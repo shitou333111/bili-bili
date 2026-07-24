@@ -1,0 +1,47 @@
+import { NextResponse } from "next/server";
+import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
+import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
+import type { ApiResponse } from "@/lib/bilibili/types";
+
+export async function GET(request: Request) {
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  const sid = sidMatch?.[1] ?? null;
+  const session = await getActiveSessionFromCookie(sid);
+
+  if (!session) {
+    return NextResponse.json<ApiResponse<{ loggedIn: false; reason: string }>>(
+      {
+        code: 0,
+        message: "no active site session",
+        data: { loggedIn: false, reason: "no session" },
+      },
+      { status: 200 },
+    );
+  }
+
+  // 验证 B站凭证，失效则尝试刷新
+  const credentialResult = await ensureValidCredential(session);
+
+  if (!credentialResult.valid) {
+    // 凭证失效且刷新失败，需要重新登录
+    return NextResponse.json<ApiResponse<{ loggedIn: false; expired: true; sid: string; uname: string }>>(
+      {
+        code: 0,
+        message: "needs relogin",
+        data: { loggedIn: false, expired: true, sid: session.sid, uname: session.uname },
+      },
+      { status: 200 },
+    );
+  }
+
+  // 凭证有效
+  return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string }>>(
+    {
+      code: 0,
+      message: "active",
+      data: { loggedIn: true, sid: session.sid, uname: session.uname },
+    },
+    { status: 200 },
+  );
+}

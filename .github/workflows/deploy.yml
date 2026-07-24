@@ -1,0 +1,133 @@
+name: Deploy To Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-server:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Prepare deploy artifacts
+        run: |
+          # Next.js standalone 输出结构:
+          # .next/standalone/  -> Node.js 服务端代码 + node_modules
+          # .next/static/      -> 静态资源 (JS/CSS/图片)
+          # public/            -> 公共静态文件
+
+          mkdir -p deploy-dist
+
+          # 复制 standalone 服务端
+          cp -r .next/standalone/. deploy-dist/
+
+          # 复制静态资源到 standalone 目录内
+          mkdir -p deploy-dist/.next/static
+          cp -r .next/static/. deploy-dist/.next/static/
+
+          # 复制 public 目录
+          if [ -d public ]; then
+            cp -r public/. deploy-dist/public/
+          fi
+
+      - name: Upload dist to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: deploy-dist/*
+          target: /tmp/bili_live-deploy
+          overwrite: true
+          strip_components: 1
+
+      - name: Atomic deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            set -e
+            TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
+            RELEASES_DIR="${TARGET_DIR}/.releases"
+            RELEASE_DIR="${RELEASES_DIR}/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            CURRENT_DIR="${TARGET_DIR}/current"
+            PRESERVE_DIR="${TARGET_DIR}/preserved"
+            LAST_RELEASE="$(ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | head -n 1 || true)"
+
+            mkdir -p "${PRESERVE_DIR}"
+
+            # Bootstrap preserved data from current or latest release.
+            # .data/ 目录存储用户记录、盲盒数据、admin配置等，必须跨版本保留
+            if [ ! -d "${PRESERVE_DIR}/.data" ]; then
+              if [ -d "${CURRENT_DIR}/.data" ]; then
+                cp -a "${CURRENT_DIR}/.data" "${PRESERVE_DIR}/.data"
+              elif [ -n "${LAST_RELEASE}" ] && [ -d "${LAST_RELEASE}/.data" ]; then
+                cp -a "${LAST_RELEASE}/.data" "${PRESERVE_DIR}/.data"
+              else
+                mkdir -p "${PRESERVE_DIR}/.data"
+              fi
+            fi
+
+            # 创建新版本目录
+            mkdir -p "$RELEASE_DIR"
+            cp -a /tmp/bili_live-deploy/. "$RELEASE_DIR/"
+
+            # 用符号链接挂载持久化数据目录
+            rm -rf "${RELEASE_DIR:?}/.data"
+            ln -sfn "${PRESERVE_DIR}/.data" "${RELEASE_DIR}/.data"
+
+            # 原子切换 current 指针
+            ln -sfn "$RELEASE_DIR" "${TARGET_DIR}/current"
+
+            # 启动/重启服务
+            if command -v pm2 >/dev/null 2>&1; then
+              if pm2 describe bili-live >/dev/null 2>&1; then
+                pm2 restart bili-live --update-env
+              else
+                cd "${TARGET_DIR}/current"
+                HOST=127.0.0.1 PORT=3000 pm2 start server.js --name bili-live
+              fi
+              pm2 save || true
+            else
+              PID_FILE="${TARGET_DIR}/server.pid"
+              if [ -f "${PID_FILE}" ]; then
+                OLD_PID="$(cat "${PID_FILE}" 2>/dev/null || true)"
+                if [ -n "${OLD_PID}" ] && kill -0 "${OLD_PID}" 2>/dev/null; then
+                  kill "${OLD_PID}" || true
+                fi
+                rm -f "${PID_FILE}"
+              fi
+
+              cd "${TARGET_DIR}/current"
+              HOST=127.0.0.1 PORT=3000 nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+              echo $! > "${PID_FILE}"
+            fi
+
+            # 清理旧版本，保留最近 5 个
+            ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | tail -n +6 | xargs -r rm -rf
