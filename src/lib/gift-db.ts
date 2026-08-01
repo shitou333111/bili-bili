@@ -1,4 +1,4 @@
-import { promises as fs } from "fs";
+import { promises as fs, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { CardFlipRawRecord } from "@/lib/bilibili/gift-api";
@@ -431,19 +431,21 @@ class CardFlipCalculator implements SynthesisProfitCalculator {
       anchor.totalEarned += reward;
       anchorMap.set(record.ruid, anchor);
 
-      // 礼物聚合
+      // 礼物聚合：跳过 reward_value=0 的记录（首翻坏牌即结束，无实际奖励）
       const giftImg = giftImageCache[record.reward_name] || "";
-      const existing = giftMap.get(record.reward_name);
-      if (existing) {
-        existing.count++;
-      } else {
-        giftMap.set(record.reward_name, {
-          gift_id: 0,
-          gift_name: record.reward_name,
-          gift_img: giftImg,
-          gift_price: reward,
-          count: 1,
-        });
+      if (record.reward_value > 0 && record.reward_name) {
+        const existing = giftMap.get(record.reward_name);
+        if (existing) {
+          existing.count++;
+        } else {
+          giftMap.set(record.reward_name, {
+            gift_id: 0,
+            gift_name: record.reward_name,
+            gift_img: giftImg,
+            gift_price: reward,
+            count: 1,
+          });
+        }
       }
 
       // 日期：优先使用 settle_time
@@ -855,3 +857,66 @@ export function calcHistoricalSynthesisProfit(
 }
 
 // ====== 筛选工具 ======
+
+// ====== 礼物数据库（用于主播数据页面显示礼物图标） ======
+
+const GIFT_DB_PATH = path.join(process.cwd(), ".data", "gift-db.json");
+
+export type GiftDbEntry = {
+  name: string;
+  img: string;
+};
+
+export type GiftDb = {
+  gifts: Record<number, GiftDbEntry>;
+  red_pocket_gift_ids?: number[];
+  last_red_pocket_update?: string;
+  tianxuan_gift_ids?: number[];
+  last_tianxuan_update?: string;
+};
+
+export function loadGiftDb(): GiftDb {
+  try {
+    if (existsSync(GIFT_DB_PATH)) {
+      const raw = readFileSync(GIFT_DB_PATH, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("[GiftDB] 读取 gift-db.json 失败:", e);
+  }
+  return { gifts: {} };
+}
+
+export function saveGiftDb(db: GiftDb): void {
+  try {
+    const dir = path.dirname(GIFT_DB_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(GIFT_DB_PATH, JSON.stringify(db, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[GiftDB] 保存 gift-db.json 失败:", e);
+  }
+}
+
+/** 批量保存礼物信息到 gift-db.json */
+export function saveGiftsToDb(giftInfos: Array<{ gift_id: number; name: string; img: string }>): void {
+  const db = loadGiftDb();
+  if (!db.gifts) db.gifts = {};
+  let changed = false;
+  for (const g of giftInfos) {
+    if (!db.gifts[g.gift_id] || !db.gifts[g.gift_id].img) {
+      db.gifts[g.gift_id] = { name: g.name, img: g.img };
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveGiftDb(db);
+  }
+}
+
+/** 根据 gift_id 获取礼物图片，没找到返回空字符串 */
+export function getGiftImg(giftId: number): string {
+  const db = loadGiftDb();
+  return db.gifts?.[giftId]?.img ?? "";
+}

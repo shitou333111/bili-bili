@@ -225,39 +225,168 @@ export async function saveSynthesisActivityInfo(activityId: string, info: any): 
 import type { RawGiftRecord } from "@/lib/revenue";
 export type { RawGiftRecord };
 
-// ====== 主播昵称缓存（所有用户共享） ======
+// ====== 用户昵称/头像缓存（全局持久化，内存+磁盘双层缓存） ======
 
 const ANCHOR_NAME_FILE = path.join(DATA_DIR, "anchor-names.json");
+const ANCHOR_FACE_FILE = path.join(DATA_DIR, "anchor-faces.json");
 
-type AnchorNameCache = Record<string, string>;
+// 内存缓存：启动时从磁盘加载，运行期间直接读写内存
+let nameCachePromise: Promise<Map<number, string>> | null = null;
+let faceCachePromise: Promise<Map<number, string>> | null = null;
+let nameDirty = false;
+let faceDirty = false;
 
-export async function readAnchorNameCache(): Promise<AnchorNameCache> {
-  try {
-    const raw = await fs.readFile(ANCHOR_NAME_FILE, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
+async function loadNameCache(): Promise<Map<number, string>> {
+  if (!nameCachePromise) {
+    nameCachePromise = (async () => {
+      try {
+        await fs.mkdir(DATA_DIR, { recursive: true });
+        const raw = await fs.readFile(ANCHOR_NAME_FILE, "utf8");
+        const obj = JSON.parse(raw) as Record<string, string>;
+        const map = new Map<number, string>();
+        for (const [k, v] of Object.entries(obj)) {
+          map.set(Number(k), v);
+        }
+        console.log(`[NameCache] 已加载 ${map.size} 条昵称缓存`);
+        return map;
+      } catch {
+        return new Map();
+      }
+    })();
   }
+  return nameCachePromise;
 }
 
-export async function saveAnchorNameCache(cache: AnchorNameCache): Promise<void> {
+async function loadFaceCache(): Promise<Map<number, string>> {
+  if (!faceCachePromise) {
+    faceCachePromise = (async () => {
+      try {
+        await fs.mkdir(DATA_DIR, { recursive: true });
+        const raw = await fs.readFile(ANCHOR_FACE_FILE, "utf8");
+        const obj = JSON.parse(raw) as Record<string, string>;
+        const map = new Map<number, string>();
+        for (const [k, v] of Object.entries(obj)) {
+          if (v) map.set(Number(k), v);
+        }
+        console.log(`[FaceCache] 已加载 ${map.size} 条头像URL缓存`);
+        return map;
+      } catch {
+        return new Map();
+      }
+    })();
+  }
+  return faceCachePromise;
+}
+
+async function flushNameCache() {
+  if (!nameDirty) return;
   try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.writeFile(ANCHOR_NAME_FILE, JSON.stringify(cache, null, 2), "utf8");
+    const map = await loadNameCache();
+    const obj: Record<string, string> = {};
+    for (const [k, v] of map) {
+      obj[String(k)] = v;
+    }
+    await fs.writeFile(ANCHOR_NAME_FILE, JSON.stringify(obj, null, 2), "utf8");
+    nameDirty = false;
   } catch {
     // ignore write errors
   }
 }
 
+async function flushFaceCache() {
+  if (!faceDirty) return;
+  try {
+    const map = await loadFaceCache();
+    const obj: Record<string, string> = {};
+    for (const [k, v] of map) {
+      obj[String(k)] = v;
+    }
+    await fs.writeFile(ANCHOR_FACE_FILE, JSON.stringify(obj, null, 2), "utf8");
+    faceDirty = false;
+  } catch {
+    // ignore write errors
+  }
+}
+
+// 定期刷盘（每10秒）
+if (typeof setInterval !== "undefined") {
+  setInterval(() => {
+    flushNameCache();
+    flushFaceCache();
+  }, 10000);
+}
+
+// 进程退出时刷盘
+if (typeof process !== "undefined") {
+  process.on("exit", () => {
+    // 同步刷盘
+    try {
+      const fs_sync = require("fs");
+      if (nameDirty && nameCachePromise) {
+        nameCachePromise.then(map => {
+          const obj: Record<string, string> = {};
+          for (const [k, v] of map) obj[String(k)] = v;
+          fs_sync.writeFileSync(ANCHOR_NAME_FILE, JSON.stringify(obj, null, 2), "utf8");
+        });
+      }
+      if (faceDirty && faceCachePromise) {
+        faceCachePromise.then(map => {
+          const obj: Record<string, string> = {};
+          for (const [k, v] of map) obj[String(k)] = v;
+          fs_sync.writeFileSync(ANCHOR_FACE_FILE, JSON.stringify(obj, null, 2), "utf8");
+        });
+      }
+    } catch {}
+  });
+}
+
 export async function getCachedAnchorName(ruid: number): Promise<string | null> {
-  const cache = await readAnchorNameCache();
-  return cache[String(ruid)] || null;
+  const map = await loadNameCache();
+  return map.get(ruid) || null;
 }
 
 export async function setCachedAnchorName(ruid: number, name: string): Promise<void> {
-  const cache = await readAnchorNameCache();
-  cache[String(ruid)] = name;
-  await saveAnchorNameCache(cache);
+  const map = await loadNameCache();
+  map.set(ruid, name);
+  nameDirty = true;
+}
+
+export async function getCachedAnchorFace(ruid: number): Promise<string | null> {
+  const map = await loadFaceCache();
+  return map.get(ruid) || null;
+}
+
+export async function setCachedAnchorFace(ruid: number, face: string): Promise<void> {
+  const map = await loadFaceCache();
+  if (face) {
+    map.set(ruid, face);
+  } else {
+    map.delete(ruid);
+  }
+  faceDirty = true;
+}
+
+/** 批量设置头像缓存（批量操作，减少IO） */
+export async function bulkSetCachedFaces(entries: Array<{ uid: number; face: string; name?: string }>): Promise<void> {
+  const faceMap = await loadFaceCache();
+  const nameMap = await loadNameCache();
+  for (const { uid, face, name } of entries) {
+    if (face) {
+      faceMap.set(uid, face);
+    }
+    if (name) {
+      nameMap.set(uid, name);
+    }
+  }
+  faceDirty = true;
+  nameDirty = true;
+  await Promise.all([flushFaceCache(), flushNameCache()]);
+}
+
+/** 获取所有已缓存的头像 UID 集合 */
+export async function getCachedFaceUids(): Promise<Set<number>> {
+  const map = await loadFaceCache();
+  return new Set(map.keys());
 }
 
 // ====== 天选礼物 ID 持久化存储 ======

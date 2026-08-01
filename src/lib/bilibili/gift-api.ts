@@ -1,11 +1,11 @@
-﻿/**
+/**
  * B站礼物相关API调用
  * 包括：盲盒检测、盲盒记录、天选礼物列表、合成活动信息
  */
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG, SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
 import type { BlindBoxGift } from "@/lib/blind-box-db";
-import { getCachedAnchorName, setCachedAnchorName } from "@/lib/user-data";
+import { getCachedAnchorName, setCachedAnchorName, getCachedAnchorFace, setCachedAnchorFace } from "@/lib/user-data";
 
 // ====== 盲盒检测响应类型 ======
 type BlindFirstWinResponse = {
@@ -595,6 +595,107 @@ export async function getUserNameByUid(mid: number): Promise<string> {
     return name;
   }
   return `主播${mid}`;
+}
+
+type LiveCardResponse = {
+  code: number;
+  message?: string;
+  msg?: string;
+  data?: {
+    uid: number;
+    uname: string;
+    face: string;
+  } | null;
+};
+
+const userInfoCache = new Map<number, { name: string; face: string }>();
+
+const NOFACE_PATTERN = /\/noface\.jpg$/;
+
+function normalizeFace(face: string): string {
+  if (!face) return "";
+  if (NOFACE_PATTERN.test(face)) return "";
+  return face;
+}
+
+export function clearUserInfoCache(uid?: number) {
+  if (uid !== undefined) {
+    userInfoCache.delete(uid);
+  } else {
+    userInfoCache.clear();
+  }
+}
+
+async function fetchUserInfoWithRetry(mid: number, retries = 3): Promise<{ name: string; face: string } | null> {
+  const url = `https://api.live.bilibili.com/live_user/v1/card/card_up?uid=${mid}&browser=0`;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+      }
+      const data = await fetchBilibiliJson<LiveCardResponse>({ url, live: true });
+      if (data.code === 0 && data.data) {
+        return {
+          name: data.data.uname || `用户${mid}`,
+          face: normalizeFace(data.data.face),
+        };
+      } else {
+        console.warn(`[getUserInfo] mid=${mid} attempt=${attempt+1} API错误: code=${data.code} msg=${data.message || data.msg}`);
+      }
+    } catch (err) {
+      console.warn(`[getUserInfo] mid=${mid} attempt=${attempt+1} 请求异常:`, err instanceof Error ? err.message : String(err));
+    }
+  }
+  return null;
+}
+
+export async function getUserInfoByUid(mid: number, forceRefresh = false): Promise<{ name: string; face: string }> {
+  if (!forceRefresh && userInfoCache.has(mid)) {
+    return userInfoCache.get(mid)!;
+  }
+
+  const cachedName = await getCachedAnchorName(mid);
+  const cachedFace = await getCachedAnchorFace(mid);
+
+  // 非强制刷新模式：只要有缓存的头像URL就直接返回（头像URL的哈希值变化即代表头像更新，URL未变就不需要重新请求API）
+  if (!forceRefresh && cachedFace) {
+    const info = { name: cachedName || `用户${mid}`, face: cachedFace };
+    userInfoCache.set(mid, info);
+    return info;
+  }
+
+  const result = await fetchUserInfoWithRetry(mid);
+
+  if (result && result.face) {
+    userInfoCache.set(mid, result);
+    await setCachedAnchorName(mid, result.name);
+    await setCachedAnchorFace(mid, result.face);
+    return result;
+  }
+
+  // Fallback: 尝试web-interface/card接口
+  try {
+    const cardUrl = `https://api.bilibili.com/x/web-interface/card?mid=${mid}`;
+    const cardData = await fetchBilibiliJson<UserInfoResponse>({ url: cardUrl });
+    if (cardData.code === 0 && cardData.data?.card?.face) {
+      const info = {
+        name: cardData.data.card.name || cachedName || `用户${mid}`,
+        face: normalizeFace(cardData.data.card.face),
+      };
+      userInfoCache.set(mid, info);
+      await setCachedAnchorName(mid, info.name);
+      await setCachedAnchorFace(mid, info.face);
+      return info;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 强制刷新失败时，返回旧缓存作为fallback
+  const fallback = { name: cachedName || `用户${mid}`, face: cachedFace || "" };
+  userInfoCache.set(mid, fallback);
+  return fallback;
 }
 
 /**

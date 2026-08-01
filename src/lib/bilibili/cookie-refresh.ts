@@ -239,29 +239,50 @@ export type CredentialCheckResult =
 export async function ensureValidCredential(session: AuthSession): Promise<CredentialCheckResult> {
   const cookie = buildCookieHeader(session);
 
-  // 步骤1：用 nav 接口验证凭证
-  try {
-    const navResult = await fetchBilibiliJson<NavResponse>({
-      url: "https://api.bilibili.com/x/web-interface/nav",
-      cookie,
-    });
-
-    if (navResult.code === 0 && navResult.data?.isLogin) {
-      return { valid: true, session, cookie };
+  // 步骤1：用 nav 接口验证凭证（412/网络错误时重试 3 次，指数退避）
+  // 这是切号后偶发"伪失效"的主因——短时间内并发请求B站导致临时限流
+  let navResult: NavResponse | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetchBilibiliJson<NavResponse>({
+        url: "https://api.bilibili.com/x/web-interface/nav",
+        cookie,
+      });
+      navResult = res;
+      if (navResult.code === 0 && navResult.data?.isLogin) {
+        return { valid: true, session, cookie };
+      }
+      // code!==0 或 isLogin=false：不是网络/限流问题，是凭证真失效，跳出重试
+      if (navResult.code === -101 || navResult.code === 3 || !navResult.data?.isLogin) break;
+      // 其他错误（-412 限流）：重试
+    } catch (err) {
+      console.error(`[CredentialCheck] nav 接口请求失败 attempt=${attempt + 1}:`, err);
     }
-
-    console.log("[CredentialCheck] B站凭证失效，尝试刷新...", navResult.code);
-  } catch (err) {
-    console.error("[CredentialCheck] nav 接口请求失败:", err);
+    if (attempt < 2) {
+      const delay = 1500 * Math.pow(2, attempt); // 1.5s / 3s
+      console.log(`[CredentialCheck] nav 接口失败，等待 ${delay}ms 后重试`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  if (navResult) {
+    console.log("[CredentialCheck] B站凭证疑似失效，尝试刷新...", navResult.code, navResult.message);
   }
 
-  // 步骤2：凭证失效，尝试刷新
-  const refreshResult = await refreshBiliCookie(session);
-  if (!refreshResult.success || !refreshResult.newCookies) {
+  // 步骤2：凭证失效，尝试刷新（也加重试）
+  let refreshResult: RefreshCookieResult | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    refreshResult = await refreshBiliCookie(session);
+    if (refreshResult.success && refreshResult.newCookies) break;
+    if (attempt < 1) {
+      console.log(`[CredentialCheck] 刷新失败 attempt=${attempt + 1}，重试...`, refreshResult.error);
+      await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt))); // 2s / 4s
+    }
+  }
+  if (!refreshResult || !refreshResult.success || !refreshResult.newCookies) {
     return {
       valid: false,
       needsRelogin: true,
-      reason: refreshResult.error || "刷新失败",
+      reason: refreshResult?.error || "刷新失败",
     };
   }
 
@@ -280,20 +301,26 @@ export async function ensureValidCredential(session: AuthSession): Promise<Crede
     };
   }
 
-  // 步骤4：用新凭证验证一次
+  // 步骤4：用新凭证验证一次（加重试）
   const newCookie = refreshResult.newCookies.join("; ");
-  try {
-    const retryNav = await fetchBilibiliJson<NavResponse>({
-      url: "https://api.bilibili.com/x/web-interface/nav",
-      cookie: newCookie,
-    });
-
-    if (retryNav.code === 0 && retryNav.data?.isLogin) {
-      console.log("[CredentialCheck] 凭证刷新成功");
-      return { valid: true, session: updatedSession, cookie: newCookie };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const retryNav = await fetchBilibiliJson<NavResponse>({
+        url: "https://api.bilibili.com/x/web-interface/nav",
+        cookie: newCookie,
+      });
+      if (retryNav.code === 0 && retryNav.data?.isLogin) {
+        console.log("[CredentialCheck] 凭证刷新成功");
+        return { valid: true, session: updatedSession, cookie: newCookie };
+      }
+      if (retryNav.code === -101 || retryNav.code === 3 || !retryNav.data?.isLogin) break;
+    } catch (err) {
+      console.error(`[CredentialCheck] 刷新后验证 attempt=${attempt + 1} 失败:`, err);
     }
-  } catch (err) {
-    console.error("[CredentialCheck] 刷新后验证失败:", err);
+    if (attempt < 2) {
+      const delay = 1500 * Math.pow(2, attempt);
+      await new Promise(r => setTimeout(r, delay));
+    }
   }
 
   return {

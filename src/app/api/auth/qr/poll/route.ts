@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { createSessionInput, getSessionCookieName, saveSession } from "@/lib/auth/session";
+import { NextRequest, NextResponse } from "next/server";
+import { createSessionInput, getSessionCookieName, getUserTokenCookieName, saveSession } from "@/lib/auth/session";
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import type { ApiResponse, QRPollResult } from "@/lib/bilibili/types";
 
@@ -65,7 +65,7 @@ async function followRedirectAndGetCookies(redirectUrl: string, existingCookies:
   return cookies;
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const qrcodeKey = url.searchParams.get("qrcode_key");
 
@@ -177,6 +177,12 @@ export async function GET(request: Request) {
         console.error("[QR Login] 获取用户昵称失败:", err);
       }
 
+      // 获取或生成用户标识
+      let userToken = request.cookies.get(getUserTokenCookieName())?.value;
+      if (!userToken) {
+        userToken = crypto.randomUUID();
+      }
+
       const session = createSessionInput({
         uname,
         mid,
@@ -185,6 +191,7 @@ export async function GET(request: Request) {
         biliRefreshToken: data.data.refresh_token || "",
         biliCookies,
         source: "qr",
+        userToken,
       });
 
       const savedSession = await saveSession(session);
@@ -201,6 +208,13 @@ export async function GET(request: Request) {
         httpOnly: true,
         sameSite: "lax",
         path: "/",
+      });
+      // 设置用户标识 Cookie（非 httpOnly，以便客户端可以读取）
+      localResponse.cookies.set(getUserTokenCookieName(), userToken, {
+        httpOnly: false,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 365 * 24 * 60 * 60, // 1年有效期
       });
       return localResponse;
     }

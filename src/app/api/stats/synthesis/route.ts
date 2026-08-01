@@ -359,6 +359,14 @@ export async function GET(request: Request) {
           uniqueRuids.add(record.ruid);
         }
         
+        // 从付费记录构建 ruid → r_uname 映射（B站API已认证，比 getUserNameByUid 更可靠）
+        const payRecordNameMap = new Map<number, string>();
+        for (const payRecord of records) {
+          if (payRecord.r_uname && !payRecordNameMap.has(payRecord.ruid)) {
+            payRecordNameMap.set(payRecord.ruid, payRecord.r_uname);
+          }
+        }
+        
         const namePromises = Array.from(uniqueRuids).map(async (ruid) => {
           const name = await getUserNameByUid(ruid);
           return { ruid, name };
@@ -371,10 +379,18 @@ export async function GET(request: Request) {
         }
         
         for (const anchor of profit.anchors) {
-          anchor.rname = nameMap.get(anchor.ruid) || `主播${anchor.ruid}`;
+          // 优先使用付费记录中的 r_uname（B站API已认证），其次使用 nameMap（B站用户名片API）
+          const nameMapVal = nameMap.get(anchor.ruid);
+          const payName = payRecordNameMap.get(anchor.ruid);
+          // nameMap 可能包含 "主播xxx" 的兜底值，此时应回退到付费记录
+          const validNameMapVal = (nameMapVal && !nameMapVal.startsWith("主播")) ? nameMapVal : undefined;
+          anchor.rname = payName || validNameMapVal || nameMapVal || `主播${anchor.ruid}`;
         }
         for (const record of profit.detailedRecords) {
-          record.rname = nameMap.get(record.ruid) || `主播${record.ruid}`;
+          const nameMapVal = nameMap.get(record.ruid);
+          const payName = payRecordNameMap.get(record.ruid);
+          const validNameMapVal = (nameMapVal && !nameMapVal.startsWith("主播")) ? nameMapVal : undefined;
+          record.rname = payName || validNameMapVal || nameMapVal || `主播${record.ruid}`;
         }
 
         // 计算所有可能礼物中的最大价格（优先使用活动信息）
@@ -396,6 +412,11 @@ export async function GET(request: Request) {
           certifications = calculateCardFlipCertifications(rawRecords, profit.detailedRecords, maxGiftPriceForCert);
         } else {
           certifications = calculateSynthesisCertifications(profit.detailedRecords, maxGiftPrice);
+        }
+
+        // 为认证记录填充主播名称（card_flip 类型的认证记录 rname 为空）
+        for (const cert of certifications) {
+          cert.rname = nameMap.get(cert.ruid) || `主播${cert.ruid}`;
         }
 
         // 活动图标：优先使用info.icon，其次用所有可能礼物中最大礼物的图片

@@ -2,6 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+function fixImageUrl(url: string): string {
+  if (!url) return "";
+  if (url.startsWith("//")) return "https:" + url;
+  if (url.startsWith("http://")) return url.replace("http://", "https://");
+  return url;
+}
+
 type User = {
   sid: string;
   uname: string;
@@ -250,7 +257,7 @@ export default function AdminPage() {
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {users.map((user) => (
                 <div key={user.mid} className={`flex items-center gap-3 rounded-lg border p-2.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
-                  <img src={user.face || ""} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
+                  <img src={fixImageUrl(user.face || "")} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium truncate">{user.uname}</span>

@@ -5,6 +5,7 @@ import { fetchBlindBoxDrawStream, checkBlindBox } from "@/lib/bilibili/gift-api"
 import { getBlindBoxInfo, saveBlindBoxInfo, type BlindBoxGift } from "@/lib/blind-box-db";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
+import { saveGiftsToDb } from "@/lib/gift-db";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -253,6 +254,12 @@ function getDateRangeFilter(type: string): { start: Date; end: Date } | null {
       const end = new Date(today);
       end.setDate(end.getDate() + 1);
       return { start: today, end };
+    }
+    case "yesterday": {
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayEnd = new Date(today);
+      return { start: yesterday, end: yesterdayEnd };
     }
     case "thisWeek": {
       const dayOfWeek = today.getDay();
@@ -678,6 +685,15 @@ export async function GET(request: Request) {
             });
             blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId);
           }
+        }
+
+        // 将盲盒内礼物信息保存到 gift-db，供消费记录显示礼物图片
+        if (blindBoxInfo?.gifts) {
+          saveGiftsToDb(blindBoxInfo.gifts.map(g => ({
+            gift_id: g.gift_id,
+            name: g.gift_name,
+            img: g.gift_img,
+          })));
         }
 
         // 从全部记录构建元数据

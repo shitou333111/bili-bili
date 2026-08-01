@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -16,7 +16,13 @@ export const metadata: Metadata = {
   title: "Bili Live Revenue Viewer",
   description: "Browser-first Bilibili live consumption dashboard with QR fallback login.",
   referrer: "no-referrer",
-  viewport: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
@@ -28,6 +34,7 @@ export default function RootLayout({
     <html
         lang="zh-CN"
         className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} h-full antialiased`}
+        suppressHydrationWarning
       >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

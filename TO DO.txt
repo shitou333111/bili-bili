@@ -31,3 +31,6 @@ https://api.live.bilibili.com/xlive/general-interface/v1/blind-box/drawStream?gi
 PK最后时刻上分，偷塔守塔，
 最后几秒？什么礼物？超多少分？上限限额，
 可以多种，比如猫猫礼物完成任务
+
+系统安全问题：
+怎么确保用户只能看到自己的账户或者自己登录的其他账户，而看不到其他人登录的账户？是通过本地cookie判别的吗？那cookie会不会过期？能不能设置无期

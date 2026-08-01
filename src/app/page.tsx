@@ -5,8 +5,11 @@ import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 import { toPng } from "html-to-image";
+import { isMobileDevice } from "@/lib/device";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
+import AnchorDataModule from "@/components/AnchorDataModule";
+import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts * 1000);
@@ -260,6 +263,8 @@ function GiftSaveModal({
   actualDateRange: { start: string; end: string } | null;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const totalCount = gifts.reduce((s, g) => s + g.count, 0);
   const totalCoins = gifts.reduce((s, g) => s + g.coins, 0);
 
@@ -268,51 +273,103 @@ function GiftSaveModal({
     : actualDateRange ? `${actualDateRange.start} ~ ${actualDateRange.end}` : dateRange;
   const anchorPartStr = anchorName !== "全部主播" ? ` ${anchorName}` : ` ${anchorCount} 位主播`;
 
-  async function saveAsImage() {
-    if (!cardRef.current) return;
+  useEffect(() => {
+    generateImage();
+  }, []);
+
+  async function generateImage() {
+    setLoading(true);
+    if (!cardRef.current) {
+      setLoading(false);
+      return;
+    }
     try {
       const dataUrl = await toPng(cardRef.current, { backgroundColor: "#fff", pixelRatio: 2, cacheBust: true });
+      setGeneratedImage(dataUrl);
+    } catch (err) {
+      console.error("生成图片失败:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadImage() {
+    if (!generatedImage) return;
+    try {
       const link = document.createElement("a");
-      link.download = `gift_list_${dateRange.replace(/[^0-9]/g, "")}.png`;
-      link.href = dataUrl;
+      link.download = `gift_list_${Date.now()}.png`;
+      link.href = generatedImage;
       link.click();
     } catch (err) {
-      console.error("保存图片失败:", err);
+      console.error("下载图片失败:", err);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative mx-4 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} className="save-exclude absolute -top-10 right-0 text-white/80 hover:text-white text-sm transition">✕ 关闭</button>
-        <div ref={cardRef} className="rounded-lg overflow-hidden shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
+      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
+        <div ref={cardRef} className="w-[320px] rounded-lg overflow-hidden shadow-2xl">
           {/* 海报头部 */}
-          <div className="bg-gradient-to-br from-[#1f1c17] via-[#2d2a24] to-[#3d3a34] px-6 pt-8 pb-6 text-white">
+          <div className="bg-gradient-to-br from-[#1f1c17] via-[#2d2a24] to-[#3d3a34] px-5 pt-6 pb-5 text-white">
             <div className="text-sm leading-relaxed text-white/80">
               {datePartStr}，<span className="font-bold text-white">{userName}</span> 给 <span className="font-bold text-white">{anchorPartStr}</span> 送出 <span className="font-bold text-white">{gifts.length}</span> 种共 <span className="font-bold text-white">{totalCount}</span> 个礼物，花费 <span className="font-bold text-white">{totalCoins}</span> 电池
             </div>
           </div>
           {/* 礼物网格 */}
-          <div className="bg-white px-6 py-5">
-            <div className="grid grid-cols-3 gap-x-4 gap-y-2">
-              {gifts.map((g) => (
-                <div key={`${g.gift_id}_${g.gift_name}`} className="flex items-center gap-1.5 text-sm py-1">
-                  {g.gift_img ? <img src={fixImageUrl(g.gift_img)} alt="" className="w-6 h-6 rounded flex-shrink-0" crossOrigin="anonymous" /> : <span className="text-[11px] text-black/50 truncate max-w-[50px] flex-shrink-0">{g.gift_name}</span>}
-                  <span className="truncate text-black/70 text-xs">×{g.count}</span>
+          <div className="bg-white px-4 py-4">
+            <div className="grid grid-cols-3 gap-x-2 gap-y-2">
+              {gifts.slice(0, 59).map((g) => (
+                <div key={`${g.gift_id}_${g.gift_name}`} className="flex items-center gap-1 text-sm py-0.5">
+                  {g.gift_img ? <img src={fixImageUrl(g.gift_img)} alt="" className="w-7 h-7 rounded flex-shrink-0" crossOrigin="anonymous" /> : <span className="text-[12px] text-black/50 truncate max-w-[55px] flex-shrink-0">{g.gift_name}</span>}
+                  <span className="truncate text-black/70 text-sm">×{g.count}</span>
                 </div>
               ))}
+              {gifts.length > 59 && (
+                <div className="flex items-center gap-1 text-sm py-0.5">
+                  <span className="truncate text-black/40 text-sm">...</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
-        <button onClick={saveAsImage} className="save-exclude mt-3 w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-          </svg>
-          保存
-        </button>
-        <button onClick={onClose} className="save-exclude mt-2 w-full rounded-xl border border-black/15 px-4 py-2.5 text-sm font-medium text-black/60 transition hover:bg-black/5">
-          关闭
-        </button>
+      </div>
+
+      <div className="relative mx-auto w-full max-w-sm flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+        {/* 加载状态 */}
+        {loading && (
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-white text-sm">生成图片中...</p>
+          </div>
+        )}
+
+        {/* 图片内容 */}
+        {!loading && generatedImage && (
+          <>
+            {/* 上方提示 */}
+            {isMobileDevice() && (
+              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
+            )}
+
+            <img src={generatedImage} alt="礼物清单" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl mx-auto" />
+
+            {/* 下方按钮区域 */}
+            <div className="flex flex-col gap-2 mt-3 w-full">
+              {!isMobileDevice() && (
+                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  下载图片
+                </button>
+              )}
+              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+                关闭
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -330,6 +387,8 @@ function CertificationModal({
   onClose: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const cert = certifications[currentIndex];
   const isLucky = cert.type === "lucky";
   const total = certifications.length;
@@ -339,20 +398,39 @@ function CertificationModal({
     return `${parts[0]}年${parseInt(parts[1])}月${parseInt(parts[2])}日`;
   }
 
-  async function saveAsImage() {
-    if (!cardRef.current) return;
+  useEffect(() => {
+    generateImage();
+  }, [currentIndex]);
+
+  async function generateImage() {
+    setLoading(true);
+    if (!cardRef.current) {
+      setLoading(false);
+      return;
+    }
     try {
       const dataUrl = await toPng(cardRef.current, {
         backgroundColor: "#fff",
         pixelRatio: 2,
         filter: (node: HTMLElement) => !node.classList?.contains("save-exclude"),
       });
+      setGeneratedImage(dataUrl);
+    } catch (err) {
+      console.error("生成图片失败:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadImage() {
+    if (!generatedImage) return;
+    try {
       const link = document.createElement("a");
-      link.download = `certification_${cert.type}_${cert.date}.png`;
-      link.href = dataUrl;
+      link.download = `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`;
+      link.href = generatedImage;
       link.click();
     } catch (err) {
-      console.error("保存图片失败:", err);
+      console.error("下载图片失败:", err);
     }
   }
 
@@ -365,164 +443,180 @@ function CertificationModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="relative mx-4 w-[80vw] max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* 关闭按钮 */}
-        <button
-          onClick={onClose}
-          className="absolute -top-10 right-0 text-white/80 hover:text-white text-sm transition"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
+      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
+        <div
+          ref={cardRef}
+          className="w-[80vw] max-w-md rounded-lg bg-white p-6 shadow-2xl"
         >
-          ✕ 关闭
-        </button>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-2xl">
+              {cert.type === "lucky" ? "👑" : cert.type === "rich" ? "💰" : "👻"}
+            </span>
+            <span className={`text-lg font-bold ${
+              cert.type === "lucky" ? "text-yellow-600" :
+              cert.type === "rich" ? "text-purple-600" : "text-gray-600"
+            }`}>
+              {cert.type === "lucky" ? "欧皇认证" :
+               cert.type === "rich" ? "神豪认证" : "非酋认证"}
+            </span>
+            {total > 1 && (
+              <span className="ml-auto text-xs text-black/35">{currentIndex + 1}/{total}</span>
+            )}
+          </div>
 
-        {/* 卡片区域：上下箭头 + 卡片 */}
-        <div className="flex flex-col items-center gap-2">
-          {/* 上箭头 */}
-          {total > 1 && (
-            <button
-              onClick={goPrev}
-              disabled={currentIndex === 0}
-              className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-            >
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
-              </svg>
-            </button>
-          )}
-
-          {/* 卡片 */}
-          <div
-            ref={cardRef}
-            className="w-full rounded-lg bg-white p-6 shadow-2xl"
-          >
-            {/* 标题 */}
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-2xl">
-                {cert.type === "lucky" ? "👑" : cert.type === "rich" ? "💰" : "👻"}
-              </span>
-              <span className={`text-lg font-bold ${
-                cert.type === "lucky" ? "text-yellow-600" :
-                cert.type === "rich" ? "text-purple-600" : "text-gray-600"
-              }`}>
-                {cert.type === "lucky" ? "欧皇认证" :
-                 cert.type === "rich" ? "神豪认证" : "非酋认证"}
-              </span>
-              {total > 1 && (
-                <span className="ml-auto text-xs text-black/35">{currentIndex + 1}/{total}</span>
-              )}
+          <div className="space-y-2.5 text-sm text-black/80">
+            <div className="flex items-center gap-1">
+              <span className="text-black/45 w-10 flex-shrink-0">日期</span>
+              <span className="font-medium">{formatDateCN(cert.date)}</span>
             </div>
-
-            {/* 内容 - 每行一个信息 */}
-            <div className="space-y-2.5 text-sm text-black/80">
-              <div className="flex items-center gap-1">
-                <span className="text-black/45 w-10 flex-shrink-0">日期</span>
-                <span className="font-medium">{formatDateCN(cert.date)}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-black/45 w-10 flex-shrink-0">用户</span>
-                <span className="font-medium text-[#1f1c17]">{cert.userName}</span>
-              </div>
-              {cert.type !== "rich" && (
-                <>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-10 flex-shrink-0">开启</span>
-                    <span className="font-medium">{cert.drawCount}</span>
-                    <span>个心动盲盒</span>
-                    {cert.blindBoxImg && (
-                      <img src={cert.blindBoxImg} alt="" className="w-5 h-5 rounded" />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                    {cert.type === "lucky" ? (
-                      <>
-                        <span className="font-medium text-yellow-600">{cert.castleCount}</span>
-                        <span>个浪漫城堡</span>
-                        {cert.castleImg && (
-                          <img src={cert.castleImg} alt="" className="w-5 h-5 rounded" />
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <span className="font-medium text-gray-500">0</span>
-                        <span>个浪漫城堡</span>
-                        {cert.castleImg && (
-                          <img src={cert.castleImg} alt="" className="w-5 h-5 rounded opacity-40" />
-                        )}
-                      </>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-10 flex-shrink-0">花费</span>
-                    <span className="font-medium">{cert.spent} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                    <span className="font-medium">{cert.earned} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-10 flex-shrink-0">盈亏</span>
-                    <span className={`font-bold ${cert.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {cert.profit >= 0 ? "+" : ""}{cert.profit} 电池
-                    </span>
-                  </div>
-                </>
-              )}
-              {cert.type === "rich" && (
+            <div className="flex items-center gap-1">
+              <span className="text-black/45 w-10 flex-shrink-0">用户</span>
+              <span className="font-medium text-[#1f1c17]">{cert.userName}</span>
+            </div>
+            {cert.type !== "rich" && (
+              <>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-10 flex-shrink-0">开启</span>
+                  <span className="font-medium">{cert.drawCount}</span>
+                  <span>个心动盲盒</span>
+                  {cert.blindBoxImg && (
+                    <img src={fixImageUrl(cert.blindBoxImg)} alt="" className="w-5 h-5 rounded" />
+                  )}
+                </div>
                 <div className="flex items-center gap-1">
                   <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                  <span className="font-bold text-purple-600">{cert.castleCount}</span>
-                  <span>个浪漫城堡</span>
-                  {cert.castleImg && (
-                    <img src={cert.castleImg} alt="" className="w-5 h-5 rounded" />
+                  {cert.type === "lucky" ? (
+                    <>
+                      <span className="font-medium text-yellow-600">{cert.castleCount}</span>
+                      <span>个浪漫城堡</span>
+                      {cert.castleImg && (
+                        <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded" />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium text-gray-500">0</span>
+                      <span>个浪漫城堡</span>
+                      {cert.castleImg && (
+                        <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded opacity-40" />
+                      )}
+                    </>
                   )}
-                  <span className="ml-auto text-black/60">壕无人性！</span>
                 </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-10 flex-shrink-0">花费</span>
+                  <span className="font-medium">{cert.spent} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
+                  <span className="font-medium">{cert.earned} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-10 flex-shrink-0">盈亏</span>
+                  <span className={`font-bold ${cert.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {cert.profit >= 0 ? "+" : ""}{cert.profit} 电池
+                  </span>
+                </div>
+              </>
+            )}
+            {cert.type === "rich" && (
+              <div className="flex items-center gap-1">
+                <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
+                <span className="font-bold text-purple-600">{cert.castleCount}</span>
+                <span>个浪漫城堡</span>
+                {cert.castleImg && (
+                  <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded" />
+                )}
+                <span className="ml-auto text-black/60">壕无人性！</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div
+        className="relative mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 加载状态 */}
+        {loading && (
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-white text-sm">生成图片中...</p>
+          </div>
+        )}
+
+        {/* 图片内容 */}
+        {!loading && generatedImage && (
+          <>
+            {/* 上方提示 */}
+            {isMobileDevice() && (
+              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
+            )}
+
+            <div className="flex flex-col items-center gap-2">
+              {/* 上箭头 */}
+              {total > 1 && (
+                <button
+                  onClick={goPrev}
+                  disabled={currentIndex === 0}
+                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
+                >
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
+                  </svg>
+                </button>
+              )}
+
+              {/* 图片 */}
+              <img src={generatedImage} alt="认证卡片" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
+
+              {/* 下箭头 */}
+              {total > 1 && (
+                <button
+                  onClick={goNext}
+                  disabled={currentIndex === total - 1}
+                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
+                >
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 9l7 7 7-7" />
+                  </svg>
+                </button>
               )}
             </div>
 
-            {/* 保存图片按钮 */}
-            <button
-              onClick={saveAsImage}
-              className="save-exclude mt-5 w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              保存
-            </button>
-          </div>
+            {/* 下方按钮区域 */}
+            <div className="flex flex-col gap-2 mt-3">
+              {!isMobileDevice() && (
+                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  下载图片
+                </button>
+              )}
+              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+                关闭
+              </button>
+            </div>
 
-          {/* 下箭头 */}
-          {total > 1 && (
-            <button
-              onClick={goNext}
-              disabled={currentIndex === total - 1}
-              className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-            >
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 9l7 7 7-7" />
-              </svg>
-            </button>
-          )}
-        </div>
-
-        {/* 底部指示器 */}
-        {total > 1 && (
-          <div className="flex justify-center gap-1.5 mt-3">
-            {certifications.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => onIndexChange(i)}
-                className={`w-2 h-2 rounded-full transition ${
-                  i === currentIndex ? "bg-white" : "bg-white/40"
-                }`}
-              />
-            ))}
-          </div>
+            {/* 底部指示器 */}
+            {total > 1 && (
+              <div className="flex justify-center gap-1.5 mt-3">
+                {certifications.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onIndexChange(i)}
+                    className={`w-2 h-2 rounded-full transition ${
+                      i === currentIndex ? "bg-white" : "bg-white/40"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -539,6 +633,8 @@ function CastleStatModal({
   onClose: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const totalDays = castleStat.dates.length;
   const totalCastles = castleStat.totalCount;
 
@@ -555,29 +651,48 @@ function CastleStatModal({
     return [first, ...middle, last];
   })();
 
-  async function saveAsImage() {
-    if (!cardRef.current) return;
+  useEffect(() => {
+    generateImage();
+  }, []);
+
+  async function generateImage() {
+    setLoading(true);
+    if (!cardRef.current) {
+      setLoading(false);
+      return;
+    }
     try {
       const dataUrl = await toPng(cardRef.current, {
         backgroundColor: "#fff",
         pixelRatio: 2,
         filter: (node: HTMLElement) => !node.classList?.contains("save-exclude"),
       });
+      setGeneratedImage(dataUrl);
+    } catch (err) {
+      console.error("生成图片失败:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadImage() {
+    if (!generatedImage) return;
+    try {
       const link = document.createElement("a");
-      link.download = `castle_stat_${castleStat.rname}.png`;
-      link.href = dataUrl;
+      link.download = `castle_stat_${castleStat.rname}_${Date.now()}.png`;
+      link.href = generatedImage;
       link.click();
     } catch (err) {
-      console.error("保存图片失败:", err);
+      console.error("下载图片失败:", err);
     }
   }
 
   const maxDayCount = Math.max(...castleStat.dates.map((d) => d.count));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative mx-4 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute -top-10 right-0 text-white/80 hover:text-white text-sm transition">✕ 关闭</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
+      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
         <div ref={cardRef} className="rounded-xl overflow-hidden shadow-2xl">
           <div className="bg-gradient-to-br from-[#2d2a24] via-[#3d3a34] to-[#4d4a44] px-6 pt-8 pb-6 text-white">
             <div className="flex items-center justify-center gap-14 mb-2">
@@ -610,17 +725,45 @@ function CastleStatModal({
                 <div className="text-center text-xs text-black/30 py-1">......</div>
               )}
             </div>
-            <button
-              onClick={saveAsImage}
-              className="save-exclude mt-4 w-2/3 mx-auto rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              保存图片
-            </button>
           </div>
         </div>
+      </div>
+
+      <div className="relative mx-4 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        {/* 加载状态 */}
+        {loading && (
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-white text-sm">生成图片中...</p>
+          </div>
+        )}
+
+        {/* 图片内容 */}
+        {!loading && generatedImage && (
+          <>
+            {/* 上方提示 */}
+            {isMobileDevice() && (
+              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
+            )}
+
+            <img src={generatedImage} alt="城堡统计" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
+
+            {/* 下方按钮区域 */}
+            <div className="flex flex-col gap-2 mt-3">
+              {!isMobileDevice() && (
+                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  下载图片
+                </button>
+              )}
+              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+                关闭
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -647,9 +790,13 @@ export default function HomePage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [overviewAnchor, setOverviewAnchor] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
+  const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
+  const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot">("revenue");
   const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot">("home");
+  // 饼图选中状态 - 用于移动端点击显示tooltip
+  const [pieActiveIndex, setPieActiveIndex] = useState<number | null>(null);
   type FanItem = { mid: number; uname: string; face: string; attribute: number; mtime: number };
   const [fansList, setFansList] = useState<FanItem[]>([]);
   const [fansTotal, setFansTotal] = useState(0);
@@ -770,8 +917,9 @@ export default function HomePage() {
         setIsMockMode(false);
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
-        // B站凭证失效且刷新失败，跳转到登录页
-        window.location.href = "/login";
+        // B站凭证失效且刷新失败，展示模拟数据
+        await handleAuthExpired();
+        setLoading(false);
         return;
       }
 
@@ -779,8 +927,8 @@ export default function HomePage() {
         setSnapshot(snapshotData.data);
         // 根据 message 判断数据来源
         if (snapshotData.message === "needs-relogin") {
-          setAuthError("B站登录已失效，请重新扫码登录。");
-          window.location.href = "/login";
+          await handleAuthExpired();
+          setLoading(false);
           return;
         } else if (snapshotData.message === "mock snapshot") {
           setIsMockMode(true);
@@ -798,9 +946,11 @@ export default function HomePage() {
 
       // 有真实数据或模拟数据时获取统计（模拟模式下 API 返回模拟数据）
       if (snapshotData.data?.source === "real" || snapshotData.data?.source === "mock") {
-        fetchStats();
-        fetchCertifications();
-        fetchOtherStats();
+        await Promise.all([
+          fetchStats(),
+          fetchCertifications(),
+          fetchOtherStats(),
+        ]);
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -833,8 +983,7 @@ export default function HomePage() {
       ]);
       // 检查是否需要重新登录
       if (blindBoxData.message === "needs-relogin" || synthesisData.message === "needs-relogin") {
-        setAuthError("B站登录已失效，请重新扫码登录。");
-        window.location.href = "/login";
+        await handleAuthExpired();
         return;
       }
       if (blindBoxData.code === 0) setBlindBoxStats(blindBoxData.data);
@@ -867,8 +1016,7 @@ export default function HomePage() {
       const res = await fetch("/api/stats/certification", { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
-        setAuthError("B站登录已失效，请重新扫码登录。");
-        window.location.href = "/login";
+        await handleAuthExpired();
         return;
       }
       if (data.code === 0 && data.data) {
@@ -884,8 +1032,7 @@ export default function HomePage() {
       const res = await fetch("/api/stats/other", { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
-        setAuthError("B站登录已失效，请重新扫码登录。");
-        window.location.href = "/login";
+        await handleAuthExpired();
         return;
       }
       if (data.code === 0 && data.data) {
@@ -894,6 +1041,68 @@ export default function HomePage() {
     } catch {
       // other stats may not be available
     }
+  }
+
+  async function openAnchorBubbleChart() {
+    if (!snapshot) return;
+    const anchors = overviewAnchors;
+    if (anchors.length === 0) return;
+
+    // 只取 top 300 用于显示和头像获取
+    const topAnchors = anchors.slice(0, 300);
+
+    // 立即打开模态框，显示加载状态
+    const initialItems: BubbleItem[] = topAnchors.map(a => ({
+      id: a.ruid,
+      name: a.rname,
+      value: a.coins,
+      face: anchorFaces[a.ruid] || "",
+    }));
+    setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像..." });
+
+    // 找出还没有头像的uid（只针对top300）
+    const missingUids = topAnchors.filter(a => !anchorFaces[a.ruid]).map(a => a.ruid);
+    let faces = { ...anchorFaces };
+
+    if (missingUids.length > 0) {
+      try {
+        const batchSize = 50;
+        let successCount = 0;
+        let failCount = 0;
+        // 串行处理批次，避免并发限流
+        for (let i = 0; i < missingUids.length; i += batchSize) {
+          const batch = missingUids.slice(i, i + batchSize);
+          try {
+            const res = await fetch(`/api/tools/user-info?uids=${batch.join(",")}`, { cache: "no-store" });
+            const data = await res.json();
+            if (data.code === 0 && data.data) {
+              for (const [uidStr, info] of Object.entries(data.data)) {
+                const face = (info as any).face || "";
+                faces[Number(uidStr)] = face;
+                if (face) successCount++; else failCount++;
+              }
+            } else {
+              failCount += batch.length;
+            }
+          } catch {
+            failCount += batch.length;
+          }
+        }
+        console.log("[AnchorBubble] 头像获取完成: 成功=" + successCount, "失败=" + failCount, "总计=" + missingUids.length);
+        setAnchorFaces(faces);
+      } catch (err) {
+        console.error("获取主播头像失败:", err);
+      }
+    }
+
+    const items: BubbleItem[] = topAnchors.map(a => ({
+      id: a.ruid,
+      name: a.rname,
+      value: a.coins,
+      face: faces[a.ruid] || "",
+    }));
+
+    setBubbleChartData({ items, title: "消费主播分布", loading: false });
   }
 
   async function loadFans(pn: number, append = false) {
@@ -1074,9 +1283,8 @@ export default function HomePage() {
         setSnapshot(snapshotData.data);
         // 根据 message 判断数据来源
         if (snapshotData.message === "needs-relogin") {
-          setAuthError("B站登录已失效，请重新扫码登录。");
-          // 跳转到登录页
-          window.location.href = "/login";
+          await handleAuthExpired();
+          setLoading(false);
           return;
         } else if (snapshotData.message === "cached snapshot") {
           setAuthError("B站请求失败，当前显示的是历史缓存数据。");
@@ -1085,9 +1293,11 @@ export default function HomePage() {
         }
       }
       if (snapshotData.data?.source === "real" || snapshotData.data?.source === "mock") {
-        fetchStats();
-        fetchCertifications();
-        fetchOtherStats();
+        await Promise.all([
+          fetchStats(),
+          fetchCertifications(),
+          fetchOtherStats(),
+        ]);
       }
     } catch (error) {
       console.error("Failed to refresh data:", error);
@@ -1138,6 +1348,21 @@ export default function HomePage() {
     setIsMockMode(true);
     setAuthError("当前查看的是模拟数据，切换账号查看自己数据");
     // 模拟模式下立即调用统计API获取模拟统计数据
+    fetchStats();
+    fetchCertifications();
+    fetchOtherStats();
+  }
+
+  /** 登录凭证失效时：清除会话，展示模拟数据，不跳转登录页 */
+  async function handleAuthExpired() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setCurrentAccount(null);
+    setApiLoggedIn(false);
+    setSnapshot(buildMockPayRecordSnapshot());
+    setBlindBoxStats(null);
+    setSynthesisStats(null);
+    setIsMockMode(true);
+    setAuthError("B站登录已失效，当前查看的是模拟数据");
     fetchStats();
     fetchCertifications();
     fetchOtherStats();
@@ -1359,87 +1584,90 @@ export default function HomePage() {
 
   return (
     <main className="h-screen flex flex-col bg-[#f5f5f5] text-[#1f1c17]">
-      {/* Header */}
-      <header className="mx-auto w-full max-w-4xl flex items-center justify-between px-2 py-2 bg-[#e8e8e8] rounded-t-xl mt-2">
+      {/* Header - outside scroll area, always clickable during loading */}
+      <header className="flex-shrink-0 mx-auto w-full max-w-4xl flex items-center justify-between px-4 py-2 bg-[#e8e8e8]">
         <h1 className="font-[family-name:var(--font-space-grotesk)] text-lg font-semibold tracking-tight">B站小工具</h1>
         <div className="flex items-center gap-2">
-          {isLoggedIn || isMockMode ? (
-            <div className="relative" ref={dropdownRef}>
-              <button
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="flex items-center gap-1.5 rounded-full bg-[#1f1c17] px-2 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
-              >
-                {isMockMode ? (
-                  <span className="text-white">🎮 模拟数据</span>
-                ) : currentAccount?.face ? (
-                  <img src={fixImageUrl(currentAccount.face)} alt="" className="w-5 h-5 rounded-full object-cover" />
-                ) : (
-                  <span className="max-w-[60px] truncate">{currentAccount?.uname || currentAccount?.mid}</span>
-                )}
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {isDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-black/10 bg-white shadow-lg z-[100]">
-                  <div className="p-2">
-                    <div className="px-3 py-2 text-xs font-medium text-black/40 uppercase tracking-wider">已登录账号</div>
-                    {accounts.map((acc) => {
-                        const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
-                        return (
-                          <button
-                            key={acc.sid}
-                            onClick={() => switchAccount(acc.sid)}
-                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
-                              isSelected
-                                ? "bg-[#1f1c17] text-white"
-                                : "hover:bg-black/5 text-black"
-                            }`}
-                          >
-                            <span>{acc.uname}</span>
-                            {isSelected && (
-                              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            )}
-                          </button>
-                        );
-                      })}
-                    <div className="border-t border-black/10 my-2"></div>
-                    <button
-                      onClick={() => { setIsDropdownOpen(false); switchToMock(); }}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
-                        isMockMode ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
-                      }`}
-                    >
-                      <span>模拟数据</span>
-                      {isMockMode && (
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                      )}
-                    </button>
-                    <Link href="/login" className="w-full block px-3 py-2 rounded-lg text-left text-sm text-black hover:bg-black/5 transition">
-                      添加新账号
-                    </Link>
-                    <button
-                      onClick={logout}
-                      className="w-full px-3 py-2 rounded-lg text-left text-sm text-red-600 hover:bg-red-50 transition"
-                    >
-                      退出登录
-                    </button>
+            {isLoggedIn || isMockMode ? (
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className="flex items-center gap-1.5 rounded-full bg-[#1f1c17] px-2 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
+                >
+                  {isMockMode ? (
+                    <span className="text-white">🎮 模拟数据</span>
+                  ) : currentAccount?.face ? (
+                    <img src={fixImageUrl(currentAccount.face)} alt="" className="w-5 h-5 rounded-full object-cover" />
+                  ) : (
+                    <span className="max-w-[60px] truncate">{currentAccount?.uname || currentAccount?.mid}</span>
+                  )}
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {isDropdownOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-black/10 bg-white shadow-lg z-[10001]">
+                    <div className="p-2">
+                      <div className="px-3 py-2 text-xs font-medium text-black/40 uppercase tracking-wider">已登录账号</div>
+                      {accounts.map((acc) => {
+                          const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
+                          return (
+                            <button
+                              key={acc.sid}
+                              onClick={() => switchAccount(acc.sid)}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
+                                isSelected
+                                  ? "bg-[#1f1c17] text-white"
+                                  : "hover:bg-black/5 text-black"
+                              }`}
+                            >
+                              <span>{acc.uname}</span>
+                              {isSelected && (
+                                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              )}
+                            </button>
+                          );
+                        })}
+                      <div className="border-t border-black/10 my-2"></div>
+                      <button
+                        onClick={() => { setIsDropdownOpen(false); switchToMock(); }}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
+                          isMockMode ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
+                        }`}
+                      >
+                        <span>模拟数据</span>
+                        {isMockMode && (
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </button>
+                      <Link href="/login" className="w-full block px-3 py-2 rounded-lg text-left text-sm text-black hover:bg-black/5 transition">
+                        添加新账号
+                      </Link>
+                      <button
+                        onClick={logout}
+                        className="w-full px-3 py-2 rounded-lg text-left text-sm text-red-600 hover:bg-red-50 transition"
+                      >
+                        退出登录
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <Link href="/login" className="rounded-full bg-[#1f1c17] px-3 py-1.5 text-sm font-medium !text-white transition hover:opacity-90">
-              扫码登录
-            </Link>
-          )}
-          {/* 刷新按钮已移至各页面内部 */}
-        </div>
-      </header>
+                )}
+              </div>
+            ) : (
+              <Link href="/login" className="rounded-full bg-[#1f1c17] px-3 py-1.5 text-sm font-medium !text-white transition hover:opacity-90">
+                扫码登录
+              </Link>
+            )}
+            {/* 刷新按钮已移至各页面内部 */}
+          </div>
+        </header>
+
+      {/* Content Area - scrollable, overlay only covers this area (not header) */}
+      <div className="flex-1 overflow-y-auto relative pb-14">
 
       {/* Auth error banner */}
       {authError && (
@@ -1448,23 +1676,22 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Loading state */}
-      {!snapshot && (
+      {/* Loading state (only for revenue module) */}
+      {activeModule === "revenue" && !snapshot && (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-black/45">加载中...</p>
+            <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
           </div>
         </div>
       )}
 
-      {/* Content - scrollable */}
-      {snapshot && (
-      <div className="flex-1 overflow-y-auto py-3">
-        <div className="mx-auto w-full max-w-4xl px-2 min-w-0">
-          {/* L3 Tab bar (only for 直播消费统计) */}
-          {activeModule === "revenue" && (
-            <div className="flex items-center gap-2 px-4 py-1.5 mb-2 overflow-x-auto whitespace-nowrap scrollbar-none">
+      {/* Content - Revenue module */}
+      {activeModule === "revenue" && snapshot && (
+        <div className="mx-auto w-full max-w-4xl px-2 min-w-0 py-3">
+          {/* L3 Tab bar - sticky at top */}
+            <div className="flex items-center gap-2 px-4 py-1.5 mb-2 overflow-x-auto whitespace-nowrap scrollbar-none sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
               {(["overview", "blindbox", "synthesis", "other"] as const).map((tab) => (
                 <button
                   key={tab}
@@ -1483,17 +1710,15 @@ export default function HomePage() {
                 disabled={loading}
                 className="shrink-0 rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-black/60 transition hover:bg-gray-50 disabled:opacity-50"
               >
-                <svg className="w-3.5 h-3.5 inline-block mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                 {loading ? "刷新中..." : "刷新"}
               </button>
               {lastRefreshTime && <span className="shrink-0 text-xs text-black/30">{lastRefreshTime}</span>}
             </div>
-          )}
           <section className="grid gap-6">
-            {activeModule === "revenue" && (<>
-              {/* Overview tab - Unified card: Summary + Date/Anchor + Gift List */}
+            {/* Overview tab - Unified card: Summary + Date/Anchor + Gift List */}
             {activeTab === "overview" && (
-              <article className="rounded-xl border border-black/10 bg-white/80 p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur overflow-x-auto">
+              <article className="rounded-xl border border-black/10 bg-white/80 p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] overflow-visible">
                 {/* Row 0: Date range */}
                 {snapshot.records.length > 0 && (() => {
                   const sorted = [...snapshot.records].sort((a, b) => a.timestamp - b.timestamp);
@@ -1531,9 +1756,20 @@ export default function HomePage() {
                     <div className="text-xs text-black/45">礼物种类</div>
                     <div className="mt-1 text-xl font-semibold">{giftTypeCount}</div>
                   </div>
-                  <div className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3">
-                    <div className="text-xs text-black/45">主播数</div>
+                  <div
+                    className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3 cursor-pointer hover:shadow-md transition-shadow relative group"
+                    onClick={openAnchorBubbleChart}
+                  >
+                    <div className="text-xs text-black/45 flex items-center gap-1">
+                      主播数
+                      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-black/10 text-[10px] text-black/50 cursor-help">?</span>
+                    </div>
                     <div className="mt-1 text-xl font-semibold">{overviewAnchors.length}</div>
+                    {/* Tooltip */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-black/85 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] text-center leading-relaxed">
+                      点击查看主播消费分布图<br/>此操作耗时约3分钟，频繁访问会限流，建议访问一次后保存图片
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/85"></div>
+                    </div>
                   </div>
                 </div>
 
@@ -1683,7 +1919,7 @@ export default function HomePage() {
                     <div className="flex flex-col">
                       {/* First pie: all-time anchors */}
                       {overviewAnchors.length > 0 && (() => {
-                        const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48"];
+                        const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
                         const TOP_N = 20;
                         const buildPieData = (anchors: Array<{ ruid: number; rname: string; coins: number }>) => {
                           const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string }> = [];
@@ -1696,7 +1932,7 @@ export default function HomePage() {
                             }
                           }
                           if (otherCoins > 0) {
-                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: pieColors[result.length % pieColors.length] });
+                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8" });
                           }
                           return result;
                         };
@@ -1716,12 +1952,14 @@ export default function HomePage() {
                                     outerRadius="95%"
                                     paddingAngle={0}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    onClick={(data: any) => {
+                                    onClick={(data: any, index: number) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
                                         const ruidStr = String(data.ruid);
                                         setOverviewAnchor(ruidStr === overviewAnchor ? "" : ruidStr);
                                         setSelectedDay(null);
                                       }
+                                      // 移动端点击切换tooltip显示
+                                      setPieActiveIndex(pieActiveIndex === index ? null : index);
                                     }}
                                     cursor="pointer"
                                   >
@@ -1748,7 +1986,7 @@ export default function HomePage() {
 
                       {/* Second pie: period anchors (visible when month selected) */}
                       {selectedMonth && periodAnchors.length > 0 && (() => {
-                        const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48"];
+                        const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
                         const TOP_N = 20;
                         const buildPieData = (anchors: Array<{ ruid: number; rname: string; coins: number }>) => {
                           const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string }> = [];
@@ -1761,7 +1999,7 @@ export default function HomePage() {
                             }
                           }
                           if (otherCoins > 0) {
-                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: pieColors[result.length % pieColors.length] });
+                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8" });
                           }
                           return result;
                         };
@@ -1784,12 +2022,14 @@ export default function HomePage() {
                                     outerRadius="95%"
                                     paddingAngle={0}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    onClick={(data: any) => {
+                                    onClick={(data: any, index: number) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
                                         const ruidStr = String(data.ruid);
                                         setOverviewAnchor(ruidStr === overviewAnchor ? "" : ruidStr);
                                         setSelectedDay(null);
                                       }
+                                      // 移动端点击切换tooltip显示
+                                      setPieActiveIndex(pieActiveIndex === index ? null : index);
                                     }}
                                     cursor="pointer"
                                   >
@@ -1920,13 +2160,13 @@ export default function HomePage() {
                       const currentFilter = blindBoxFilters[stat.blindBoxId] ?? { ruid: "", dateRange: "all" };
                       const isXindong = stat.blindBoxId === 32251;
                       return (
-                        <div key={stat.blindBoxId} className={`rounded-lg border border-black/10 p-3 ${isXindong ? "bg-[#f9f4ea]" : "bg-[#fff7ef]"}`}>
+                        <div key={stat.blindBoxId} className={`rounded-lg border border-black/10 p-2 ${isXindong ? "bg-[#f9f4ea]" : "bg-[#fff7ef]"}`}>
                           {/* Row 1: 盲盒图标+名称 + 统计时间 */}
                           <div className="flex items-center gap-2 mb-2">
                             {BLIND_BOX_CONFIG.icons[stat.blindBoxId] && (
                               <img src={BLIND_BOX_CONFIG.icons[stat.blindBoxId]} alt="" className="w-6 h-6 rounded" />
                             )}
-                            <span className="font-semibold text-sm">{stat.blindBoxName}</span>
+                            <span className="font-semibold text-sm truncate max-w-[80px]">{stat.blindBoxName.slice(0, 6)}{stat.blindBoxName.length > 6 ? "..." : ""}</span>
                             {isXindong && (
                               <button
                                 onClick={() => {
@@ -2018,7 +2258,7 @@ export default function HomePage() {
                                         <td className="pl-3 pr-2 py-2">
                                           <div className="flex items-center gap-2">
                                             {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
-                                            <span className="font-medium truncate">{gift.gift_name}</span>
+                                            <span className="font-medium">{gift.gift_name}</span>
                                           </div>
                                         </td>
                                         <td className="px-2 py-2 text-right">{gift.unitPrice}</td>
@@ -2325,12 +2565,6 @@ export default function HomePage() {
                     <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
                       <div className="text-xs text-black/70">总送礼天数</div>
                       <div className="mt-1 text-2xl font-semibold">{otherStats.dayStats.totalDays} <span className="text-sm font-normal text-black/45">天</span></div>
-                      {otherStats.dayStats.maxDaysInYear > 0 && (
-                        <div className="text-xs text-black/60 mt-2">
-                          365天内最多活跃: {otherStats.dayStats.maxDaysInYearRange.start.replace(/-/g, ".")} - {otherStats.dayStats.maxDaysInYearRange.end.replace(/-/g, ".")}
-                        </div>
-                      )}
-
                     </div>
                     <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
                       <div className="text-xs text-black/70">连续送礼最长</div>
@@ -2371,12 +2605,11 @@ export default function HomePage() {
                             </div>
                             {room.maxDaysInYear > 0 && (
                               <div className="text-xs text-black/55">
-                                365天内最多: <b className="text-black/80">{room.maxDaysInYear}</b> 天
-                                <span className="text-black/40 ml-1">{room.maxDaysInYearRange.start.replace(/-/g, ".")} - {room.maxDaysInYearRange.end.replace(/-/g, ".")}</span>
+                                过去1年有 <b className="text-black/80">{room.maxDaysInYear}</b> 天给TA送过礼物
                               </div>
                             )}
                             <div className="flex items-center gap-4 text-xs text-black/55 mt-0.5">
-                              <span>连续最长: <b className="text-black/80">{room.maxConsecutiveDays}</b> 天</span>
+                              <span>连续最长 <b className="text-black/80">{room.maxConsecutiveDays}</b> 天给TA送过礼物</span>
                               {room.maxConsecutiveDays > 0 && (
                                 <span className="text-black/40">{room.maxConsecutiveStart.replace(/-/g, ".")} - {room.maxConsecutiveEnd.replace(/-/g, ".")}</span>
                               )}
@@ -2398,20 +2631,23 @@ export default function HomePage() {
                 <div className="text-sm text-black/45">正在加载其他数据...</div>
               </article>
             )}
-            </>
-            )}
+          </section>
+        </div>
+      )}
 
-            {/* 主播数据统计 - placeholder */}
-            {activeModule === "anchor" && (
-              <article className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
-                <div className="text-4xl mb-4">📈</div>
-                <h3 className="text-lg font-semibold">主播数据统计</h3>
-                <p className="mt-2 text-sm text-black/45">即将上线，敬请期待</p>
-              </article>
-            )}
+      {/* 主播数据 - 保持挂载避免切换闪烁 */}
+      <div style={{ display: activeModule === "anchor" ? "block" : "none" }}>
+        <AnchorDataModule
+          key={currentAccount?.sid ?? "no-account"}
+          anchorName={currentAccount?.uname ?? ""}
+          anchorFace={currentAccount?.face ?? ""}
+        />
+      </div>
 
-            {/* B站小工具 */}
-            {activeModule === "screenshot" && toolsPage === "home" && (
+      {/* B站小工具 */}
+      {activeModule === "screenshot" && (
+        <div className="mx-auto w-full max-w-4xl px-2 min-w-0">
+          {toolsPage === "home" && (
               <div className="grid grid-cols-1 gap-3">
                 {[
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", action: () => { setToolsPage("fans"); loadFans(1); } },
@@ -2516,7 +2752,7 @@ export default function HomePage() {
                               {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                             </div>
                           )}
-                          <img src={fan.face} alt="" className={`w-9 h-9 rounded-full flex-shrink-0 ${isDeactivated ? "opacity-40 grayscale" : ""}`} />
+                          <img src={fixImageUrl(fan.face)} alt="" className={`w-9 h-9 rounded-full flex-shrink-0 ${isDeactivated ? "opacity-40 grayscale" : ""}`} />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <span className={`text-sm font-medium truncate ${isDeactivated ? "text-black/30" : ""}`}>{fan.uname}</span>
@@ -2615,7 +2851,7 @@ export default function HomePage() {
                               {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                             </div>
                           )}
-                          <img src={item.anchor_info.avatar} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
+                          <img src={fixImageUrl(item.anchor_info.avatar)} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-medium truncate">{item.anchor_info.nick_name}</span>
@@ -2759,21 +2995,36 @@ export default function HomePage() {
                 </div>
               </div>
             )}
-          </section>
         </div>
-      </div>
       )}
 
-      {/* Bottom Navigation */}
-      <nav className="mx-auto w-full max-w-4xl flex items-center justify-around px-4 py-1.5 bg-[#e8e8e8] rounded-t-xl mb-3">
+      {/* Loading Overlay - only covers content area, header above is still clickable */}
+      {loading && (
+        <div className="absolute inset-0 z-[9999] bg-white/70 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-12 h-12 border-4 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-base font-medium text-[#1f1c17]">正在加载数据...</p>
+            <p className="text-sm text-black/45">切换账号需要重新获取数据，请耐心等待</p>
+            <p className="text-xs text-black/30">首次加载可能需要几分钟</p>
+          </div>
+        </div>
+      )}
+
+      </div> {/* End of scrollable content area */}
+
+      {/* Bottom Navigation - fixed at bottom */}
+      <nav className="fixed bottom-0 left-0 right-0 mx-auto w-full max-w-4xl flex items-center justify-around px-4 py-1.5 bg-[#e8e8e8] rounded-t-xl border-t border-black/10 z-50">
         {([
           { key: "revenue", label: "粉丝消费", icon: "📊" },
           { key: "anchor", label: "主播数据", icon: "📈" },
-          { key: "screenshot", label: "B站小工具", icon: "🔧" },
+          { key: "screenshot", label: "其他工具", icon: "🧰" },
         ] as const).map((mod) => (
           <button
             key={mod.key}
-            onClick={() => { setActiveModule(mod.key); if (mod.key !== "screenshot") setToolsPage("home"); }}
+            onClick={() => {
+              setActiveModule(mod.key);
+              if (mod.key !== "screenshot") setToolsPage("home");
+            }}
             className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg transition min-w-0 ${
               activeModule === mod.key
                 ? "text-[#1f1c17]"
@@ -2810,6 +3061,17 @@ export default function HomePage() {
           selectedDay={selectedDay}
           actualDateRange={actualDateRange}
           onClose={() => setShowGiftSaveModal(false)}
+        />
+      )}
+
+      {/* 头像气泡分布图 */}
+      {bubbleChartData && (
+        <AvatarBubbleChart
+          items={bubbleChartData.items}
+          title={bubbleChartData.title}
+          loading={bubbleChartData.loading}
+          loadingText={bubbleChartData.loadingText}
+          onClose={() => setBubbleChartData(null)}
         />
       )}
 

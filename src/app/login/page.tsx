@@ -29,19 +29,40 @@ export default function LoginPage() {
   const [status, setStatus] = useState("正在生成登录二维码...");
   const [error, setError] = useState("");
   const [qrKey, setQrKey] = useState("");
+  const [countdown, setCountdown] = useState(0);
   const pollTimerRef = useRef<number | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    if (countdownTimerRef.current !== null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
   }, []);
 
   const pollLogin = useCallback((key: string) => {
     clearPollTimer();
     let pollCount = 0;
-    const maxPolls = 200;
+    const maxPolls = 120;  // 180秒 / 1.5秒 = 120次
+    const totalSeconds = 180;  // B站二维码有效期约180秒
+    setCountdown(totalSeconds);
+
+    countdownTimerRef.current = window.setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownTimerRef.current) {
+            window.clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
     pollTimerRef.current = window.setInterval(async () => {
       pollCount++;
@@ -126,14 +147,50 @@ export default function LoginPage() {
     }
   }, [clearPollTimer, pollLogin]);
 
-  const downloadQRCode = useCallback(() => {
+  const downloadQRCode = useCallback(async () => {
     if (!qrImage) return;
-    const link = document.createElement("a");
-    link.href = qrImage;
-    link.download = "bilibili-login-qr.png";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+
+    try {
+      // 方案一：优先使用 Web Share API（iOS Safari、Android Chrome）
+      const response = await fetch(qrImage);
+      const blob = await response.blob();
+      const file = new File([blob], 'bilibili-login-qr.png', { type: blob.type });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: '保存二维码图片',
+        });
+        return;
+      }
+    } catch (err) {
+      console.log('Web Share API 不可用或失败，降级使用全屏展示');
+    }
+
+    // 方案二：全屏弹窗展示，提示长按保存（兼容所有浏览器，包括微信）
+    const newWindow = window.open("", "_blank");
+    if (newWindow) {
+      newWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>登录二维码</title>
+          <style>
+            body { margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #1a1a1a; }
+            img { max-width: 90vw; max-height: 70vh; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+            .hint { margin-bottom: 20px; font-size: 18px; color: #fff; text-align: center; padding: 0 20px; font-weight: 500; }
+            .close-btn { position: absolute; top: 20px; right: 20px; color: #fff; font-size: 24px; cursor: pointer; padding: 10px; }
+          </style>
+        </head>
+        <body>
+          <button class="close-btn" onclick="window.close()">✕</button>
+          <p class="hint">长按图片保存到相册</p>
+          <img src="${qrImage}" alt="登录二维码" />
+        </body>
+        </html>
+      `);
+      newWindow.document.close();
+    }
   }, [qrImage]);
 
   useEffect(() => {
@@ -158,9 +215,9 @@ export default function LoginPage() {
             使用哔哩哔哩手机APP扫码，在手机上确认登录。本网站只获取你的登录凭证，无法知道密码，更不会也无法更改密码或对账号安全方面做出任何更改。
           </p>
 
-          <div className="mt-8 flex flex-col items-center gap-4">
-            <div className="max-w-[280px] w-full rounded-[1.75rem] border border-black/10 bg-[#111111] p-4">
-              <div className="w-full aspect-square rounded-3xl bg-white p-2 overflow-hidden">
+          <div className="mt-8 flex justify-center">
+            <div className="max-w-[280px] w-full rounded-[1.75rem] border border-black/10 bg-[#111111] p-4 flex items-center justify-center">
+              <div className="w-full aspect-square rounded-3xl bg-white p-2 overflow-hidden flex items-center justify-center">
                 {qrImage ? (
                   <img src={qrImage} alt="Bilibili login QR code" className="w-full h-full object-contain" />
                 ) : (
@@ -168,22 +225,15 @@ export default function LoginPage() {
                 )}
               </div>
             </div>
-            
-            <button
-              type="button"
-              onClick={downloadQRCode}
-              disabled={!qrImage}
-              className="flex items-center gap-1.5 rounded-full bg-black/10 px-5 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              下载二维码图片
-            </button>
           </div>
 
           <div className="mt-6 text-center">
-            <div className="text-lg font-medium text-black/80">{status}</div>
+            <div className="text-lg font-medium text-black/80">
+              {status}
+              {status === "等待扫码中..." && countdown > 0 && (
+                <span className="ml-2 text-sm text-black/50">({Math.floor(countdown / 60)}分{countdown % 60}秒)</span>
+              )}
+            </div>
             {error ? (
               <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
                 <p className="text-sm text-red-600">{error}</p>
@@ -191,11 +241,15 @@ export default function LoginPage() {
             ) : null}
           </div>
 
+          <div className="mt-2 text-center">
+            <p className="text-xs text-black/40">长按上面的二维码图片保存或截屏</p>
+          </div>
+
           <div className="mt-6 flex justify-center">
             <button
               type="button"
               onClick={loadQR}
-              className="rounded-full bg-[#1f1c17] px-6 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+              className="rounded-full bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
             >
               重新生成二维码
             </button>
@@ -204,8 +258,10 @@ export default function LoginPage() {
           <div className="mt-6 flex justify-center">
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 clearPollTimer();
+                // 清除登录会话，避免主页检测到过期session后跳回登录页
+                await fetch("/api/auth/logout", { method: "POST" });
                 window.location.href = "/";
               }}
               className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"

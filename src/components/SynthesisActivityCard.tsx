@@ -4,6 +4,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import type { SynthesisActivityStats } from "@/app/api/stats/synthesis/route";
 import type { SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
 import { toPng } from "html-to-image";
+import { isMobileDevice } from "@/lib/device";
 
 function formatProfit(profit: number): string {
   if (profit >= 0) return `+${profit}`;
@@ -39,31 +40,33 @@ export default function SynthesisActivityCard({ activity }: SynthesisActivityCar
     if (!anchor) return activity.profit;
     const anchorRecords = activity.profit.detailedRecords.filter(r => String(r.ruid) === selectedAnchor);
     const giftMap = new Map<string, SynthesisGiftInfo>();
-    let totalEarned = 0;
     let successCount = 0;
     for (const r of anchorRecords) {
-      if (r.synthetic_result === 0) continue;
-      totalEarned += r.gift_price;
-      successCount++;
-      const key = r.gift_name;
-      const existing = giftMap.get(key);
-      if (existing) {
-        existing.count++;
-      } else {
-        giftMap.set(key, {
-          gift_id: 0,
-          gift_name: r.gift_name,
-          gift_img: r.gift_img,
-          gift_price: r.gift_price,
-          count: 1,
-        });
+      if (r.synthetic_result !== 0) {
+        successCount++;
+      }
+      // 礼物聚合：对所有记录（包括翻牌首翻坏牌等 synthetic_result=0），按 gift_name 计数
+      if (r.gift_name) {
+        const key = r.gift_name;
+        const existing = giftMap.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          giftMap.set(key, {
+            gift_id: 0,
+            gift_name: r.gift_name,
+            gift_img: r.gift_img,
+            gift_price: r.gift_price,
+            count: 1,
+          });
+        }
       }
     }
     return {
       ...activity.profit,
       totalSpent: anchor.totalSpent,
-      totalEarned,
-      profit: totalEarned - anchor.totalSpent,
+      totalEarned: anchor.totalEarned,
+      profit: anchor.totalEarned - anchor.totalSpent,
       successCount,
       giftList: Array.from(giftMap.values()).sort((a, b) => a.gift_price - b.gift_price),
     };
@@ -106,48 +109,50 @@ export default function SynthesisActivityCard({ activity }: SynthesisActivityCar
   }, [activity.id]);
 
   return (
-    <div key={activity.id} ref={cardRef} className={`w-full min-w-0 rounded-xl border border-black/10 ${cardBgColor} p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
+    <div key={activity.id} ref={cardRef} className={`w-full min-w-0 rounded-xl border border-black/10 ${cardBgColor} p-2 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {activity.icon && <img src={fixImageUrl(activity.icon)} alt="" className="w-7 h-7 rounded flex-shrink-0" />}
-          <div className="text-base font-bold uppercase tracking-[0.15em] text-black/70">{activity.name}</div>
+          <div className="text-base font-bold uppercase tracking-[0.15em] text-black/70 truncate max-w-[100px]">
+            {activity.name.slice(0, 6)}{activity.name.length > 6 ? "..." : ""}
+          </div>
         </div>
-        {filteredCertifications.length > 0 && (
-          <button
-            onClick={() => { setShowCertModal(true); setCertIndex(0); }}
-            className="inline-flex items-center gap-1 rounded-full border border-yellow-400 bg-yellow-50 px-2 py-1 text-xs hover:bg-yellow-100 transition"
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedAnchor}
+            onChange={(e) => setSelectedAnchor(e.target.value)}
+            className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-black/65 outline-none focus:border-black/30 flex-shrink-0"
           >
-            <span className="text-sm">👑</span>
-            <span className="text-sm">👻</span>
-            <span className="text-sm">💰</span>
-          </button>
-        )}
+            <option value="">全部主播</option>
+            {activity.profit.anchors.map((anchor) => (
+              <option key={anchor.ruid} value={anchor.ruid}>
+                {anchor.rname || `主播${anchor.ruid}`}
+              </option>
+            ))}
+          </select>
+          {filteredCertifications.length > 0 && (
+            <button
+              onClick={() => { setShowCertModal(true); setCertIndex(0); }}
+              className="inline-flex items-center gap-1 rounded-full border border-yellow-400 bg-yellow-50 px-2 py-1 text-xs hover:bg-yellow-100 transition"
+            >
+              <span className="text-sm">👑</span>
+              <span className="text-sm">👻</span>
+              <span className="text-sm">💰</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="text-s text-black/70 font-medium whitespace-nowrap overflow-x-auto scrollbar-none flex-1 min-w-0">
-            {filteredStats.totalEarned}-{filteredStats.totalSpent}=<span className={filteredStats.profit >= 0 ? "text-green-600 font-bold" : "text-red-500 font-bold"}>{filteredStats.profit >= 0 ? "+" : ""}{filteredStats.profit}</span>电池 | 合成 {totalGiftCount} 个礼物
-          </div>
-          <button
-            onClick={() => setShowDebug(!showDebug)}
-            className="text-xs text-black/40 hover:text-black/70 transition underline"
-          >
-            {showDebug ? "收起调试" : "调试"}
-          </button>
+        <div className="text-s text-black/70 font-medium whitespace-nowrap overflow-x-auto scrollbar-none flex-1 min-w-0">
+          合成 {totalGiftCount} 个礼物 | {filteredStats.totalEarned}-{filteredStats.totalSpent}=<span className={filteredStats.profit >= 0 ? "text-green-600 font-bold" : "text-red-500 font-bold"}>{filteredStats.profit >= 0 ? "+" : ""}{filteredStats.profit}</span>电池
         </div>
-        <select
-          value={selectedAnchor}
-          onChange={(e) => setSelectedAnchor(e.target.value)}
-          className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-black/65 outline-none focus:border-black/30 flex-shrink-0"
+        <button
+          onClick={() => setShowDebug(!showDebug)}
+          className="text-xs text-black/40 hover:text-black/70 transition underline flex-shrink-0"
         >
-          <option value="">全部主播</option>
-          {activity.profit.anchors.map((anchor) => (
-            <option key={anchor.ruid} value={anchor.ruid}>
-              {anchor.rname || `主播${anchor.ruid}`}
-            </option>
-          ))}
-        </select>
+          {showDebug ? "收起调试" : "调试"}
+        </button>
       </div>
 
       {filteredStats.giftList.length > 0 && (
@@ -180,7 +185,7 @@ export default function SynthesisActivityCard({ activity }: SynthesisActivityCar
                         <td className="pl-3 pr-2 py-2">
                           <div className="flex items-center gap-2">
                             {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
-                            <span className="font-medium truncate">{gift.gift_name}</span>
+                            <span className="font-medium">{gift.gift_name}</span>
                           </div>
                         </td>
                         <td className="px-2 py-2 text-right">{gift.gift_price}</td>
@@ -389,23 +394,44 @@ function CertificationModal({
   activityType?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const cert = certifications[currentIndex];
   const total = certifications.length;
 
-  async function saveAsImage() {
-    if (!cardRef.current) return;
+  useEffect(() => {
+    generateImage();
+  }, [currentIndex]);
+
+  async function generateImage() {
+    setLoading(true);
+    if (!cardRef.current) {
+      setLoading(false);
+      return;
+    }
     try {
       const dataUrl = await toPng(cardRef.current, {
         backgroundColor: "#fff",
         pixelRatio: 2,
         filter: (node: HTMLElement) => !node.classList?.contains("save-exclude"),
       });
+      setGeneratedImage(dataUrl);
+    } catch (err) {
+      console.error("生成图片失败:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadImage() {
+    if (!generatedImage) return;
+    try {
       const link = document.createElement("a");
       link.download = `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`;
-      link.href = dataUrl;
+      link.href = generatedImage;
       link.click();
     } catch (err) {
-      console.error("保存图片失败:", err);
+      console.error("下载图片失败:", err);
     }
   }
 
@@ -418,184 +444,209 @@ function CertificationModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
+      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
+        <div
+          ref={cardRef}
+          className="w-[80vw] max-w-md rounded-lg bg-white p-6 shadow-2xl"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-2xl">
+              {cert.type === "lucky" ? "👑" : cert.type === "rich" ? "💰" : "👻"}
+            </span>
+            <span className={`text-lg font-bold ${
+              cert.type === "lucky" ? "text-yellow-600" :
+              cert.type === "rich" ? "text-purple-600" : "text-gray-600"
+            }`}>
+              {cert.type === "lucky" ? "欧皇认证" :
+               cert.type === "rich" ? "神豪认证" : "非酋认证"}
+            </span>
+            {total > 1 && (
+              <span className="ml-auto text-xs text-black/35">{currentIndex + 1}/{total}</span>
+            )}
+          </div>
+
+          <div className="space-y-2.5 text-sm text-black/80">
+            <div className="flex items-center gap-1">
+              <span className="text-black/45 w-12 flex-shrink-0">日期</span>
+              <span className="font-medium">{cert.date}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-black/45 w-12 flex-shrink-0">直播间</span>
+              <span className="font-medium text-[#1f1c17]">{cert.rname || `主播${cert.ruid}`}</span>
+            </div>
+            {activityType === "card_flip" && cert.type === "lucky" && (
+              <>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">礼物</span>
+                  {cert.gift_img && (
+                    <img src={fixImageUrl(cert.gift_img)} alt="" className="w-5 h-5 rounded" />
+                  )}
+                  <span className="font-medium">{cert.gift_name}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">花费</span>
+                  <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">价值</span>
+                  <span className="font-medium">{cert.gift_price} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
+                  <span className="font-bold text-green-600">
+                    爆赚{Math.floor(cert.profit)} 电池
+                  </span>
+                </div>
+                <div className="text-sm text-black/60 mt-1">只尝试了一次，一气呵成！</div>
+              </>
+            )}
+            {activityType === "card_flip" && cert.type === "unlucky" && (
+              <>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 flex-shrink-0">总共翻了</span>
+                  <span className="font-bold">{cert.gift_name.replace("次翻牌", "")}</span>
+                  <span>次牌</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="font-bold">{cert.count}</span>
+                  <span>次翻到了凶牌，超过一半</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">花费</span>
+                  <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">价值</span>
+                  <span className="font-medium">{Math.floor(cert.gift_price || cert.spent + cert.profit)} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
+                  <span className="font-bold text-red-500">
+                    爆亏{Math.floor(Math.abs(cert.profit))} 电池！否极泰来...
+                  </span>
+                </div>
+              </>
+            )}
+            {activityType !== "card_flip" && cert.type !== "rich" && (
+              <>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">礼物</span>
+                  <span className="font-medium">{cert.gift_name}</span>
+                  {cert.gift_img && (
+                    <img src={fixImageUrl(cert.gift_img)} alt="" className="w-5 h-5 rounded" />
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">价值</span>
+                  <span className="font-medium">{cert.gift_price} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">花费</span>
+                  <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
+                  <span className={`font-bold ${cert.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {cert.profit >= 0 ? "+" : ""}{Math.floor(cert.profit)} 电池
+                  </span>
+                </div>
+              </>
+            )}
+            {cert.type === "rich" && (
+              <div className="flex items-center gap-1">
+                <span className="text-black/45 w-12 flex-shrink-0">爆出</span>
+                <span className="font-bold text-purple-600">{cert.count}</span>
+                <span>个 {cert.gift_name}</span>
+                <span className="text-black/60">壕无人性！</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div
         className="relative mx-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          onClick={onClose}
-          className="save-exclude absolute -top-10 right-0 text-white/80 hover:text-white text-sm transition"
-        >
-          ✕ 关闭
-        </button>
+        {/* 加载状态 */}
+        {loading && (
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-white text-sm">生成图片中...</p>
+          </div>
+        )}
 
-        <div className="flex flex-col items-center gap-2">
-          {total > 1 && (
-            <button
-              onClick={goPrev}
-              disabled={currentIndex === 0}
-              className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-            >
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
-              </svg>
-            </button>
-          )}
+        {/* 图片内容 */}
+        {!loading && generatedImage && (
+          <>
+            {/* 上方提示 */}
+            {isMobileDevice() && (
+              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
+            )}
 
-          <div
-            ref={cardRef}
-            className="w-[80vw] max-w-md rounded-lg bg-white p-6 shadow-2xl"
-          >
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-2xl">
-                {cert.type === "lucky" ? "👑" : cert.type === "rich" ? "💰" : "👻"}
-              </span>
-              <span className={`text-lg font-bold ${
-                cert.type === "lucky" ? "text-yellow-600" :
-                cert.type === "rich" ? "text-purple-600" : "text-gray-600"
-              }`}>
-                {cert.type === "lucky" ? "欧皇认证" :
-                 cert.type === "rich" ? "神豪认证" : "非酋认证"}
-              </span>
+            <div className="flex flex-col items-center gap-2">
+              {/* 上箭头 */}
               {total > 1 && (
-                <span className="ml-auto text-xs text-black/35">{currentIndex + 1}/{total}</span>
+                <button
+                  onClick={goPrev}
+                  disabled={currentIndex === 0}
+                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
+                >
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
+                  </svg>
+                </button>
+              )}
+
+              {/* 图片 */}
+              <img src={generatedImage} alt="认证卡片" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
+
+              {/* 下箭头 */}
+              {total > 1 && (
+                <button
+                  onClick={goNext}
+                  disabled={currentIndex === total - 1}
+                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
+                >
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 9l7 7 7-7" />
+                  </svg>
+                </button>
               )}
             </div>
 
-            <div className="space-y-2.5 text-sm text-black/80">
-              <div className="flex items-center gap-1">
-                <span className="text-black/45 w-12 flex-shrink-0">日期</span>
-                <span className="font-medium">{cert.date}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-black/45 w-12 flex-shrink-0">直播间</span>
-                <span className="font-medium text-[#1f1c17]">{cert.rname || `主播${cert.ruid}`}</span>
-              </div>
-              {activityType === "card_flip" && cert.type === "lucky" && (
-                <>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">礼物</span>
-                    {cert.gift_img && (
-                      <img src={fixImageUrl(cert.gift_img)} alt="" className="w-5 h-5 rounded" />
-                    )}
-                    <span className="font-medium">{cert.gift_name}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">花费</span>
-                    <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">价值</span>
-                    <span className="font-medium">{cert.gift_price} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
-                    <span className="font-bold text-green-600">
-                      爆赚{Math.floor(cert.profit)} 电池
-                    </span>
-                  </div>
-                  <div className="text-sm text-black/60 mt-1">只尝试了一次，一气呵成！</div>
-                </>
+            {/* 下方按钮区域 */}
+            <div className="flex flex-col gap-2 mt-3">
+              {!isMobileDevice() && (
+                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  下载图片
+                </button>
               )}
-              {activityType === "card_flip" && cert.type === "unlucky" && (
-                <>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 flex-shrink-0">总共翻了</span>
-                    <span className="font-bold">{cert.gift_name.replace("次翻牌", "")}</span>
-                    <span>次牌</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="font-bold">{cert.count}</span>
-                    <span>次翻到了凶牌，超过一半</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">花费</span>
-                    <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">价值</span>
-                    <span className="font-medium">{Math.floor(cert.gift_price || cert.spent + cert.profit)} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
-                    <span className="font-bold text-red-500">
-                      爆亏{Math.floor(Math.abs(cert.profit))} 电池！否极泰来...
-                    </span>
-                  </div>
-                </>
-              )}
-              {activityType !== "card_flip" && cert.type !== "rich" && (
-                <>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">礼物</span>
-                    <span className="font-medium">{cert.gift_name}</span>
-                    {cert.gift_img && (
-                      <img src={fixImageUrl(cert.gift_img)} alt="" className="w-5 h-5 rounded" />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">价值</span>
-                    <span className="font-medium">{cert.gift_price} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">花费</span>
-                    <span className="font-medium">{Math.floor(cert.spent)} 电池</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-black/45 w-12 flex-shrink-0">盈亏</span>
-                    <span className={`font-bold ${cert.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {cert.profit >= 0 ? "+" : ""}{Math.floor(cert.profit)} 电池
-                    </span>
-                  </div>
-                </>
-              )}
-              {cert.type === "rich" && (
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-12 flex-shrink-0">爆出</span>
-                  <span className="font-bold text-purple-600">{cert.count}</span>
-                  <span>个 {cert.gift_name}</span>
-                  <span className="text-black/60">壕无人性！</span>
-                </div>
-              )}
+              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+                关闭
+              </button>
             </div>
 
-            <button
-              onClick={saveAsImage}
-              className="save-exclude mt-5 w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              保存图片
-            </button>
-          </div>
-
-          {total > 1 && (
-            <button
-              onClick={goNext}
-              disabled={currentIndex === total - 1}
-              className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-            >
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 9l7 7 7-7" />
-              </svg>
-            </button>
-          )}
-        </div>
-
-        {total > 1 && (
-          <div className="flex justify-center gap-1.5 mt-3">
-            {certifications.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => onIndexChange(i)}
-                className={`w-2 h-2 rounded-full transition ${
-                  i === currentIndex ? "bg-white" : "bg-white/40"
-                }`}
-              />
-            ))}
-          </div>
+            {/* 底部指示器 */}
+            {total > 1 && (
+              <div className="flex justify-center gap-1.5 mt-3">
+                {certifications.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onIndexChange(i)}
+                    className={`w-2 h-2 rounded-full transition ${
+                      i === currentIndex ? "bg-white" : "bg-white/40"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

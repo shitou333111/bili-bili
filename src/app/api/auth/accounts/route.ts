@@ -1,9 +1,13 @@
-import { NextResponse } from "next/server";
-import { getAllSessions } from "@/lib/auth/session";
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionsByUserToken, getUserTokenCookieName } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
-export async function GET() {
-  const sessions = await getAllSessions();
+export async function GET(request: NextRequest) {
+  // 获取用户标识
+  const userToken = request.cookies.get(getUserTokenCookieName())?.value || null;
+  
+  // 只返回当前用户标识关联的会话
+  const sessions = await getSessionsByUserToken(userToken);
 
   // 按 mid 去重，保留最新的（updatedAt 最近的）
   const seen = new Map<number, typeof sessions[0]>();

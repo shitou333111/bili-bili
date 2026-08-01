@@ -5,6 +5,7 @@ import path from "path";
 const STATE_DIR = path.join(process.cwd(), ".data");
 const STATE_FILE = path.join(STATE_DIR, "bili-live-state.json");
 const SESSION_COOKIE_NAME = "bili_live_sid";
+const USER_TOKEN_COOKIE_NAME = "bili_live_user_token";
 
 export type AuthSession = {
   sid: string;
@@ -15,6 +16,7 @@ export type AuthSession = {
   biliRefreshToken: string;
   biliCookies?: string[];
   source: "qr" | "dev";
+  userToken: string; // 用户级别标识，用于隔离不同浏览器/设备的账号
   createdAt: string;
   updatedAt: string;
 };
@@ -40,7 +42,11 @@ async function ensureStateFile() {
 
 export async function readState(): Promise<SessionState> {
   await ensureStateFile();
-  const raw = await fs.readFile(STATE_FILE, "utf8");
+  let raw = await fs.readFile(STATE_FILE, "utf8");
+  // 去除 UTF-8 BOM (EF BB BF)
+  if (raw.charCodeAt(0) === 0xFEFF) {
+    raw = raw.slice(1);
+  }
   try {
     const parsed = JSON.parse(raw) as Partial<SessionState>;
     return {
@@ -78,6 +84,7 @@ export function createSessionInput(input: Omit<AuthSession, "sid" | "createdAt" 
     biliRefreshToken: input.biliRefreshToken,
     biliCookies: input.biliCookies,
     source: input.source,
+    userToken: input.userToken,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -120,6 +127,19 @@ export async function setCurrentSession(sid: string | null) {
 
 export function getSessionCookieName() {
   return SESSION_COOKIE_NAME;
+}
+
+export function getUserTokenCookieName() {
+  return USER_TOKEN_COOKIE_NAME;
+}
+
+/**
+ * 根据用户标识获取该用户的所有会话
+ */
+export async function getSessionsByUserToken(userToken: string | null | undefined): Promise<AuthSession[]> {
+  if (!userToken) return [];
+  const state = await readState();
+  return state.sessions.filter((item) => item.userToken === userToken);
 }
 
 /**

@@ -3,6 +3,7 @@ import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchRealPayRecordSnapshot } from "@/lib/bilibili/app";
+import { saveGiftsToDb } from "@/lib/gift-db";
 import { readPayRecords, savePayRecords, getMaxId, type RawGiftRecord } from "@/lib/user-data";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
@@ -83,8 +84,13 @@ export async function GET(request: Request) {
           });
         }
         return map;
-      }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()),
+      }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
     );
+
+    // 保存礼物信息到 gift-db.json
+    if (giftCatalog.length > 0) {
+      saveGiftsToDb(giftCatalog.map(g => ({ gift_id: g.giftId, name: g.giftName, img: g.giftImg })));
+    }
 
     const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
 
@@ -125,7 +131,7 @@ export async function GET(request: Request) {
               });
             }
             return map;
-          }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()),
+          }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
         );
         const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
         const result = {

@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
-import { getSessionBySid, getSessionCookieName, setCurrentSession } from "@/lib/auth/session";
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionBySid, getSessionCookieName, getUserTokenCookieName, setCurrentSession } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const body = await request.json();
   const { sid } = body as { sid?: string };
 
@@ -23,6 +23,19 @@ export async function POST(request: Request) {
       {
         code: 1,
         message: "session not found",
+        data: { success: false },
+      },
+      { status: 200 },
+    );
+  }
+
+  // 验证用户只能切换自己的账号
+  const userToken = request.cookies.get(getUserTokenCookieName())?.value;
+  if (userToken !== session.userToken) {
+    return NextResponse.json<ApiResponse<{ success: boolean }>>(
+      {
+        code: 1,
+        message: "无权访问该账号",
         data: { success: false },
       },
       { status: 200 },
