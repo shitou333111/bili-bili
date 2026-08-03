@@ -9,6 +9,7 @@
 
 import { getPlatform } from "./platform";
 import type { Platform } from "./platform/types";
+import { serverApiUrl } from "./server-api";
 
 // ==================== 内部工具 ====================
 
@@ -21,15 +22,15 @@ async function p(): Promise<Platform> {
   return _platformCache;
 }
 
-/** Web 模式：通用 fetch 封装 */
+/** Web 模式：通用 fetch 封装（Tauri 下自动转发到服务器） */
 async function webFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(path, { cache: "no-store", ...options });
+  const res = await fetch(serverApiUrl(path), { cache: "no-store", ...options });
   return res.json();
 }
 
-/** Web 模式：POST 封装 */
+/** Web 模式：POST 封装（Tauri 下自动转发到服务器） */
 async function webPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(serverApiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,

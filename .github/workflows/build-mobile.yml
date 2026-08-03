@@ -1,18 +1,10 @@
-name: Build Mobile Apps
+name: Build Client Apps
 
 on:
   push:
     branches: [ main, native-client ]
   workflow_dispatch:
     inputs:
-      platform:
-        description: "构建平台"
-        required: true
-        type: choice
-        options:
-          - android
-          - ios
-          - both
       server_url:
         description: "服务器地址"
         required: false
@@ -20,13 +12,57 @@ on:
         default: "http://192.168.1.2:3000"
 
 concurrency:
-  group: build-mobile-${{ github.ref }}
+  group: build-client-${{ github.ref }}
   cancel-in-progress: false
 
+# ==================== 构建触发逻辑 ====================
+# commit 信息中包含关键字决定构建哪个平台：
+#   exe -> Windows EXE
+#   apk -> Android APK
+#   ipa -> iOS IPA
+# 例如 "exe ipa" 会同时构建 exe 和 ipa。
+
 jobs:
-  # ==================== Android ====================
-  build-android:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'mobile')) }}
+  # ==================== Windows EXE ====================
+  build-exe:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'exe')) }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri CLI (Rust)
+        run: cargo install tauri-cli --locked
+
+      - name: Install npm dependencies
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
+
+      - name: Build frontend
+        env:
+          NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
+        run: npm run build:tauri
+
+      - name: Build Windows EXE
+        run: cargo tauri build --no-bundle
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-live-exe
+          path: src-tauri/target/release/*.exe
+
+  # ==================== Android APK ====================
+  build-apk:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'apk')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -84,7 +120,6 @@ jobs:
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
-          # 生成 debug keystore（若不存在）
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
             mkdir -p "$HOME/.android"
             keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
@@ -92,7 +127,6 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-          # 找到 APK 并签名
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
           echo "Signing APK: $APK"
           "$ANDROID_HOME/build-tools/34.0.0/zipalign" -f 4 "$APK" "$APK.aligned"
@@ -112,9 +146,9 @@ jobs:
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             src-tauri/gen/android/app/build/outputs/apk/release/*.apk
 
-  # ==================== iOS ====================
-  build-ios:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'mobile')) }}
+  # ==================== iOS IPA ====================
+  build-ipa:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'ipa')) }}
     runs-on: macos-latest
     steps:
       - name: Checkout

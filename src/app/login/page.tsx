@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { serverFetch } from "@/lib/server-api";
 
 type QRGenerateResponse = {
   code: number;
@@ -76,10 +77,7 @@ export default function LoginPage() {
       }
 
       try {
-        const response = await fetch(`/api/auth/qr/poll?qrcode_key=${encodeURIComponent(key)}`, {
-          cache: "no-store",
-        });
-        const data = (await response.json()) as QRPollResponse;
+        const data = await serverFetch<QRPollResponse>(`/api/auth/qr/poll?qrcode_key=${encodeURIComponent(key)}`);
 
         if (data.code === 0 && data.data?.code === 0) {
           clearPollTimer();
@@ -137,10 +135,7 @@ export default function LoginPage() {
     setStatus("正在生成登录二维码...");
 
     try {
-      const response = await fetch("/api/auth/qr/generate", {
-        cache: "no-store",
-      });
-      const data = (await response.json()) as QRGenerateResponse;
+      const data = await serverFetch<QRGenerateResponse>("/api/auth/qr/generate");
 
       if (!data.data?.qrcode_key) {
         throw new Error(data.message || "二维码生成失败");
@@ -270,7 +265,7 @@ export default function LoginPage() {
               onClick={async () => {
                 clearPollTimer();
                 // 清除登录会话，避免主页检测到过期session后跳回登录页
-                await fetch("/api/auth/logout", { method: "POST" });
+                await serverFetch("/api/auth/logout", { method: "POST" });
                 window.location.href = "/";
               }}
               className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
