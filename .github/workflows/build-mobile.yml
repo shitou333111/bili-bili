@@ -54,8 +54,8 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@latest
+      - name: Install Tauri CLI (Rust)
+        run: cargo install tauri-cli --locked
 
       - name: Install Linux dependencies
         run: |
@@ -71,14 +71,14 @@ jobs:
         run: npm run build:tauri
 
       - name: Init Android project
-        run: tauri android init
+        run: cargo tauri android init
 
       - name: Build Android APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           JAVA_HOME: ${{ env.JAVA_HOME }}
-        run: tauri android build --target aarch64
+        run: cargo tauri android build --target aarch64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -105,8 +105,8 @@ jobs:
         with:
           targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@latest
+      - name: Install Tauri CLI (Rust)
+        run: cargo install tauri-cli --locked
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
@@ -117,10 +117,10 @@ jobs:
         run: npm run build:tauri
 
       - name: Init iOS project
-        run: tauri ios init
+        run: cargo tauri ios init
 
       - name: Build iOS IPA
-        run: tauri ios build --target aarch64
+        run: cargo tauri ios build --target aarch64
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
