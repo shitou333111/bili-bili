@@ -84,7 +84,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-android
-          path: src-tauri/gen/android/app/build/outputs/apk/release/*.apk
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            src-tauri/gen/android/app/build/outputs/apk/release/*.apk
 
   # ==================== iOS ====================
   build-ios:
@@ -126,4 +128,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-ios
-          path: src-tauri/gen/ios/build/*.ipa
+          path: |
+            src-tauri/gen/apple/build/*/*.ipa
+            src-tauri/gen/ios/build/*/*.ipa
