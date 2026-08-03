@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
       - name: Build frontend
         env:
@@ -75,7 +75,7 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           JAVA_HOME: ${{ env.JAVA_HOME }}
-        run: cargo tauri android build --target aarch64
+        run: tauri android build --target aarch64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -106,7 +106,7 @@ jobs:
         run: npm install -g @tauri-apps/cli@latest
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
       - name: Build frontend
         env:
@@ -114,7 +114,7 @@ jobs:
         run: npm run build:tauri
 
       - name: Build iOS IPA
-        run: cargo tauri ios build --target aarch64-apple-ios
+        run: tauri ios build --target aarch64-apple-ios
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
