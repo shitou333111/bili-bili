@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import type { SynthesisActivityStats } from "@/app/api/stats/synthesis/route";
-import type { SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
+import type { SynthesisActivityStats, SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 

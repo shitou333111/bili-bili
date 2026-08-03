@@ -82,6 +82,15 @@ export type SynthesisCertification = {
   count?: number;
 };
 
+export type SynthesisActivityStats = {
+  id: string;
+  type: string;
+  name: string;
+  icon?: string;
+  profit: SynthesisActivityProfitResult;
+  certifications: SynthesisCertification[];
+};
+
 /**
  * 抽槽类活动原始记录
  * record_type: 1=抽取, 3=替换, 4=合成

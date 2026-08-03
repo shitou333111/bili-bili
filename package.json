@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
-    "build:tauri": "cross-env TAURI_BUILD=1 next build",
+    "build:tauri": "node scripts/build-tauri.mjs",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
     "tauri": "tauri"

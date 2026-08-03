@@ -12,6 +12,7 @@ import {
   type SynthesisGiftInfo,
   type SynthesisAnchorInfo,
   type SynthesisCertification,
+  type SynthesisActivityStats,
 } from "@/lib/gift-db";
 import { readPayRecords, saveSynthesisRecords, getSynthesisActivityInfo, saveSynthesisActivityInfo, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds, getCardFlipGiftImages, getCardFlipGiftImage, saveCardFlipGiftImage } from "@/lib/user-data";
 import { SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
@@ -20,14 +21,8 @@ import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
 
-export type SynthesisActivityStats = {
-  id: string;
-  type: string;
-  name: string;
-  icon?: string;
-  profit: SynthesisActivityProfitResult;
-  certifications: SynthesisCertification[];
-};
+// re-export 类型，保持向后兼容（组件从 gift-db 导入）
+export type { SynthesisActivityStats } from "@/lib/gift-db";
 
 export type SynthesisStatsResponse = {
   historical: SynthesisProfitResult;
