@@ -70,6 +70,9 @@ jobs:
           NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
         run: npm run build:tauri
 
+      - name: Init Android project
+        run: tauri android init
+
       - name: Build Android APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
@@ -113,8 +116,11 @@ jobs:
           NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
         run: npm run build:tauri
 
+      - name: Init iOS project
+        run: tauri ios init
+
       - name: Build iOS IPA
-        run: tauri ios build --target aarch64-apple-ios
+        run: tauri ios build --target aarch64
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
