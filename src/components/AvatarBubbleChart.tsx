@@ -435,7 +435,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     const scaleY = DOWNLOAD_H / canvasDims.h;
 
     function getCanvas(): HTMLCanvasElement | null {
-      return container.querySelector("canvas") as HTMLCanvasElement | null;
+      return container?.querySelector("canvas") as HTMLCanvasElement | null;
     }
 
     function dispatchCorrected(e: MouseEvent) {

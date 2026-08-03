@@ -6,6 +6,7 @@ import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
 import { checkBlindBox } from "@/lib/bilibili/gift-api";
 import { buildMockAnchorGiftsResponse } from "@/lib/revenue";
+import { getBuvidCookie } from "@/lib/bilibili/client";
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -41,12 +42,11 @@ type BiliGiftStreamResponse = {
 /** 本地存储的记录格式 */
 type GiftRecord = BiliGiftRecord;
 
-/** 存储元数据 */
-type AnchorGiftsMetadata = {
-  total_page: number;
-  end_date: string;
-  last_fetch: string;
-  total_count: number;
+/** 记录文件中存储的元数据（与records合并到一个文件） */
+type RecordsMetaData = {
+  end_date: string;       // 已获取到的截止日期，如 "20260801"
+  last_fetch: string;     // 最后一次获取时间
+  total_page: number;     // 累计获取页数
 };
 
 // ==================== 常量 ====================
@@ -223,49 +223,75 @@ function getRecordsFilePath(mid: number, uname: string): string {
   return path.join(getRecordsDir(mid, uname), "anchor-gifts-records.json");
 }
 
-function getMetadataFilePath(mid: number, uname: string): string {
+/** 旧版metadata文件路径（用于迁移） */
+function getOldMetadataFilePath(mid: number, uname: string): string {
   return path.join(getRecordsDir(mid, uname), "anchor-gifts-metadata.json");
 }
 
-async function readRecords(mid: number, uname: string): Promise<GiftRecord[]> {
+/** 读取记录和元数据（合并存储后统一读取，兼容旧版分离文件） */
+async function readRecordsWithMeta(mid: number, uname: string): Promise<{ records: GiftRecord[]; meta: RecordsMetaData | null }> {
   const filePath = getRecordsFilePath(mid, uname);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    return parsed.records ?? [];
+    const records: GiftRecord[] = Array.isArray(parsed) ? parsed : (parsed.records ?? []);
+    // 新格式：元数据内嵌在records文件中
+    if (parsed.end_date !== undefined) {
+      return {
+        records,
+        meta: {
+          end_date: parsed.end_date ?? "",
+          last_fetch: parsed.last_fetch ?? parsed.exportedAt ?? "",
+          total_page: parsed.total_page ?? 0,
+        },
+      };
+    }
+    // 旧格式：records文件无元数据，尝试从独立的metadata文件迁移
+    const oldMeta = await tryReadOldMetadata(mid, uname);
+    return { records, meta: oldMeta };
   } catch {
-    return [];
+    // records文件不存在，尝试从独立的metadata文件迁移
+    const oldMeta = await tryReadOldMetadata(mid, uname);
+    return { records: [], meta: oldMeta };
   }
 }
 
-async function saveRecords(mid: number, uname: string, records: GiftRecord[]) {
-  const dir = getRecordsDir(mid, uname);
-  await ensureDir(dir);
-  const filePath = getRecordsFilePath(mid, uname);
-  const data = {
-    exportedAt: getBeijingTime(),
-    totalRecords: records.length,
-    records,
-  };
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-}
-
-async function readMetadata(mid: number, uname: string): Promise<AnchorGiftsMetadata | null> {
-  const filePath = getMetadataFilePath(mid, uname);
+/** 读取旧版独立metadata文件（迁移用） */
+async function tryReadOldMetadata(mid: number, uname: string): Promise<RecordsMetaData | null> {
+  const filePath = getOldMetadataFilePath(mid, uname);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      end_date: parsed.end_date ?? "",
+      last_fetch: parsed.last_fetch ?? "",
+      total_page: parsed.total_page ?? 0,
+    };
   } catch {
     return null;
   }
 }
 
-async function saveMetadata(mid: number, uname: string, meta: AnchorGiftsMetadata) {
+/** 保存记录和元数据到同一个文件，并删除旧版metadata文件 */
+async function saveRecordsWithMeta(mid: number, uname: string, records: GiftRecord[], meta: RecordsMetaData) {
   const dir = getRecordsDir(mid, uname);
   await ensureDir(dir);
-  const filePath = getMetadataFilePath(mid, uname);
-  await fs.writeFile(filePath, JSON.stringify(meta, null, 2), "utf-8");
+  const filePath = getRecordsFilePath(mid, uname);
+  const data = {
+    last_fetch: meta.last_fetch,
+    end_date: meta.end_date,
+    total_page: meta.total_page,
+    total_count: records.length,
+    records,
+  };
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+  // 删除旧版metadata文件（如果存在）
+  const oldMetaPath = getOldMetadataFilePath(mid, uname);
+  try {
+    await fs.unlink(oldMetaPath);
+  } catch {
+    // 文件不存在则忽略
+  }
 }
 
 // ==================== API 调用 ====================
@@ -277,6 +303,7 @@ async function fetchGiftStreamPage(
   page: number,
   beginDate: string,
   endDate: string,
+  buvidCookie?: string,
 ): Promise<BiliGiftStreamResponse> {
   const body = [
     `page=${page}`,
@@ -289,18 +316,21 @@ async function fetchGiftStreamPage(
     `csrf=${csrf}`,
   ].join("&");
 
+  const fullCookie = buvidCookie ? `${cookie};${buvidCookie}` : cookie;
+
   const headers: Record<string, string> = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://link.bilibili.com/p/center/index",
-    "Origin": "https://link.bilibili.com",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://live.bilibili.com/",
+    "Origin": "https://live.bilibili.com",
     "Content-Type": "application/x-www-form-urlencoded",
-    "Cookie": cookie,
+    "Cookie": fullCookie,
   };
 
   // 仅 page=0 输出请求日志，避免翻页日志淹没终端
   if (page === 0) {
-    console.log(`[AnchorGifts][API] 请求 page=0 begin=${beginDate} end=${endDate} csrf=${csrf ? "***" : "(空)"}`);
+    console.log(`[AnchorGifts][API] 请求 page=0 begin=${beginDate} end=${endDate} csrf=${csrf ? "***" : "(空)"} buvid=${buvidCookie ? "有" : "无"}`);
   }
 
   const response = await fetch(GIFT_STREAM_API, {
@@ -338,14 +368,20 @@ function recordKey(r: GiftRecord): string {
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 /** 并发获取月度数据的并发数 */
-const MONTH_CONCURRENCY = 2;
+const MONTH_CONCURRENCY = 1;
 
-/** 页面请求失败时的重试次数（page=0用5次，翻页用2次） */
-const PAGE_RETRY_COUNT = 2;
+/** 页面请求失败时的重试次数（page=0用5次，翻页用3次） */
+const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 
 /** 连续请求间隔（ms），避免触发B站限流 */
-const REQUEST_INTERVAL_MS = 800;
+const REQUEST_INTERVAL_MS = 1500;
+
+/** 412限流后的冷却间隔（ms） */
+const RATE_LIMIT_COOLDOWN_MS = 30_000;
+
+/** 412限流后恢复翻页的慢速间隔（ms） */
+const SLOW_REQUEST_INTERVAL_MS = 4000;
 
 /** 月度数据获取失败时抛出的错误，携带失败的月份范围 */
 class MonthFetchError extends Error {
@@ -524,9 +560,8 @@ export async function GET(request: Request) {
   const fanFilter = url.searchParams.get("fan") ?? "";
 
   try {
-    // 读取已有记录和元数据
-    const existingRecords = await readRecords(validSession.mid, validSession.uname);
-    const metadata = await readMetadata(validSession.mid, validSession.uname);
+    // 读取已有记录和元数据（合并存储）
+    const { records: existingRecords, meta } = await readRecordsWithMeta(validSession.mid, validSession.uname);
 
     let allRecords = existingRecords;
     let fetchedNewPages = 0;
@@ -538,14 +573,16 @@ export async function GET(request: Request) {
     let yesterdayAvailable = true;
 
     /** 获取指定月份(payload按整个自然月)内的所有记录，自动翻页 */
-    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>): Promise<{ records: GiftRecord[]; pages: number }> {
+    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string): Promise<{ records: GiftRecord[]; pages: number }> {
       const records: GiftRecord[] = [];
+      let rateLimited = false; // 412限流标记，触发后切换慢速模式
 
       // 带重试的页面请求，网络错误/412限流时使用指数退避
       async function fetchPageWithRetry(page: number, maxRetries: number = PAGE_RETRY_COUNT): Promise<BiliGiftStreamResponse | null> {
+        const totalAttempts = maxRetries + 1;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
-            const result = await fetchGiftStreamPage(biliCookie, csrf, page, begin, end);
+            const result = await fetchGiftStreamPage(biliCookie, csrf, page, begin, end, buvidCookie);
             if (result.code === 0) return result;
             // code=1301000: "不支持查询三年前的数据"——该月数据已过期，跳过（不重试）
             if (result.code === 1301000) {
@@ -554,15 +591,21 @@ export async function GET(request: Request) {
             }
             // 其他API错误：指数退避
             const delay = 1000 * Math.pow(2, attempt);
-            console.error(`[AnchorGifts] ${begin}~${end} 第${page}页 API错误 code=${result.code}，等待${delay}ms后重试${attempt + 1}/${maxRetries}`);
+            console.error(`[AnchorGifts] ${begin}~${end} 第${page}页 API错误 code=${result.code}，等待${delay}ms后重试${attempt + 1}/${totalAttempts}`);
             if (attempt < maxRetries) await new Promise(r => setTimeout(r, delay));
           } catch (err: any) {
             const isRateLimit = err?.message?.includes("412");
-            // 指数退避：1s/2s/4s/8s/16s（412限流用3s/6s/12s/24s/48s）
-            const baseDelay = isRateLimit ? 3000 : 1000;
-            const delay = baseDelay * Math.pow(2, attempt);
-            console.error(`[AnchorGifts] ${begin}~${end} 第${page}页请求失败${isRateLimit ? "(B站限流412)" : ""}，等待${delay}ms后重试${attempt + 1}/${maxRetries}:`, err);
-            if (attempt < maxRetries) await new Promise(r => setTimeout(r, delay));
+            if (isRateLimit) {
+              // 412限流：先冷却，再以慢速重试
+              rateLimited = true;
+              const cooldownDelay = RATE_LIMIT_COOLDOWN_MS + attempt * 10_000;
+              console.warn(`[AnchorGifts] ${begin}~${end} 第${page}页 触发412限流，冷却${cooldownDelay}ms后进入慢速模式重试${attempt + 1}/${totalAttempts}`);
+              await new Promise(r => setTimeout(r, cooldownDelay));
+            } else {
+              const delay = 1000 * Math.pow(2, attempt);
+              console.error(`[AnchorGifts] ${begin}~${end} 第${page}页请求失败，等待${delay}ms后重试${attempt + 1}/${totalAttempts}:`, err);
+              if (attempt < maxRetries) await new Promise(r => setTimeout(r, delay));
+            }
           }
         }
         return null;
@@ -600,7 +643,7 @@ export async function GET(request: Request) {
       // 翻页：从第1页到第totalPages-1页（0-based，第0页已获取）
       let stoppedEarly = false;
       for (let p = 1; p < totalPages; p++) {
-        // 连续匹配检测（增量模式）
+        // 连续匹配检测（有已有数据时启用）
         if (existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
           const lastN = records.slice(-CONSECUTIVE_MATCH_THRESHOLD);
           const allMatch = lastN.every(r => {
@@ -614,8 +657,9 @@ export async function GET(request: Request) {
           }
         }
 
-        // 请求间隔，避免触发B站限流
-        await new Promise(r => setTimeout(r, REQUEST_INTERVAL_MS));
+        // 请求间隔：412限流后使用慢速间隔
+        const interval = rateLimited ? SLOW_REQUEST_INTERVAL_MS : REQUEST_INTERVAL_MS;
+        await new Promise(r => setTimeout(r, interval));
 
         const pageResult = await fetchPageWithRetry(p);
         if (pageResult?.data?.list) {
@@ -630,133 +674,90 @@ export async function GET(request: Request) {
       return { records, pages };
     }
 
-    if (refresh || existingRecords.length === 0) {
-      // 全量获取：B站最多保存3年收入记录，从3年前开始
-      const beginDate = (() => {
-        const now = new Date();
-        const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-        const beijing = new Date(utc + 8 * 3600000);
-        beijing.setFullYear(beijing.getFullYear() - 3);
-        return formatDate(beijing);
-      })();
+    // ==================== 统一获取逻辑 ====================
+    // 只用 end_date 决定起始日期：
+    // - end_date 为空或文件不存在 → 首次使用，从3年前下个月开始（如2026年8月→2023年9月）
+    // - end_date 不为空 → 从 end_date 开始增量获取
+    // refresh=true 只是代表用户手动触发，不影响起始日期判断
+    const startDate = (() => {
+      if (meta?.end_date) {
+        console.log(`[AnchorGifts] 起始日期：使用 end_date=${meta.end_date}${refresh ? " (用户手动触发)" : ""}`);
+        return meta.end_date;
+      }
+      // 首次使用：B站最多保存3年数据，从3年前的下个月开始
+      // 如当前2026年8月 → 2023年9月（8月数据可能已过期）
+      const now = new Date();
+      const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+      const beijing = new Date(utc + 8 * 3600000);
+      const startYear = beijing.getFullYear() - 3;
+      const startMonth = beijing.getMonth() + 1; // 0-indexed → 1-indexed (1~12)
+      // 下个月：12月 → 次年1月
+      const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+      const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+      const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+      console.log(`[AnchorGifts] 首次使用：起始日期=${beginDate}（当前${beijing.getFullYear()}年${startMonth}月 → 3年前${startYear}年${startMonth}月 → 下个月${beginYear}年${beginMonth}月）${refresh ? " (用户手动触发)" : ""}`);
+      return beginDate;
+    })();
 
-      const chunks = generateMonthChunks(beginDate, yesterdayStr);
-      console.log(`[AnchorGifts] 全量获取: ${beginDate} ~ ${yesterdayStr}, refresh=${refresh}, 共${chunks.length}个月, 并发数=${MONTH_CONCURRENCY}`);
+    if (startDate > yesterdayStr) {
+      console.log(`[AnchorGifts] 无需获取，startDate=${startDate} > yesterdayStr=${yesterdayStr}`);
+      fetchedNewPages = 0;
+    } else {
+      // 获取 buvid3 反爬Cookie
+      const buvidCookie = await getBuvidCookie().catch(() => "");
 
+      const chunks = generateMonthChunks(startDate, yesterdayStr);
+      console.log(`[AnchorGifts] 获取数据: ${startDate} ~ ${yesterdayStr}, 共${chunks.length}个月, 并发数=${MONTH_CONCURRENCY}${buvidCookie ? ", buvid=有" : ", buvid=无"}`);
+
+      const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
+      let hasNewRecords = false;
+
+      // 并行获取各月数据
       const { results: chunkResults, firstError } = await runWithConcurrency(chunks, MONTH_CONCURRENCY, async (chunk) => {
         console.log(`[AnchorGifts] 获取分段: ${chunk.start} ~ ${chunk.end}`);
-        return await fetchRange(chunk.start, chunk.end);
+        return await fetchRange(chunk.start, chunk.end, existingKeyCounter, buvidCookie);
       });
 
-      const merged: GiftRecord[] = [];
+      // 合并结果并去重
       fetchedNewPages = 0;
       for (const result of chunkResults) {
-        if (result) {
-          merged.push(...result.records);
-          fetchedNewPages += result.pages;
-        }
-      }
-
-      // 如果中途有月份失败，标记失败月份起始日为截止点，下次重新拉取该月
-      if (firstError instanceof MonthFetchError) {
-        const failedBegin = firstError.begin;
-        console.error(`[AnchorGifts] 全量获取中途失败: ${firstError.message}，安全failedBegin=${failedBegin}`);
-        allRecords = merged.sort((a, b) => b.time.localeCompare(a.time));
-        await saveRecords(validSession.mid, validSession.uname, allRecords);
-        await saveMetadata(validSession.mid, validSession.uname, {
-          total_page: fetchedNewPages,
-          end_date: failedBegin,
-          last_fetch: getBeijingTime(),
-          total_count: allRecords.length,
-        });
-        console.log(`[AnchorGifts] 全量获取部分完成: ${fetchedNewPages} 页, 共 ${allRecords.length} 条记录（截止 ${failedBegin}）`);
-      } else {
-        allRecords = merged.sort((a, b) => b.time.localeCompare(a.time));
-        await saveRecords(validSession.mid, validSession.uname, allRecords);
-        await saveMetadata(validSession.mid, validSession.uname, {
-          total_page: fetchedNewPages,
-          end_date: yesterdayStr,
-          last_fetch: getBeijingTime(),
-          total_count: allRecords.length,
-        });
-        console.log(`[AnchorGifts] 全量获取完成: ${fetchedNewPages} 页, 共 ${allRecords.length} 条记录`);
-      }
-    } else {
-      // 增量获取：优先使用元数据记录的 end_date（精确到日），避免从旧记录重复全量拉取
-      const startDate = (() => {
-        if (metadata?.end_date) {
-          console.log(`[AnchorGifts] 增量起始：使用元数据 end_date=${metadata.end_date}`);
-          return metadata.end_date; // 精确到日，如 "20260610"
-        }
-        // 回退：使用最新记录所在月份的第一天
-        const latestRecord = existingRecords[0];
-        const latestDate = getDatePart(latestRecord.time);
-        const latestYm = latestDate.replace(/-/g, "").slice(0, 6);
-        console.log(`[AnchorGifts] 增量起始：无元数据，使用最新记录 ${latestDate} → ${latestYm}01`);
-        return `${latestYm}01`;
-      })();
-
-      if (startDate > yesterdayStr) {
-        console.log(`[AnchorGifts] 无需增量获取，startDate=${startDate} > yesterdayStr=${yesterdayStr}`);
-        fetchedNewPages = 0;
-      } else {
-        const chunks = generateMonthChunks(startDate, yesterdayStr);
-        console.log(`[AnchorGifts] 增量获取: ${startDate} ~ ${yesterdayStr}, 共${chunks.length}个月, 并发数=${MONTH_CONCURRENCY}`);
-
-        const existingKeyCounter = buildRecordKeyCounter(existingRecords);
-        let hasNewRecords = false;
-
-        // 并行获取各月数据（existingKeyCounter 只在 fetchRange 中读取，写入在全部完成后统一处理）
-        const { results: chunkResults, firstError } = await runWithConcurrency(chunks, MONTH_CONCURRENCY, async (chunk) => {
-          console.log(`[AnchorGifts] 增量分段: ${chunk.start} ~ ${chunk.end}`);
-          return await fetchRange(chunk.start, chunk.end, existingKeyCounter);
-        });
-
-        // 合并结果并去重
-        fetchedNewPages = 0;
-        for (const result of chunkResults) {
-          if (!result) continue;
-          fetchedNewPages += result.pages;
-          for (const r of result.records) {
+        if (!result) continue;
+        fetchedNewPages += result.pages;
+        for (const r of result.records) {
+          if (existingKeyCounter) {
             const key = recordKey(r);
             const existingCount = existingKeyCounter.get(key) ?? 0;
             if (existingCount > 0) {
               existingKeyCounter.set(key, existingCount - 1);
               continue;
             }
-            existingRecords.push(r);
-            hasNewRecords = true;
           }
+          existingRecords.push(r);
+          hasNewRecords = true;
         }
+      }
 
-        allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
+      allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
 
-        // 如果中途有月份失败，标记失败月份起始日为截止点，下次重新拉取该月
-        if (firstError instanceof MonthFetchError) {
-          const failedBegin = firstError.begin;
-          console.error(`[AnchorGifts] 增量获取中途失败: ${firstError.message}，安全failedBegin=${failedBegin}`);
-          if (hasNewRecords) {
-            await saveRecords(validSession.mid, validSession.uname, allRecords);
-            await saveMetadata(validSession.mid, validSession.uname, {
-              total_page: (metadata!.total_page ?? 0) + fetchedNewPages,
-              end_date: failedBegin,
-              last_fetch: getBeijingTime(),
-              total_count: allRecords.length,
-            });
-          }
-          console.log(`[AnchorGifts] 增量获取部分完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条（截止 ${failedBegin}）`);
-        } else if (hasNewRecords) {
-          await saveRecords(validSession.mid, validSession.uname, allRecords);
-          await saveMetadata(validSession.mid, validSession.uname, {
-            total_page: (metadata!.total_page ?? 0) + fetchedNewPages,
-            end_date: yesterdayStr,
-            last_fetch: getBeijingTime(),
-            total_count: allRecords.length,
-          });
-          console.log(`[AnchorGifts] 增量获取完成: ${fetchedNewPages} 页, 新增记录 有, 总计 ${allRecords.length} 条`);
-        } else {
-          console.log(`[AnchorGifts] 增量获取完成: ${fetchedNewPages} 页, 新增记录 无, 总计 ${allRecords.length} 条`);
-        }
+      const prevTotalPage = meta?.total_page ?? 0;
+
+      // 如果中途有月份失败，标记失败月份起始日为截止点，下次从该月继续
+      if (firstError instanceof MonthFetchError) {
+        const failedBegin = firstError.begin;
+        console.error(`[AnchorGifts] 获取中途失败: ${firstError.message}，安全failedBegin=${failedBegin}`);
+        await saveRecordsWithMeta(validSession.mid, validSession.uname, allRecords, {
+          total_page: prevTotalPage + fetchedNewPages,
+          end_date: failedBegin,
+          last_fetch: getBeijingTime(),
+        });
+        console.log(`[AnchorGifts] 获取部分完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条（截止 ${failedBegin}）`);
+      } else {
+        await saveRecordsWithMeta(validSession.mid, validSession.uname, allRecords, {
+          total_page: prevTotalPage + fetchedNewPages,
+          end_date: yesterdayStr,
+          last_fetch: getBeijingTime(),
+        });
+        console.log(`[AnchorGifts] 获取完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条`);
       }
     }
 
@@ -1099,7 +1100,7 @@ export async function GET(request: Request) {
       totalHamster,
       totalRmb: totalHamster / 100,
       totalCount: filteredRecords.length,
-      totalPage: metadata?.total_page ?? 0,
+      totalPage: (meta?.total_page ?? 0) + fetchedNewPages,
       giftTypes: giftMap.size,
       fanCount: fanMap.size,
       monthlyData,
@@ -1111,7 +1112,7 @@ export async function GET(request: Request) {
       otherStats,
       records: filteredRecords,
       filter: { dateRange: dateRangeFilter, fan: fanFilter },
-      metadata,
+      metadata: meta,
       fetchedNewPages: fetchedNewPages,
       yesterdayAvailable,
     };
