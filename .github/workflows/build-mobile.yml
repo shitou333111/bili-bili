@@ -80,6 +80,30 @@ jobs:
           JAVA_HOME: ${{ env.JAVA_HOME }}
         run: cargo tauri android build --target aarch64
 
+      - name: Sign APK with debug keystore
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          # 生成 debug keystore（若不存在）
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            mkdir -p "$HOME/.android"
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          # 找到 APK 并签名
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          echo "Signing APK: $APK"
+          "$ANDROID_HOME/build-tools/34.0.0/zipalign" -f 4 "$APK" "$APK.aligned"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+            --ks "$HOME/.android/debug.keystore" \
+            --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out "$APK" "$APK.aligned"
+          rm -f "$APK.aligned"
+          echo "Signed APK ready: $APK"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
