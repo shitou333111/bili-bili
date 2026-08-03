@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSessionCookieName, setCurrentSession } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function POST() {
   await setCurrentSession(null);
 

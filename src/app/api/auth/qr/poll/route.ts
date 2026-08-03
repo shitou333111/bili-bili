@@ -3,6 +3,8 @@ import { createSessionInput, getSessionCookieName, getUserTokenCookieName, saveS
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import type { ApiResponse, QRPollResult } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 function extractCookieValues(response: Response) {
   const headerList =
     typeof (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie === "function"
@@ -196,11 +198,11 @@ export async function GET(request: NextRequest) {
 
       const savedSession = await saveSession(session);
 
-      const localResponse = NextResponse.json<ApiResponse<QRPollResult>>(
+      const localResponse = NextResponse.json<ApiResponse<QRPollResult & { sid?: string; userToken?: string }>>(
         {
           code: data.code,
           message: data.message,
-          data: data.data,
+          data: { ...data.data, sid: savedSession.sid, userToken },
         },
         { status: 200 },
       );

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSessionInput, saveSession, getSessionCookieName, getUserTokenCookieName } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
   // 获取或生成用户标识
   let userToken = request.cookies.get(getUserTokenCookieName())?.value;

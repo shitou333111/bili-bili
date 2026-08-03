@@ -1,7 +1,23 @@
 import { promises as fs, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
+import { renameSync } from "fs";
 import path from "path";
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { CardFlipRawRecord } from "@/lib/bilibili/gift-api";
+
+// ====== 文件写入互斥锁（防止并发写入导致 JSON 截断） ======
+let writeLock: Promise<unknown> = Promise.resolve();
+
+function withWriteLock<T>(fn: () => T): Promise<T> {
+  const prev = writeLock;
+  let resolve!: (v: T) => void;
+  const next = new Promise<T>((r) => { resolve = r; });
+  writeLock = next;
+  return prev.then(() => {
+    const result = fn();
+    resolve(result);
+    return result;
+  });
+}
 
 // ====== 合成活动盈亏统计 ======
 
@@ -893,26 +909,31 @@ export function saveGiftDb(db: GiftDb): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(GIFT_DB_PATH, JSON.stringify(db, null, 2), "utf-8");
+    // 原子写入：先写临时文件，再重命名，避免并发写入导致 JSON 截断
+    const tmpPath = GIFT_DB_PATH + ".tmp";
+    writeFileSync(tmpPath, JSON.stringify(db, null, 2), "utf-8");
+    renameSync(tmpPath, GIFT_DB_PATH);
   } catch (e) {
     console.error("[GiftDB] 保存 gift-db.json 失败:", e);
   }
 }
 
 /** 批量保存礼物信息到 gift-db.json */
-export function saveGiftsToDb(giftInfos: Array<{ gift_id: number; name: string; img: string }>): void {
-  const db = loadGiftDb();
-  if (!db.gifts) db.gifts = {};
-  let changed = false;
-  for (const g of giftInfos) {
-    if (!db.gifts[g.gift_id] || !db.gifts[g.gift_id].img) {
-      db.gifts[g.gift_id] = { name: g.name, img: g.img };
-      changed = true;
+export async function saveGiftsToDb(giftInfos: Array<{ gift_id: number; name: string; img: string }>): Promise<void> {
+  await withWriteLock(() => {
+    const db = loadGiftDb();
+    if (!db.gifts) db.gifts = {};
+    let changed = false;
+    for (const g of giftInfos) {
+      if (!db.gifts[g.gift_id] || !db.gifts[g.gift_id].img) {
+        db.gifts[g.gift_id] = { name: g.name, img: g.img };
+        changed = true;
+      }
     }
-  }
-  if (changed) {
-    saveGiftDb(db);
-  }
+    if (changed) {
+      saveGiftDb(db);
+    }
+  });
 }
 
 /** 根据 gift_id 获取礼物图片，没找到返回空字符串 */

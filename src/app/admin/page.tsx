@@ -17,6 +17,7 @@ type User = {
   source: string;
   createdAt: string;
   updatedAt: string;
+  lastUpload?: string;
   isCurrent: boolean;
 };
 
@@ -97,6 +98,30 @@ export default function AdminPage() {
       prev.map((u) => ({ ...u, isCurrent: u.sid === sid })),
     );
     alert("已切换，现在可以用该用户身份访问首页");
+  };
+
+  const handleLoadRemoteData = async (user: User) => {
+    try {
+      // 先从服务器拉取该用户的数据文件
+      const res = await fetch(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`);
+      const data = await res.json();
+      if (data.code !== 0) {
+        alert("加载失败: " + (data.message || "未知错误"));
+        return;
+      }
+      const files = data.data?.files ?? {};
+      const fileNames = Object.keys(files);
+      if (fileNames.length === 0) {
+        alert("该用户暂无上传数据");
+        return;
+      }
+      // 切换到该用户并跳转到首页
+      await handleImpersonate(user.sid);
+      alert(`已加载 ${user.uname} 的 ${fileNames.length} 个数据文件 (${fileNames.join(", ")})，即将跳转首页`);
+      window.location.href = "/";
+    } catch (err) {
+      alert("加载失败: " + (err instanceof Error ? err.message : "网络错误"));
+    }
   };
 
   const handleSaveConfig = async () => {
@@ -264,16 +289,34 @@ export default function AdminPage() {
                       <span className="text-[10px] text-black/30">UID {user.mid}</span>
                       {user.isCurrent && <span className="text-[10px] px-1 rounded bg-[#00a1d6]/10 text-[#00a1d6]">当前</span>}
                     </div>
-                    <span className="text-[10px] text-black/30">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-black/30">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</span>
+                      {user.lastUpload && (
+                        <span className="text-[10px] text-[#2ecc71]">
+                          数据: {new Date(user.lastUpload).toLocaleString("zh-CN").slice(0, 10)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {!user.isCurrent && (
-                    <button
-                      onClick={() => handleImpersonate(user.sid)}
-                      className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
-                    >
-                      切换
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {user.lastUpload && (
+                      <button
+                        onClick={() => handleLoadRemoteData(user)}
+                        className="rounded-lg border border-[#2ecc71]/30 bg-[#2ecc71]/5 px-2 py-1 text-[10px] text-[#2ecc71] hover:bg-[#2ecc71]/10 transition"
+                        title="加载该用户上传的数据"
+                      >
+                        加载数据
+                      </button>
+                    )}
+                    {!user.isCurrent && (
+                      <button
+                        onClick={() => handleImpersonate(user.sid)}
+                        className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
+                      >
+                        切换
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

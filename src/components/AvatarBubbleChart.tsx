@@ -549,7 +549,10 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
 
   function downloadImage() {
     const dataUrl = generateImageDataUrl();
-    if (!dataUrl) return;
+    if (!dataUrl) {
+      console.warn("[AvatarChart] 下载失败：无法生成图片，请等待头像加载完成");
+      return;
+    }
     if (isMobile()) { setMobilePreview({ url: dataUrl }); return; }
     const link = document.createElement("a");
     link.download = `${title}_头像分布.png`;

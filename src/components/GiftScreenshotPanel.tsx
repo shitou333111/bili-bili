@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { isMobileDevice } from "@/lib/device";
+import { fetchGiftEffects } from "@/lib/gift-effects-client";
 
 // ==================== 类型定义 ====================
 
@@ -732,12 +733,9 @@ export default function GiftScreenshotPanel({
     if (missingIds.length === 0) return;
 
     setLoadingEffects(true);
-    fetch(`/api/gift-effects?gift_ids=${missingIds.join(",")}`)
-      .then(r => r.json())
+    fetchGiftEffects(missingIds)
       .then(data => {
-        if (data.code === 0 && data.data) {
-          setEffectDataMap(prev => ({ ...prev, ...data.data }));
-        }
+        setEffectDataMap(prev => ({ ...prev, ...data }));
       })
       .catch(err => console.error("获取礼物特效失败:", err))
       .finally(() => setLoadingEffects(false));

@@ -7,6 +7,15 @@ const STATE_FILE = path.join(STATE_DIR, "bili-live-state.json");
 const SESSION_COOKIE_NAME = "bili_live_sid";
 const USER_TOKEN_COOKIE_NAME = "bili_live_user_token";
 
+// 文件写入互斥锁，防止并发写入导致 "Compaction failed" 错误
+let writeLock: Promise<void> = Promise.resolve();
+function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = writeLock;
+  let resolve: () => void;
+  writeLock = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
 export type AuthSession = {
   sid: string;
   uname: string;
@@ -59,8 +68,10 @@ export async function readState(): Promise<SessionState> {
 }
 
 export async function writeState(state: SessionState) {
-  await ensureStateFile();
-  await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  await withWriteLock(async () => {
+    await ensureStateFile();
+    await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  });
 }
 
 export async function getAllSessions(): Promise<AuthSession[]> {
@@ -91,26 +102,29 @@ export function createSessionInput(input: Omit<AuthSession, "sid" | "createdAt" 
 }
 
 export async function saveSession(session: AuthSession): Promise<AuthSession> {
-  const state = await readState();
-  // 先按 sid 找，找不到再按 mid（B站用户ID）找，避免同一账号重复
-  let index = state.sessions.findIndex((item) => item.sid === session.sid);
-  if (index < 0) {
-    index = state.sessions.findIndex((item) => item.mid === session.mid);
-  }
-  let effectiveSession: AuthSession;
-  if (index >= 0) {
-    // 保留原有 sid，更新其他信息
-    const existingSid = state.sessions[index].sid;
-    effectiveSession = { ...session, sid: existingSid };
-    state.sessions[index] = effectiveSession;
-    state.currentSid = existingSid;
-  } else {
-    effectiveSession = session;
-    state.sessions.unshift(session);
-    state.currentSid = session.sid;
-  }
-  await writeState(state);
-  return effectiveSession;
+  return withWriteLock(async () => {
+    const state = await readState();
+    // 先按 sid 找，找不到再按 mid（B站用户ID）找，避免同一账号重复
+    let index = state.sessions.findIndex((item) => item.sid === session.sid);
+    if (index < 0) {
+      index = state.sessions.findIndex((item) => item.mid === session.mid);
+    }
+    let effectiveSession: AuthSession;
+    if (index >= 0) {
+      // 保留原有 sid，更新其他信息
+      const existingSid = state.sessions[index].sid;
+      effectiveSession = { ...session, sid: existingSid };
+      state.sessions[index] = effectiveSession;
+      state.currentSid = existingSid;
+    } else {
+      effectiveSession = session;
+      state.sessions.unshift(session);
+      state.currentSid = session.sid;
+    }
+    await ensureStateFile();
+    await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+    return effectiveSession;
+  });
 }
 
 export async function getSessionBySid(sid: string | null | undefined) {
@@ -120,9 +134,12 @@ export async function getSessionBySid(sid: string | null | undefined) {
 }
 
 export async function setCurrentSession(sid: string | null) {
-  const state = await readState();
-  state.currentSid = sid;
-  await writeState(state);
+  return withWriteLock(async () => {
+    const state = await readState();
+    state.currentSid = sid;
+    await ensureStateFile();
+    await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  });
 }
 
 export function getSessionCookieName() {
@@ -163,21 +180,24 @@ export async function updateSessionCredentials(
     biliCookies?: string[];
   },
 ) {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.sid === sid);
-  if (!session) return null;
+  return withWriteLock(async () => {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.sid === sid);
+    if (!session) return null;
 
-  if (credentials.biliSessdata) {
-    session.biliSessdata = credentials.biliSessdata;
-  }
-  if (credentials.biliRefreshToken) {
-    session.biliRefreshToken = credentials.biliRefreshToken;
-  }
-  if (credentials.biliCookies) {
-    session.biliCookies = credentials.biliCookies;
-  }
-  session.updatedAt = new Date().toISOString();
+    if (credentials.biliSessdata) {
+      session.biliSessdata = credentials.biliSessdata;
+    }
+    if (credentials.biliRefreshToken) {
+      session.biliRefreshToken = credentials.biliRefreshToken;
+    }
+    if (credentials.biliCookies) {
+      session.biliCookies = credentials.biliCookies;
+    }
+    session.updatedAt = new Date().toISOString();
 
-  await writeState(state);
-  return session;
+    await ensureStateFile();
+    await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+    return session;
+  });
 }

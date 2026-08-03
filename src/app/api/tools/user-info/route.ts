@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getUserInfoByUid, clearUserInfoCache } from "@/lib/bilibili/gift-api";
 import { getCachedFaceUids, setCachedAnchorFace, setCachedAnchorName } from "@/lib/user-data";
 
+export const dynamic = "force-dynamic";
+
 const REQUEST_DELAY_MS = 200;
 
 export async function GET(request: Request) {

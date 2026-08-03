@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# tauri rust build artifacts
+/src-tauri/target/
+
 # data - exclude all runtime data (user records, sessions, snapshots, backups)
 .data/
 

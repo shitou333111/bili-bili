@@ -3,6 +3,8 @@ import { getSessionCookieName, getSessionBySid } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 
+export const dynamic = "force-dynamic";
+
 type BiliMedalResponse = {
   code: number;
   message: string;
@@ -18,7 +20,8 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1", 10);
 
-  const sid = request.cookies.get(getSessionCookieName())?.value;
+  let sid = request.cookies.get(getSessionCookieName())?.value;
+  if (!sid) sid = url.searchParams.get("_sid") ?? undefined;
   const session = await getSessionBySid(sid);
   if (!session) {
     return NextResponse.json({ code: -101, message: "未登录", data: null });

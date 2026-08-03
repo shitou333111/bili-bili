@@ -258,14 +258,27 @@ export default function AnchorDataModule({
       .catch(() => {});
   }, []);
 
-  async function fetchData() {
+  /** 构造带 session ID 和 userToken 的 API URL（Tauri WebView 可能不发送 cookie） */
+function apiUrl(path: string): string {
+  if (typeof window === "undefined") return path;
+  const sid = localStorage.getItem("bili_live_sid");
+  const userToken = localStorage.getItem("bili_live_user_token");
+  const params: string[] = [];
+  if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
+  if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
+  if (params.length === 0) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}${params.join("&")}`;
+}
+
+async function fetchData() {
     setLoading(true);
     setAuthError(null);
     // 重置盲盒筛选条件
     setBlindBoxDateFilter("all");
     setBlindBoxFanFilter("");
     try {
-      const res = await fetch("/api/anchor/gifts", { cache: "no-store" });
+      const res = await fetch(apiUrl("/api/anchor/gifts"), { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         setAuthError("B站登录已失效，请重新扫码登录。");
@@ -623,7 +636,7 @@ export default function AnchorDataModule({
                             <div className="text-[10px] text-black/45">月度统计</div>
                             <div className="overflow-x-auto" style={{ scrollbarWidth: "thin" }}>
                               <div style={{ width: "100%", minWidth: `${minWidth}px` }}>
-                                <ResponsiveContainer width="100%" height={170}>
+                                <ResponsiveContainer width="100%" height={170} minWidth={0}>
                                   <BarChart data={monthlyData} margin={{ top: 16, right: 2, left: 2, bottom: 2 }}>
                                     <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
                                     <Tooltip
@@ -738,7 +751,7 @@ export default function AnchorDataModule({
                             <>
                               <div className="text-[10px] text-black/45">全部时期</div>
                               <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none -mx-1" style={{ height: 170 }}>
-                                <ResponsiveContainer width="100%" height="100%">
+                                <ResponsiveContainer width="100%" height={170}>
                                   <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                                     <Pie
                                       data={allTimePieData}
@@ -802,7 +815,7 @@ export default function AnchorDataModule({
                             <div className="mt-2 border-t border-black/10 pt-2">
                               <div className="text-[10px] text-black/45">{title}</div>
                               <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none -mx-1" style={{ height: 170 }}>
-                                <ResponsiveContainer width="100%" height="100%">
+                                <ResponsiveContainer width="100%" height={170}>
                                   <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                                     <Pie
                                       data={periodPieData}
@@ -963,7 +976,7 @@ export default function AnchorDataModule({
                                         setBlindBoxDateFilter(key);
                                         const fanParam = blindBoxFanFilter ? `&fan=${blindBoxFanFilter}` : "";
                                         const url = `/api/anchor/gifts${key !== "all" ? `?dateRange=${key}${fanParam}` : (fanParam ? `?${fanParam.slice(1)}` : "")}`;
-                                        fetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
+                                        fetch(apiUrl(url), { cache: "no-store" }).then(r => r.json()).then(data => {
                                           if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
                                         });
                                       }}
@@ -989,7 +1002,7 @@ export default function AnchorDataModule({
                                   const fanParam = fanUid ? `fan=${fanUid}` : "";
                                   const params = [dateParam, fanParam].filter(Boolean).join("&");
                                   const url = `/api/anchor/gifts${params ? `?${params}` : ""}`;
-                                  fetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
+                                  fetch(apiUrl(url), { cache: "no-store" }).then(r => r.json()).then(data => {
                                     if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
                                   });
                                 }}

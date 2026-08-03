@@ -807,6 +807,11 @@ export default function HomePage() {
   const [fansSelected, setFansSelected] = useState<Set<number>>(new Set());
   const [fansRemoving, setFansRemoving] = useState(false);
   const [fansMsg, setFansMsg] = useState("");
+  // 版本号卡片连续点击 → admin 入口
+  const [versionClickCount, setVersionClickCount] = useState(0);
+  const [showAdminPwd, setShowAdminPwd] = useState(false);
+  const [adminPwd, setAdminPwd] = useState("");
+  const [adminPwdError, setAdminPwdError] = useState(false);
 
   type MedalItem = {
     medal: { uid: number; target_id: number; medal_id: number; level: number; medal_name: string; intimacy: number; next_intimacy: number; today_feed: number; day_limit: number; is_lighted: number; guard_level: number; wearing_status: number; can_delete: boolean; medal_color_start: number; medal_color_end: number; medal_color_border: number };
@@ -896,12 +901,25 @@ export default function HomePage() {
     return () => window.removeEventListener("resize", applyZoom);
   }, []);
 
-  async function fetchData() {
+  /** 构造带 session ID 和 userToken 的 API URL（Tauri WebView 可能不发送 cookie） */
+function apiUrl(path: string): string {
+  if (typeof window === "undefined") return path;
+  const sid = localStorage.getItem("bili_live_sid");
+  const userToken = localStorage.getItem("bili_live_user_token");
+  const params: string[] = [];
+  if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
+  if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
+  if (params.length === 0) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}${params.join("&")}`;
+}
+
+async function fetchData() {
     setLoading(true);
     try {
       const [accountsRes, snapshotRes] = await Promise.all([
-        fetch("/api/auth/accounts", { cache: "no-store" }),
-        fetch("/api/revenue/pay-record", { cache: "no-store" }),
+        fetch(apiUrl("/api/auth/accounts"), { cache: "no-store" }),
+        fetch(apiUrl("/api/revenue/pay-record"), { cache: "no-store" }),
       ]);
 
       const accountsData = await accountsRes.json();
@@ -909,7 +927,7 @@ export default function HomePage() {
 
       setAccounts(accountsData.data?.accounts || []);
 
-      const statusRes = await fetch("/api/auth/status", { cache: "no-store" });
+      const statusRes = await fetch(apiUrl("/api/auth/status"), { cache: "no-store" });
       const statusData = await statusRes.json();
       if (statusData.data?.loggedIn && statusData.data?.sid) {
         setApiLoggedIn(true);
@@ -974,8 +992,8 @@ export default function HomePage() {
       }
 
       const [blindBoxRes, synthesisRes] = await Promise.all([
-        fetch(blindBoxUrl, { cache: "no-store" }),
-        fetch("/api/stats/synthesis", { cache: "no-store" }),
+        fetch(apiUrl(blindBoxUrl), { cache: "no-store" }),
+        fetch(apiUrl("/api/stats/synthesis"), { cache: "no-store" }),
       ]);
       const [blindBoxData, synthesisData] = await Promise.all([
         blindBoxRes.json(),
@@ -1013,7 +1031,7 @@ export default function HomePage() {
 
   async function fetchCertifications() {
     try {
-      const res = await fetch("/api/stats/certification", { cache: "no-store" });
+      const res = await fetch(apiUrl("/api/stats/certification"), { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         await handleAuthExpired();
@@ -1029,7 +1047,7 @@ export default function HomePage() {
 
   async function fetchOtherStats() {
     try {
-      const res = await fetch("/api/stats/other", { cache: "no-store" });
+      const res = await fetch(apiUrl("/api/stats/other"), { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         await handleAuthExpired();
@@ -1153,7 +1171,7 @@ export default function HomePage() {
     setFansRemoving(true);
     setFansMsg("");
     try {
-      const res = await fetch("/api/tools/remove-fan", {
+      const res = await fetch(apiUrl("/api/tools/remove-fan"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fids }),
@@ -1192,7 +1210,7 @@ export default function HomePage() {
     setMedalsLoading(true);
     setMedalsMsg("");
     try {
-      const res = await fetch(`/api/tools/medals?page=${page}`, { cache: "no-store" });
+      const res = await fetch(apiUrl(`/api/tools/medals?page=${page}`), { cache: "no-store" });
       const data = await res.json();
       if (data.code === 0 && data.data) {
         const allItems = [...(data.data.list || []), ...(data.data.special_list || [])];
@@ -1214,7 +1232,7 @@ export default function HomePage() {
     setMedalsRemoving(true);
     setMedalsMsg("");
     try {
-      const res = await fetch("/api/tools/delete-medal", {
+      const res = await fetch(apiUrl("/api/tools/delete-medal"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ medal_id: medalId }),
@@ -1250,7 +1268,7 @@ export default function HomePage() {
     let failed = 0;
     for (const medalId of medalsSelected) {
       try {
-        const res = await fetch("/api/tools/delete-medal", {
+        const res = await fetch(apiUrl("/api/tools/delete-medal"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ medal_id: medalId }),
@@ -1277,7 +1295,7 @@ export default function HomePage() {
     setLoading(true);
     setAuthError(null);
     try {
-      const snapshotRes = await fetch("/api/revenue/pay-record?refresh=true", { cache: "no-store" });
+      const snapshotRes = await fetch(apiUrl("/api/revenue/pay-record?refresh=true"), { cache: "no-store" });
       const snapshotData = await snapshotRes.json();
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
@@ -1311,12 +1329,12 @@ export default function HomePage() {
   async function switchAccount(sid: string) {
     setLoading(true);
     try {
-      const response = await fetch("/api/auth/switch", {
+      const res = await fetch(apiUrl("/api/auth/switch"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sid }),
       });
-      const data = await response.json();
+      const data = await res.json();
       if (data.code === 0) {
         setIsDropdownOpen(false);
         await fetchData();
@@ -1330,7 +1348,7 @@ export default function HomePage() {
 
   async function logout() {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
       setCurrentAccount(null);
       setIsDropdownOpen(false);
       setSnapshot(buildMockPayRecordSnapshot());
@@ -1355,7 +1373,7 @@ export default function HomePage() {
 
   /** 登录凭证失效时：清除会话，展示模拟数据，不跳转登录页 */
   async function handleAuthExpired() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
     setCurrentAccount(null);
     setApiLoggedIn(false);
     setSnapshot(buildMockPayRecordSnapshot());
@@ -1822,7 +1840,7 @@ export default function HomePage() {
                           <div className="text-[10px] text-black/45">月度统计</div>
                           <div className="overflow-x-auto" style={{ scrollbarWidth: "thin" }}>
                             <div style={{ width: "100%", minWidth: `${minWidth}px` }}>
-                              <ResponsiveContainer width="100%" height={170}>
+                              <ResponsiveContainer width="100%" height={170} minWidth={0}>
                                 <BarChart data={monthlyData} margin={{ top: 16, right: 2, left: 2, bottom: 2 }}>
                                   <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
                                   <Tooltip
@@ -1941,7 +1959,7 @@ export default function HomePage() {
                           <>
                             <div className="text-[10px] text-black/45">全部时期</div>
                             <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none -mx-1" style={{ height: 170 }}>
-                              <ResponsiveContainer width="100%" height="100%">
+                              <ResponsiveContainer width="100%" height={170}>
                                 <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                                   <Pie
                                     data={allTimePieData}
@@ -2011,7 +2029,7 @@ export default function HomePage() {
                           <div className="mt-2 border-t border-black/10 pt-2">
                             <div className="text-[10px] text-black/45">{title}</div>
                             <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none -mx-1" style={{ height: 170 }}>
-                              <ResponsiveContainer width="100%" height="100%">
+                              <ResponsiveContainer width="100%" height={170}>
                                 <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                                   <Pie
                                     data={periodPieData}
@@ -2646,7 +2664,7 @@ export default function HomePage() {
 
       {/* B站小工具 */}
       {activeModule === "screenshot" && (
-        <div className="mx-auto w-full max-w-4xl px-2 min-w-0">
+        <div className="mx-auto w-full max-w-4xl px-2 min-w-0 py-3">
           {toolsPage === "home" && (
               <div className="grid grid-cols-1 gap-3">
                 {[
@@ -2669,6 +2687,78 @@ export default function HomePage() {
                     </div>
                   </button>
                 ))}
+              </div>
+            )}
+
+            {/* 版本号卡片 - 连续点击6次进入管理员页面 */}
+            {toolsPage === "home" && (
+              <div className="mt-3 flex justify-center">
+                <button
+                  onClick={() => {
+                    const next = versionClickCount + 1;
+                    setVersionClickCount(next);
+                    if (next >= 6) {
+                      setVersionClickCount(0);
+                      setShowAdminPwd(true);
+                      setAdminPwdError(false);
+                    }
+                  }}
+                  className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"
+                  title="v0.1.0"
+                >
+                  v0.1.0
+                </button>
+              </div>
+            )}
+
+            {/* Admin 密码弹窗 */}
+            {showAdminPwd && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(false); }}>
+                <div className="rounded-xl border border-black/10 bg-white p-6 shadow-xl w-72" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="text-sm font-semibold text-center mb-4">管理员验证</h3>
+                  <input
+                    type="password"
+                    placeholder="请输入密码"
+                    value={adminPwd}
+                    onChange={(e) => { setAdminPwd(e.target.value); setAdminPwdError(false); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (adminPwd === "333") {
+                          setShowAdminPwd(false);
+                          setAdminPwd("");
+                          window.location.href = "/admin";
+                        } else {
+                          setAdminPwdError(true);
+                        }
+                      }
+                    }}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${adminPwdError ? "border-[#e74c3c]" : "border-black/10 focus:border-black/30"}`}
+                    autoFocus
+                  />
+                  {adminPwdError && <p className="text-xs text-[#e74c3c] mt-1">密码错误</p>}
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => {
+                        if (adminPwd === "333") {
+                          setShowAdminPwd(false);
+                          setAdminPwd("");
+                          window.location.href = "/admin";
+                        } else {
+                          setAdminPwdError(true);
+                        }
+                      }}
+                      className="flex-1 rounded-lg bg-[#1f1c17] py-2 text-sm text-white font-medium hover:opacity-90 transition"
+                    >
+                      确认
+                    </button>
+                    <button
+                      onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(false); }}
+                      className="flex-1 rounded-lg border border-black/10 py-2 text-sm text-black/60 hover:bg-gray-50 transition"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

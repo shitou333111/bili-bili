@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
 import { setCurrentSession, getSessionCookieName } from "@/lib/auth/session";
 
+export const dynamic = "force-dynamic";
+
 async function checkAdmin(request: Request): Promise<boolean> {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));

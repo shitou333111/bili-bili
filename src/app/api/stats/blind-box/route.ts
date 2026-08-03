@@ -10,6 +10,8 @@ import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
 
+export const dynamic = "force-dynamic";
+
 // 盲盒抽取记录存储类型（字段名与API返回一致）
 type BlindBoxDrawRecord = {
   gift_id: number;
@@ -594,9 +596,11 @@ function calculateProfit(
 }
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  if (!sid) sid = url.searchParams.get("_sid") ?? null;
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
@@ -620,7 +624,6 @@ export async function GET(request: Request) {
   const validSession = credentialResult.session;
 
   // 解析筛选参数（支持按盲盒ID分别筛选：ruid_32251=xxx, dateRange_32251=thisMonth）
-  const url = new URL(request.url);
 
   try {
     const biliCookie = credentialResult.cookie;
@@ -689,7 +692,7 @@ export async function GET(request: Request) {
 
         // 将盲盒内礼物信息保存到 gift-db，供消费记录显示礼物图片
         if (blindBoxInfo?.gifts) {
-          saveGiftsToDb(blindBoxInfo.gifts.map(g => ({
+          await saveGiftsToDb(blindBoxInfo.gifts.map(g => ({
             gift_id: g.gift_id,
             name: g.gift_name,
             img: g.gift_img,

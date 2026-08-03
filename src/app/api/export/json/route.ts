@@ -4,6 +4,8 @@ import { readPayRecords, getBeijingTime } from "@/lib/user-data";
 import { generateMockRecords } from "@/lib/revenue";
 import type { RawGiftRecord } from "@/lib/revenue";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));

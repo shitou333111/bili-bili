@@ -7,10 +7,17 @@ import { saveGiftsToDb } from "@/lib/gift-db";
 import { readPayRecords, savePayRecords, getMaxId, type RawGiftRecord } from "@/lib/user-data";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  // fallback: query 参数 _sid（Tauri WebView 可能不发送 cookie）
+  if (!sid) {
+    sid = url.searchParams.get("_sid") ?? null;
+  }
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
@@ -89,7 +96,7 @@ export async function GET(request: Request) {
 
     // 保存礼物信息到 gift-db.json
     if (giftCatalog.length > 0) {
-      saveGiftsToDb(giftCatalog.map(g => ({ gift_id: g.giftId, name: g.giftName, img: g.giftImg })));
+      await saveGiftsToDb(giftCatalog.map(g => ({ gift_id: g.giftId, name: g.giftName, img: g.giftImg })));
     }
 
     const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);

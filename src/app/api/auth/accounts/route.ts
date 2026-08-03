@@ -2,9 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionsByUserToken, getUserTokenCookieName } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
-  // 获取用户标识
-  const userToken = request.cookies.get(getUserTokenCookieName())?.value || null;
+  const url = new URL(request.url);
+  // 获取用户标识：优先 cookie，fallback 到 query 参数（Tauri WebView 可能不发送 cookie）
+  let userToken = request.cookies.get(getUserTokenCookieName())?.value || null;
+  if (!userToken) {
+    userToken = url.searchParams.get("_user_token") ?? null;
+  }
   
   // 只返回当前用户标识关联的会话
   const sessions = await getSessionsByUserToken(userToken);

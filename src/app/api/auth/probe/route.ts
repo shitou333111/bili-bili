@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import type { ApiResponse, LoginProbeResult } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
 
@@ -60,4 +62,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

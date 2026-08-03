@@ -6,6 +6,8 @@ import { fetchTianxuanGiftList, fetchRedPocketGiftList } from "@/lib/bilibili/gi
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 // 星愿水晶球单价（电池），用于判断"天选之子"头衔
 const CRYSTAL_BALL_PRICE = 1000;
 
@@ -164,9 +166,11 @@ function buildMockOtherStats(): OtherStatsResponse {
 }
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  if (!sid) sid = url.searchParams.get("_sid") ?? null;
   console.log("[OtherStats] sid:", sid);
   const session = await getActiveSessionFromCookie(sid);
 

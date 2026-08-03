@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   deploy-server:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'server'))
     runs-on: ubuntu-latest
 
     steps:

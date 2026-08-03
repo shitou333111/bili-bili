@@ -18,6 +18,8 @@ import { SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
 import { getEffectiveSynthesisConfig } from "@/lib/config-override";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export type SynthesisActivityStats = {
   id: string;
   type: string;
@@ -234,9 +236,11 @@ function buildMockSynthesisStats(): SynthesisStatsResponse {
 }
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  if (!sid) sid = url.searchParams.get("_sid") ?? null;
   console.log("[SynthesisStats] sid:", sid);
   const session = await getActiveSessionFromCookie(sid);
   console.log("[SynthesisStats] session:", session ? "found" : "not found");

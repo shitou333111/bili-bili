@@ -3,6 +3,8 @@ import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
 import { readAdminConfig, writeAdminConfig, validateActivityType, getValidActivityTypes, type AdminConfig } from "@/lib/admin-config";
 import { BLIND_BOX_CONFIG, SYNTHESIS_CONFIG } from "@/lib/config";
 
+export const dynamic = "force-dynamic";
+
 async function checkAdmin(request: Request): Promise<boolean> {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));

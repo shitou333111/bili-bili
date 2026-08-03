@@ -6,6 +6,8 @@ import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
 
+export const dynamic = "force-dynamic";
+
 const XINDONG_ID = 32251;
 const CASTLE_ID = 32132; // 浪漫城堡
 const XINDONG_PRICE = 150; // 心动盲盒单价
@@ -291,9 +293,11 @@ async function readBlindBoxRecords(mid: number, uname: string, blindBoxId: numbe
 }
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  if (!sid) sid = url.searchParams.get("_sid") ?? null;
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {

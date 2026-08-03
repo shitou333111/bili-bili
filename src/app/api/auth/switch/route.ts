@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionBySid, getSessionCookieName, getUserTokenCookieName, setCurrentSession } from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
+  const url = new URL(request.url);
   const body = await request.json();
   const { sid } = body as { sid?: string };
 
@@ -30,7 +33,8 @@ export async function POST(request: NextRequest) {
   }
 
   // 验证用户只能切换自己的账号
-  const userToken = request.cookies.get(getUserTokenCookieName())?.value;
+  let userToken = request.cookies.get(getUserTokenCookieName())?.value;
+  if (!userToken) userToken = url.searchParams.get("_user_token") ?? undefined;
   if (userToken !== session.userToken) {
     return NextResponse.json<ApiResponse<{ success: boolean }>>(
       {

@@ -21,6 +21,8 @@ type QRPollResponse = {
     url: string;
     refresh_token: string;
     timestamp: number;
+    sid?: string;
+    userToken?: string;
   };
 };
 
@@ -81,6 +83,13 @@ export default function LoginPage() {
 
         if (data.code === 0 && data.data?.code === 0) {
           clearPollTimer();
+          // 存储 SID 和 userToken 到 localStorage，持久化以便下次打开自动登录
+          if (data.data.sid) {
+            localStorage.setItem("bili_live_sid", data.data.sid);
+          }
+          if (data.data.userToken) {
+            localStorage.setItem("bili_live_user_token", data.data.userToken);
+          }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {
             window.location.href = "/";
@@ -128,7 +137,7 @@ export default function LoginPage() {
     setStatus("正在生成登录二维码...");
 
     try {
-      const response = await fetch("/api/auth/qr", {
+      const response = await fetch("/api/auth/qr/generate", {
         cache: "no-store",
       });
       const data = (await response.json()) as QRGenerateResponse;

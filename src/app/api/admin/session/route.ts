@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const name = getAdminCookieName();

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { loadGiftDb, saveGiftsToDb } from "@/lib/gift-db";
@@ -9,6 +9,8 @@ import { buildMockAnchorGiftsResponse } from "@/lib/revenue";
 import { getBuvidCookie } from "@/lib/bilibili/client";
 import { promises as fs } from "fs";
 import path from "path";
+
+export const dynamic = "force-dynamic";
 
 // ==================== 类型定义 ====================
 
@@ -521,11 +523,17 @@ function generateMonthChunks(begin: string, end: string): Array<{ start: string;
 // ==================== GET Handler ====================
 
 export async function GET(request: Request) {
-  // 认证
+  // 认证：优先 cookie，fallback 到 query 参数（Tauri WebView 可能不发送 cookie）
+  const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
   console.log(`[AnchorGifts] 收到请求, cookie header 长度: ${cookieHeader.length}`);
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  let sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
+  let sid = sidMatch?.[1] ?? null;
+  // fallback: query 参数 _sid
+  if (!sid) {
+    sid = url.searchParams.get("_sid") ?? null;
+    if (sid) console.log(`[AnchorGifts] 从 query 参数获取 sid: ${sid.substring(0, 8)}...`);
+  }
   console.log(`[AnchorGifts] sid 匹配: ${sid ? sid.substring(0, 8) + "..." : "(null)"}`);
   const session = await getActiveSessionFromCookie(sid);
 
@@ -554,7 +562,6 @@ export async function GET(request: Request) {
   console.log(`[AnchorGifts] 认证通过: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
 
   // 解析查询参数
-  const url = new URL(request.url);
   const refresh = url.searchParams.get("refresh") === "true";
   const dateRangeFilter = url.searchParams.get("dateRange") ?? "all";
   const fanFilter = url.searchParams.get("fan") ?? "";
@@ -944,7 +951,7 @@ export async function GET(request: Request) {
     // 将盲盒内礼物信息保存到 gift-db，供消费记录显示礼物图片
     for (const info of Object.values(allBlindBoxInfo)) {
       if (info.gifts) {
-        saveGiftsToDb(info.gifts.map(g => ({
+        await saveGiftsToDb(info.gifts.map(g => ({
           gift_id: g.gift_id,
           name: g.gift_name,
           img: g.gift_img,
@@ -956,7 +963,7 @@ export async function GET(request: Request) {
     const giftDb = loadGiftDb();
 
     // 同时将所有礼物记录中的礼物名称保存到 gift-db（img 可能为空，后续由 pay-records 填充）
-    saveGiftsToDb(
+    await saveGiftsToDb(
       Array.from(giftMap.entries()).map(([gift_id, v]) => ({
         gift_id,
         name: v.name,

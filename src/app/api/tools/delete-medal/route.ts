@@ -3,8 +3,12 @@ import { getSessionCookieName, getSessionBySid } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
-  const sid = request.cookies.get(getSessionCookieName())?.value;
+  const url = new URL(request.url);
+  let sid = request.cookies.get(getSessionCookieName())?.value;
+  if (!sid) sid = url.searchParams.get("_sid") ?? undefined;
   const session = await getSessionBySid(sid);
   if (!session) {
     return NextResponse.json({ code: -101, message: "未登录" });

@@ -4,6 +4,8 @@ import { checkBlindBox } from "@/lib/bilibili/gift-api";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 
+export const dynamic = "force-dynamic";
+
 async function checkAdmin(request: Request): Promise<boolean> {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));
