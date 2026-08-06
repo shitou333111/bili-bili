@@ -256,7 +256,7 @@ function GiftSaveModal({
   selectedDay,
   actualDateRange,
 }: {
-  gifts: Array<{ gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>;
+  gifts: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>;
   userName: string;
   dateRange: string;
   anchorName: string;
@@ -324,7 +324,7 @@ function GiftSaveModal({
           <div className="bg-white px-4 py-4">
             <div className="grid grid-cols-3 gap-x-2 gap-y-2">
               {gifts.slice(0, 59).map((g) => (
-                <div key={`${g.gift_id}_${g.gift_name}`} className="flex items-center gap-1 text-sm py-0.5">
+                <div key={g.uid} className="flex items-center gap-1 text-sm py-0.5">
                   {g.gift_img ? <img src={fixImageUrl(g.gift_img)} alt="" className="w-7 h-7 rounded flex-shrink-0" crossOrigin="anonymous" /> : <span className="text-[12px] text-black/50 truncate max-w-[55px] flex-shrink-0">{g.gift_name}</span>}
                   <span className="truncate text-black/70 text-sm">×{g.count}</span>
                 </div>
@@ -359,16 +359,16 @@ function GiftSaveModal({
             <img src={generatedImage} alt="礼物清单" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl mx-auto" />
 
             {/* 下方按钮区域 */}
-            <div className="flex flex-col gap-2 mt-3 w-full">
+            <div className="flex gap-2.5 mt-3 w-full justify-center">
               {!isMobileDevice() && (
-                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载图片
                 </button>
               )}
-              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+              <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
             </div>
@@ -592,16 +592,16 @@ function CertificationModal({
             </div>
 
             {/* 下方按钮区域 */}
-            <div className="flex flex-col gap-2 mt-3">
+            <div className="flex gap-2.5 mt-3 justify-center">
               {!isMobileDevice() && (
-                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载图片
                 </button>
               )}
-              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+              <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
             </div>
@@ -753,16 +753,16 @@ function CastleStatModal({
             <img src={generatedImage} alt="城堡统计" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
 
             {/* 下方按钮区域 */}
-            <div className="flex flex-col gap-2 mt-3">
+            <div className="flex gap-2.5 mt-3 justify-center">
               {!isMobileDevice() && (
-                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载图片
                 </button>
               )}
-              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+              <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
             </div>
@@ -1144,11 +1144,15 @@ async function fetchData() {
     const topAnchors = anchors.slice(0, 300);
 
     // 立即打开模态框，显示加载状态
+    // 天选礼物（显示当前登录用户名）用登录头像，其余用已缓存头像
+    const isSelfAnchor = (a: { ruid: number; rname: string }) =>
+      a.ruid === (currentAccount?.mid ?? -1);
+    const selfFace = currentAccount?.face || "";
     const initialItems: BubbleItem[] = topAnchors.map(a => ({
       id: a.ruid,
       name: a.rname,
       value: a.coins,
-      face: anchorFaces[a.ruid] || "",
+      face: isSelfAnchor(a) ? selfFace : (anchorFaces[a.ruid] || ""),
     }));
     setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像..." });
 
@@ -1191,7 +1195,7 @@ async function fetchData() {
       id: a.ruid,
       name: a.rname,
       value: a.coins,
-      face: faces[a.ruid] || "",
+      face: isSelfAnchor(a) ? selfFace : (faces[a.ruid] || ""),
     }));
 
     setBubbleChartData({ items, title: "消费主播分布", loading: false });
@@ -1474,9 +1478,19 @@ async function fetchData() {
   const isLoggedIn = Boolean(currentAccount) || apiLoggedIn;
   const isRealSnapshot = snapshot?.source === "real";
 
-  // 按主播筛选记录
+  // 礼物天选特殊处理：主播给自己发天选，昵称为空、ruid=0，归到当前登录账号
+  // 实际花费需扣除未领取退还的电池（refund_price）
+  const isTianxuanRecord = (r: any) => r.ruid === 0 && !r.r_uname;
+  const tianxuanCoins = (r: any) => r.totalCoins - (Number(r.refund_price) || 0);
+  const tianxuanUid = currentAccount?.mid ?? 0;
+
+  // 按主播筛选记录（天选记录归到当前登录账号 uid）
   const filteredOverviewRecords = snapshot ? (overviewAnchor
-    ? snapshot.records.filter((r) => r.ruid === Number(overviewAnchor) && r.status_msg !== "已退回")
+    ? snapshot.records.filter((r) => {
+        if (r.status_msg === "已退回") return false;
+        const uid = isTianxuanRecord(r) ? tianxuanUid : r.ruid;
+        return uid === Number(overviewAnchor);
+      })
     : snapshot.records.filter(r => r.status_msg !== "已退回")) : [];
 
   // 按月份聚合数据
@@ -1486,7 +1500,7 @@ async function fetchData() {
       const d = new Date(r.timestamp * 1000);
       const key = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
       const existing = map.get(key) || { coins: 0, count: 0 };
-      existing.coins += r.totalCoins;
+      existing.coins += isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins;
       existing.count += 1;
       map.set(key, existing);
     }
@@ -1513,11 +1527,16 @@ async function fetchData() {
 
   // 主播列表（按电池数降序）
   const overviewAnchors: Array<{ ruid: number; rname: string; coins: number }> = snapshot ? (() => {
+    // 礼物天选：昵称为空、ruid=0，归到当前登录账号，显示登录用户名，花费扣除退还。
+    // 以 Map<ruid> 做 UID 整合：天选与本账号其他"给自己消费"（ruid===当前uid）自动合并到同一项，
+    // 不会把天选单独当作该账号的全部消费。
     const map = new Map<number, { rname: string; coins: number }>();
     for (const r of snapshot.records) {
-      const existing = map.get(r.ruid) ?? { rname: r.r_uname, coins: 0 };
-      existing.coins += r.totalCoins;
-      map.set(r.ruid, existing);
+      const isTianxuan = isTianxuanRecord(r);
+      const ruid = isTianxuan ? tianxuanUid : r.ruid;
+      const existing = map.get(ruid) ?? { rname: isTianxuan ? (currentAccount?.uname || "自己") : r.r_uname, coins: 0 };
+      existing.coins += isTianxuan ? tianxuanCoins(r) : r.totalCoins;
+      map.set(ruid, existing);
     }
     return Array.from(map.entries())
       .map(([ruid, v]) => ({ ruid, rname: v.rname, coins: v.coins }))
@@ -1540,11 +1559,14 @@ async function fetchData() {
         return d.getDate() === selectedDay;
       });
     }
+    // 礼物天选：归到当前登录账号，显示登录用户名，花费扣除退还
     const map = new Map<number, { rname: string; coins: number }>();
     for (const r of records) {
-      const existing = map.get(r.ruid) ?? { rname: r.r_uname, coins: 0 };
-      existing.coins += r.totalCoins;
-      map.set(r.ruid, existing);
+      const isTianxuan = isTianxuanRecord(r);
+      const ruid = isTianxuan ? tianxuanUid : r.ruid;
+      const existing = map.get(ruid) ?? { rname: isTianxuan ? (currentAccount?.uname || "自己") : r.r_uname, coins: 0 };
+      existing.coins += isTianxuan ? tianxuanCoins(r) : r.totalCoins;
+      map.set(ruid, existing);
     }
     return Array.from(map.entries())
       .map(([ruid, v]) => ({ ruid, rname: v.rname, coins: v.coins }))
@@ -1574,7 +1596,7 @@ async function fetchData() {
     for (const r of monthRecords) {
       const d = new Date(r.timestamp * 1000);
       const day = d.getDate();
-      map.set(day, (map.get(day) ?? 0) + r.totalCoins);
+      map.set(day, (map.get(day) ?? 0) + (isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins));
     }
     return map;
   })();
@@ -1647,29 +1669,35 @@ async function fetchData() {
   // 消费电池数：排除所有包裹道具（合成产出、天选、红包都不是实际消费）
   const consumptionCoins = filteredOverviewRecords
     .filter(r => r.bag_desc !== "包裹道具")
-    .reduce((sum, r) => sum + r.totalCoins, 0);
+    .reduce((sum, r) => sum + (isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins), 0);
 
   // 赚取礼物统计（包裹道具，排除合成消费gift_id=1）
   const earnedGiftRecords = filteredOverviewRecords.filter(r => r.bag_desc === "包裹道具" && r.gift_id !== 1);
   const earnedGiftCount = earnedGiftRecords.reduce((sum, r) => sum + r.gift_num, 0);
   const earnedGiftTypes = new Set(earnedGiftRecords.map(r => r.gift_name)).size;
 
-  // 礼物清单汇总（所有实际送出的礼物，排除合成原料gift_id=1）
+  // 礼物清单汇总（所有实际送出的礼物，排除合成原料gift_id=1；天选礼物按图片链接分组）
   const monthGiftSummaryNew = (() => {
     const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
-    const summaryRecords = rawRecords.filter(r => r.gift_id !== 1);
-    const map = new Map<string, { gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>();
+    const summaryRecords = rawRecords.filter(r => {
+      if (r.gift_id !== 1) return true;    // 正常礼物
+      return isTianxuanRecord(r);           // 天选礼物（gift_id=1 但属天选）保留
+    });
+    const map = new Map<string, { uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>();
     for (const r of summaryRecords) {
-      const key = r.gift_name;
+      const isTx = isTianxuanRecord(r);
+      // 天选礼物按图片链接分组（同一链接=同一类），正常礼物按名称分组
+      const key = isTx ? `tx_${r.gift_img}` : r.gift_name;
       const existing = map.get(key) ?? {
+        uid: key,
         gift_id: r.gift_id,
-        gift_name: r.gift_name,
-        gift_img: giftImgMap.get(`${r.gift_id}_${r.gift_name}`) ?? fixImageUrl(r.gift_img) ?? "",
+        gift_name: r.gift_name, // 天选礼物名称统一为"礼物天选"
+        gift_img: isTx ? (fixImageUrl(r.gift_img) ?? "") : (giftImgMap.get(`${r.gift_id}_${r.gift_name}`) ?? fixImageUrl(r.gift_img) ?? ""),
         count: 0,
         coins: 0,
       };
       existing.count += r.gift_num;
-      existing.coins += r.totalCoins;
+      existing.coins += isTx ? tianxuanCoins(r) : r.totalCoins;
       if (!existing.gift_img && r.gift_img) {
         existing.gift_img = fixImageUrl(r.gift_img);
         existing.gift_id = r.gift_id;
@@ -1755,16 +1783,16 @@ async function fetchData() {
                   </button>
                 ))}
               </div>
-              {/* 刷新按钮（右侧）：单箭头转圈图标作为淡色透明背景，时间叠加上方且颜色更深 */}
+              {/* 刷新按钮（右侧）：缺口弧形边框，与左侧按钮组同高，环形与时间同时显示 */}
               <div className="shrink-0">
                 <button
                   onClick={refreshData}
                   disabled={loading}
-                  className="relative flex items-center justify-center rounded-full border border-black/15 bg-white/85 transition hover:bg-gray-50 disabled:opacity-50 h-9 w-9"
+                  className="refresh-btn-arc relative flex items-center justify-center h-[38px] w-[38px]"
                 >
-                  {/* 背景图标：单箭头转圈（⟳ U+27F3），颜色淡、半透明 */}
-                  <span aria-hidden="true" className={`text-black/25 leading-none ${loading ? "animate-spin" : ""}`} style={{ fontSize: 30 }}>⟳</span>
-                  {lastRefreshTime && <span className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-medium text-black">{lastRefreshTime}</span>}
+                  {lastRefreshTime ? (
+                    <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
+                  ) : null}
                 </button>
               </div>
             </div>
@@ -2182,7 +2210,7 @@ async function fetchData() {
                         </thead>
                         <tbody>
                           {monthGiftSummaryNew.map((gift) => (
-                            <tr key={`${gift.gift_id}_${gift.gift_name}`} className="border-t border-black/10 bg-white">
+                            <tr key={gift.uid} className="border-t border-black/10 bg-white">
                               <td className="px-3 py-1.5">
                                 <div className="flex items-center gap-1.5">
                                   {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-4 h-4 rounded" />}

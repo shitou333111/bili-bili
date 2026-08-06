@@ -1716,16 +1716,16 @@ export default function GiftScreenshotPanel({
             <button
               onClick={handleDownload}
               disabled={downloading || loadingEffects}
-              className="rounded-xl bg-[#1f1c17] px-6 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50 flex items-center gap-1.5"
+              className="modal-action-btn modal-action-primary"
             >
               {downloading ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   生成中...
                 </>
               ) : (
                 <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载保存图片
@@ -1779,7 +1779,7 @@ export default function GiftScreenshotPanel({
             )}
             <button
               onClick={() => setFramePicker(null)}
-              className="mt-5 px-6 py-2 rounded-full border border-white/30 text-white/80 text-sm hover:bg-white/10 transition"
+              className="mt-5 modal-action-btn modal-action-light"
             >
               关闭
             </button>
@@ -1798,7 +1798,7 @@ export default function GiftScreenshotPanel({
             <img src={previewUrl} alt="大礼物截图" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
             <button
               onClick={() => { setShowDownloadModal(false); setPreviewUrl(""); }}
-              className="mt-3 w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30"
+              className="mt-3 modal-action-btn modal-action-light"
             >
               关闭
             </button>

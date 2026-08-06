@@ -623,16 +623,16 @@ function CertificationModal({
             </div>
 
             {/* 下方按钮区域 */}
-            <div className="flex flex-col gap-2 mt-3">
+            <div className="flex gap-2.5 mt-3 justify-center">
               {!isMobileDevice() && (
-                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载图片
                 </button>
               )}
-              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+              <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
             </div>

@@ -197,16 +197,16 @@ function GiftSaveModal({
             <img src={generatedImage} alt="礼物清单" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl mx-auto" />
 
             {/* 下方按钮区域 */}
-            <div className="flex flex-col gap-2 mt-3 w-full">
+            <div className="flex gap-2.5 mt-3 w-full justify-center">
               {!isMobileDevice() && (
-                <button onClick={downloadImage} className="w-full rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                   </svg>
                   下载图片
                 </button>
               )}
-              <button onClick={onClose} className="w-full rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+              <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
             </div>
@@ -567,16 +567,16 @@ async function fetchData() {
                   </button>
                 ))}
               </div>
-              {/* 刷新按钮（右侧）：单箭头转圈图标作为淡色透明背景，时间叠加上方且颜色更深 */}
+              {/* 刷新按钮（右侧）：缺口弧形边框，与左侧按钮组同高，环形与时间同时显示（与粉丝页一致） */}
               <div className="shrink-0">
                 <button
                   onClick={fetchData}
                   disabled={loading}
-                  className="relative flex items-center justify-center rounded-full border border-black/15 bg-white/85 transition hover:bg-gray-50 disabled:opacity-50 h-9 w-9"
+                  className="refresh-btn-arc relative flex items-center justify-center h-[38px] w-[38px]"
                 >
-                  {/* 背景图标：单箭头转圈（⟳ U+27F3），颜色淡、半透明 */}
-                  <span aria-hidden="true" className={`text-black/25 leading-none ${loading ? "animate-spin" : ""}`} style={{ fontSize: 30 }}>⟳</span>
-                  {lastRefreshTime && <span className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-medium text-black">{lastRefreshTime}</span>}
+                  {lastRefreshTime ? (
+                    <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
+                  ) : null}
                 </button>
               </div>
             </div>

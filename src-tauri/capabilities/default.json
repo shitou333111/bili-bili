@@ -6,6 +6,8 @@
   },
   "permissions": [
     "core:default",
+    "allow-fetch-json",
+    "allow-debug-acl",
     {
       "identifier": "http:default",
       "allow": [

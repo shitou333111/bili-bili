@@ -793,6 +793,11 @@ export function calcHistoricalSynthesisProfit(
       continue;
     }
 
+    // 礼物天选（gift_id=1 但 gift_name="礼物天选"）不是合成材料花费，排除
+    if (record.gift_id === 1 && record.gift_name === "礼物天选") {
+      continue;
+    }
+
     if (record.gift_id === 1) {
       totalSpent += coins;
       drawCount += record.gift_num;

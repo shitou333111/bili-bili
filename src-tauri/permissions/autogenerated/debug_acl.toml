@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-debug-acl"
+description = "Enables the debug_acl command without any pre-configured scope."
+commands.allow = ["debug_acl"]
+
+[[permission]]
+identifier = "deny-debug-acl"
+description = "Denies the debug_acl command without any pre-configured scope."
+commands.deny = ["debug_acl"]

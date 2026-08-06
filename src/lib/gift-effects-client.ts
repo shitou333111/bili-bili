@@ -92,14 +92,20 @@ async function fetchEffectsListFromBili(): Promise<GiftEffectsList | null> {
 }
 
 async function fetchEffectJson(webMp4Json: string): Promise<EffectJsonConfig | null> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const data = await invoke<EffectJsonConfig>("fetch_json", { url: webMp4Json });
-    return data;
-  } catch (e) {
-    console.error("[GiftEffects] JSON获取失败:", webMp4Json.substring(0, 60), e);
-    return null;
+  // 首次冷连接（App 刚启动/DNS/TLS 未就绪 + 并发建连）可能瞬时失败，重试一次即可命中热路径
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<EffectJsonConfig>("fetch_json", { url: webMp4Json });
+    } catch (e) {
+      if (attempt === 1) {
+        console.error("[GiftEffects] JSON获取失败:", webMp4Json.substring(0, 60), e);
+        return null;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
   }
+  return null;
 }
 
 async function fetchFromBili(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {

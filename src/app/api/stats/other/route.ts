@@ -269,9 +269,11 @@ export async function GET(request: Request) {
     // 3. 每个主播的送礼天数统计
     const roomMap = new Map<number, { rname: string; dateSet: Set<string>; allTianxuan: boolean }>();
     for (const r of allRecords) {
-      // 天选礼物：主播给自己发的红包，r_uname 通常为空，需特殊命名
-      const isTianxuan = tianxuanGiftIds.includes(r.gift_id);
-      const existing = roomMap.get(r.ruid);
+      // 天选礼物：主播给自己发的红包，r_uname 为空、ruid=0，需特殊命名
+      // 归到当前登录账号（session.mid）显示为"自己发天选"
+      const isTianxuan = tianxuanGiftIds.includes(r.gift_id) || (r.ruid === 0 && !r.r_uname);
+      const ruid = (r.ruid === 0 && !r.r_uname) ? session.mid : r.ruid;
+      const existing = roomMap.get(ruid);
       if (existing) {
         // 优先使用非空的真实主播名
         if (!existing.rname && r.r_uname) existing.rname = r.r_uname;
@@ -279,7 +281,7 @@ export async function GET(request: Request) {
         if (!isTianxuan) existing.allTianxuan = false;
         existing.dateSet.add(getDateStr(r.timestamp));
       } else {
-        roomMap.set(r.ruid, {
+        roomMap.set(ruid, {
           rname: r.r_uname,
           dateSet: new Set([getDateStr(r.timestamp)]),
           allTianxuan: isTianxuan,
@@ -292,7 +294,7 @@ export async function GET(request: Request) {
       const sortedDates = Array.from(dateSet).sort();
       const consecutive = calcMaxConsecutive(sortedDates);
       const yearMax = calcMaxDaysInYear(sortedDates);
-      const resolvedName = rname || (allTianxuan ? "给自己发天选" : `主播${ruid}`);
+      const resolvedName = rname || (allTianxuan ? "自己发天选" : `主播${ruid}`);
       roomStats.push({
         ruid,
         rname: resolvedName,

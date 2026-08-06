@@ -590,8 +590,8 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="relative mx-auto flex flex-col items-center"
-        style={{ width: canvasDims.w + 32 }}
+        className="relative mx-auto flex flex-col items-center max-h-screen overflow-y-auto"
+        style={{ width: canvasDims.w + 32, paddingTop: "16px", paddingBottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }}
         onClick={(e) => e.stopPropagation()}
       >
         <p className="text-white/80 text-sm mb-1 w-full text-center truncate px-2" title={title}>{title}</p>
@@ -622,12 +622,12 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
             </div>
           )}
         </div>
-        <div className="flex gap-3 mt-4 w-full max-w-md">
-          <button onClick={downloadImage} disabled={isLoading} className="flex-1 rounded-xl bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
+        <div className="flex gap-2.5 mt-4 w-full justify-center">
+          <button onClick={downloadImage} disabled={isLoading} className="modal-action-btn modal-action-primary">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
             下载图片
           </button>
-          <button onClick={onClose} className="flex-1 rounded-xl border border-white/40 bg-white/20 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/30">
+          <button onClick={onClose} className="modal-action-btn modal-action-light">
             关闭
           </button>
         </div>
