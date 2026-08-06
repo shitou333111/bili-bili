@@ -265,8 +265,17 @@ export default function LoginPage() {
               onClick={async () => {
                 clearPollTimer();
                 // 清除登录会话，避免主页检测到过期session后跳回登录页
-                await serverFetch("/api/auth/logout", { method: "POST" });
-                window.location.href = "/";
+                try {
+                  await serverFetch("/api/auth/logout", { method: "POST" });
+                } catch {
+                  // 离线或网络错误时忽略，仍可返回上一页
+                }
+                // 返回到打开登录页面前的页面（取消登录模态框）
+                if (window.history.length > 1) {
+                  window.history.back();
+                } else {
+                  window.location.href = "/";
+                }
               }}
               className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
             >

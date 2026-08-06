@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { serverApiUrl } from "@/lib/server-api";
 
 type FoamTreeCtor = any;
 let FoamTreePromise: Promise<FoamTreeCtor> | null = null;
@@ -68,7 +69,13 @@ function cleanBilibiliFaceUrl(url: string): string {
 }
 
 function proxyUrl(url: string): string {
-  return `/api/proxy/image?url=${encodeURIComponent(cleanBilibiliFaceUrl(url))}`;
+  const cleaned = cleanBilibiliFaceUrl(url);
+  // Tauri: 直接访问 B站 CDN（客户端直连，不经过服务器）
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    return cleaned;
+  }
+  // Web: 通过服务器代理添加 CORS 头
+  return `/api/proxy/image?url=${encodeURIComponent(cleaned)}`;
 }
 
 function formatValue(v: number): string {
@@ -153,7 +160,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
         refreshingRef.current.add(id);
         refreshAttemptedRef.current.add(id);
         console.log(`[AvatarChart] 头像加载失败，尝试刷新URL: uid=${id}`);
-        fetch(`/api/tools/user-info?uids=${id}&refresh=1`, { cache: "no-store" })
+        fetch(serverApiUrl(`/api/tools/user-info?uids=${id}&refresh=1`), { cache: "no-store" })
           .then(r => r.json())
           .then(data => {
             refreshingRef.current.delete(id);

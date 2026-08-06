@@ -5,7 +5,7 @@
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG, SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
 import type { BlindBoxGift } from "@/lib/blind-box-db";
-import { getCachedAnchorName, setCachedAnchorName, getCachedAnchorFace, setCachedAnchorFace } from "@/lib/user-data";
+import { getCachedName, setCachedAnchorInfo, getCachedFace, setCachedFanInfo } from "@/lib/user-data";
 
 // ====== 盲盒检测响应类型 ======
 type BlindFirstWinResponse = {
@@ -577,21 +577,27 @@ export async function fetchUserNameByUid(mid: number): Promise<string | null> {
 
 const userNameCache = new Map<number, string>();
 
-export async function getUserNameByUid(mid: number): Promise<string> {
+export async function getUserNameByUid(mid: number, requesterMid?: number, requesterUname?: string): Promise<string> {
   if (userNameCache.has(mid)) {
     return userNameCache.get(mid)!;
   }
 
-  const cached = await getCachedAnchorName(mid);
-  if (cached) {
-    userNameCache.set(mid, cached);
-    return cached;
+  // 从用户的主播列表文件读取
+  if (requesterMid) {
+    const cached = await getCachedName(requesterMid, requesterUname || "", mid);
+    if (cached) {
+      userNameCache.set(mid, cached);
+      return cached;
+    }
   }
 
   const name = await fetchUserNameByUid(mid);
   if (name) {
     userNameCache.set(mid, name);
-    await setCachedAnchorName(mid, name);
+    // 写入用户的主播列表文件
+    if (requesterMid) {
+      await setCachedAnchorInfo(requesterMid, requesterUname || "", mid, name, "");
+    }
     return name;
   }
   return `主播${mid}`;
@@ -650,27 +656,30 @@ async function fetchUserInfoWithRetry(mid: number, retries = 3): Promise<{ name:
   return null;
 }
 
-export async function getUserInfoByUid(mid: number, forceRefresh = false): Promise<{ name: string; face: string }> {
+export async function getUserInfoByUid(mid: number, forceRefresh = false, requesterMid?: number, requesterUname?: string): Promise<{ name: string; face: string }> {
   if (!forceRefresh && userInfoCache.has(mid)) {
     return userInfoCache.get(mid)!;
   }
 
-  const cachedName = await getCachedAnchorName(mid);
-  const cachedFace = await getCachedAnchorFace(mid);
-
-  // 非强制刷新模式：只要有缓存的头像URL就直接返回（头像URL的哈希值变化即代表头像更新，URL未变就不需要重新请求API）
-  if (!forceRefresh && cachedFace) {
-    const info = { name: cachedName || `用户${mid}`, face: cachedFace };
-    userInfoCache.set(mid, info);
-    return info;
+  // 从用户的文件读取缓存
+  if (!forceRefresh && requesterMid) {
+    const cachedName = await getCachedName(requesterMid, requesterUname || "", mid);
+    const cachedFace = await getCachedFace(requesterMid, requesterUname || "", mid);
+    if (cachedFace) {
+      const info = { name: cachedName || `用户${mid}`, face: cachedFace };
+      userInfoCache.set(mid, info);
+      return info;
+    }
   }
 
   const result = await fetchUserInfoWithRetry(mid);
 
   if (result && result.face) {
     userInfoCache.set(mid, result);
-    await setCachedAnchorName(mid, result.name);
-    await setCachedAnchorFace(mid, result.face);
+    // 写入用户的粉丝列表文件
+    if (requesterMid) {
+      await setCachedFanInfo(requesterMid, requesterUname || "", mid, result.name, result.face);
+    }
     return result;
   }
 
@@ -680,20 +689,20 @@ export async function getUserInfoByUid(mid: number, forceRefresh = false): Promi
     const cardData = await fetchBilibiliJson<UserInfoResponse>({ url: cardUrl });
     if (cardData.code === 0 && cardData.data?.card?.face) {
       const info = {
-        name: cardData.data.card.name || cachedName || `用户${mid}`,
+        name: cardData.data.card.name || `用户${mid}`,
         face: normalizeFace(cardData.data.card.face),
       };
       userInfoCache.set(mid, info);
-      await setCachedAnchorName(mid, info.name);
-      await setCachedAnchorFace(mid, info.face);
+      if (requesterMid) {
+        await setCachedFanInfo(requesterMid, requesterUname || "", mid, info.name, info.face);
+      }
       return info;
     }
   } catch {
     // ignore
   }
 
-  // 强制刷新失败时，返回旧缓存作为fallback
-  const fallback = { name: cachedName || `用户${mid}`, face: cachedFace || "" };
+  const fallback = { name: `用户${mid}`, face: "" };
   userInfoCache.set(mid, fallback);
   return fallback;
 }

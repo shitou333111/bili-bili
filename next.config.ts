@@ -7,6 +7,14 @@ const internalHost = process.env.TAURI_DEV_HOST || "localhost";
 const nextConfig: NextConfig = {
   // Tauri 构建时使用静态导出，Web 部署时使用 standalone
   output: isTauri ? "export" : "standalone",
+  // Tauri 构建时排除 .ts 扩展名（API routes 都是 route.ts），避免与静态导出冲突
+  pageExtensions: isTauri ? ["tsx", "jsx", "js"] : undefined,
+  // Turbopack 根目录（消除多 lockfile 警告）
+  turbopack: { root: __dirname },
+  // standalone 追踪时排除 src-tauri/target 等大目录，避免把整个 Rust 构建产物复制进 .next/standalone
+  outputFileTracingExcludes: {
+    "/*": ["./src-tauri/**", "./.data/**", "./.next/**"],
+  },
   allowedDevOrigins: ["http://192.168.1.2:3000", "http://192.168.1.2", "192.168.1.2"],
   // 静态导出需要禁用图片优化
   images: isTauri ? { unoptimized: true } : undefined,

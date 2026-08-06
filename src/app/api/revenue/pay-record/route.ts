@@ -5,6 +5,7 @@ import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchRealPayRecordSnapshot } from "@/lib/bilibili/app";
 import { saveGiftsToDb } from "@/lib/gift-db";
 import { readPayRecords, savePayRecords, getMaxId, type RawGiftRecord } from "@/lib/user-data";
+import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,46 @@ export async function GET(request: Request) {
       { code: 0, message: "mock snapshot", data: snapshot },
       { status: 200 },
     );
+  }
+
+  // 离线模式：跳过 B 站校验与抓取，直接返回本地缓存的上次更新数据
+  if (isOffline(url)) {
+    const cachedRecords = await readPayRecords(session.mid, session.uname);
+    if (cachedRecords.length > 0) {
+      const allRecords = cachedRecords.map(r => ({
+        ...r,
+        totalCoins: Number((r.pay_coin || r.coin).replace(/,/g, "")) || 0,
+        giftNameKey: r.gift_name,
+      }));
+      const giftCatalog = Array.from(
+        allRecords.reduce((map, record) => {
+          const key = `${record.gift_id}_${record.gift_name}`;
+          if (!map.has(key)) {
+            map.set(key, {
+              giftName: record.gift_name,
+              giftImg: record.gift_img,
+              giftId: record.gift_id,
+              latestTimestamp: record.timestamp,
+            });
+          }
+          return map;
+        }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
+      );
+      const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
+      const result = {
+        source: "real" as const,
+        month: new Date().toISOString().slice(0, 7).replace("-", ""),
+        nextId: allRecords.length > 0 ? allRecords[allRecords.length - 1].id : 0,
+        totalRecords: allRecords.length,
+        totalCoins,
+        giftCatalog,
+        records: allRecords,
+      };
+      return NextResponse.json<ApiResponse<typeof result>>(
+        { code: 0, message: "cached snapshot", data: result },
+        { status: 200 },
+      );
+    }
   }
 
   // 验证 B站凭证，失效则尝试刷新，刷新失败则返回 mock 并要求重新登录

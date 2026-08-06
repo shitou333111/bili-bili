@@ -36,7 +36,7 @@ const BILIBILI_LIVE_HEADERS: Record<string, string> = {
 };
 
 /** 服务器地址（配置中心 + 数据收集） */
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "https://your-server.com";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
 
 export const tauriPlatform: Platform = {
   name: "tauri",
@@ -151,9 +151,10 @@ export const tauriPlatform: Platform = {
     }
   },
 
-  getDataDir(): string {
-    // Tauri 使用 app data 目录，这里返回相对路径，实际路径由 Tauri 插件处理
-    return ".data";
+  async getDataDir(): Promise<string> {
+    // 使用原生 FS API 的应用数据目录（Android: files/, iOS: Library/Application Support）
+    const { appDataDir, join } = await import("@tauri-apps/api/path");
+    return join(await appDataDir(), "data");
   },
 
   // ========== 会话管理 ==========

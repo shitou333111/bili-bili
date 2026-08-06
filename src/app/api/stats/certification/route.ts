@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { getBlindBoxInfo } from "@/lib/blind-box-db";
+import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -309,16 +310,18 @@ export async function GET(request: Request) {
     );
   }
 
-  // 验证 B站凭证，失效则尝试刷新，刷新失败则返回需要重新登录
-  const credentialResult = await ensureValidCredential(session);
-  if (!credentialResult.valid) {
-    return NextResponse.json<ApiResponse<null>>(
-      { code: 401, message: "needs-relogin", data: null },
-      { status: 401 },
-    );
+  // 验证 B站凭证，失效则尝试刷新，刷新失败则返回需要重新登录（离线时跳过校验）
+  if (!isOffline(url)) {
+    const credentialResult = await ensureValidCredential(session);
+    if (!credentialResult.valid) {
+      return NextResponse.json<ApiResponse<null>>(
+        { code: 401, message: "needs-relogin", data: null },
+        { status: 401 },
+      );
+    }
   }
 
-  const validSession = credentialResult.session;
+  const validSession = session;
 
   try {
     const blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, XINDONG_ID);

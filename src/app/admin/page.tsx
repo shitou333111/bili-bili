@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { serverApiUrl } from "@/lib/server-api";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -33,6 +34,8 @@ type AdminConfigData = {
 
 export default function AdminPage() {
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
+  // 首次进入时静默校验/自动登录，期间不渲染登录框，避免“弹出后自动消失”的闪烁
+  const [checking, setChecking] = useState(true);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -41,27 +44,57 @@ export default function AdminPage() {
   const [config, setConfig] = useState<AdminConfigData | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
   const [fetchingName, setFetchingName] = useState<number | null>(null);
+  // 用户搜索
+  const [userSearch, setUserSearch] = useState("");
+  // 活动名称映射（从本地活动信息 JSON 读取，只读展示）
+  const [activityNames, setActivityNames] = useState<Record<string, string>>({});
 
   const checkAdminSession = useCallback(async () => {
-    const res = await fetch("/api/admin/session");
+    const res = await fetch(serverApiUrl("/api/admin/session"));
     const data = await res.json();
     setAdminLoggedIn(data.data?.valid ?? false);
+    setChecking(false);
   }, []);
 
   useEffect(() => {
     checkAdminSession();
   }, [checkAdminSession]);
 
+  const loadActivityNames = useCallback(async (activities: ActivityItem[]) => {
+    const names: Record<string, string> = {};
+    await Promise.all(
+      activities.map(async (act) => {
+        if (!act.id) return;
+        try {
+          const res = await fetch(serverApiUrl(`/api/admin/activity-info?activity_id=${encodeURIComponent(act.id)}`));
+          const data = await res.json();
+          if (data.code === 0 && data.data?.name) {
+            names[act.id] = data.data.name;
+          }
+        } catch { /* ignore */ }
+      }),
+    );
+    setActivityNames(names);
+  }, []);
+
   const loadData = useCallback(async () => {
+    // 附带当前浏览器登录账号的 sid，用于默认选中当前用户
+    const sid = typeof window !== "undefined" ? localStorage.getItem("bili_live_sid") : null;
+    const usersUrl = sid
+      ? `/api/admin/users?_sid=${encodeURIComponent(sid)}`
+      : "/api/admin/users";
     const [usersRes, configRes] = await Promise.all([
-      fetch("/api/admin/users"),
-      fetch("/api/admin/config"),
+      fetch(serverApiUrl(usersUrl)),
+      fetch(serverApiUrl("/api/admin/config")),
     ]);
     const usersData = await usersRes.json();
     const configData = await configRes.json();
     if (usersData.code === 0) setUsers(usersData.data.users);
-    if (configData.code === 0) setConfig(configData.data);
-  }, []);
+    if (configData.code === 0) {
+      setConfig(configData.data);
+      loadActivityNames(configData.data.synthesis_activities ?? []);
+    }
+  }, [loadActivityNames]);
 
   useEffect(() => {
     if (adminLoggedIn) loadData();
@@ -71,7 +104,7 @@ export default function AdminPage() {
     setLoginLoading(true);
     setLoginError("");
     try {
-      const res = await fetch("/api/admin/login", {
+      const res = await fetch(serverApiUrl("/api/admin/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loginForm),
@@ -89,21 +122,26 @@ export default function AdminPage() {
   };
 
   const handleImpersonate = async (sid: string) => {
-    await fetch("/api/admin/impersonate", {
+    const res = await fetch(serverApiUrl("/api/admin/impersonate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sid }),
     });
+    const data = await res.json();
+    // 更新 localStorage 中的 userToken 与 sid，确保首页和 admin 默认选中一致
+    if (data.data?.userToken) {
+      localStorage.setItem("bili_live_user_token", data.data.userToken);
+    }
+    localStorage.setItem("bili_live_sid", sid);
     setUsers((prev) =>
       prev.map((u) => ({ ...u, isCurrent: u.sid === sid })),
     );
-    alert("已切换，现在可以用该用户身份访问首页");
   };
 
   const handleLoadRemoteData = async (user: User) => {
     try {
       // 先从服务器拉取该用户的数据文件
-      const res = await fetch(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`);
+      const res = await fetch(serverApiUrl(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`));
       const data = await res.json();
       if (data.code !== 0) {
         alert("加载失败: " + (data.message || "未知错误"));
@@ -127,7 +165,7 @@ export default function AdminPage() {
   const handleSaveConfig = async () => {
     if (!config) return;
     setConfigSaved(false);
-    const res = await fetch("/api/admin/config", {
+    const res = await fetch(serverApiUrl("/api/admin/config"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
@@ -168,6 +206,21 @@ export default function AdminPage() {
     });
   };
 
+  // 上移下移盲盒条目（固定盲盒 32251/35206 不参与排序，仅调整其余条目顺序）
+  const moveBlindBox = (filteredIndex: number, dir: -1 | 1) => {
+    if (!config) return;
+    const fixedIds = [32251, 35206];
+    const boxes = [...config.blind_boxes];
+    const nonFixed: number[] = [];
+    boxes.forEach((b, i) => { if (!fixedIds.includes(b.id)) nonFixed.push(i); });
+    const target = filteredIndex + dir;
+    if (target < 0 || target >= nonFixed.length) return;
+    const a = nonFixed[filteredIndex];
+    const b = nonFixed[target];
+    [boxes[a], boxes[b]] = [boxes[b], boxes[a]];
+    setConfig({ ...config, blind_boxes: boxes });
+  };
+
   const updateActivity = (index: number, field: keyof ActivityItem, value: string) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
@@ -194,13 +247,23 @@ export default function AdminPage() {
     });
   };
 
+  // 上移下移合成活动条目
+  const moveActivity = (index: number, dir: -1 | 1) => {
+    if (!config) return;
+    const target = index + dir;
+    if (target < 0 || target >= config.synthesis_activities.length) return;
+    const acts = [...config.synthesis_activities];
+    [acts[index], acts[target]] = [acts[target], acts[index]];
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
   const fetchBlindBoxName = async (index: number) => {
     if (!config) return;
     const box = config.blind_boxes[index];
     if (!box.id || box.id <= 0) return;
     setFetchingName(index);
     try {
-      const res = await fetch(`/api/admin/blind-box-info?gift_id=${box.id}`);
+      const res = await fetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
       const data = await res.json();
       if (data.code === 0 && data.data?.name) {
         const boxes = [...config.blind_boxes];
@@ -230,6 +293,24 @@ export default function AdminPage() {
     acts[index] = { ...acts[index], active: !acts[index].active };
     setConfig({ ...config, synthesis_activities: acts });
   };
+
+  // 按用户名或 UID 过滤用户
+  const filteredUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) =>
+      u.uname.toLowerCase().includes(q) || String(u.mid).includes(q),
+    );
+  }, [users, userSearch]);
+
+  if (checking) {
+    // 静默校验/自动登录中，不渲染任何登录框，避免闪烁
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#faf9f6]">
+        <div className="w-8 h-8 border-2 border-black/15 border-t-black/40 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   if (!adminLoggedIn) {
     return (
@@ -275,12 +356,21 @@ export default function AdminPage() {
 
         {/* Users */}
         <div className="rounded-xl border border-black/10 bg-white/80 p-4">
-          <h2 className="text-sm font-bold mb-3">用户列表 ({users.length})</h2>
-          {users.length === 0 ? (
-            <p className="text-xs text-black/30">暂无用户</p>
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h2 className="text-sm font-bold">用户列表 ({filteredUsers.length})</h2>
+            <input
+              type="text"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder="搜索用户名 / UID"
+              className="w-44 rounded-lg border border-black/10 px-2.5 py-1.5 text-xs focus:outline-none focus:border-black/30"
+            />
+          </div>
+          {filteredUsers.length === 0 ? (
+            <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {users.map((user) => (
+              {filteredUsers.map((user) => (
                 <div key={user.mid} className={`flex items-center gap-3 rounded-lg border p-2.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
                   <img src={fixImageUrl(user.face || "")} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
                   <div className="flex-1 min-w-0">
@@ -359,11 +449,39 @@ export default function AdminPage() {
                   <span className="w-32 text-xs text-black/50">心动盲盒</span>
                   <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
                 </div>
-                {/* 其他盲盒 */}
-                {config.blind_boxes.filter((box) => box.id !== 32251).map((box) => {
-                  const realIndex = config.blind_boxes.findIndex((b) => b === box);
-                  return (
+                {/* 幸运盲盒 - 固定项，始终勾选，不可更改 */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={true}
+                    disabled
+                    className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0 opacity-50"
+                  />
+                  <span className="w-24 text-xs text-black/50">35206</span>
+                  <span className="w-32 text-xs text-black/50">幸运盲盒</span>
+                  <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
+                </div>
+                {/* 其他盲盒（可配置，支持上移下移排序） */}
+                {config.blind_boxes
+                  .filter((box) => box.id !== 32251 && box.id !== 35206)
+                  .map((box, filteredIndex) => {
+                    const realIndex = config.blind_boxes.findIndex((b) => b === box);
+                    return (
                   <div key={realIndex} className={`flex items-center gap-2 ${!config.current_activity_blind_box_ids.includes(box.id) ? "opacity-50" : ""}`}>
+                    <div className="flex flex-col shrink-0">
+                      <button
+                        onClick={() => moveBlindBox(filteredIndex, -1)}
+                        disabled={filteredIndex === 0}
+                        className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                        title="上移"
+                      >▲</button>
+                      <button
+                        onClick={() => moveBlindBox(filteredIndex, 1)}
+                        disabled={filteredIndex === config.blind_boxes.filter((b) => b.id !== 32251 && b.id !== 35206).length - 1}
+                        className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                        title="下移"
+                      >▼</button>
+                    </div>
                     <input
                       type="checkbox"
                       checked={config.current_activity_blind_box_ids.includes(box.id)}
@@ -422,6 +540,20 @@ export default function AdminPage() {
                 {config.synthesis_activities.map((act, i) => (
                   <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${act.active === false ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-2">
+                      <div className="flex flex-col shrink-0">
+                        <button
+                          onClick={() => moveActivity(i, -1)}
+                          disabled={i === 0}
+                          className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                          title="上移"
+                        >▲</button>
+                        <button
+                          onClick={() => moveActivity(i, 1)}
+                          disabled={i === config.synthesis_activities.length - 1}
+                          className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                          title="下移"
+                        >▼</button>
+                      </div>
                       <input
                         type="checkbox"
                         checked={act.active !== false}
@@ -435,6 +567,14 @@ export default function AdminPage() {
                         onChange={(e) => updateActivity(i, "id", e.target.value)}
                         placeholder="活动ID"
                         className="w-32 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      {/* 活动名称 - 自动从 info_url 提取，只读显示 */}
+                      <input
+                        type="text"
+                        value={activityNames[act.id] ?? ""}
+                        readOnly
+                        placeholder="自动获取名称"
+                        className="w-36 rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
                       />
                       <select
                         value={act.type}

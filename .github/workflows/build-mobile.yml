@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       server_url:
-        description: "服务器地址"
+        description: "服务器地址（push 触发时使用 Secrets 中的 NEXT_PUBLIC_SERVER_URL）"
         required: false
         type: string
         default: "http://192.168.1.2:3000"
@@ -21,6 +21,15 @@ concurrency:
 #   apk -> Android APK
 #   ipa -> iOS IPA
 # 例如 "exe ipa" 会同时构建 exe 和 ipa。
+#
+# 服务器地址优先级：
+#   1. workflow_dispatch 时手动输入的 server_url
+#   2. GitHub Secrets 中的 NEXT_PUBLIC_SERVER_URL
+#   3. 默认值 http://localhost:3000（本地测试用）
+# 请在 GitHub Settings → Secrets and variables → Actions 中配置 NEXT_PUBLIC_SERVER_URL
+
+env:
+  SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000' }}
 
 jobs:
   # ==================== Windows EXE ====================
@@ -48,7 +57,7 @@ jobs:
 
       - name: Build frontend
         env:
-          NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: npm run build:tauri
 
       - name: Build Windows EXE
@@ -103,7 +112,7 @@ jobs:
 
       - name: Build frontend
         env:
-          NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: npm run build:tauri
 
       - name: Init Android project
@@ -173,7 +182,7 @@ jobs:
 
       - name: Build frontend
         env:
-          NEXT_PUBLIC_SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL }}
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: npm run build:tauri
 
       - name: Init iOS project

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { isMobileDevice } from "@/lib/device";
+import { serverApiUrl } from "@/lib/server-api";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
 
 // ==================== 类型定义 ====================
@@ -458,6 +459,8 @@ export default function GiftScreenshotPanel({
   giftDb,
   fanFaces: parentFanFaces,
   yesterdayAvailable,
+  mid = 0,
+  uname = "",
 }: {
   records: AnchorGiftRecord[];
   anchorName: string;
@@ -465,6 +468,8 @@ export default function GiftScreenshotPanel({
   giftDb: Record<number, { img: string }>;
   fanFaces: Record<number, string>;
   yesterdayAvailable?: boolean;
+  mid?: number;
+  uname?: string;
 }) {
   // 筛选状态
   const [dateFilter, setDateFilter] = useState<string>("thisWeek");
@@ -503,22 +508,29 @@ export default function GiftScreenshotPanel({
   const [framePickerFrames, setFramePickerFrames] = useState<HTMLCanvasElement[]>([]);
   const [framePickerLoading, setFramePickerLoading] = useState(false);
 
-  // 粉丝头像：先查 anchor-faces.json，再 API
+  // 粉丝头像：先查 send-fans-list，再 API
   const [localFaces, setLocalFaces] = useState<Record<number, string>>({});
   const mergedFaces = { ...localFaces, ...parentFanFaces };
 
-  // 加载 anchor-faces.json
+  // 加载 send-fans-list.json
   const [anchorFacesJson, setAnchorFacesJson] = useState<Record<string, string>>({});
   useEffect(() => {
-    fetch("/api/faces")
+    if (mid <= 0) return;
+    fetch(serverApiUrl(`/api/faces?mid=${mid}&uname=${encodeURIComponent(uname)}`))
       .then(r => r.json())
       .then(data => {
         if (data.code === 0 && data.data) {
-          setAnchorFacesJson(data.data);
+          // 转换 { uid: { name, face } } 为 { uid: faceUrl } 格式
+          const faceMap: Record<string, string> = {};
+          for (const [k, v] of Object.entries(data.data)) {
+            const entry = v as { name?: string; face?: string };
+            if (entry.face) faceMap[k] = entry.face;
+          }
+          setAnchorFacesJson(faceMap);
         }
       })
       .catch(() => {});
-  }, []);
+  }, [mid, uname]);
 
   // Toast 自动消失
   useEffect(() => {
@@ -627,7 +639,7 @@ export default function GiftScreenshotPanel({
     return map;
   })();
 
-  // 自动获取粉丝头像：先查 anchor-faces.json，再 API
+  // 自动获取粉丝头像：先查 send-fans-list，再 API
   useEffect(() => {
     const neededUids = allGifts.map(g => g.fanUid);
     const missingUids = neededUids.filter(uid => !mergedFaces[uid]);
@@ -637,7 +649,7 @@ export default function GiftScreenshotPanel({
     const newFaces: Record<number, string> = {};
     const apiUids: number[] = [];
 
-    // 先查 anchor-faces.json
+    // 先查 send-fans-list
     for (const uid of missingUids) {
       const face = anchorFacesJson[String(uid)];
       if (face) {
@@ -661,7 +673,7 @@ export default function GiftScreenshotPanel({
       for (let i = 0; i < apiUids.length; i += batchSize) {
         const batch = apiUids.slice(i, i + batchSize);
         try {
-          const res = await fetch(`/api/tools/user-info?uids=${batch.join(",")}`);
+          const res = await fetch(serverApiUrl(`/api/tools/user-info?uids=${batch.join(",")}`));
           const data = await res.json();
           if (data.code === 0 && data.data) {
             for (const [uidStr, info] of Object.entries(data.data)) {
@@ -886,6 +898,8 @@ export default function GiftScreenshotPanel({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    console.log("[GiftScreenshot] renderCard: anchorName=", JSON.stringify(anchorName), "anchorFace=", JSON.stringify(anchorFace?.substring(0, 80)));
+
     canvas.width = CARD_W;
     canvas.height = CARD_H;
 
@@ -938,6 +952,7 @@ export default function GiftScreenshotPanel({
     if (anchorFace) {
       try {
         const img = await loadImage(anchorFace);
+        console.log("[GiftScreenshot] 主播头像加载成功:", anchorFace.substring(0, 80));
         ctx.save();
         ctx.beginPath();
         ctx.arc(anchorAvatarX + avatarSize / 2, anchorAvatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
@@ -945,8 +960,11 @@ export default function GiftScreenshotPanel({
         ctx.clip();
         ctx.drawImage(img, anchorAvatarX, anchorAvatarY, avatarSize, avatarSize);
         ctx.restore();
-      } catch { /* ignore */ }
+      } catch (e) {
+        console.error("[GiftScreenshot] 主播头像加载失败:", anchorFace?.substring(0, 80), e);
+      }
     } else {
+      console.log("[GiftScreenshot] 主播头像URL为空，跳过加载");
       ctx.beginPath();
       ctx.arc(anchorAvatarX + avatarSize / 2, anchorAvatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(255,255,255,0.15)";
@@ -1681,9 +1699,6 @@ export default function GiftScreenshotPanel({
       {selectedGifts.length > 0 && (
         <div className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)]">
           <h3 className="text-sm font-semibold mb-3">卡片预览</h3>
-          {loadingEffects && (
-            <div className="text-xs text-black/45 mb-2">正在加载礼物动画...</div>
-          )}
 
           <div className="flex justify-center">
             <div className="relative" style={{ width: "270px", height: "480px" }}>

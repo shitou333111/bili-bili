@@ -17,9 +17,22 @@ function fixImageUrl(url: string): string {
 
 interface SynthesisActivityCardProps {
   activity: SynthesisActivityStats;
+  index?: number;
 }
 
-export default function SynthesisActivityCard({ activity }: SynthesisActivityCardProps) {
+// 合成活动卡片背景色板：每个活动使用不同颜色作区分（新增活动自动取新的颜色）
+const ACTIVITY_CARD_BG = [
+  "bg-[#fff7ef]", // 淡橙色
+  "bg-[#f0f7ee]", // 淡绿色
+  "bg-[#eef3fb]", // 淡蓝色
+  "bg-[#f3f0fa]", // 淡紫色
+  "bg-[#fdf0f4]", // 淡粉色
+  "bg-[#eaf7f3]", // 淡青色
+  "bg-[#f5f0e8]", // 淡驼色
+  "bg-[#eef9e6]", // 淡黄绿
+];
+
+export default function SynthesisActivityCard({ activity, index = 0 }: SynthesisActivityCardProps) {
   const [selectedAnchor, setSelectedAnchor] = useState<string>("");
   const [selectedGift, setSelectedGift] = useState<SynthesisGiftInfo | null>(null);
   const [certIndex, setCertIndex] = useState(0);
@@ -98,14 +111,7 @@ export default function SynthesisActivityCard({ activity }: SynthesisActivityCar
     return activity.certifications.filter(c => String(c.ruid) === selectedAnchor);
   }, [selectedAnchor, activity.certifications]);
 
-  const cardBgColor = useMemo(() => {
-    const colors: Record<string, string> = {
-      "activity-1": "bg-[#fff7ef]",
-      "activity-2": "bg-[#f0f7ee]",
-      "historical": "bg-[#eef3fb]",
-    };
-    return colors[activity.id] || "bg-[#fff7ef]";
-  }, [activity.id]);
+  const cardBgColor = ACTIVITY_CARD_BG[index % ACTIVITY_CARD_BG.length];
 
   return (
     <div key={activity.id} ref={cardRef} className={`w-full min-w-0 rounded-xl border border-black/10 ${cardBgColor} p-2 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>

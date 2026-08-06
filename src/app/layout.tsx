@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -36,7 +37,10 @@ export default function RootLayout({
         className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} h-full antialiased`}
         suppressHydrationWarning
       >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <ExternalLinkHandler />
+        {children}
+      </body>
     </html>
   );
 }

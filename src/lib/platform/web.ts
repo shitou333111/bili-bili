@@ -143,7 +143,7 @@ export const webPlatform: Platform = {
     }
   },
 
-  getDataDir(): string {
+  async getDataDir(): Promise<string> {
     return DATA_DIR;
   },
 

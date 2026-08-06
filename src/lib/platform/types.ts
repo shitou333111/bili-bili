@@ -51,8 +51,8 @@ export interface Platform {
   readdir(path: string): Promise<string[]>;
   unlink(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
-  /** 获取应用数据根目录 */
-  getDataDir(): string;
+  /** 获取应用数据根目录（Tauri 下为原生应用数据目录，需异步解析） */
+  getDataDir(): Promise<string>;
 
   // ---------- 会话管理 ----------
   getSessionState(): Promise<SessionState>;

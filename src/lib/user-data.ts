@@ -225,168 +225,144 @@ export async function saveSynthesisActivityInfo(activityId: string, info: any): 
 import type { RawGiftRecord } from "@/lib/revenue";
 export type { RawGiftRecord };
 
-// ====== 用户昵称/头像缓存（全局持久化，内存+磁盘双层缓存） ======
+// ====== 用户昵称/头像缓存（按用户隔离，存储在 uid_{mid}_{uname}/ 目录下） ======
+//
+// 每个用户有两个文件：
+//   - received-anchors-list.json: 该用户送过礼的主播 { uid: { name, face } }
+//   - send-fans-list.json: 给该用户送过礼的粉丝 { uid: { name, face } }
 
-const ANCHOR_NAME_FILE = path.join(DATA_DIR, "anchor-names.json");
-const ANCHOR_FACE_FILE = path.join(DATA_DIR, "anchor-faces.json");
+type UserInfoEntry = { name: string; face: string };
 
-// 内存缓存：启动时从磁盘加载，运行期间直接读写内存
-let nameCachePromise: Promise<Map<number, string>> | null = null;
-let faceCachePromise: Promise<Map<number, string>> | null = null;
-let nameDirty = false;
-let faceDirty = false;
-
-async function loadNameCache(): Promise<Map<number, string>> {
-  if (!nameCachePromise) {
-    nameCachePromise = (async () => {
-      try {
-        await fs.mkdir(DATA_DIR, { recursive: true });
-        const raw = await fs.readFile(ANCHOR_NAME_FILE, "utf8");
-        const obj = JSON.parse(raw) as Record<string, string>;
-        const map = new Map<number, string>();
-        for (const [k, v] of Object.entries(obj)) {
-          map.set(Number(k), v);
-        }
-        console.log(`[NameCache] 已加载 ${map.size} 条昵称缓存`);
-        return map;
-      } catch {
-        return new Map();
-      }
-    })();
-  }
-  return nameCachePromise;
+/** 获取用户的主播列表文件路径 */
+function getReceivedAnchorsFile(userMid: number, uname: string): string {
+  return path.join(getUserDataDir(userMid, uname), "received-anchors-list.json");
 }
 
-async function loadFaceCache(): Promise<Map<number, string>> {
-  if (!faceCachePromise) {
-    faceCachePromise = (async () => {
-      try {
-        await fs.mkdir(DATA_DIR, { recursive: true });
-        const raw = await fs.readFile(ANCHOR_FACE_FILE, "utf8");
-        const obj = JSON.parse(raw) as Record<string, string>;
-        const map = new Map<number, string>();
-        for (const [k, v] of Object.entries(obj)) {
-          if (v) map.set(Number(k), v);
-        }
-        console.log(`[FaceCache] 已加载 ${map.size} 条头像URL缓存`);
-        return map;
-      } catch {
-        return new Map();
-      }
-    })();
-  }
-  return faceCachePromise;
+/** 获取用户的粉丝列表文件路径 */
+function getSendFansFile(userMid: number, uname: string): string {
+  return path.join(getUserDataDir(userMid, uname), "send-fans-list.json");
 }
 
-async function flushNameCache() {
-  if (!nameDirty) return;
+/** 按用户缓存 { uid → UserInfoEntry } */
+async function loadUserListFile(filePath: string): Promise<Map<number, UserInfoEntry>> {
   try {
-    const map = await loadNameCache();
-    const obj: Record<string, string> = {};
+    const raw = await fs.readFile(filePath, "utf8");
+    const obj = JSON.parse(raw) as Record<string, UserInfoEntry>;
+    const map = new Map<number, UserInfoEntry>();
+    for (const [k, v] of Object.entries(obj)) {
+      map.set(Number(k), v);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+async function saveUserListFile(filePath: string, map: Map<number, UserInfoEntry>): Promise<void> {
+  try {
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    const obj: Record<string, UserInfoEntry> = {};
     for (const [k, v] of map) {
       obj[String(k)] = v;
     }
-    await fs.writeFile(ANCHOR_NAME_FILE, JSON.stringify(obj, null, 2), "utf8");
-    nameDirty = false;
+    await fs.writeFile(filePath, JSON.stringify(obj, null, 2), "utf8");
   } catch {
     // ignore write errors
   }
 }
 
-async function flushFaceCache() {
-  if (!faceDirty) return;
-  try {
-    const map = await loadFaceCache();
-    const obj: Record<string, string> = {};
-    for (const [k, v] of map) {
-      obj[String(k)] = v;
-    }
-    await fs.writeFile(ANCHOR_FACE_FILE, JSON.stringify(obj, null, 2), "utf8");
-    faceDirty = false;
-  } catch {
-    // ignore write errors
-  }
+/** 查询某用户的缓存昵称 */
+export async function getCachedName(userMid: number, uname: string, ruid: number): Promise<string | null> {
+  const filePath = getSendFansFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  return map.get(ruid)?.name || null;
 }
 
-// 定期刷盘（每10秒）
-if (typeof setInterval !== "undefined") {
-  setInterval(() => {
-    flushNameCache();
-    flushFaceCache();
-  }, 10000);
+/** 查询某用户的缓存头像 */
+export async function getCachedFace(userMid: number, uname: string, ruid: number): Promise<string | null> {
+  const filePath = getSendFansFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  return map.get(ruid)?.face || null;
 }
 
-// 进程退出时刷盘
-if (typeof process !== "undefined") {
-  process.on("exit", () => {
-    // 同步刷盘
-    try {
-      const fs_sync = require("fs");
-      if (nameDirty && nameCachePromise) {
-        nameCachePromise.then(map => {
-          const obj: Record<string, string> = {};
-          for (const [k, v] of map) obj[String(k)] = v;
-          fs_sync.writeFileSync(ANCHOR_NAME_FILE, JSON.stringify(obj, null, 2), "utf8");
-        });
-      }
-      if (faceDirty && faceCachePromise) {
-        faceCachePromise.then(map => {
-          const obj: Record<string, string> = {};
-          for (const [k, v] of map) obj[String(k)] = v;
-          fs_sync.writeFileSync(ANCHOR_FACE_FILE, JSON.stringify(obj, null, 2), "utf8");
-        });
-      }
-    } catch {}
+/** 写入主播信息到 received-anchors-list.json */
+export async function setCachedAnchorInfo(userMid: number, uname: string, ruid: number, name: string, face: string): Promise<void> {
+  const filePath = getReceivedAnchorsFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  const existing = map.get(ruid) || { name: "", face: "" };
+  map.set(ruid, {
+    name: name || existing.name,
+    face: face || existing.face,
   });
+  await saveUserListFile(filePath, map);
 }
 
-export async function getCachedAnchorName(ruid: number): Promise<string | null> {
-  const map = await loadNameCache();
-  return map.get(ruid) || null;
+/** 写入粉丝信息到 send-fans-list.json */
+export async function setCachedFanInfo(userMid: number, uname: string, ruid: number, name: string, face: string): Promise<void> {
+  const filePath = getSendFansFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  const existing = map.get(ruid) || { name: "", face: "" };
+  map.set(ruid, {
+    name: name || existing.name,
+    face: face || existing.face,
+  });
+  await saveUserListFile(filePath, map);
 }
 
-export async function setCachedAnchorName(ruid: number, name: string): Promise<void> {
-  const map = await loadNameCache();
-  map.set(ruid, name);
-  nameDirty = true;
-}
-
-export async function getCachedAnchorFace(ruid: number): Promise<string | null> {
-  const map = await loadFaceCache();
-  return map.get(ruid) || null;
-}
-
-export async function setCachedAnchorFace(ruid: number, face: string): Promise<void> {
-  const map = await loadFaceCache();
-  if (face) {
-    map.set(ruid, face);
-  } else {
-    map.delete(ruid);
+/** 获取某用户的完整粉丝列表 { uid: { name, face } }（供前端 /api/faces 使用） */
+export async function getSendFansList(userMid: number, uname: string): Promise<Record<string, UserInfoEntry>> {
+  const filePath = getSendFansFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  const obj: Record<string, UserInfoEntry> = {};
+  for (const [k, v] of map) {
+    obj[String(k)] = v;
   }
-  faceDirty = true;
+  return obj;
 }
 
-/** 批量设置头像缓存（批量操作，减少IO） */
-export async function bulkSetCachedFaces(entries: Array<{ uid: number; face: string; name?: string }>): Promise<void> {
-  const faceMap = await loadFaceCache();
-  const nameMap = await loadNameCache();
-  for (const { uid, face, name } of entries) {
-    if (face) {
-      faceMap.set(uid, face);
-    }
-    if (name) {
-      nameMap.set(uid, name);
-    }
+/** 获取某用户的完整主播列表 { uid: { name, face } } */
+export async function getReceivedAnchorsList(userMid: number, uname: string): Promise<Record<string, UserInfoEntry>> {
+  const filePath = getReceivedAnchorsFile(userMid, uname);
+  const map = await loadUserListFile(filePath);
+  const obj: Record<string, UserInfoEntry> = {};
+  for (const [k, v] of map) {
+    obj[String(k)] = v;
   }
-  faceDirty = true;
-  nameDirty = true;
-  await Promise.all([flushFaceCache(), flushNameCache()]);
+  return obj;
 }
 
-/** 获取所有已缓存的头像 UID 集合 */
-export async function getCachedFaceUids(): Promise<Set<number>> {
-  const map = await loadFaceCache();
-  return new Set(map.keys());
+// ====== 用户个人信息（account-info.json） ======
+
+type AccountInfo = { mid: number; uname: string; face: string };
+
+/** 获取 account-info.json 路径 */
+function getAccountInfoFile(userMid: number, uname: string): string {
+  return path.join(getUserDataDir(userMid, uname), "account-info.json");
+}
+
+/** 保存用户个人信息（登录或信息更新时调用） */
+export async function saveAccountInfo(userMid: number, uname: string, face: string): Promise<void> {
+  const filePath = getAccountInfoFile(userMid, uname);
+  const data: AccountInfo = { mid: userMid, uname, face };
+  try {
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  } catch {
+    // ignore
+  }
+}
+
+/** 读取用户个人信息（admin 模式或需要最新信息时调用） */
+export async function loadAccountInfo(userMid: number, uname: string): Promise<AccountInfo | null> {
+  const filePath = getAccountInfoFile(userMid, uname);
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw) as AccountInfo;
+  } catch {
+    return null;
+  }
 }
 
 // ====== 天选礼物 ID 持久化存储 ======

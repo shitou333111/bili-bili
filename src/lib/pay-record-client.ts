@@ -336,7 +336,7 @@ export async function fetchPayRecords(
   }
 
   const safeName = session.uname.replace(/[\\/:*?"<>|]/g, "_");
-  const dataDir = `${platform.getDataDir()}/uid_${session.mid}_${safeName}`;
+  const dataDir = `${await platform.getDataDir()}/uid_${session.mid}_${safeName}`;
   const recordsPath = `${dataDir}/pay-records.json`;
 
   // 读取已有记录

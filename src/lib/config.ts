@@ -7,11 +7,14 @@
 export const BLIND_BOX_CONFIG = {
   // 心动盲盒（常规）
   xindong: 32251,
+  // 幸运盲盒（固定盲盒，始终显示）
+  lucky: 35206,
   // 当前活动盲盒（在配置文件中指定，如果不存在则显示"当前无活动盲盒"）
   current_activity_blind_box_id: 35684 as number | null,
   // 盲盒图标映射
   icons: {
     32251: "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png",
+    35206: "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png",
     35684: "https://s1.hdslb.com/bfs/live/48307f9c584235ade71c59de9c93eaa607b03388.png",
   } as Record<number, string>,
 } as const;

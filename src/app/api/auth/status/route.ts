@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
+import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,18 @@ export async function GET(request: Request) {
         code: 0,
         message: "no active site session",
         data: { loggedIn: false, reason: "no session" },
+      },
+      { status: 200 },
+    );
+  }
+
+  // 离线模式：跳过 B 站校验，视为已登录（仍可就地读取缓存数据）
+  if (isOffline(url)) {
+    return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string }>>(
+      {
+        code: 0,
+        message: "active (offline)",
+        data: { loggedIn: true, sid: session.sid, uname: session.uname },
       },
       { status: 200 },
     );

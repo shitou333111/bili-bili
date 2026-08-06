@@ -12,9 +12,11 @@
   },
   "dependencies": {
     "@carrotsearch/foamtree": "^3.6.1",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/cli": "^2.11.4",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "@tauri-apps/plugin-store": "^2.4.4",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/qrcode": "^1.5.6",

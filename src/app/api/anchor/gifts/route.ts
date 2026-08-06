@@ -1,7 +1,8 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
-import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { loadGiftDb, saveGiftsToDb } from "@/lib/gift-db";
+import { ensureValidCredential, buildCookieHeader } from "@/lib/bilibili/cookie-refresh";
+import { loadGiftDb, saveGiftsToDb, getGiftImg } from "@/lib/gift-db";
+import { isOffline } from "@/lib/offline";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
 import { checkBlindBox } from "@/lib/bilibili/gift-api";
@@ -546,20 +547,23 @@ export async function GET(request: Request) {
     );
   }
 
-  const credentialResult = await ensureValidCredential(session);
-  if (!credentialResult.valid) {
-    console.log(`[AnchorGifts] B站凭证失效，返回模拟数据`);
-    const mockData = buildMockAnchorGiftsResponse();
-    return NextResponse.json(
-      { code: 0, message: "needs-relogin", data: mockData },
-      { status: 200 },
-    );
+  const offline = isOffline(url);
+  if (!offline) {
+    const credentialResult = await ensureValidCredential(session);
+    if (!credentialResult.valid) {
+      console.log(`[AnchorGifts] B站凭证失效，返回模拟数据`);
+      const mockData = buildMockAnchorGiftsResponse();
+      return NextResponse.json(
+        { code: 0, message: "needs-relogin", data: mockData },
+        { status: 200 },
+      );
+    }
   }
 
-  const validSession = credentialResult.session;
-  const biliCookie = credentialResult.cookie;
+  const validSession = session;
+  const biliCookie = offline ? "" : buildCookieHeader(session);
   const csrf = biliCookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
-  console.log(`[AnchorGifts] 认证通过: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
+  console.log(`[AnchorGifts] 认证通过${offline ? " (离线模式，使用本地缓存)" : ""}: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
 
   // 解析查询参数
   const refresh = url.searchParams.get("refresh") === "true";
@@ -706,7 +710,12 @@ export async function GET(request: Request) {
       return beginDate;
     })();
 
-    if (startDate > yesterdayStr) {
+    if (offline) {
+      // 离线模式：不抓取 B 站，仅使用本地缓存记录
+      console.log(`[AnchorGifts] 离线模式，使用本地缓存 ${existingRecords.length} 条记录`);
+      allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
+      fetchedNewPages = 0;
+    } else if (startDate > yesterdayStr) {
       console.log(`[AnchorGifts] 无需获取，startDate=${startDate} > yesterdayStr=${yesterdayStr}`);
       fetchedNewPages = 0;
     } else {
@@ -819,9 +828,9 @@ export async function GET(request: Request) {
     const blindBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
     const allBlindBoxInfo = await getAllBlindBoxInfo(0, "");
 
-    // 如果本地没有盲盒信息，尝试从B站API获取（参考粉丝页盲盒盈亏的实现）
+    // 如果本地没有盲盒信息，尝试从B站API获取（离线时跳过）
     for (const blindBoxId of blindBoxIds) {
-      if (!allBlindBoxInfo[blindBoxId]) {
+      if (!offline && !allBlindBoxInfo[blindBoxId]) {
         try {
           console.log(`[AnchorGifts] 本地无盲盒 ${blindBoxId} 信息，尝试从B站API获取...`);
           const checkResult = await checkBlindBox(blindBoxId, biliCookie);
@@ -992,7 +1001,7 @@ export async function GET(request: Request) {
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
-      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? "";
+      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? getGiftImg(blindBoxId) ?? "";
       const drawCount = count?.num ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;
       // blind_price 单位是电池，乘以50转换为 hamster（收益已/2，成本也需/2）

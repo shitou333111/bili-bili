@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "Bili Live",
+  "productName": "B瓜",
   "version": "0.1.0",
   "identifier": "com.bili-live.app",
   "build": {
@@ -13,11 +13,14 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Bili Live",
-        "width": 1200,
-        "height": 800,
+        "label": "main",
+        "title": "B瓜",
+        "width": 1000,
+        "height": 1778,
+        "visible": false,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "devtools": true
       }
     ],
     "security": {
@@ -34,17 +37,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://your-server.com/api/update/{{target}}/{{arch}}/{{current_version}}"
-      ],
-      "pubkey": "YOUR_PUBLIC_KEY_HERE",
-      "windows": {
-        "installMode": "passive"
-      }
-    }
+    "createUpdaterArtifacts": false
   }
 }

@@ -1,36 +1,23 @@
 {
-  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "identifier": "default",
-  "description": "默认权限配置",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://*:*", "https://*:*"]
+  },
   "permissions": [
     "core:default",
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://api.bilibili.com/**" },
-        { "url": "https://api.live.bilibili.com/**" },
-        { "url": "https://www.bilibili.com/**" },
-        { "url": "https://live.bilibili.com/**" },
-        { "url": "https://passport.bilibili.com/**" },
-        { "url": "https://*.hdslb.com/**" },
-        { "url": "https://your-server.com/**" }
+        { "url": "http://*:*" },
+        { "url": "https://*:*" }
       ]
     },
-    {
-      "identifier": "fs:default",
-      "allow": [
-        { "path": "$APPDATA/**" },
-        { "path": "$APPLOCALDATA/**" },
-        { "path": "$RESOURCE/**" }
-      ]
-    },
+    "fs:default",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appdata-meta-recursive",
     "store:default",
-    {
-      "identifier": "updater:default",
-      "allow": [
-        { "url": "https://your-server.com/**" }
-      ]
-    }
+    "opener:default"
   ]
 }

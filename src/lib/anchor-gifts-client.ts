@@ -196,7 +196,7 @@ export async function fetchAnchorGifts(
     ?.split("=")[1] ?? "";
 
   // 读取已有记录和元数据
-  const dataDir = `${platform.getDataDir()}/uid_${session.mid}_${session.uname.replace(/[\\/:*?"<>|]/g, "_")}`;
+  const dataDir = `${await platform.getDataDir()}/uid_${session.mid}_${session.uname.replace(/[\\/:*?"<>|]/g, "_")}`;
   const recordsPath = `${dataDir}/anchor-gifts-records.json`;
 
   let existingRecords: BiliGiftRecord[] = [];

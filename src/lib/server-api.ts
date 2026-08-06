@@ -5,7 +5,7 @@
  * - Tauri 模式：前端是静态文件，需将 /api/... 转发到服务器（NEXT_PUBLIC_SERVER_URL）
  */
 
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "https://your-server.com";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
 
 /** 检测是否在 Tauri 环境 */
 export function isTauri(): boolean {
@@ -16,9 +16,18 @@ export function isTauri(): boolean {
   }
 }
 
+let _debugLogged = false;
+
 /** 获取服务器 API 完整 URL */
 export function serverApiUrl(path: string): string {
-  if (isTauri()) {
+  const tauri = isTauri();
+  if (!_debugLogged) {
+    _debugLogged = true;
+    console.log(
+      `[serverApi] isTauri=${tauri}, SERVER_BASE_URL="${SERVER_BASE_URL}"`,
+    );
+  }
+  if (tauri) {
     return `${SERVER_BASE_URL}${path}`;
   }
   return path;

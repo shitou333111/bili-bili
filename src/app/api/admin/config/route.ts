@@ -15,7 +15,7 @@ async function checkAdmin(request: Request): Promise<boolean> {
 function getDefaultConfig() {
   const blind_boxes = Object.entries(BLIND_BOX_CONFIG.icons).map(([id, icon]) => ({
     id: Number(id),
-    name: Number(id) === BLIND_BOX_CONFIG.xindong ? "心动盲盒" : "",
+    name: Number(id) === BLIND_BOX_CONFIG.xindong ? "心动盲盒" : Number(id) === BLIND_BOX_CONFIG.lucky ? "幸运盲盒" : "",
     icon,
   }));
 

@@ -4,7 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
+import { serverApiUrl } from "@/lib/server-api";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
+import { getBlindBoxCardBg } from "@/lib/layout";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 
@@ -218,9 +220,13 @@ function GiftSaveModal({
 export default function AnchorDataModule({
   anchorName = "",
   anchorFace = "",
+  mid = 0,
+  uname = "",
 }: {
   anchorName?: string;
   anchorFace?: string;
+  mid?: number;
+  uname?: string;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,7 +254,7 @@ export default function AnchorDataModule({
 
   // 加载礼物数据库
   useEffect(() => {
-    fetch("/api/gift-db")
+    fetch(serverApiUrl("/api/gift-db"))
       .then(r => r.json())
       .then(data => {
         if (data.code === 0 && data.data) {
@@ -266,9 +272,18 @@ function apiUrl(path: string): string {
   const params: string[] = [];
   if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
   if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
-  if (params.length === 0) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}${params.join("&")}`;
+  // 离线时通知服务器返回本地缓存数据（而不是 mock/401）
+  // 用 navigator.onLine 同步判断，确保请求发出时状态准确（hook 状态在挂载后异步同步）
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    params.push("offline=1");
+  }
+  let url = path;
+  if (params.length > 0) {
+    const sep = path.includes("?") ? "&" : "?";
+    url = `${path}${sep}${params.join("&")}`;
+  }
+  // Tauri 模式下需转换为完整 URL（静态前端无服务器处理相对路径）
+  return serverApiUrl(url);
 }
 
 async function fetchData() {
@@ -306,7 +321,7 @@ async function fetchData() {
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
       setLoading(false);
-      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
     }
   }
 
@@ -341,7 +356,7 @@ async function fetchData() {
         for (let i = 0; i < missingUids.length; i += batchSize) {
           const batch = missingUids.slice(i, i + batchSize);
           try {
-            const res = await fetch(`/api/tools/user-info?uids=${batch.join(",")}`, { cache: "no-store" });
+            const res = await fetch(apiUrl(`/api/tools/user-info?uids=${batch.join(",")}&mid=${mid}&uname=${encodeURIComponent(uname)}`), { cache: "no-store" });
             const data = await res.json();
             if (data.code === 0 && data.data) {
               for (const [uidStr, info] of Object.entries(data.data)) {
@@ -514,7 +529,7 @@ async function fetchData() {
     <div className="flex-1 flex flex-col min-h-0">
       {/* Auth error banner */}
       {authError && (
-        <div className="mx-auto w-full max-w-4xl px-2 py-2 bg-amber-50 rounded-lg">
+        <div className="content-wrapper px-2 py-2 bg-amber-50 rounded-lg">
           <p className="text-sm text-amber-800">{authError}</p>
         </div>
       )}
@@ -533,31 +548,37 @@ async function fetchData() {
       {/* Content - scrollable */}
       {stats && (
         <div className="flex-1 overflow-y-auto py-3">
-          <div className="mx-auto w-full max-w-4xl px-2 min-w-0">
-            {/* Tab bar - sticky at top */}
-            <div className="flex items-center gap-2 px-4 py-1.5 mb-2 overflow-x-auto whitespace-nowrap scrollbar-none sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
-              {(["revenue", "blindbox", "gift_screenshot", "other"] as const).map((tab) => (
+          <div className="content-wrapper px-2 min-w-0">
+            {/* Tab bar - segmented control, sticky at top, 整体居中 */}
+            <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
+              {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
+              <div className="flex items-center rounded-full border border-black/10 bg-white/85 p-1 shadow-sm shrink-0 w-[80%] max-w-[800px]">
+                {(["revenue", "blindbox", "gift_screenshot", "other"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`flex-1 rounded-full px-2 py-1 text-sm font-medium transition-all ${
+                      activeTab === tab
+                        ? "bg-[#1f1c17] text-white shadow-sm"
+                        : "text-black/65 hover:bg-black/5"
+                    }`}
+                  >
+                    {tab === "revenue" ? "收入" : tab === "blindbox" ? "盲盒" : tab === "gift_screenshot" ? "大礼物" : "其他"}
+                  </button>
+                ))}
+              </div>
+              {/* 刷新按钮（右侧）：单箭头转圈图标作为淡色透明背景，时间叠加上方且颜色更深 */}
+              <div className="shrink-0">
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                    activeTab === tab
-                      ? "bg-[#1f1c17] text-white"
-                      : "bg-white border border-black/15 text-black/75 hover:bg-gray-50"
-                  }`}
+                  onClick={fetchData}
+                  disabled={loading}
+                  className="relative flex items-center justify-center rounded-full border border-black/15 bg-white/85 transition hover:bg-gray-50 disabled:opacity-50 h-9 w-9"
                 >
-                  {tab === "revenue" ? "收入统计" : tab === "blindbox" ? "盲盒盈亏" : tab === "gift_screenshot" ? "大礼物截图" : "其他数据"}
+                  {/* 背景图标：单箭头转圈（⟳ U+27F3），颜色淡、半透明 */}
+                  <span aria-hidden="true" className={`text-black/25 leading-none ${loading ? "animate-spin" : ""}`} style={{ fontSize: 30 }}>⟳</span>
+                  {lastRefreshTime && <span className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-medium text-black">{lastRefreshTime}</span>}
                 </button>
-              ))}
-              <button
-                onClick={fetchData}
-                disabled={loading}
-                className="shrink-0 rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-black/60 transition hover:bg-gray-50 disabled:opacity-50"
-              >
-                <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                {loading ? "刷新中..." : "刷新"}
-              </button>
-              {lastRefreshTime && <span className="shrink-0 text-xs text-black/30">{lastRefreshTime}</span>}
+              </div>
             </div>
 
             <section className="grid gap-6">
@@ -940,18 +961,18 @@ async function fetchData() {
                 <>
                   {blindBoxProfits && blindBoxProfits.length > 0 ? (
                     <div className="space-y-4">
-                      {blindBoxProfits.map((bb) => {
+                      {blindBoxProfits.map((bb, idx) => {
                         const isXindong = bb.gift_id === 32251;
                         const blindPrice = bb.blindPrice; // 单位：电池
                         const totalSpent = bb.cost / 100; // hamster → 电池
                         const totalEarned = bb.totalHamster / 100; // hamster → 电池
                         const profit = bb.profit / 100; // hamster → 电池
                         return (
-                          <div key={bb.gift_id} className={`rounded-lg border border-black/10 p-2 ${isXindong ? "bg-[#f9f4ea]" : "bg-[#fff7ef]"}`}>
+                          <div key={bb.gift_id} className={`rounded-lg border border-black/10 p-2 ${getBlindBoxCardBg(idx)}`}>
                             {/* Row 1: 盲盒图标+名称 + 统计时间 */}
                             <div className="flex items-center gap-2 mb-2">
-                              {BLIND_BOX_CONFIG.icons[bb.gift_id] && (
-                                <img src={BLIND_BOX_CONFIG.icons[bb.gift_id]} alt="" className="w-6 h-6 rounded" />
+                              {(bb.img || BLIND_BOX_CONFIG.icons[bb.gift_id]) && (
+                                <img src={bb.img || BLIND_BOX_CONFIG.icons[bb.gift_id]} alt="" className="w-6 h-6 rounded" />
                               )}
                               <span className="font-semibold text-sm truncate max-w-[80px]">{bb.name.slice(0, 6)}{bb.name.length > 6 ? "..." : ""}</span>
                               <span className="ml-auto text-xs text-black/65">
@@ -1082,6 +1103,8 @@ async function fetchData() {
                   giftDb={giftDb}
                   fanFaces={fanFaces}
                   yesterdayAvailable={yesterdayAvailable}
+                  mid={mid}
+                  uname={uname}
                 />
               )}
 

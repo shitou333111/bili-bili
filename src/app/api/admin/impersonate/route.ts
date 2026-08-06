@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
-import { setCurrentSession, getSessionCookieName } from "@/lib/auth/session";
+import { setCurrentSession, getSessionCookieName, getSessionBySid } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +21,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: "missing sid" }, { status: 400 });
   }
 
+  // 获取目标用户的 userToken，用于前端更新 localStorage
+  const targetSession = await getSessionBySid(sid);
+  const targetUserToken = targetSession?.userToken || "";
+
   await setCurrentSession(sid);
 
-  const res = NextResponse.json({ code: 0, message: "ok" });
+  const res = NextResponse.json({ code: 0, message: "ok", data: { userToken: targetUserToken } });
   res.cookies.set(getSessionCookieName(), sid, {
     httpOnly: true,
     sameSite: "lax",

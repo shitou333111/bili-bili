@@ -5,7 +5,8 @@ import { fetchBlindBoxDrawStream, checkBlindBox } from "@/lib/bilibili/gift-api"
 import { getBlindBoxInfo, saveBlindBoxInfo, type BlindBoxGift } from "@/lib/blind-box-db";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
-import { saveGiftsToDb } from "@/lib/gift-db";
+import { saveGiftsToDb, getGiftImg } from "@/lib/gift-db";
+import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -529,7 +530,7 @@ function calculateProfit(
 ): BlindBoxProfitResult {
   const blindPrice = blindBoxEntry?.price ?? 0;
   const blindBoxName = blindBoxEntry?.gift_name ?? `盲盒_${blindBoxId}`;
-  const blindBoxImg = blindBoxEntry?.gift_img ?? "";
+  const blindBoxImg = blindBoxEntry?.gift_img ?? getGiftImg(blindBoxId) ?? "";
 
   // 构建 gift_id -> {price, img} 映射表
   const giftInfoMap = new Map<number, { price: number; img: string }>();
@@ -612,21 +613,24 @@ export async function GET(request: Request) {
     );
   }
 
-  // 验证 B站凭证，失效则尝试刷新，刷新失败则返回需要重新登录
-  const credentialResult = await ensureValidCredential(session);
-  if (!credentialResult.valid) {
-    return NextResponse.json<ApiResponse<null>>(
-      { code: 401, message: "needs-relogin", data: null },
-      { status: 401 },
-    );
+  // 验证 B站凭证，失效则尝试刷新，刷新失败则返回需要重新登录（离线时跳过校验）
+  const offline = isOffline(url);
+  if (!offline) {
+    const credentialResult = await ensureValidCredential(session);
+    if (!credentialResult.valid) {
+      return NextResponse.json<ApiResponse<null>>(
+        { code: 401, message: "needs-relogin", data: null },
+        { status: 401 },
+      );
+    }
   }
 
-  const validSession = credentialResult.session;
+  const validSession = session;
 
   // 解析筛选参数（支持按盲盒ID分别筛选：ruid_32251=xxx, dateRange_32251=thisMonth）
 
   try {
-    const biliCookie = credentialResult.cookie;
+    const biliCookie = "";
 
     const effectiveBlindBoxConfig = await getEffectiveBlindBoxConfig();
     const currentIds = effectiveBlindBoxConfig.current_activity_blind_box_ids ?? [];
@@ -653,8 +657,10 @@ export async function GET(request: Request) {
         // 获取已存储记录的最新时间戳，用于增量获取
         const latestTimestamp = getLatestTimestamp(existingRecords);
 
-        // 增量获取新记录
-        const newRecords = await fetchBlindBoxDrawStream(blindBoxId, biliCookie, latestTimestamp);
+        // 增量获取新记录（离线时跳过，仅用本地缓存）
+        const newRecords = offline
+          ? []
+          : await fetchBlindBoxDrawStream(blindBoxId, biliCookie, latestTimestamp);
 
         // 合并记录
         const mergedRecords = newRecords.length > 0
@@ -675,9 +681,9 @@ export async function GET(request: Request) {
 
         console.log(`[BlindBoxStats] 盲盒 ${blindBoxId}: 新记录 ${newRecords.length} 条, 已存储 ${existingRecords.length} 条, 合并后 ${mergedRecords.length} 条`);
 
-        // 获取盲盒信息（只在本地没有时才请求API）
+        // 获取盲盒信息（只在本地没有时才请求API，离线时跳过B站请求）
         let blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId);
-        if (!blindBoxInfo) {
+        if (!blindBoxInfo && !offline) {
           const checkResult = await checkBlindBox(blindBoxId, biliCookie);
           if (checkResult) {
             await saveBlindBoxInfo(session.mid, session.uname, blindBoxId, {

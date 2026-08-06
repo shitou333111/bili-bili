@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
+import { saveAccountInfo } from "@/lib/user-data";
 
 const STATE_DIR = path.join(process.cwd(), ".data");
 const STATE_FILE = path.join(STATE_DIR, "bili-live-state.json");
@@ -102,29 +103,34 @@ export function createSessionInput(input: Omit<AuthSession, "sid" | "createdAt" 
 }
 
 export async function saveSession(session: AuthSession): Promise<AuthSession> {
-  return withWriteLock(async () => {
+  const effectiveSession = await withWriteLock(async () => {
     const state = await readState();
     // 先按 sid 找，找不到再按 mid（B站用户ID）找，避免同一账号重复
     let index = state.sessions.findIndex((item) => item.sid === session.sid);
     if (index < 0) {
       index = state.sessions.findIndex((item) => item.mid === session.mid);
     }
-    let effectiveSession: AuthSession;
+    let result: AuthSession;
     if (index >= 0) {
       // 保留原有 sid，更新其他信息
       const existingSid = state.sessions[index].sid;
-      effectiveSession = { ...session, sid: existingSid };
-      state.sessions[index] = effectiveSession;
+      result = { ...session, sid: existingSid };
+      state.sessions[index] = result;
       state.currentSid = existingSid;
     } else {
-      effectiveSession = session;
+      result = session;
       state.sessions.unshift(session);
       state.currentSid = session.sid;
     }
     await ensureStateFile();
     await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
-    return effectiveSession;
+    return result;
   });
+  // 保存用户个人信息到 account-info.json（供 admin 模式读取）
+  if (effectiveSession.face) {
+    saveAccountInfo(effectiveSession.mid, effectiveSession.uname, effectiveSession.face).catch(() => {});
+  }
+  return effectiveSession;
 }
 
 export async function getSessionBySid(sid: string | null | undefined) {

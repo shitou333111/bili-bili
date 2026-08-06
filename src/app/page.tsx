@@ -6,10 +6,14 @@ import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
+import { serverApiUrl } from "@/lib/server-api";
+import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
+import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
+import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts * 1000);
@@ -159,7 +163,7 @@ type SynthesisActivityStats = {
 };
 
 type SynthesisStats = {
-  historical: { totalSpent: number; totalEarned: number; profit: number; drawCount: number; replaceCount: number; synthesisCount: number; successCount: number; detailedRecords?: any[]; giftList?: any[] };
+  historical: { totalSpent: number; totalEarned: number; profit: number; drawCount: number; replaceCount: number; synthesisCount: number; successCount: number; detailedRecords?: any[]; giftList?: any[]; anchorStats?: Array<{ ruid: number; rname: string; count: number; value: number; spent: number; profit: number }> };
   activities: SynthesisActivityStats[];
   tianxuanGifts?: { id: number; name: string }[];
   redPocketGifts?: { id: number; name: string }[];
@@ -773,7 +777,6 @@ export default function HomePage() {
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [lastRefreshTime, setLastRefreshTime] = useState<string>("");
   const [blindBoxStats, setBlindBoxStats] = useState<BlindBoxStats | null>(null);
@@ -793,7 +796,7 @@ export default function HomePage() {
   const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
-  const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot">("revenue");
+  const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
   const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot">("home");
   // 饼图选中状态 - 用于移动端点击显示tooltip
   const [pieActiveIndex, setPieActiveIndex] = useState<number | null>(null);
@@ -807,11 +810,82 @@ export default function HomePage() {
   const [fansSelected, setFansSelected] = useState<Set<number>>(new Set());
   const [fansRemoving, setFansRemoving] = useState(false);
   const [fansMsg, setFansMsg] = useState("");
-  // 版本号卡片连续点击 → admin 入口
+  // 离线功能轻提示（短时间内自动消失）
+  const [offlineToast, setOfflineToast] = useState("");
+  const offlineToastTimer = useRef<number | null>(null);
+  function showOfflineToast(msg: string) {
+    setOfflineToast(msg);
+    if (offlineToastTimer.current) window.clearTimeout(offlineToastTimer.current);
+    offlineToastTimer.current = window.setTimeout(() => setOfflineToast(""), 2000);
+  }
+  // 版本号卡片连续点击 → admin 入口（点击3次），已使用过 admin 后再其他工具页显示入口卡片
   const [versionClickCount, setVersionClickCount] = useState(0);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
   const [adminPwd, setAdminPwd] = useState("");
   const [adminPwdError, setAdminPwdError] = useState(false);
+  const [adminUsed, setAdminUsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return !!localStorage.getItem("bili_live_admin_used");
+  });
+
+  // 后台静默登录 admin：有已保存的账号密码则直接向服务器验证，无需弹窗；失败才弹窗
+  function attemptAdminLogin() {
+    const cred = localStorage.getItem("bili_live_admin_cred");
+    if (cred) {
+      const [username, password] = (() => {
+        try {
+          const d = atob(cred);
+          const i = d.indexOf(":");
+          return [d.slice(0, i), d.slice(i + 1)];
+        } catch {
+          return ["", ""];
+        }
+      })();
+      fetch(serverApiUrl("/api/admin/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            // 静默登录成功，直接进入 admin，不显示登录框
+            window.location.href = serverApiUrl("/admin");
+          } else {
+            // 服务器信息已变更等原因导致自动登录失败，弹出模态框重新输入
+            localStorage.removeItem("bili_live_admin_cred");
+            setShowAdminPwd(true);
+            setAdminPwdError(true);
+          }
+        })
+        .catch(() => {
+          setShowAdminPwd(true);
+          setAdminPwdError(true);
+        });
+    } else {
+      // 首次使用，无已保存账号密码，弹出模态框输入
+      setShowAdminPwd(true);
+      setAdminPwdError(false);
+    }
+  }
+
+  async function handleAdminLogin() {
+    const res = await fetch(serverApiUrl("/api/admin/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: adminPwd }),
+    });
+    if (res.ok) {
+      // 记住账号密码，下次自动静默登录
+      localStorage.setItem("bili_live_admin_cred", btoa(`admin:${adminPwd}`));
+      localStorage.setItem("bili_live_admin_used", "1");
+      setAdminUsed(true);
+      setShowAdminPwd(false);
+      setAdminPwd("");
+      window.location.href = serverApiUrl("/admin");
+    } else {
+      setAdminPwdError(true);
+    }
+  }
 
   type MedalItem = {
     medal: { uid: number; target_id: number; medal_id: number; level: number; medal_name: string; intimacy: number; next_intimacy: number; today_feed: number; day_limit: number; is_lighted: number; guard_level: number; wearing_status: number; can_delete: boolean; medal_color_start: number; medal_color_end: number; medal_color_border: number };
@@ -836,26 +910,17 @@ export default function HomePage() {
   const [isMockMode, setIsMockMode] = useState(false);
   const [apiLoggedIn, setApiLoggedIn] = useState(false);
   const [showHistoricalDebug, setShowHistoricalDebug] = useState(false);
+  // 在线状态（离线时使用本地缓存数据，并禁用需要联网的功能）
+  const isOnline = useOnlineStatus();
+
+  // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
+  useEffect(() => {
+    document.documentElement.style.setProperty("--page-max-width", `${PAGE_MAX_WIDTH_NUM}px`);
+  }, []);
 
   useEffect(() => {
     fetchData();
   }, []);
-
-  // 点击空白区域关闭下拉菜单
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    }
-    if (isDropdownOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isDropdownOpen]);
 
   // 点击空白区域关闭统计规则弹窗
   const statsRulesRef = useRef<HTMLDivElement>(null);
@@ -909,9 +974,18 @@ function apiUrl(path: string): string {
   const params: string[] = [];
   if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
   if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
-  if (params.length === 0) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}${params.join("&")}`;
+  // 离线时通知服务器返回本地缓存数据（而不是 mock/401）
+// 用 navigator.onLine 同步判断，确保请求发出时状态准确（hook 状态在挂载后异步同步）
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    params.push("offline=1");
+  }
+  let url = path;
+  if (params.length > 0) {
+    const sep = path.includes("?") ? "&" : "?";
+    url = `${path}${sep}${params.join("&")}`;
+  }
+  // Tauri 模式下需转换为完整 URL（静态前端无服务器处理相对路径）
+  return serverApiUrl(url);
 }
 
 async function fetchData() {
@@ -1091,7 +1165,7 @@ async function fetchData() {
         for (let i = 0; i < missingUids.length; i += batchSize) {
           const batch = missingUids.slice(i, i + batchSize);
           try {
-            const res = await fetch(`/api/tools/user-info?uids=${batch.join(",")}`, { cache: "no-store" });
+            const res = await fetch(apiUrl(`/api/tools/user-info?uids=${batch.join(",")}`), { cache: "no-store" });
             const data = await res.json();
             if (data.code === 0 && data.data) {
               for (const [uidStr, info] of Object.entries(data.data)) {
@@ -1121,13 +1195,26 @@ async function fetchData() {
     }));
 
     setBubbleChartData({ items, title: "消费主播分布", loading: false });
+
+    // 写入 received-anchors-list.json（主播数据页面使用）
+    const anchorData: Record<string, { name: string; face: string }> = {};
+    for (const a of topAnchors) {
+      anchorData[a.ruid] = { name: a.rname, face: faces[a.ruid] || "" };
+    }
+    if (Object.keys(anchorData).length > 0) {
+      fetch(apiUrl("/api/user-data/write"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "received-anchors-list", data: anchorData }),
+      }).catch(() => {});
+    }
   }
 
   async function loadFans(pn: number, append = false) {
     setFansLoading(true);
     setFansMsg("");
     try {
-      const res = await fetch(`/api/tools/fans?pn=${pn}&ps=50`, { cache: "no-store" });
+      const res = await fetch(apiUrl(`/api/tools/fans?pn=${pn}&ps=50`), { cache: "no-store" });
       const data = await res.json();
       if (data.code === -101) {
         setFansMsg(data.message);
@@ -1322,7 +1409,7 @@ async function fetchData() {
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
       setLoading(false);
-      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
     }
   }
 
@@ -1336,7 +1423,6 @@ async function fetchData() {
       });
       const data = await res.json();
       if (data.code === 0) {
-        setIsDropdownOpen(false);
         await fetchData();
       }
     } catch (error) {
@@ -1350,7 +1436,6 @@ async function fetchData() {
     try {
       await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
       setCurrentAccount(null);
-      setIsDropdownOpen(false);
       setSnapshot(buildMockPayRecordSnapshot());
       setBlindBoxStats(null);
       setSynthesisStats(null);
@@ -1600,96 +1685,40 @@ async function fetchData() {
     return { start: formatDateShort(formatTimestamp(sorted[0].timestamp)), end: formatDateShort(formatTimestamp(sorted[sorted.length - 1].timestamp)) };
   })() : null;
 
+  // 底部托盘导航：切换页面
+  function handleDockChange(tab: DockTabKey) {
+    if (tab === "fans") { setActiveModule("revenue"); setToolsPage("home"); }
+    else if (tab === "anchor") { setActiveModule("anchor"); setToolsPage("home"); }
+    else if (tab === "help") { setActiveModule("screenshot"); setToolsPage("home"); }
+    else { setActiveModule("pending"); }
+  }
+  // 当前托盘高亮项
+  const dockTab: DockTabKey = activeModule === "revenue" ? "fans"
+    : activeModule === "anchor" ? "anchor"
+    : activeModule === "screenshot" ? "help"
+    : "pending";
+
   return (
     <main className="h-screen flex flex-col bg-[#f5f5f5] text-[#1f1c17]">
-      {/* Header - outside scroll area, always clickable during loading */}
-      <header className="flex-shrink-0 mx-auto w-full max-w-4xl flex items-center justify-between px-4 py-2 bg-[#e8e8e8]">
-        <h1 className="font-[family-name:var(--font-space-grotesk)] text-lg font-semibold tracking-tight">B站小工具</h1>
-        <div className="flex items-center gap-2">
-            {isLoggedIn || isMockMode ? (
-              <div className="relative" ref={dropdownRef}>
-                <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="flex items-center gap-1.5 rounded-full bg-[#1f1c17] px-2 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
-                >
-                  {isMockMode ? (
-                    <span className="text-white">🎮 模拟数据</span>
-                  ) : currentAccount?.face ? (
-                    <img src={fixImageUrl(currentAccount.face)} alt="" className="w-5 h-5 rounded-full object-cover" />
-                  ) : (
-                    <span className="max-w-[60px] truncate">{currentAccount?.uname || currentAccount?.mid}</span>
-                  )}
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {isDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-black/10 bg-white shadow-lg z-[10001]">
-                    <div className="p-2">
-                      <div className="px-3 py-2 text-xs font-medium text-black/40 uppercase tracking-wider">已登录账号</div>
-                      {accounts.map((acc) => {
-                          const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
-                          return (
-                            <button
-                              key={acc.sid}
-                              onClick={() => switchAccount(acc.sid)}
-                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
-                                isSelected
-                                  ? "bg-[#1f1c17] text-white"
-                                  : "hover:bg-black/5 text-black"
-                              }`}
-                            >
-                              <span>{acc.uname}</span>
-                              {isSelected && (
-                                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                </svg>
-                              )}
-                            </button>
-                          );
-                        })}
-                      <div className="border-t border-black/10 my-2"></div>
-                      <button
-                        onClick={() => { setIsDropdownOpen(false); switchToMock(); }}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition ${
-                          isMockMode ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
-                        }`}
-                      >
-                        <span>模拟数据</span>
-                        {isMockMode && (
-                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        )}
-                      </button>
-                      <Link href="/login" className="w-full block px-3 py-2 rounded-lg text-left text-sm text-black hover:bg-black/5 transition">
-                        添加新账号
-                      </Link>
-                      <button
-                        onClick={logout}
-                        className="w-full px-3 py-2 rounded-lg text-left text-sm text-red-600 hover:bg-red-50 transition"
-                      >
-                        退出登录
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <Link href="/login" className="rounded-full bg-[#1f1c17] px-3 py-1.5 text-sm font-medium !text-white transition hover:opacity-90">
-                扫码登录
-              </Link>
-            )}
-            {/* 刷新按钮已移至各页面内部 */}
-          </div>
-        </header>
+      {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
+      <div className="flex-1 overflow-y-auto relative pb-28">
 
-      {/* Content Area - scrollable, overlay only covers this area (not header) */}
-      <div className="flex-1 overflow-y-auto relative pb-14">
+      {/* Offline banner */}
+      {!isOnline && (
+        <div className="content-wrapper px-2 py-2">
+          <div className="flex items-center gap-2 rounded-lg bg-gray-100 border border-black/10 px-3 py-2">
+            <span className="text-base">📴</span>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-black/70">离线模式</p>
+              <p className="text-xs text-black/45">当前无网络连接，正在使用本地缓存数据（收入、盲盒、合成、礼物等）。需要联网的功能（粉丝清理、粉丝牌清理、扫码登录等）暂不可用。</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Auth error banner */}
       {authError && (
-        <div className="mx-auto w-full max-w-4xl px-2 py-2 bg-amber-50 rounded-lg">
+        <div className="content-wrapper px-2 py-2 bg-amber-50 rounded-lg">
           <p className="text-sm text-amber-800">{authError}</p>
         </div>
       )}
@@ -1707,33 +1736,39 @@ async function fetchData() {
 
       {/* Content - Revenue module */}
       {activeModule === "revenue" && snapshot && (
-        <div className="mx-auto w-full max-w-4xl px-2 min-w-0 py-3">
-          {/* L3 Tab bar - sticky at top */}
-            <div className="flex items-center gap-2 px-4 py-1.5 mb-2 overflow-x-auto whitespace-nowrap scrollbar-none sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
-              {(["overview", "blindbox", "synthesis", "other"] as const).map((tab) => (
+        <div className="content-wrapper px-2 min-w-0 py-3">
+          {/* L3 Tab bar - segmented control, sticky at top, 整体居中 */}
+            <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
+              {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
+              <div className="flex items-center rounded-full border border-black/10 bg-white/85 p-1 shadow-sm shrink-0 w-[80%] max-w-[800px]">
+                {(["overview", "blindbox", "synthesis", "other"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`flex-1 rounded-full px-2 py-1 text-sm font-medium transition-all ${
+                      activeTab === tab
+                        ? "bg-[#1f1c17] text-white shadow-sm"
+                        : "text-black/65 hover:bg-black/5"
+                    }`}
+                  >
+                    {tab === "overview" ? "消费" : tab === "blindbox" ? "盲盒" : tab === "synthesis" ? "合成" : "其他"}
+                  </button>
+                ))}
+              </div>
+              {/* 刷新按钮（右侧）：单箭头转圈图标作为淡色透明背景，时间叠加上方且颜色更深 */}
+              <div className="shrink-0">
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                    activeTab === tab
-                      ? "bg-[#1f1c17] text-white"
-                      : "bg-white border border-black/15 text-black/75 hover:bg-gray-50"
-                  }`}
+                  onClick={refreshData}
+                  disabled={loading}
+                  className="relative flex items-center justify-center rounded-full border border-black/15 bg-white/85 transition hover:bg-gray-50 disabled:opacity-50 h-9 w-9"
                 >
-                  {tab === "overview" ? "消费统计" : tab === "blindbox" ? "盲盒盈亏" : tab === "synthesis" ? "合成盈亏" : "其他数据"}
+                  {/* 背景图标：单箭头转圈（⟳ U+27F3），颜色淡、半透明 */}
+                  <span aria-hidden="true" className={`text-black/25 leading-none ${loading ? "animate-spin" : ""}`} style={{ fontSize: 30 }}>⟳</span>
+                  {lastRefreshTime && <span className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-medium text-black">{lastRefreshTime}</span>}
                 </button>
-              ))}
-              <button
-                onClick={refreshData}
-                disabled={loading}
-                className="shrink-0 rounded-full border border-black/15 px-3 py-1.5 text-xs font-medium text-black/60 transition hover:bg-gray-50 disabled:opacity-50"
-              >
-                <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                {loading ? "刷新中..." : "刷新"}
-              </button>
-              {lastRefreshTime && <span className="shrink-0 text-xs text-black/30">{lastRefreshTime}</span>}
+              </div>
             </div>
-          <section className="grid gap-6">
+          <section className="grid gap-6 content-wrapper">
             {/* Overview tab - Unified card: Summary + Date/Anchor + Gift List */}
             {activeTab === "overview" && (
               <article className="rounded-xl border border-black/10 bg-white/80 p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] overflow-visible">
@@ -2174,15 +2209,16 @@ async function fetchData() {
               <>
                 {blindBoxStats ? (
                   <div className="space-y-4">
-                    {blindBoxStats.map((stat) => {
+                    {blindBoxStats.map((stat, boxIndex) => {
                       const currentFilter = blindBoxFilters[stat.blindBoxId] ?? { ruid: "", dateRange: "all" };
                       const isXindong = stat.blindBoxId === 32251;
+                      const cardBg = getBlindBoxCardBg(boxIndex);
                       return (
-                        <div key={stat.blindBoxId} className={`rounded-lg border border-black/10 p-2 ${isXindong ? "bg-[#f9f4ea]" : "bg-[#fff7ef]"}`}>
+                        <div key={stat.blindBoxId} className={`rounded-lg border border-black/10 p-2 ${cardBg}`}>
                           {/* Row 1: 盲盒图标+名称 + 统计时间 */}
                           <div className="flex items-center gap-2 mb-2">
-                            {BLIND_BOX_CONFIG.icons[stat.blindBoxId] && (
-                              <img src={BLIND_BOX_CONFIG.icons[stat.blindBoxId]} alt="" className="w-6 h-6 rounded" />
+                            {(stat.blindBoxImg || BLIND_BOX_CONFIG.icons[stat.blindBoxId]) && (
+                              <img src={stat.blindBoxImg || BLIND_BOX_CONFIG.icons[stat.blindBoxId]} alt="" className="w-6 h-6 rounded" />
                             )}
                             <span className="font-semibold text-sm truncate max-w-[80px]">{stat.blindBoxName.slice(0, 6)}{stat.blindBoxName.length > 6 ? "..." : ""}</span>
                             {isXindong && (
@@ -2368,8 +2404,8 @@ async function fetchData() {
             {activeTab === "synthesis" && synthesisStats ? (
               <>
                 {synthesisStats.activities.length > 0 ? (
-                  synthesisStats.activities.map((activity) => (
-                    <SynthesisActivityCard key={activity.id} activity={activity} />
+                  synthesisStats.activities.map((activity, actIndex) => (
+                    <SynthesisActivityCard key={activity.id} activity={activity} index={actIndex} />
                   ))
                 ) : (
                   <div className="rounded-xl border border-black/10 bg-[#f9f4ea] p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)]">
@@ -2378,7 +2414,7 @@ async function fetchData() {
                   </div>
                 )}
 
-                <div className="mt-4 rounded-xl border border-black/10 bg-[#eef3fb] p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)]">
+                <div className={`mt-4 rounded-xl border border-black/10 ${HISTORICAL_PNL_BG} p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
                   <div className="flex items-center justify-between">
                     <div className="textsm font-bold uppercase tracking-[0.15em] text-black/70">历史总盈亏</div>
                     <button
@@ -2388,17 +2424,43 @@ async function fetchData() {
                       {showHistoricalDebug ? "收起调试" : "调试"}
                     </button>
                   </div>
-                  <div className="mt-3 flex items-baseline gap-2">
-                    <span className="text-3xl font-semibold">{formatProfit(synthesisStats.historical.profit)}</span>
-                    <span className={`text-sm font-medium ${synthesisStats.historical.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {synthesisStats.historical.profit >= 0 ? "赚" : "亏"}
-                    </span>
-                  </div>
-                  <div className="mt-3 overflow-hidden">
-                    <div className="text-xs text-black/70 font-medium whitespace-nowrap overflow-x-auto scrollbar-none">
-                      {synthesisStats.historical.totalEarned}-{synthesisStats.historical.totalSpent}=<span className={synthesisStats.historical.profit >= 0 ? "text-green-600 font-bold" : "text-red-500 font-bold"}>{formatProfit(synthesisStats.historical.profit)}</span>电池 | 合成 {synthesisStats.historical.synthesisCount} 个礼物
+                  <div className="mt-3">
+                    <div className="text-lg font-semibold whitespace-nowrap overflow-x-auto scrollbar-none">
+                      {synthesisStats.historical.totalEarned}-{synthesisStats.historical.totalSpent}=<span className={synthesisStats.historical.profit >= 0 ? "text-green-600 font-bold" : "text-red-500 font-bold"}>{formatProfit(synthesisStats.historical.profit)}</span>电池
                     </div>
+                    <div className="mt-1 text-xs text-black/50">共合成 {synthesisStats.historical.synthesisCount} 个礼物</div>
                   </div>
+
+                  {/* 各主播直播间盈亏 */}
+                  {synthesisStats.historical.anchorStats && synthesisStats.historical.anchorStats.length > 0 && (
+                    <div className="mt-4">
+                      <div className="text-xs font-medium text-black/70 mb-2">各主播直播间盈亏</div>
+                      <div className="overflow-x-auto rounded-lg border border-black/10">
+                        <table className="w-full border-collapse text-left text-xs">
+                          <thead className="bg-black/5 text-black/50">
+                            <tr>
+                              <th className="pl-2 pr-1 py-1 font-medium">主播名</th>
+                              <th className="px-1 py-1 font-medium text-right">数目</th>
+                              <th className="px-1 py-1 font-medium text-right">价值</th>
+                              <th className="px-1 py-1 font-medium text-right">花费</th>
+                              <th className="px-1 py-1 font-medium text-right">盈亏</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {synthesisStats.historical.anchorStats.map((a) => (
+                              <tr key={a.ruid} className="border-t border-black/5">
+                                <td className="pl-2 pr-1 py-1">{a.rname || `ID:${a.ruid}`}</td>
+                                <td className="px-1 py-1 text-right tabular-nums">{a.count}</td>
+                                <td className="px-1 py-1 text-right tabular-nums">{a.value}</td>
+                                <td className="px-1 py-1 text-right tabular-nums">{a.spent}</td>
+                                <td className={`px-1 py-1 text-right tabular-nums ${a.profit >= 0 ? "text-green-600" : "text-red-500"}`}>{formatProfit(a.profit)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Historical debug */}
                   {showHistoricalDebug && (
@@ -2597,7 +2659,7 @@ async function fetchData() {
 
                   <hr className="border-t border-black/10 my-4" />
 
-                  <h3 className="text-base font-bold tracking-tight mb-3">主播送礼详情</h3>
+                  <h3 className="text-base font-bold tracking-tight mb-3">给主播送礼详情</h3>
                   {otherStats.roomStats.length > 0 ? (
                     <div className="space-y-2">
                       {otherStats.roomStats.slice(0, 10).map((room) => {
@@ -2658,49 +2720,172 @@ async function fetchData() {
         <AnchorDataModule
           key={currentAccount?.sid ?? "no-account"}
           anchorName={currentAccount?.uname ?? ""}
-          anchorFace={currentAccount?.face ?? ""}
+          anchorFace={fixImageUrl(currentAccount?.face ?? "")}
+          mid={currentAccount?.mid ?? 0}
+          uname={currentAccount?.uname ?? ""}
         />
       </div>
 
       {/* B站小工具 */}
       {activeModule === "screenshot" && (
-        <div className="mx-auto w-full max-w-4xl px-2 min-w-0 py-3">
+        <div className="content-wrapper px-2 min-w-0 py-3">
           {toolsPage === "home" && (
+              <>
               <div className="grid grid-cols-1 gap-3">
                 {[
-                  { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", action: () => { setToolsPage("fans"); loadFans(1); } },
-                  { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", action: () => { setToolsPage("medal"); loadMedals(1); } },
-                  { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", action: () => setToolsPage("screenshot") },
-                ].map((tool) => (
+                  { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", offlineOnly: true },
+                  { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", offlineOnly: true },
+                  { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", offlineOnly: false },
+                ].map((tool) => {
+                  // 仅离线模式禁用需要联网的工具（粉丝清理/粉丝牌清理）
+                  const disabled = !isOnline && tool.offlineOnly;
+                  return (
                   <button
                     key={tool.title}
-                    onClick={tool.action}
-                    className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-black/20 hover:shadow-lg"
+                    onClick={() => {
+                      if (disabled) {
+                        showOfflineToast("当前处于离线模式，无法使用此项功能");
+                        return;
+                      }
+                      if (tool.title === "粉丝清理") { setToolsPage("fans"); loadFans(1); }
+                      else if (tool.title === "粉丝牌清理") { setToolsPage("medal"); loadMedals(1); }
+                      else { setToolsPage("screenshot"); }
+                    }}
+                    className={`rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
+                      disabled
+                        ? "border-black/5 bg-gray-100/70 cursor-not-allowed opacity-60"
+                        : "border-black/10 bg-white/80 hover:border-black/20 hover:shadow-lg"
+                    }`}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-3xl">{tool.icon}</span>
+                      <span className={`text-3xl ${disabled ? "grayscale opacity-50" : ""}`}>{tool.icon}</span>
                       <div>
                         <h3 className="text-base font-bold">{tool.title}</h3>
                         <p className="mt-0.5 text-xs text-black/45">{tool.desc}</p>
                       </div>
+                      {disabled ? (
+                        <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+                      ) : (
+                        <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                      )}
+                    </div>
+                  </button>
+                  );
+                })}
+                {/* 已使用过 admin 后，显示管理后台入口卡片 */}
+                {adminUsed && (
+                  <button
+                    onClick={attemptAdminLogin}
+                    className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-black/20 hover:shadow-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">🛠️</span>
+                      <div>
+                        <h3 className="text-base font-bold">管理后台</h3>
+                        <p className="mt-0.5 text-xs text-black/45">查看用户、配置盲盒与合成活动</p>
+                      </div>
                       <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                     </div>
                   </button>
-                ))}
+                )}
               </div>
+
+              {/* 用户卡片：显示当前账号头像+昵称，可滚动切换账号（置于页面下方） */}
+              <div className="rounded-xl border border-black/10 bg-white/85 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur mt-3">
+                {isLoggedIn || isMockMode ? (
+                  <>
+                    <div className="flex items-center gap-3 mb-3">
+                      {isMockMode ? (
+                        <div className="w-12 h-12 rounded-full bg-[#1f1c17] flex items-center justify-center text-xl">🎮</div>
+                      ) : currentAccount?.face ? (
+                        <img src={fixImageUrl(currentAccount.face)} alt="" className="w-12 h-12 rounded-full object-cover" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-full bg-black/5 flex items-center justify-center text-lg text-black/40">{currentAccount?.uname?.slice(0, 1) || "?"}</div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate">{isMockMode ? "模拟数据" : (currentAccount?.uname || currentAccount?.mid || "未命名账号")}</div>
+                        <div className="text-xs text-black/40">点击下方账号即可切换</div>
+                      </div>
+                      {!isMockMode && currentAccount?.mid && (
+                        <span className="ml-auto text-[10px] text-black/30">UID {currentAccount.mid}</span>
+                      )}
+                    </div>
+                    {/* 账号列表：区域内滚动，显式展示所有账号 */}
+                    <div className="max-h-40 overflow-y-auto space-y-1.5">
+                      {accounts.map((acc) => {
+                        const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
+                        return (
+                          <button
+                            key={acc.sid}
+                            onClick={() => switchAccount(acc.sid)}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-sm transition ${
+                              isSelected ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
+                            }`}
+                          >
+                            {acc.face ? (
+                              <img src={fixImageUrl(acc.face)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                            ) : (
+                              <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">{acc.uname.slice(0, 1)}</span>
+                            )}
+                            <span className="truncate flex-1">{acc.uname}</span>
+                            {isSelected && (
+                              <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={switchToMock}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-sm transition ${
+                          isMockMode ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
+                        }`}
+                      >
+                        <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">🎮</span>
+                        <span>模拟数据</span>
+                        {isMockMode && (
+                          <svg className="w-4 h-4 ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <Link href="/login" className="flex-1 rounded-lg border border-black/10 py-2 text-center text-sm text-black/70 hover:bg-black/5 transition">
+                        添加新账号
+                      </Link>
+                      <button onClick={logout} className="flex-1 rounded-lg border border-red-200 py-2 text-center text-sm text-red-600 hover:bg-red-50 transition">
+                        退出登录
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-black/5 flex items-center justify-center text-lg text-black/40">?</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold">未登录</div>
+                      <div className="text-xs text-black/40">扫码登录后可查看你的数据</div>
+                    </div>
+                    <Link href="/login" className="flex-shrink-0 rounded-full bg-[#1f1c17] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90">
+                      扫码登录
+                    </Link>
+                  </div>
+                )}
+              </div>
+              </>
             )}
 
-            {/* 版本号卡片 - 连续点击6次进入管理员页面 */}
+            {/* 版本号卡片 - 连续点击3次进入管理员页面 */}
             {toolsPage === "home" && (
               <div className="mt-3 flex justify-center">
                 <button
                   onClick={() => {
                     const next = versionClickCount + 1;
                     setVersionClickCount(next);
-                    if (next >= 6) {
+                    if (next >= 3) {
                       setVersionClickCount(0);
-                      setShowAdminPwd(true);
-                      setAdminPwdError(false);
+                      attemptAdminLogin();
                     }
                   }}
                   className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"
@@ -2723,13 +2908,7 @@ async function fetchData() {
                     onChange={(e) => { setAdminPwd(e.target.value); setAdminPwdError(false); }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
-                        if (adminPwd === "333") {
-                          setShowAdminPwd(false);
-                          setAdminPwd("");
-                          window.location.href = "/admin";
-                        } else {
-                          setAdminPwdError(true);
-                        }
+                        handleAdminLogin();
                       }
                     }}
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${adminPwdError ? "border-[#e74c3c]" : "border-black/10 focus:border-black/30"}`}
@@ -2738,15 +2917,7 @@ async function fetchData() {
                   {adminPwdError && <p className="text-xs text-[#e74c3c] mt-1">密码错误</p>}
                   <div className="flex gap-2 mt-3">
                     <button
-                      onClick={() => {
-                        if (adminPwd === "333") {
-                          setShowAdminPwd(false);
-                          setAdminPwd("");
-                          window.location.href = "/admin";
-                        } else {
-                          setAdminPwdError(true);
-                        }
-                      }}
+                      onClick={handleAdminLogin}
                       className="flex-1 rounded-lg bg-[#1f1c17] py-2 text-sm text-white font-medium hover:opacity-90 transition"
                     >
                       确认
@@ -3088,6 +3259,15 @@ async function fetchData() {
         </div>
       )}
 
+      {/* 离线轻提示 toast */}
+      {offlineToast && (
+        <div className="fixed left-1/2 top-16 -translate-x-1/2 z-[99999] pointer-events-none">
+          <div className="rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
+            {offlineToast}
+          </div>
+        </div>
+      )}
+
       {/* Loading Overlay - only covers content area, header above is still clickable */}
       {loading && (
         <div className="absolute inset-0 z-[9999] bg-white/70 backdrop-blur-sm flex items-center justify-center">
@@ -3100,32 +3280,29 @@ async function fetchData() {
         </div>
       )}
 
+      {/* 待定页（占位，等待后续功能） */}
+      {activeModule === "pending" && (
+        <div className="content-wrapper px-2 min-w-0 py-3">
+          <div className="rounded-xl border border-black/10 bg-white/85 p-10 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
+            <div className="text-4xl mb-3">🚧</div>
+            <div className="text-sm text-black/60">新功能筹备中，敬请期待</div>
+          </div>
+        </div>
+      )}
+
       </div> {/* End of scrollable content area */}
 
-      {/* Bottom Navigation - fixed at bottom */}
-      <nav className="fixed bottom-0 left-0 right-0 mx-auto w-full max-w-4xl flex items-center justify-around px-4 py-1.5 bg-[#e8e8e8] rounded-t-xl border-t border-black/10 z-50">
-        {([
-          { key: "revenue", label: "粉丝消费", icon: "📊" },
-          { key: "anchor", label: "主播数据", icon: "📈" },
-          { key: "screenshot", label: "其他工具", icon: "🧰" },
-        ] as const).map((mod) => (
-          <button
-            key={mod.key}
-            onClick={() => {
-              setActiveModule(mod.key);
-              if (mod.key !== "screenshot") setToolsPage("home");
-            }}
-            className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg transition min-w-0 ${
-              activeModule === mod.key
-                ? "text-[#1f1c17]"
-                : "text-black/40 hover:text-black/70"
-            }`}
-          >
-            <span className="text-lg leading-none">{mod.icon}</span>
-            <span className={`text-[10px] leading-none ${activeModule === mod.key ? "font-semibold" : ""}`}>{mod.label}</span>
-          </button>
-        ))}
-      </nav>
+      {/* iOS 苹果风格悬浮底部托盘导航栏 */}
+      <BottomDock
+        tabs={[
+          { key: "fans", label: "粉丝" },
+          { key: "anchor", label: "主播" },
+          { key: "pending", label: "待定" },
+          { key: "help", label: "帮助" },
+        ]}
+        activeKey={dockTab}
+        onChange={handleDockChange}
+      />
 
       {/* 欧皇/非酋认证弹窗 */}
       {showCertModal && certifications.length > 0 && (

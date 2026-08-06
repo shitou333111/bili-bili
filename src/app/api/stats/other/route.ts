@@ -3,6 +3,7 @@ import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/ses
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { readPayRecords, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds } from "@/lib/user-data";
 import { fetchTianxuanGiftList, fetchRedPocketGiftList } from "@/lib/bilibili/gift-api";
+import { isOffline } from "@/lib/offline";
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
@@ -182,35 +183,30 @@ export async function GET(request: Request) {
     );
   }
 
-  const credentialResult = await ensureValidCredential(session);
-  if (!credentialResult.valid) {
-    return NextResponse.json<ApiResponse<null>>(
-      { code: 401, message: "needs-relogin", data: null },
-      { status: 401 },
-    );
+  const offline = isOffline(url);
+
+  // 离线模式：跳过 B 站凭证校验与天选/红包列表抓取，直接基于本地缓存计算
+  if (!offline) {
+    const credentialResult = await ensureValidCredential(session);
+    if (!credentialResult.valid) {
+      return NextResponse.json<ApiResponse<null>>(
+        { code: 401, message: "needs-relogin", data: null },
+        { status: 401 },
+      );
+    }
   }
 
   try {
-    const biliCookie = credentialResult.cookie;
-
-    // 获取天选和红包礼物ID列表
+    // 获取天选和红包礼物ID列表（离线时跳过 B 站抓取，仅用本地累积的 ID）
     let tianxuanGiftIds: number[] = [];
-    try {
-      const tianxuanGifts = await fetchTianxuanGiftList(biliCookie);
-      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(tianxuanGifts.map(g => g.id));
-    } catch (err) {
-      console.error("[OtherStats] 获取天选礼物列表失败:", err);
-    }
+    const tianxuanGifts = offline ? [] : await fetchTianxuanGiftList("").catch(() => []);
+    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(tianxuanGifts.map(g => g.id));
 
     let redPocketGiftIds: number[] = [];
-    try {
-      const redPocketGifts = await fetchRedPocketGiftList(biliCookie);
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(redPocketGifts.map(g => g.id));
-    } catch (err) {
-      console.error("[OtherStats] 获取红包礼物列表失败:", err);
-    }
+    const redPocketGifts = offline ? [] : await fetchRedPocketGiftList("").catch(() => []);
+    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(redPocketGifts.map(g => g.id));
 
-    const records = await readPayRecords(credentialResult.session.mid, credentialResult.session.uname || "");
+    const records = await readPayRecords(session.mid, session.uname || "");
 
     if (records.length === 0) {
       return NextResponse.json<ApiResponse<OtherStatsResponse>>(
@@ -271,24 +267,35 @@ export async function GET(request: Request) {
     };
 
     // 3. 每个主播的送礼天数统计
-    const roomMap = new Map<number, { rname: string; dateSet: Set<string> }>();
+    const roomMap = new Map<number, { rname: string; dateSet: Set<string>; allTianxuan: boolean }>();
     for (const r of allRecords) {
+      // 天选礼物：主播给自己发的红包，r_uname 通常为空，需特殊命名
+      const isTianxuan = tianxuanGiftIds.includes(r.gift_id);
       const existing = roomMap.get(r.ruid);
       if (existing) {
+        // 优先使用非空的真实主播名
+        if (!existing.rname && r.r_uname) existing.rname = r.r_uname;
+        // 只要存在非天选记录，就不是"给自己发天选"
+        if (!isTianxuan) existing.allTianxuan = false;
         existing.dateSet.add(getDateStr(r.timestamp));
       } else {
-        roomMap.set(r.ruid, { rname: r.r_uname, dateSet: new Set([getDateStr(r.timestamp)]) });
+        roomMap.set(r.ruid, {
+          rname: r.r_uname,
+          dateSet: new Set([getDateStr(r.timestamp)]),
+          allTianxuan: isTianxuan,
+        });
       }
     }
 
     const roomStats: RoomStat[] = [];
-    for (const [ruid, { rname, dateSet }] of roomMap) {
+    for (const [ruid, { rname, dateSet, allTianxuan }] of roomMap) {
       const sortedDates = Array.from(dateSet).sort();
       const consecutive = calcMaxConsecutive(sortedDates);
       const yearMax = calcMaxDaysInYear(sortedDates);
+      const resolvedName = rname || (allTianxuan ? "给自己发天选" : `主播${ruid}`);
       roomStats.push({
         ruid,
-        rname,
+        rname: resolvedName,
         totalDays: sortedDates.length,
         maxConsecutiveDays: consecutive.max,
         maxConsecutiveStart: consecutive.start,

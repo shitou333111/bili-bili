@@ -1,5 +1,5 @@
 import { promises as fs, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
-import { renameSync } from "fs";
+import { renameSync, unlinkSync } from "fs";
 import path from "path";
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { CardFlipRawRecord } from "@/lib/bilibili/gift-api";
@@ -31,6 +31,21 @@ export type SynthesisProfitResult = {
   successCount: number;
   giftList?: SynthesisGiftInfo[];
   detailedRecords?: SynthesisDetailedRecord[];
+  /** 按主播维度的历史合成盈亏统计（仅历史总盈亏卡片使用） */
+  anchorStats?: SynthesisAnchorProfitInfo[];
+};
+
+export type SynthesisAnchorProfitInfo = {
+  ruid: number;
+  rname: string;
+  /** 合成功数（不区分价值，即合成产物的 gift_num 总和） */
+  count: number;
+  /** 价值（合成产物总价） */
+  value: number;
+  /** 花费（合成材料总价） */
+  spent: number;
+  /** 盈亏 = 价值 - 花费 */
+  profit: number;
 };
 
 export type SynthesisGiftInfo = {
@@ -745,8 +760,13 @@ export function calculateSynthesisCertifications(
 }
 
 /**
- * 计算历史合成活动盈亏（从消费记录中统计）
- * 逻辑：
+ * 计算历史合成活动盈亏（从消费记录中统计，按主播/直播间独立累计）
+ *
+ * 历史总盈亏覆盖所有合成活动（消费记录是全量的），而页面上方列举的活动只是其中几个，
+ * 因此历史统计必须基于消费记录。同时，每个主播的花费与收益在其各自直播间内独立累计，
+ * 避免跨直播间混算导致"0 礼物但有花费"或"有礼物但无花费"的误统计。
+ *
+ * 逻辑（与之前一致，仅增加按主播维度聚合）：
  * - 花费 = gift_id === 1 的记录总价（合成材料，1电池），排除已退回
  * - 收益 = bag_desc === "包裹道具" 且排除天选礼物和红包礼物的记录总价（合成产物）
  */
@@ -768,11 +788,11 @@ export function calcHistoricalSynthesisProfit(
 
   for (const record of records) {
     const coins = Number((record.pay_coin || record.coin || "0").replace(/,/g, ""));
-    
+
     if (record.status_msg === "已退回") {
       continue;
     }
-    
+
     if (record.gift_id === 1) {
       totalSpent += coins;
       drawCount += record.gift_num;
@@ -837,36 +857,47 @@ export function calcHistoricalSynthesisProfit(
     });
   }
 
+  // 按主播/直播间独立累计（花费=合成材料，价值=合成产物）
+  const anchorMap = new Map<number, SynthesisAnchorProfitInfo>();
+  for (const r of spentRecords) {
+    const cur = anchorMap.get(r.ruid) || {
+      ruid: r.ruid,
+      rname: r.r_uname || "",
+      count: 0,
+      value: 0,
+      spent: 0,
+      profit: 0,
+    };
+    cur.spent += Number((r.pay_coin || r.coin || "0").replace(/,/g, ""));
+    if (r.r_uname) cur.rname = cur.rname || r.r_uname;
+    anchorMap.set(r.ruid, cur);
+  }
+  for (const r of earnedRecords) {
+    const coins = Number((r.pay_coin || r.coin || "0").replace(/,/g, ""));
+    const cur = anchorMap.get(r.ruid) || {
+      ruid: r.ruid,
+      rname: r.r_uname || "",
+      count: 0,
+      value: 0,
+      spent: 0,
+      profit: 0,
+    };
+    cur.value += coins;
+    cur.count += r.gift_num;
+    if (r.r_uname) cur.rname = cur.rname || r.r_uname;
+    anchorMap.set(r.ruid, cur);
+  }
+  for (const info of anchorMap.values()) {
+    info.profit = info.value - info.spent;
+  }
+  const anchorStats = Array.from(anchorMap.values()).sort((a, b) => b.value - a.value);
+
   const giftList = Array.from(giftMap.values());
 
   console.log(`[calcHistoricalSynthesisProfit] 总记录数: ${records.length}`);
   console.log(`[calcHistoricalSynthesisProfit] 花费记录数: ${spentRecords.length}, 总花费: ${totalSpent}`);
   console.log(`[calcHistoricalSynthesisProfit] 收益记录数: ${earnedRecords.length}, 总收益: ${totalEarned}`);
-  console.log(`[calcHistoricalSynthesisProfit] 礼物种类: ${giftList.length}, 详细记录: ${detailedRecords.length}`);
-  console.log(`[calcHistoricalSynthesisProfit] 天选礼物ID列表(${tianxuanGiftIds.length}):`, tianxuanGiftIds);
-  console.log(`[calcHistoricalSynthesisProfit] 红包礼物ID列表(${redPocketGiftIds.length}):`, redPocketGiftIds);
-  console.log(`[calcHistoricalSynthesisProfit] 合并排除列表(${excludedGiftIds.size}):`, [...excludedGiftIds]);
-  
-  // 诊断：输出所有 bag_desc==="包裹道具" 的记录分类
-  const allPackageRecords = records.filter(r => r.bag_desc === "包裹道具" && r.status_msg !== "已退回");
-  const excludedRecords = allPackageRecords.filter(r => excludedGiftIds.has(r.gift_id));
-  const includedRecords = allPackageRecords.filter(r => !excludedGiftIds.has(r.gift_id));
-  console.log(`[calcHistoricalSynthesisProfit] 所有包裹道具记录: ${allPackageRecords.length}, 被排除(天选+红包): ${excludedRecords.length}, 计入合成: ${includedRecords.length}`);
-  
-  if (excludedRecords.length > 0) {
-    console.log(`[calcHistoricalSynthesisProfit] 被排除的包裹道具详情:`);
-    for (const r of excludedRecords.slice(0, 10)) {
-      console.log(`  ${r.gift_name}(id:${r.gift_id}, inTianxuan:${tianxuanGiftIds.includes(r.gift_id)}, inRedPocket:${redPocketGiftIds.includes(r.gift_id)})`);
-    }
-  }
-  
-  if (earnedRecords.length > 0) {
-    console.log(`[calcHistoricalSynthesisProfit] 前10条收益记录示例:`);
-    for (let i = 0; i < Math.min(10, earnedRecords.length); i++) {
-      const r = earnedRecords[i];
-      console.log(`  - ${r.gift_name} (id:${r.gift_id}, coin_type:${r.coin_type || "(空)"}, bag_desc:${r.bag_desc}, coins:${r.pay_coin || r.coin}, num:${r.gift_num})`);
-    }
-  }
+  console.log(`[calcHistoricalSynthesisProfit] 礼物种类: ${giftList.length}, 详细记录: ${detailedRecords.length}, 主播数: ${anchorStats.length}`);
 
   return {
     totalSpent,
@@ -878,6 +909,7 @@ export function calcHistoricalSynthesisProfit(
     successCount: synthesisCount,
     giftList,
     detailedRecords,
+    anchorStats,
   };
 }
 
@@ -904,6 +936,11 @@ export function loadGiftDb(): GiftDb {
   try {
     if (existsSync(GIFT_DB_PATH)) {
       const raw = readFileSync(GIFT_DB_PATH, "utf-8");
+      if (!raw.trim()) {
+        // 文件为空（可能是之前写入被中断），返回默认值
+        console.warn("[GiftDB] gift-db.json 为空，使用默认值");
+        return { gifts: {} };
+      }
       return JSON.parse(raw);
     }
   } catch (e) {
@@ -921,7 +958,21 @@ export function saveGiftDb(db: GiftDb): void {
     // 原子写入：先写临时文件，再重命名，避免并发写入导致 JSON 截断
     const tmpPath = GIFT_DB_PATH + ".tmp";
     writeFileSync(tmpPath, JSON.stringify(db, null, 2), "utf-8");
-    renameSync(tmpPath, GIFT_DB_PATH);
+    try {
+      renameSync(tmpPath, GIFT_DB_PATH);
+    } catch {
+      // Windows 上 rename 可能因文件锁定失败，先删除目标再重试
+      try {
+        if (existsSync(GIFT_DB_PATH)) {
+          unlinkSync(GIFT_DB_PATH);
+        }
+        renameSync(tmpPath, GIFT_DB_PATH);
+      } catch {
+        // 最终 fallback：直接覆盖写入
+        writeFileSync(GIFT_DB_PATH, JSON.stringify(db, null, 2), "utf-8");
+        try { unlinkSync(tmpPath); } catch { /* 忽略清理失败 */ }
+      }
+    }
   } catch (e) {
     console.error("[GiftDB] 保存 gift-db.json 失败:", e);
   }

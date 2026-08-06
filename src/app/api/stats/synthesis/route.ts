@@ -3,10 +3,10 @@ import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/ses
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchSynthesisActivityInfo, fetchSynthesisActivityRecords, fetchTianxuanGiftList, fetchRedPocketGiftList, getUserNameByUid } from "@/lib/bilibili/gift-api";
 import {
-  calcHistoricalSynthesisProfit,
   getSynthesisCalculator,
   calculateSynthesisCertifications,
   calculateCardFlipCertifications,
+  calcHistoricalSynthesisProfit,
   type SynthesisProfitResult,
   type SynthesisActivityProfitResult,
   type SynthesisGiftInfo,
@@ -14,9 +14,10 @@ import {
   type SynthesisCertification,
   type SynthesisActivityStats,
 } from "@/lib/gift-db";
-import { readPayRecords, saveSynthesisRecords, getSynthesisActivityInfo, saveSynthesisActivityInfo, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds, getCardFlipGiftImages, getCardFlipGiftImage, saveCardFlipGiftImage } from "@/lib/user-data";
+import { readPayRecords, readSynthesisRecords, saveSynthesisRecords, getSynthesisActivityInfo, saveSynthesisActivityInfo, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds, getCardFlipGiftImages, getCardFlipGiftImage, saveCardFlipGiftImage } from "@/lib/user-data";
 import { SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
 import { getEffectiveSynthesisConfig } from "@/lib/config-override";
+import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -250,46 +251,66 @@ export async function GET(request: Request) {
   }
 
   console.log("[SynthesisStats] 验证凭证...");
-  const credentialResult = await ensureValidCredential(session);
-  console.log("[SynthesisStats] 凭证验证结果:", credentialResult.valid ? "有效" : "失效");
-  if (!credentialResult.valid) {
-    return NextResponse.json<ApiResponse<null>>(
-      { code: 401, message: "needs-relogin", data: null },
-      { status: 401 },
-    );
+  const offline = isOffline(url);
+  let onlineCookie = "";
+  if (!offline) {
+    const credentialResult = await ensureValidCredential(session);
+    console.log("[SynthesisStats] 凭证验证结果:", credentialResult.valid ? "有效" : "失效");
+    if (!credentialResult.valid) {
+      return NextResponse.json<ApiResponse<null>>(
+        { code: 401, message: "needs-relogin", data: null },
+        { status: 401 },
+      );
+    }
+    onlineCookie = credentialResult.cookie;
   }
 
-  const validSession = credentialResult.session;
+  const validSession = session;
 
   try {
-    const biliCookie = credentialResult.cookie;
+    const biliCookie = onlineCookie;
     console.log("[SynthesisStats] 开始获取数据...");
 
     let tianxuanGiftIds: number[] = [];
     let tianxuanGiftList: { id: number; name: string }[] = [];
-    try {
-      const tianxuanGifts = await fetchTianxuanGiftList(biliCookie);
-      const currentIds = tianxuanGifts.map(g => g.id);
-      tianxuanGiftList = tianxuanGifts.map(g => ({ id: g.id, name: g.name }));
-      // 合并当前 API 返回 + 历史累积的天选礼物 ID，防止历史天选礼物漏过滤
-      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(currentIds);
-    } catch (err) {
-      console.error("[SynthesisStats] 获取天选礼物列表失败:", err);
+    if (offline) {
+      // 离线模式：仅用本地累积的天选礼物 ID
+      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds([]);
+    } else {
+      try {
+        const tianxuanGifts = await fetchTianxuanGiftList(biliCookie);
+        const currentIds = tianxuanGifts.map(g => g.id);
+        tianxuanGiftList = tianxuanGifts.map(g => ({ id: g.id, name: g.name }));
+        tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(currentIds);
+      } catch (err) {
+        console.error("[SynthesisStats] 获取天选礼物列表失败:", err);
+      }
     }
 
     let redPocketGiftIds: number[] = [];
     let redPocketGiftList: { id: number; name: string }[] = [];
-    try {
-      const redPocketGifts = await fetchRedPocketGiftList(biliCookie);
-      const currentRedPocketIds = redPocketGifts.map(g => g.id);
-      redPocketGiftList = redPocketGifts.map(g => ({ id: g.id, name: g.name }));
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(currentRedPocketIds);
-    } catch (err) {
-      console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
+    if (offline) {
+      // 离线模式：仅用本地累积的红包礼物 ID
+      redPocketGiftIds = await getAccumulatedRedPocketGiftIds([]);
+    } else {
+      try {
+        const redPocketGifts = await fetchRedPocketGiftList(biliCookie);
+        const currentRedPocketIds = redPocketGifts.map(g => g.id);
+        redPocketGiftList = redPocketGifts.map(g => ({ id: g.id, name: g.name }));
+        redPocketGiftIds = await getAccumulatedRedPocketGiftIds(currentRedPocketIds);
+      } catch (err) {
+        console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
+      }
     }
 
+    // 历史总盈亏：基于消费记录(pay-records)按主播/直播间独立累计。
+    // 消费记录是全量的（覆盖所有合成活动），而页面上方列出的活动只是其中几个，不全，
+    // 因此历史统计从消费记录计算（见下方 calcHistoricalSynthesisProfit），
+    // 而不是由少量活动结果累加得到。声明在活动处理完后赋值。
+    let historical: SynthesisProfitResult;
+
+    // 付费记录用于构建 ruid → r_uname 名称映射（B站API已认证，比 getUserNameByUid 更可靠）
     const records = await readPayRecords(validSession.mid, validSession.uname || "");
-    const historical = calcHistoricalSynthesisProfit(records, tianxuanGiftIds, redPocketGiftIds);
 
     const activities: SynthesisActivityStats[] = [];
     const effectiveSynthConfig = await getEffectiveSynthesisConfig();
@@ -304,29 +325,40 @@ export async function GET(request: Request) {
 
         console.log(`[SynthesisStats] 获取活动信息: ${activity.info_url}`);
         let info = null;
-        try {
+        if (offline) {
+          // 离线模式：仅用本地缓存的活动信息
           info = await getSynthesisActivityInfo(activity.id);
-          if (info && info.name && (activity.type !== "material_package" || info.resource)) {
-            console.log(`[SynthesisStats] 从缓存读取活动信息:`, info);
-          } else {
-            info = await fetchSynthesisActivityInfo(biliCookie, activity);
-            console.log(`[SynthesisStats] 从API获取活动信息:`, info);
-            if (info && info.name) {
-              await saveSynthesisActivityInfo(activity.id, info);
+        } else {
+          try {
+            info = await getSynthesisActivityInfo(activity.id);
+            if (info && info.name && (activity.type !== "material_package" || info.resource)) {
+              console.log(`[SynthesisStats] 从缓存读取活动信息:`, info);
+            } else {
+              info = await fetchSynthesisActivityInfo(biliCookie, activity);
+              console.log(`[SynthesisStats] 从API获取活动信息:`, info);
+              if (info && info.name) {
+                await saveSynthesisActivityInfo(activity.id, info);
+              }
             }
+          } catch (infoErr) {
+            console.warn(`[SynthesisStats] 获取活动信息失败（活动可能已结束）:`, infoErr);
           }
-        } catch (infoErr) {
-          console.warn(`[SynthesisStats] 获取活动信息失败（活动可能已结束）:`, infoErr);
         }
 
         console.log(`[SynthesisStats] 获取活动记录: ${activity.record_url}`);
         let rawRecords: any[] = [];
-        try {
-          rawRecords = await fetchSynthesisActivityRecords(biliCookie, activity);
-          console.log(`[SynthesisStats] 活动记录数量:`, rawRecords.length);
-          await saveSynthesisRecords(validSession.mid, validSession.uname || "", activity.id, rawRecords, info?.name);
-        } catch (recordErr) {
-          console.warn(`[SynthesisStats] 获取活动记录失败:`, recordErr);
+        if (offline) {
+          // 离线模式：仅用本地缓存的活动记录
+          rawRecords = await readSynthesisRecords(validSession.mid, validSession.uname || "", activity.id);
+          console.log(`[SynthesisStats] 离线模式，读取本地活动记录:`, rawRecords.length);
+        } else {
+          try {
+            rawRecords = await fetchSynthesisActivityRecords(biliCookie, activity);
+            console.log(`[SynthesisStats] 活动记录数量:`, rawRecords.length);
+            await saveSynthesisRecords(validSession.mid, validSession.uname || "", activity.id, rawRecords, info?.name);
+          } catch (recordErr) {
+            console.warn(`[SynthesisStats] 获取活动记录失败:`, recordErr);
+          }
         }
 
         // card_flip 类型需要注入礼物图片缓存，因为 info_url 为空，活动信息中不包含礼物图片
@@ -367,7 +399,7 @@ export async function GET(request: Request) {
         }
         
         const namePromises = Array.from(uniqueRuids).map(async (ruid) => {
-          const name = await getUserNameByUid(ruid);
+          const name = await getUserNameByUid(ruid, validSession.mid, validSession.uname || "").catch(() => "");
           return { ruid, name };
         });
         
@@ -460,6 +492,35 @@ export async function GET(request: Request) {
     }
 
     console.log(`[SynthesisStats] 共获取 ${activities.length} 个活动数据`);
+
+    // 历史总盈亏：基于消费记录(pay-records)按主播/直播间独立累计。
+    // 消费记录是全量的（覆盖所有合成活动），而页面上方列出的活动只是其中几个，不全，
+    // 因此历史统计必须从消费记录计算，而不是由少量活动结果累加得到。
+    historical = calcHistoricalSynthesisProfit(records, tianxuanGiftIds, redPocketGiftIds);
+
+    // 补偿历史各主播的昵称（优先用付费记录 r_uname，其次 B站API 查询结果）
+    if (historical.anchorStats) {
+      const payRecordNameMap = new Map<number, string>();
+      for (const payRecord of records) {
+        if (payRecord.r_uname && !payRecordNameMap.has(payRecord.ruid)) {
+          payRecordNameMap.set(payRecord.ruid, payRecord.r_uname);
+        }
+      }
+      const anchorRuids = Array.from(new Set(historical.anchorStats.map(a => a.ruid)));
+      const nameResults = await Promise.all(anchorRuids.map(async (ruid) => {
+        const name = await getUserNameByUid(ruid, validSession.mid, validSession.uname || "").catch(() => "");
+        return { ruid, name };
+      }));
+      const nameMap = new Map<number, string>();
+      for (const { ruid, name } of nameResults) nameMap.set(ruid, name);
+      for (const info of historical.anchorStats) {
+        if (info.rname) continue;
+        const nameMapVal = nameMap.get(info.ruid);
+        const payName = payRecordNameMap.get(info.ruid);
+        const validNameMapVal = (nameMapVal && !nameMapVal.startsWith("主播")) ? nameMapVal : undefined;
+        info.rname = payName || validNameMapVal || nameMapVal || `主播${info.ruid}`;
+      }
+    }
 
     const data: SynthesisStatsResponse = { historical, activities, tianxuanGifts: tianxuanGiftList, redPocketGifts: redPocketGiftList };
 
