@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import ExternalLinkHandler from "@/components/ExternalLinkHandler";
+import SafeAreaStyler from "@/components/SafeAreaStyler";
+import ToastHost from "@/components/ToastHost";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -40,6 +42,8 @@ export default function RootLayout({
       >
       <body className="min-h-full flex flex-col">
         <ExternalLinkHandler />
+        <SafeAreaStyler />
+        <ToastHost />
         {children}
       </body>
     </html>

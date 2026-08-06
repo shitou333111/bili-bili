@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
+import { showToast } from "@/lib/toast";
+import { saveMobileOrDownload } from "@/lib/save-image";
 
 // ==================== 类型定义 ====================
 
@@ -1541,10 +1543,14 @@ export default function GiftScreenshotPanel({
       await renderCard();
 
       if (isMobileDevice()) {
-        // 移动端：生成 dataURL 显示弹窗，供用户长按保存
+        // 移动端：直接保存到相册（系统分享面板）
         const url = canvas.toDataURL("image/png");
-        setPreviewUrl(url);
-        setShowDownloadModal(true);
+        const res = await saveMobileOrDownload(url, `gift_screenshot_${Date.now()}.png`);
+        // 分享被取消/不可用时，展示预览供长按保存，避免误以为已保存
+        if (res === "fallback") {
+          setPreviewUrl(url);
+          setShowDownloadModal(true);
+        }
       } else {
         canvas.toBlob(blob => {
           if (!blob) return;
@@ -1554,6 +1560,7 @@ export default function GiftScreenshotPanel({
           a.download = `gift_screenshot_${Date.now()}.png`;
           a.click();
           URL.revokeObjectURL(url);
+          setShowToast("图片已保存");
         }, "image/png");
       }
     } catch (err) {

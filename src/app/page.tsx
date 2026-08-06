@@ -14,6 +14,9 @@ import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
+import PieTooltip from "@/components/PieTooltip";
+import { showToast } from "@/lib/toast";
+import { saveMobileOrDownload } from "@/lib/save-image";
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts * 1000);
@@ -299,14 +302,8 @@ function GiftSaveModal({
 
   async function downloadImage() {
     if (!generatedImage) return;
-    try {
-      const link = document.createElement("a");
-      link.download = `gift_list_${Date.now()}.png`;
-      link.href = generatedImage;
-      link.click();
-    } catch (err) {
-      console.error("下载图片失败:", err);
-    }
+    const res = await saveMobileOrDownload(generatedImage, `gift_list_${Date.now()}.png`);
+    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
   }
 
   return (
@@ -351,23 +348,16 @@ function GiftSaveModal({
         {/* 图片内容 */}
         {!loading && generatedImage && (
           <>
-            {/* 上方提示 */}
-            {isMobileDevice() && (
-              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
-            )}
-
             <img src={generatedImage} alt="礼物清单" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl mx-auto" />
 
             {/* 下方按钮区域 */}
             <div className="flex gap-2.5 mt-3 w-full justify-center">
-              {!isMobileDevice() && (
-                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  下载图片
-                </button>
-              )}
+              <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                {isMobileDevice() ? "保存到相册" : "下载图片"}
+              </button>
               <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
@@ -428,14 +418,8 @@ function CertificationModal({
 
   async function downloadImage() {
     if (!generatedImage) return;
-    try {
-      const link = document.createElement("a");
-      link.download = `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`;
-      link.href = generatedImage;
-      link.click();
-    } catch (err) {
-      console.error("下载图片失败:", err);
-    }
+    const res = await saveMobileOrDownload(generatedImage, `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`);
+    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
   }
 
   function goPrev() {
@@ -681,14 +665,8 @@ function CastleStatModal({
 
   async function downloadImage() {
     if (!generatedImage) return;
-    try {
-      const link = document.createElement("a");
-      link.download = `castle_stat_${castleStat.rname}_${Date.now()}.png`;
-      link.href = generatedImage;
-      link.click();
-    } catch (err) {
-      console.error("下载图片失败:", err);
-    }
+    const res = await saveMobileOrDownload(generatedImage, `castle_stat_${castleStat.rname}_${Date.now()}.png`);
+    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
   }
 
   const maxDayCount = Math.max(...castleStat.dates.map((d) => d.count));
@@ -828,30 +806,28 @@ export default function HomePage() {
     return !!localStorage.getItem("bili_live_admin_used");
   });
 
-  // 后台静默登录 admin：有已保存的账号密码则直接向服务器验证，无需弹窗；失败才弹窗
+  // 后台静默登录 admin：有已保存的密码则直接向服务器验证，无需弹窗；失败才弹窗
   function attemptAdminLogin() {
     const cred = localStorage.getItem("bili_live_admin_cred");
     if (cred) {
-      const [username, password] = (() => {
+      const password = (() => {
         try {
-          const d = atob(cred);
-          const i = d.indexOf(":");
-          return [d.slice(0, i), d.slice(i + 1)];
+          return atob(cred);
         } catch {
-          return ["", ""];
+          return "";
         }
       })();
       fetch(serverApiUrl("/api/admin/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ password }),
       })
         .then(async (res) => {
           if (res.ok) {
             // 静默登录成功，直接进入 admin，不显示登录框
             window.location.href = serverApiUrl("/admin");
           } else {
-            // 服务器信息已变更等原因导致自动登录失败，弹出模态框重新输入
+            // 密码已变更等原因导致自动登录失败，弹出模态框重新输入
             localStorage.removeItem("bili_live_admin_cred");
             setShowAdminPwd(true);
             setAdminPwdError(true);
@@ -862,7 +838,7 @@ export default function HomePage() {
           setAdminPwdError(true);
         });
     } else {
-      // 首次使用，无已保存账号密码，弹出模态框输入
+      // 首次使用，无已保存密码，弹出模态框输入
       setShowAdminPwd(true);
       setAdminPwdError(false);
     }
@@ -872,11 +848,11 @@ export default function HomePage() {
     const res = await fetch(serverApiUrl("/api/admin/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: adminPwd }),
+      body: JSON.stringify({ password: adminPwd }),
     });
     if (res.ok) {
-      // 记住账号密码，下次自动静默登录
-      localStorage.setItem("bili_live_admin_cred", btoa(`admin:${adminPwd}`));
+      // 记住密码，下次自动静默登录
+      localStorage.setItem("bili_live_admin_cred", btoa(adminPwd));
       localStorage.setItem("bili_live_admin_used", "1");
       setAdminUsed(true);
       setShowAdminPwd(false);
@@ -1005,6 +981,8 @@ async function fetchData() {
       const statusData = await statusRes.json();
       if (statusData.data?.loggedIn && statusData.data?.sid) {
         setApiLoggedIn(true);
+        // 同步 localStorage，确保 admin 页据此标记当前激活用户
+        localStorage.setItem("bili_live_sid", statusData.data.sid);
         setCurrentAccount(accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data?.sid) || null);
         setIsMockMode(false);
       } else if (statusData.data?.expired) {
@@ -1427,6 +1405,8 @@ async function fetchData() {
       });
       const data = await res.json();
       if (data.code === 0) {
+        // 同步 localStorage，确保 admin 页依据最新 sid 标记当前激活用户
+        localStorage.setItem("bili_live_sid", sid);
         await fetchData();
       }
     } catch (error) {
@@ -1727,9 +1707,9 @@ async function fetchData() {
     : "pending";
 
   return (
-    <main className="h-screen flex flex-col bg-[#f5f5f5] text-[#1f1c17]">
+    <main className="page-main flex flex-col min-h-0 bg-[#f5f5f5] text-[#1f1c17]">
       {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
-      <div className="flex-1 overflow-y-auto relative pb-24" style={{ overscrollBehavior: "none" }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative pb-24" style={{ overscrollBehavior: "none" }}>
 
       {/* Offline banner */}
       {!isOnline && (
@@ -1751,20 +1731,22 @@ async function fetchData() {
         </div>
       )}
 
-      {/* Loading state (only for revenue module) */}
-      {activeModule === "revenue" && !snapshot && (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-sm text-black/45">加载中...</p>
-            <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
+      {/* Revenue module - 保持挂载，切换模块时仅切换 display，避免重新绘制图表/卡顿 */}
+      <div className="min-h-full flex flex-col" style={{ display: activeModule === "revenue" ? "flex" : "none" }}>
+        {/* Loading state (only for revenue module) */}
+        {!snapshot && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-sm text-black/45">加载中...</p>
+              <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Content - Revenue module */}
-      {activeModule === "revenue" && snapshot && (
-        <div className="content-wrapper px-2 min-w-0 py-3">
+        {/* Content - Revenue module */}
+        {snapshot && (
+          <div className="content-wrapper px-2 min-w-0 py-3">
           {/* L3 Tab bar - segmented control, sticky at top, 整体居中 */}
             <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
               {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
@@ -1788,7 +1770,7 @@ async function fetchData() {
                 <button
                   onClick={refreshData}
                   disabled={loading}
-                  className="refresh-btn-arc relative flex items-center justify-center h-[38px] w-[38px]"
+                  className="refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px]"
                 >
                   {lastRefreshTime ? (
                     <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
@@ -1863,7 +1845,8 @@ async function fetchData() {
                         <a
                           href="/api/export/json"
                           download
-                          className="rounded-full border border-[#1f1c17] px-3 py-0.5 text-xs font-medium text-[#1f1c17] transition hover:bg-black/5"
+                          onClick={() => showToast("JSON 已开始下载")}
+                          className="rounded-full border border-[#1f1c17] px-3 py-0.5 text-xs font-medium text-[#1f1c17] transition hover:bg-black/5 active:scale-95"
                         >
                           下载全部数据
                         </a>
@@ -1919,7 +1902,7 @@ async function fetchData() {
                                       return null;
                                     }}
                                   />
-                                  <Bar dataKey="coins" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer"
+                                  <Bar dataKey="coins" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer" isAnimationActive={false}
                                     onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                     label={(props: any) => {
                                       const { x, y, width, value, index } = props;
@@ -2003,17 +1986,17 @@ async function fetchData() {
                         const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
                         const TOP_N = 20;
                         const buildPieData = (anchors: Array<{ ruid: number; rname: string; coins: number }>) => {
-                          const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string }> = [];
+                          const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string; battery: number }> = [];
                           let otherCoins = 0;
                           for (let i = 0; i < anchors.length; i++) {
                             if (i < TOP_N) {
-                              result.push({ rname: anchors[i].rname, coins: anchors[i].coins, ruid: anchors[i].ruid, fill: pieColors[i % pieColors.length] });
+                              result.push({ rname: anchors[i].rname, coins: anchors[i].coins, ruid: anchors[i].ruid, fill: pieColors[i % pieColors.length], battery: anchors[i].coins });
                             } else {
                               otherCoins += anchors[i].coins;
                             }
                           }
                           if (otherCoins > 0) {
-                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8" });
+                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8", battery: otherCoins });
                           }
                           return result;
                         };
@@ -2032,6 +2015,7 @@ async function fetchData() {
                                     cy="50%"
                                     outerRadius="95%"
                                     paddingAngle={0}
+                                    isAnimationActive={false}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                     onClick={(data: any, index: number) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
@@ -2054,9 +2038,7 @@ async function fetchData() {
                                     ))}
                                   </Pie>
                                   <Tooltip
-                                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    formatter={((value: number, name: string) => [`${value} 电池`, name]) as any}
-                                    contentStyle={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff" }}
+                                    content={<PieTooltip />}
                                   />
                                 </PieChart>
                               </ResponsiveContainer>
@@ -2070,17 +2052,17 @@ async function fetchData() {
                         const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
                         const TOP_N = 20;
                         const buildPieData = (anchors: Array<{ ruid: number; rname: string; coins: number }>) => {
-                          const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string }> = [];
+                          const result: Array<{ rname: string; coins: number; ruid: number | null; fill: string; battery: number }> = [];
                           let otherCoins = 0;
                           for (let i = 0; i < anchors.length; i++) {
                             if (i < TOP_N) {
-                              result.push({ rname: anchors[i].rname, coins: anchors[i].coins, ruid: anchors[i].ruid, fill: pieColors[i % pieColors.length] });
+                              result.push({ rname: anchors[i].rname, coins: anchors[i].coins, ruid: anchors[i].ruid, fill: pieColors[i % pieColors.length], battery: anchors[i].coins });
                             } else {
                               otherCoins += anchors[i].coins;
                             }
                           }
                           if (otherCoins > 0) {
-                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8" });
+                            result.push({ rname: "其他", coins: otherCoins, ruid: null, fill: "#94a3b8", battery: otherCoins });
                           }
                           return result;
                         };
@@ -2102,6 +2084,7 @@ async function fetchData() {
                                     cy="50%"
                                     outerRadius="95%"
                                     paddingAngle={0}
+                                    isAnimationActive={false}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                     onClick={(data: any, index: number) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
@@ -2124,9 +2107,7 @@ async function fetchData() {
                                     ))}
                                   </Pie>
                                   <Tooltip
-                                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    formatter={((value: number, name: string) => [`${value} 电池`, name]) as any}
-                                    contentStyle={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff" }}
+                                    content={<PieTooltip />}
                                   />
                                 </PieChart>
                               </ResponsiveContainer>
@@ -2741,7 +2722,8 @@ async function fetchData() {
             )}
           </section>
         </div>
-      )}
+        )}
+      </div>
 
       {/* 主播数据 - 保持挂载避免切换闪烁 */}
       <div style={{ display: activeModule === "anchor" ? "block" : "none" }}>
@@ -2754,8 +2736,8 @@ async function fetchData() {
         />
       </div>
 
-      {/* B站小工具 */}
-      {activeModule === "screenshot" && (
+      {/* B站小工具 - 保持挂载，仅切换 display */}
+      <div style={{ display: activeModule === "screenshot" ? "block" : "none" }}>
         <div className="content-wrapper px-2 min-w-0 py-3">
           {toolsPage === "home" && (
               <>
@@ -2838,9 +2820,11 @@ async function fetchData() {
                         <span className="ml-auto text-[10px] text-black/30">UID {currentAccount.mid}</span>
                       )}
                     </div>
-                    {/* 账号列表：区域内滚动，显式展示所有账号 */}
-                    <div className="max-h-40 overflow-y-auto space-y-1.5">
-                      {accounts.map((acc) => {
+                    {/* 账号列表：区域内滚动，显式展示所有账号（当前账号已显示在最上方，不再重复列出） */}
+                    <div className="space-y-1.5">
+                      {accounts
+                        .filter((acc) => isMockMode || acc.sid !== currentAccount?.sid)
+                        .map((acc) => {
                         const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
                         return (
                           <button
@@ -3285,7 +3269,7 @@ async function fetchData() {
               </div>
             )}
         </div>
-      )}
+      </div>
 
       {/* 离线轻提示 toast */}
       {offlineToast && (
@@ -3308,15 +3292,15 @@ async function fetchData() {
         </div>
       )}
 
-      {/* 待定页（占位，等待后续功能） */}
-      {activeModule === "pending" && (
+      {/* 待定页（占位，等待后续功能）- 保持挂载 */}
+      <div style={{ display: activeModule === "pending" ? "block" : "none" }}>
         <div className="content-wrapper px-2 min-w-0 py-3">
           <div className="rounded-xl border border-black/10 bg-white/85 p-10 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
             <div className="text-4xl mb-3">🚧</div>
             <div className="text-sm text-black/60">新功能筹备中，敬请期待</div>
           </div>
         </div>
-      )}
+      </div>
 
       </div> {/* End of scrollable content area */}
 

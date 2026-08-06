@@ -38,8 +38,9 @@ async function writeAdminSessions(sessions: AdminSession[]) {
   await fs.writeFile(ADMIN_STATE_FILE, JSON.stringify(sessions, null, 2), "utf8");
 }
 
-export function verifyAdmin(username: string, password: string): boolean {
-  return username === ADMIN_USER && password === ADMIN_PASS;
+export function verifyAdmin(username: string | undefined, password: string): boolean {
+  // 仅校验密码（管理员账号固定为 admin，用户名无需校验）
+  return password === ADMIN_PASS;
 }
 
 export async function createAdminSession(): Promise<string> {

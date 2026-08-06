@@ -4,6 +4,8 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import type { SynthesisActivityStats, SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
+import { showToast } from "@/lib/toast";
+import { saveMobileOrDownload } from "@/lib/save-image";
 
 function formatProfit(profit: number): string {
   if (profit >= 0) return `+${profit}`;
@@ -430,14 +432,8 @@ function CertificationModal({
 
   async function downloadImage() {
     if (!generatedImage) return;
-    try {
-      const link = document.createElement("a");
-      link.download = `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`;
-      link.href = generatedImage;
-      link.click();
-    } catch (err) {
-      console.error("下载图片失败:", err);
-    }
+    const res = await saveMobileOrDownload(generatedImage, `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`);
+    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
   }
 
   function goPrev() {

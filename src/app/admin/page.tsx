@@ -36,7 +36,7 @@ export default function AdminPage() {
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
   // 首次进入时静默校验/自动登录，期间不渲染登录框，避免“弹出后自动消失”的闪烁
   const [checking, setChecking] = useState(true);
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [loginForm, setLoginForm] = useState({ password: "" });
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
 
@@ -107,7 +107,7 @@ export default function AdminPage() {
       const res = await fetch(serverApiUrl("/api/admin/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(loginForm),
+        body: JSON.stringify({ password: loginForm.password }),
       });
       if (res.ok) {
         setAdminLoggedIn(true);
@@ -319,19 +319,13 @@ export default function AdminPage() {
           <h1 className="text-base font-bold text-center mb-4">管理员登录</h1>
           {loginError && <p className="text-xs text-[#e74c3c] mb-2 text-center">{loginError}</p>}
           <input
-            type="text"
-            placeholder="用户名"
-            value={loginForm.username}
-            onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
-            className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm mb-2 focus:outline-none focus:border-black/30"
-          />
-          <input
             type="password"
-            placeholder="密码"
+            placeholder="请输入管理密码"
             value={loginForm.password}
-            onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+            onChange={(e) => setLoginForm({ password: e.target.value })}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
             className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm mb-3 focus:outline-none focus:border-black/30"
+            autoFocus
           />
           <button
             onClick={handleLogin}
@@ -346,7 +340,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f6] py-6 px-4">
+    <div className="min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden">
       <div className="max-w-3xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -374,12 +368,12 @@ export default function AdminPage() {
                 <div key={user.mid} className={`flex items-center gap-3 rounded-lg border p-2.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
                   <img src={fixImageUrl(user.face || "")} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium truncate">{user.uname}</span>
-                      <span className="text-[10px] text-black/30">UID {user.mid}</span>
-                      {user.isCurrent && <span className="text-[10px] px-1 rounded bg-[#00a1d6]/10 text-[#00a1d6]">当前</span>}
+                    <div className="flex items-start gap-1.5">
+                      <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
+                      {user.isCurrent && <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">当前</span>}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="text-[10px] text-black/30 mt-0.5">UID {user.mid}</div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                       <span className="text-[10px] text-black/30">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</span>
                       {user.lastUpload && (
                         <span className="text-[10px] text-[#2ecc71]">
@@ -400,7 +394,7 @@ export default function AdminPage() {
                     )}
                     {!user.isCurrent && (
                       <button
-                        onClick={() => handleImpersonate(user.sid)}
+                        onClick={() => { handleImpersonate(user.sid); window.location.href = "/"; }}
                         className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
                       >
                         切换
@@ -438,27 +432,27 @@ export default function AdminPage() {
               <p className="text-[10px] text-black/40">勾选 = 在页面上展示为当前活动盲盒</p>
               <div className="space-y-2">
                 {/* 心动盲盒 - 固定项，始终勾选，不可更改 */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <input
                     type="checkbox"
                     checked={true}
                     disabled
                     className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0 opacity-50"
                   />
-                  <span className="w-24 text-xs text-black/50">32251</span>
-                  <span className="w-32 text-xs text-black/50">心动盲盒</span>
+                  <span className="w-16 text-xs text-black/50">32251</span>
+                  <span className="w-auto text-xs text-black/50">心动盲盒</span>
                   <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
                 </div>
                 {/* 幸运盲盒 - 固定项，始终勾选，不可更改 */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <input
                     type="checkbox"
                     checked={true}
                     disabled
                     className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0 opacity-50"
                   />
-                  <span className="w-24 text-xs text-black/50">35206</span>
-                  <span className="w-32 text-xs text-black/50">幸运盲盒</span>
+                  <span className="w-16 text-xs text-black/50">35206</span>
+                  <span className="w-auto text-xs text-black/50">幸运盲盒</span>
                   <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
                 </div>
                 {/* 其他盲盒（可配置，支持上移下移排序） */}
@@ -467,60 +461,62 @@ export default function AdminPage() {
                   .map((box, filteredIndex) => {
                     const realIndex = config.blind_boxes.findIndex((b) => b === box);
                     return (
-                  <div key={realIndex} className={`flex items-center gap-2 ${!config.current_activity_blind_box_ids.includes(box.id) ? "opacity-50" : ""}`}>
-                    <div className="flex flex-col shrink-0">
-                      <button
-                        onClick={() => moveBlindBox(filteredIndex, -1)}
-                        disabled={filteredIndex === 0}
-                        className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
-                        title="上移"
-                      >▲</button>
-                      <button
-                        onClick={() => moveBlindBox(filteredIndex, 1)}
-                        disabled={filteredIndex === config.blind_boxes.filter((b) => b.id !== 32251 && b.id !== 35206).length - 1}
-                        className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
-                        title="下移"
-                      >▼</button>
+                  <div key={realIndex} className={`rounded-lg border border-black/10 p-2 space-y-2 ${!config.current_activity_blind_box_ids.includes(box.id) ? "opacity-50" : ""}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex flex-col shrink-0">
+                        <button
+                          onClick={() => moveBlindBox(filteredIndex, -1)}
+                          disabled={filteredIndex === 0}
+                          className="admin-move-btn"
+                          title="上移"
+                        >▲</button>
+                        <button
+                          onClick={() => moveBlindBox(filteredIndex, 1)}
+                          disabled={filteredIndex === config.blind_boxes.filter((b) => b.id !== 32251 && b.id !== 35206).length - 1}
+                          className="admin-move-btn"
+                          title="下移"
+                        >▼</button>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={config.current_activity_blind_box_ids.includes(box.id)}
+                        onChange={() => toggleCurrentBoxId(box.id)}
+                        className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
+                        title="勾选为当前活动盲盒"
+                      />
+                      <input
+                        type="text"
+                        value={box.id || ""}
+                        onChange={(e) => updateBlindBox(realIndex, "id", e.target.value)}
+                        onBlur={() => { if (box.id > 0 && !box.name) fetchBlindBoxName(realIndex); }}
+                        placeholder="gift_id"
+                        className="w-20 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <input
+                        type="text"
+                        value={box.name}
+                        readOnly
+                        placeholder="自动获取"
+                        className="flex-1 min-w-[110px] rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
+                      />
+                      {box.id > 0 && (
+                        <button
+                          onClick={() => fetchBlindBoxName(realIndex)}
+                          disabled={fetchingName === realIndex}
+                          className="text-[10px] text-[#00a1d6] hover:underline shrink-0 disabled:opacity-50"
+                        >
+                          {fetchingName === realIndex ? "查询中..." : "获取名称"}
+                        </button>
+                      )}
+                      <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={config.current_activity_blind_box_ids.includes(box.id)}
-                      onChange={() => toggleCurrentBoxId(box.id)}
-                      className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
-                      title="勾选为当前活动盲盒"
-                    />
-                    <input
-                      type="text"
-                      value={box.id || ""}
-                      onChange={(e) => updateBlindBox(realIndex, "id", e.target.value)}
-                      onBlur={() => { if (box.id > 0 && !box.name) fetchBlindBoxName(realIndex); }}
-                      placeholder="gift_id"
-                      className="w-24 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                    />
-                    <input
-                      type="text"
-                      value={box.name}
-                      readOnly
-                      placeholder="自动获取"
-                      className="w-32 rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
-                    />
-                    {box.id > 0 && (
-                      <button
-                        onClick={() => fetchBlindBoxName(realIndex)}
-                        disabled={fetchingName === realIndex}
-                        className="text-[10px] text-[#00a1d6] hover:underline shrink-0 disabled:opacity-50"
-                      >
-                        {fetchingName === realIndex ? "查询中..." : "获取名称"}
-                      </button>
-                    )}
                     <input
                       type="text"
                       value={box.icon}
                       onChange={(e) => updateBlindBox(realIndex, "icon", e.target.value)}
                       placeholder="图标链接"
-                      className="flex-1 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                      className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
                     />
-                    <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0">删除</button>
                   </div>
                   );
                 })}
@@ -539,18 +535,18 @@ export default function AdminPage() {
               <div className="space-y-3">
                 {config.synthesis_activities.map((act, i) => (
                   <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${act.active === false ? "opacity-50" : ""}`}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div className="flex flex-col shrink-0">
                         <button
                           onClick={() => moveActivity(i, -1)}
                           disabled={i === 0}
-                          className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                          className="admin-move-btn"
                           title="上移"
                         >▲</button>
                         <button
                           onClick={() => moveActivity(i, 1)}
                           disabled={i === config.synthesis_activities.length - 1}
-                          className="text-[10px] text-black/40 hover:text-black/80 leading-none disabled:opacity-30"
+                          className="admin-move-btn"
                           title="下移"
                         >▼</button>
                       </div>
@@ -566,7 +562,7 @@ export default function AdminPage() {
                         value={act.id}
                         onChange={(e) => updateActivity(i, "id", e.target.value)}
                         placeholder="活动ID"
-                        className="w-32 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                        className="w-24 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
                       />
                       {/* 活动名称 - 自动从 info_url 提取，只读显示 */}
                       <input
@@ -574,7 +570,7 @@ export default function AdminPage() {
                         value={activityNames[act.id] ?? ""}
                         readOnly
                         placeholder="自动获取名称"
-                        className="w-36 rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
+                        className="flex-1 min-w-[120px] rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
                       />
                       <select
                         value={act.type}

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { serverApiUrl } from "@/lib/server-api";
+import { showToast } from "@/lib/toast";
+import { saveMobileOrDownload } from "@/lib/save-image";
 
 type FoamTreeCtor = any;
 let FoamTreePromise: Promise<FoamTreeCtor> | null = null;
@@ -83,12 +85,6 @@ function formatValue(v: number): string {
   return String(v);
 }
 
-function isMobile(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-    || ("ontouchstart" in window && window.innerWidth <= 900);
-}
-
 /** 初始尺寸计算（同步，避免首次渲染时尺寸不对） */
 function computeInitialSize() {
   if (typeof window === "undefined") return { w: 360, h: 640 };
@@ -109,6 +105,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
   const imageFailedRef = useRef<Set<number>>(new Set());
   const refreshAttemptedRef = useRef<Set<number>>(new Set());
   const refreshingRef = useRef<Set<number>>(new Set());
+  const proxyAttemptedRef = useRef<Set<number>>(new Set());
   const loadingDoneRef = useRef(false);
   const progressRef = useRef({ loaded: 0, total: 0 });
   const groupsRef = useRef<FTGroup[]>([]);
@@ -118,7 +115,6 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
   const [internalLoading, setInternalLoading] = useState(true);
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; value: string } | null>(null);
-  const [mobilePreview, setMobilePreview] = useState<{ url: string } | null>(null);
   const [canvasDims, setCanvasDims] = useState(computeInitialSize);
 
   const isLoading = externalLoading || internalLoading;
@@ -152,10 +148,14 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     }
 
     img.onload = () => {
+      clearTimeout(loadTimer);
       imageMap.set(id, img);
       done();
     };
-    img.onerror = () => {
+
+    // 头像加载失败/超时后的降级路径：先刷 URL，再回退服务器代理
+    let loadTimer: ReturnType<typeof setTimeout>;
+    function handleFail() {
       if (!refreshAttemptedRef.current.has(id) && !refreshingRef.current.has(id)) {
         refreshingRef.current.add(id);
         refreshAttemptedRef.current.add(id);
@@ -193,10 +193,25 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
             done();
           });
       } else {
-        failedSet.add(id);
-        done();
+        // 直连失败且已尝试刷新 URL，回退到服务器代理加载一次（兼容 Tauri 直连 B站 CDN 失败的情况）
+        if (!proxyAttemptedRef.current.has(id)) {
+          proxyAttemptedRef.current.add(id);
+          const proxied = serverApiUrl(`/api/proxy/image?url=${encodeURIComponent(cleanBilibiliFaceUrl(g.face))}`);
+          const pimg = new Image();
+          pimg.crossOrigin = "anonymous";
+          pimg.onload = () => { imageMap.set(id, pimg); triggerRedraw(); done(); };
+          pimg.onerror = () => { failedSet.add(id); triggerRedraw(); done(); };
+          pimg.src = proxied;
+        } else {
+          failedSet.add(id);
+          done();
+        }
       }
-    };
+    }
+
+    img.onerror = handleFail;
+    // 直连若长时间无响应（安卓上 B站 CDN 可能挂起而非报错），超时后同样走降级路径
+    loadTimer = setTimeout(handleFail, 8000);
     img.src = proxyUrl(g.face);
   }, [triggerRedraw]);
 
@@ -285,7 +300,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       descriptionGroup: false,
       descriptionGroupSize: 0,
       descriptionGroupMinHeight: 0,
-      groupLabelDecorator: undefined,
+      groupLabelDecorator: () => void 0,
       groupLabelFontSize: 0,
       groupLabelMinFontSize: 0,
       groupBorderWidth: 0,
@@ -319,14 +334,15 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       finalIncrementalDrawMaxDuration: 500,
       fadeDuration: 300,
       zoomMouseWheelDuration: 300,
-      backgroundColor: "#ffffff",
       groupContentDecoratorTriggering: "onSurfaceDirty",
       attributionWeight: 0,
       attributionText: "",
       attributionLogo: "",
       descriptionGroupPolygonDrawn: false,
+      backgroundColor: "#f6f1e9",
       groupColorDecorator: (opts: any, props: any, vars: any) => {
-        vars.groupColor = "#ffffff";
+        // 使用各格子自身的占位色（暖色系），避免未加载头像的区域呈现刺眼白色
+        vars.groupColor = props.group.color || "#f6f1e9";
       },
       groupContentDecorator: (opts: any, props: any, vars: any) => {
         const ctx: CanvasRenderingContext2D = props.context;
@@ -356,7 +372,8 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
           const dy = bbox.minY + (bh - dh) / 2;
           ctx.drawImage(img, dx, dy, dw, dh);
         } else {
-          ctx.fillStyle = failedSetClosure.has(origId) ? "#ffffff" : (origColor || "#ffffff");
+          // 头像缺失/失败时填充浅暖色占位色，避免区域呈现刺眼白色
+          ctx.fillStyle = failedSetClosure.has(origId) ? "#d8c9b4" : (origColor || "#d8c9b4");
           ctx.beginPath();
           ctx.moveTo(polygon[0].x, polygon[0].y);
           for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i].x, polygon[i].y);
@@ -560,27 +577,11 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       console.warn("[AvatarChart] 下载失败：无法生成图片，请等待头像加载完成");
       return;
     }
-    if (isMobile()) { setMobilePreview({ url: dataUrl }); return; }
-    const link = document.createElement("a");
-    link.download = `${title}_头像分布.png`;
-    link.href = dataUrl;
-    link.click();
+    // 移动端 Tauri 直接保存到相册（系统分享），桌面/Web 直接下载
+    saveMobileOrDownload(dataUrl, `${title}_头像分布.png`).then(res => {
+      if (res === "fallback") showToast("未保存到相册，请长按图片保存");
+    });
   }
-
-  // 移动端保存后自动关闭预览
-  useEffect(() => {
-    if (!mobilePreview) return;
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") setTimeout(() => setMobilePreview(null), 400);
-    };
-    const onPageHide = () => { setTimeout(() => setMobilePreview(null), 400); };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onPageHide);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", onPageHide);
-    };
-  }, [mobilePreview]);
 
   const displayCount = Math.min(items.length, MAX_DISPLAY);
   const noteText = title.includes("主播")
@@ -596,7 +597,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       >
         <p className="text-white/80 text-sm mb-1 w-full text-center truncate px-2" title={title}>{title}</p>
         <p className="text-white/40 text-xs mb-2">{noteText}</p>
-        <div className="relative rounded-lg shadow-2xl overflow-hidden bg-white" style={{ width: canvasDims.w, height: canvasDims.h }}>
+        <div className="relative rounded-lg shadow-2xl overflow-hidden bg-[#f6f1e9]" style={{ width: canvasDims.w, height: canvasDims.h }}>
           <div
             ref={containerRef}
             style={{ width: DOWNLOAD_W, height: DOWNLOAD_H, transform: `scale(${canvasDims.w / DOWNLOAD_W})`, transformOrigin: "top left" }}
@@ -642,29 +643,6 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
           </div>
         )}
 
-        {mobilePreview && (
-          <div
-            className="fixed inset-0 z-[70] flex flex-col items-center justify-center bg-black/95 p-2"
-            onClick={() => setMobilePreview(null)}
-          >
-            <p className="text-white/90 text-sm mb-2">长按图片保存到相册，保存后点击任意位置返回</p>
-            <div className="overflow-auto" style={{ maxWidth: "100vw", maxHeight: "80vh" }}>
-              <img
-                src={mobilePreview.url}
-                alt="头像分布"
-                className="rounded-lg shadow-2xl block"
-                style={{ width: "auto", height: "auto", maxWidth: "95vw" }}
-                draggable={false}
-              />
-            </div>
-            <button
-              className="mt-3 rounded-xl bg-white/20 border border-white/40 px-6 py-2 text-sm text-white"
-              onClick={() => setMobilePreview(null)}
-            >
-              返回
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

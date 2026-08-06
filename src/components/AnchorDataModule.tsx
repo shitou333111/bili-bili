@@ -9,6 +9,9 @@ import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
+import PieTooltip from "@/components/PieTooltip";
+import { showToast } from "@/lib/toast";
+import { saveMobileOrDownload } from "@/lib/save-image";
 
 type AnchorGiftRecord = {
   uid: number;
@@ -82,8 +85,10 @@ function formatCoinsShort(coins: number): string {
 }
 
 function formatBattery(hamster: number): string {
-  // 换算关系：1电池 = 100 Hamster，主播收益只显示整数
-  return Math.round(hamster / 100).toString();
+  // 换算关系：1电池 = 100 Hamster；超过1万以"万"为单位显示1位小数
+  const battery = Math.round(hamster / 100);
+  if (battery >= 10000) return `${(battery / 10000).toFixed(1)}万`;
+  return String(battery);
 }
 
 function monthLabel(ym: string) {
@@ -134,13 +139,9 @@ function GiftSaveModal({
 
   async function downloadImage() {
     if (!generatedImage) return;
-    try {
-      const link = document.createElement("a");
-      link.download = `gift_list_${Date.now()}.png`;
-      link.href = generatedImage;
-      link.click();
-    } catch (err) {
-      console.error("下载图片失败:", err);
+    const res = await saveMobileOrDownload(generatedImage, `gift_list_${Date.now()}.png`);
+    if (res === "fallback") {
+      showToast("未保存到相册，请长按上方图片保存");
     }
   }
 
@@ -189,23 +190,16 @@ function GiftSaveModal({
         {/* 图片内容 */}
         {!loading && generatedImage && (
           <>
-            {/* 上方提示 */}
-            {isMobileDevice() && (
-              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
-            )}
-
             <img src={generatedImage} alt="礼物清单" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl mx-auto" />
 
             {/* 下方按钮区域 */}
             <div className="flex gap-2.5 mt-3 w-full justify-center">
-              {!isMobileDevice() && (
-                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  下载图片
-                </button>
-              )}
+              <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                {isMobileDevice() ? "保存到相册" : "下载图片"}
+              </button>
               <button onClick={onClose} className="modal-action-btn modal-action-light">
                 关闭
               </button>
@@ -547,7 +541,7 @@ async function fetchData() {
 
       {/* Content - scrollable */}
       {stats && (
-        <div className="flex-1 overflow-y-auto py-3">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden py-3">
           <div className="content-wrapper px-2 min-w-0">
             {/* Tab bar - segmented control, sticky at top, 整体居中 */}
             <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
@@ -572,7 +566,7 @@ async function fetchData() {
                 <button
                   onClick={fetchData}
                   disabled={loading}
-                  className="refresh-btn-arc relative flex items-center justify-center h-[38px] w-[38px]"
+                  className="refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px]"
                 >
                   {lastRefreshTime ? (
                     <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
@@ -673,7 +667,7 @@ async function fetchData() {
                                         return null;
                                       }}
                                     />
-                                    <Bar dataKey="hamster" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer"
+                                    <Bar dataKey="hamster" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer" isAnimationActive={false}
                                       onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                       label={(props: any) => {
                                         const { x, y, width, value, index } = props;
@@ -753,17 +747,17 @@ async function fetchData() {
                         {allFans.length > 0 && (() => {
                           const TOP_N = 20;
                           const buildPieData = (fans: Array<{ uid: number; uname: string; hamster: number }>) => {
-                            const result: Array<{ uname: string; hamster: number; uid: number | null; fill: string }> = [];
+                            const result: Array<{ uname: string; hamster: number; uid: number | null; fill: string; battery: number }> = [];
                             let otherHamster = 0;
                             for (let i = 0; i < fans.length; i++) {
                               if (i < TOP_N) {
-                                result.push({ uname: fans[i].uname, hamster: fans[i].hamster, uid: fans[i].uid, fill: pieColors[i % pieColors.length] });
+                                result.push({ uname: fans[i].uname, hamster: fans[i].hamster, uid: fans[i].uid, fill: pieColors[i % pieColors.length], battery: fans[i].hamster / 100 });
                               } else {
                                 otherHamster += fans[i].hamster;
                               }
                             }
                             if (otherHamster > 0) {
-                              result.push({ uname: "其他", hamster: otherHamster, uid: null, fill: "#94a3b8" });
+                              result.push({ uname: "其他", hamster: otherHamster, uid: null, fill: "#94a3b8", battery: otherHamster / 100 });
                             }
                             return result;
                           };
@@ -782,6 +776,7 @@ async function fetchData() {
                                       cy="50%"
                                       outerRadius="95%"
                                       paddingAngle={0}
+                                      isAnimationActive={false}
                                       onClick={(data: any) => {
                                         if (data?.uid !== null && data?.uid !== undefined) {
                                           const uidStr = String(data.uid);
@@ -801,8 +796,7 @@ async function fetchData() {
                                       ))}
                                     </Pie>
                                     <Tooltip
-                                      formatter={((value: number, name: string) => [`${formatBattery(value)} 电池`, name]) as any}
-                                      contentStyle={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff" }}
+                                      content={<PieTooltip />}
                                     />
                                   </PieChart>
                                 </ResponsiveContainer>
@@ -814,17 +808,17 @@ async function fetchData() {
                         {selectedMonth && periodFans.length > 0 && (() => {
                           const TOP_N = 20;
                           const buildPieData = (fans: Array<{ uid: number; uname: string; hamster: number }>) => {
-                            const result: Array<{ uname: string; hamster: number; uid: number | null; fill: string }> = [];
+                            const result: Array<{ uname: string; hamster: number; uid: number | null; fill: string; battery: number }> = [];
                             let otherHamster = 0;
                             for (let i = 0; i < fans.length; i++) {
                               if (i < TOP_N) {
-                                result.push({ uname: fans[i].uname, hamster: fans[i].hamster, uid: fans[i].uid, fill: pieColors[i % pieColors.length] });
+                                result.push({ uname: fans[i].uname, hamster: fans[i].hamster, uid: fans[i].uid, fill: pieColors[i % pieColors.length], battery: fans[i].hamster / 100 });
                               } else {
                                 otherHamster += fans[i].hamster;
                               }
                             }
                             if (otherHamster > 0) {
-                              result.push({ uname: "其他", hamster: otherHamster, uid: null, fill: "#94a3b8" });
+                              result.push({ uname: "其他", hamster: otherHamster, uid: null, fill: "#94a3b8", battery: otherHamster / 100 });
                             }
                             return result;
                           };
@@ -846,6 +840,7 @@ async function fetchData() {
                                       cy="50%"
                                       outerRadius="95%"
                                       paddingAngle={0}
+                                      isAnimationActive={false}
                                       onClick={(data: any) => {
                                         if (data?.uid !== null && data?.uid !== undefined) {
                                           const uidStr = String(data.uid);
@@ -865,8 +860,7 @@ async function fetchData() {
                                       ))}
                                     </Pie>
                                     <Tooltip
-                                      formatter={((value: number, name: string) => [`${formatBattery(value)} 电池`, name]) as any}
-                                      contentStyle={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff" }}
+                                      content={<PieTooltip />}
                                     />
                                   </PieChart>
                                 </ResponsiveContainer>

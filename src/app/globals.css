@@ -45,6 +45,8 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-space-grotesk), Arial, Helvetica, sans-serif;
+  /* 顶部通知栏/刘海安全区（--safe-top 由 SafeAreaStyler 按平台注入） */
+  padding-top: var(--safe-top, 0px);
 }
 
 a {
@@ -65,11 +67,18 @@ a {
   display: none;
 }
 
+/* 主页面容器高度：视口高度减去顶部安全区。
+   注意：calc 内 - 号两侧必须有空格，否则 CSS 解析失败（这正是此前页面无法向下滚动的根因）。
+   用类而非 Tailwind 任意值，避免 calc()+var() 在任意值中的转义问题。 */
+.page-main {
+  height: calc(100dvh - var(--safe-top, 0px));
+}
+
 /* ===== iOS 悬浮底部托盘导航栏（Dock Bar） ===== */
 /* 1. 悬浮容器（定位在页面最底部，居中，容器穿透） */
 .bottom-dock-container {
   position: fixed;
-  bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  bottom: var(--dock-bottom, 16px);
   left: 0;
   right: 0;
   display: flex;
@@ -190,8 +199,8 @@ a {
   inset: 0;
   border-radius: inherit;
   background: conic-gradient(from 0deg, #22c55e 0deg 30deg, transparent 30deg 66deg, #22c55e 66deg 360deg);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
 }
 
 /* 点击时缺口环快速旋转一圈 */
@@ -245,4 +254,34 @@ a {
 }
 .modal-action-light:hover:not(:disabled) {
   background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* ===== Admin 配置上移/下移按钮（移动端加大，便于操作） ===== */
+.admin-move-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.5);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+.admin-move-btn:hover:not(:disabled) {
+  color: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.08);
+}
+.admin-move-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+@media (max-width: 600px) {
+  .admin-move-btn {
+    width: 34px;
+    height: 30px;
+    font-size: 15px;
+  }
 }
