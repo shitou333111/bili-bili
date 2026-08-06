@@ -1701,7 +1701,7 @@ async function fetchData() {
   return (
     <main className="h-screen flex flex-col bg-[#f5f5f5] text-[#1f1c17]">
       {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
-      <div className="flex-1 overflow-y-auto relative pb-28">
+      <div className="flex-1 overflow-y-auto relative pb-24" style={{ overscrollBehavior: "none" }}>
 
       {/* Offline banner */}
       {!isOnline && (

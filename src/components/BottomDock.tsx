@@ -1,7 +1,5 @@
 "use client";
 
-import type { CSSProperties } from "react";
-
 export type DockTabKey = "fans" | "anchor" | "pending" | "help";
 
 interface BottomDockProps {
@@ -16,7 +14,7 @@ interface BottomDockProps {
  */
 export default function BottomDock({ tabs, activeKey, onChange }: BottomDockProps) {
   return (
-    <div className="bottom-dock-container" style={{ "--sab": "env(safe-area-inset-bottom, 20px)" } as CSSProperties}>
+    <div className="bottom-dock-container">
       <nav className="bottom-dock">
         {tabs.map((t) => (
           <button

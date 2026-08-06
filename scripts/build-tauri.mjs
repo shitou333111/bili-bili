@@ -38,11 +38,11 @@ function getServerUrl() {
   if (fromFile) return fromFile;
 
   console.warn(
-    "[build-tauri] ⚠️  未设置 NEXT_PUBLIC_SERVER_URL，将使用默认值 http://localhost:3000\n" +
+    "[build-tauri] ⚠️  未设置 NEXT_PUBLIC_SERVER_URL，将使用默认值 http://192.168.1.2:3000\n" +
     "   请确保后端服务器正在运行（npm run dev 或 npm start），否则客户端所有 API 请求将失败。\n" +
     "   设置方式：创建 .env.local 文件，写入 NEXT_PUBLIC_SERVER_URL=http://your-server.com",
   );
-  return "http://localhost:3000";
+  return "http://192.168.1.2:3000";
 }
 
 const serverUrl = getServerUrl();

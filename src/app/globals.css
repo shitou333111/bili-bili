@@ -69,7 +69,7 @@ a {
 /* 1. 悬浮容器（定位在页面最底部，居中，容器穿透） */
 .bottom-dock-container {
   position: fixed;
-  bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 20px)));
+  bottom: max(8px, env(safe-area-inset-bottom, 0px));
   left: 0;
   right: 0;
   display: flex;
@@ -77,7 +77,7 @@ a {
   align-items: center;
   z-index: 9999;
   pointer-events: none;
-  padding: 0 16px;
+  padding: 0 12px;
 }
 
 /* 2. 苹果毛玻璃胶囊托盘（完全参照参考代码改编） */
@@ -86,9 +86,9 @@ a {
   pointer-events: auto;
   display: flex;
   gap: 8px;
-  padding: 6px 0.5rem;
-  width: fit-content;
-  max-width: 400px;
+  padding: 6px;
+  width: 86%;
+  max-width: 600px;
   border-radius: 28px;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(24px);
@@ -167,7 +167,7 @@ a {
   }
 
   .dock-item {
-    padding: 8px 16px;
-    font-size: 16px;
+    padding: 8px 14px;
+    font-size: 15px;
   }
 }

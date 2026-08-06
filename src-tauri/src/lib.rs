@@ -64,21 +64,23 @@ pub fn run() {
             };
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let scale = monitor.scale_factor();
                     let wa = monitor.work_area();
-                    let avail_w = wa.size.width as f64;
-                    let avail_h = wa.size.height as f64;
-                    let avail_x = wa.position.x as f64;
-                    let avail_y = wa.position.y as f64;
-                    // 宽度固定等于页面最大宽度（内容刚好铺满窗口）
+                    // work_area 返回物理像素，转换为逻辑像素
+                    let avail_w = wa.size.width as f64 / scale;
+                    let avail_h = wa.size.height as f64 / scale;
+                    let avail_x = wa.position.x as f64 / scale;
+                    let avail_y = wa.position.y as f64 / scale;
+                    // 宽度固定等于页面最大宽度（逻辑像素，内容刚好铺满窗口）
                     let w = page_max_width;
                     // 高度：按 16:9 计算，但不超过可用区域 90%
                     let h0 = w * 16.0 / 9.0;
                     let h = if h0 <= avail_h * 0.9 { h0 } else { avail_h * 0.9 };
-                    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(w.round() as u32, h.round() as u32)));
+                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
                     // 相对可用区域居中（不遮挡任务栏）
                     let x = avail_x + ((avail_w - w) / 2.0).round();
                     let y = avail_y + ((avail_h - h) / 2.0).round();
-                    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x as i32, y as i32)));
+                    let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
                 }
                 let _ = window.show();
             }
