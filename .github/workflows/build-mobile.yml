@@ -10,6 +10,11 @@ on:
         required: false
         type: string
         default: "http://192.168.1.2:3000"
+      debug:
+        description: "打包 Debug 版本（不勾选则默认 Release）"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: build-client-${{ github.ref }}
@@ -22,14 +27,20 @@ concurrency:
 #   ipa -> iOS IPA
 # 例如 "exe ipa" 会同时构建 exe 和 ipa。
 #
+# 打包版本（Debug / Release）：
+#   push 触发：commit message 包含 "debug" 关键字 → 打 Debug 包，否则 Release
+#   workflow_dispatch：手动勾选 inputs.debug → 打 Debug 包，否则 Release
+#
 # 服务器地址优先级：
 #   1. workflow_dispatch 时手动输入的 server_url
 #   2. GitHub Secrets 中的 NEXT_PUBLIC_SERVER_URL
-#   3. 默认值 http://localhost:3000（本地测试用）
+#   3. 默认值 http://192.168.1.2:3000（本地测试用）
 # 请在 GitHub Settings → Secrets and variables → Actions 中配置 NEXT_PUBLIC_SERVER_URL
 
 env:
   SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL || 'http://192.168.1.2:3000' }}
+  # commit message 含 debug 或手动勾选 debug → true（Debug 包），否则 false（Release 包）
+  IS_DEBUG: ${{ (github.event_name == 'workflow_dispatch' && inputs.debug == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'debug')) }}
 
 jobs:
   # ==================== Windows EXE ====================
@@ -61,9 +72,23 @@ jobs:
         run: npm run build:tauri
 
       - name: Build Windows EXE
-        run: cargo tauri build --no-bundle
+        shell: bash
+        run: |
+          if [ "$IS_DEBUG" = "true" ]; then
+            cargo tauri build --no-bundle --debug
+          else
+            cargo tauri build --no-bundle
+          fi
 
-      - name: Upload EXE
+      - name: Upload EXE (debug)
+        if: env.IS_DEBUG == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-live-exe-debug
+          path: src-tauri/target/debug/*.exe
+
+      - name: Upload EXE (release)
+        if: env.IS_DEBUG != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-exe
@@ -126,9 +151,16 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           JAVA_HOME: ${{ env.JAVA_HOME }}
-        run: cargo tauri android build --target aarch64
+        run: |
+          if [ "$IS_DEBUG" = "true" ]; then
+            cargo tauri android build --target aarch64 --debug
+          else
+            cargo tauri android build --target aarch64
+          fi
 
+      # Debug 包已用 debug keystore 自动签名；仅 Release 包需要手动签名
       - name: Sign APK with debug keystore
+        if: env.IS_DEBUG != 'true'
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
@@ -150,7 +182,17 @@ jobs:
           rm -f "$APK.aligned"
           echo "Signed APK ready: $APK"
 
-      - name: Upload APK
+      - name: Upload APK (debug)
+        if: env.IS_DEBUG == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-live-android-debug
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+            src-tauri/gen/android/app/build/outputs/apk/debug/*.apk
+
+      - name: Upload APK (release)
+        if: env.IS_DEBUG != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-android
@@ -195,9 +237,24 @@ jobs:
         run: cargo tauri icon
 
       - name: Build iOS IPA
-        run: cargo tauri ios build --target aarch64 --no-sign
+        run: |
+          if [ "$IS_DEBUG" = "true" ]; then
+            cargo tauri ios build --target aarch64 --no-sign --debug
+          else
+            cargo tauri ios build --target aarch64 --no-sign
+          fi
 
-      - name: Upload IPA
+      - name: Upload IPA (debug)
+        if: env.IS_DEBUG == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-live-ios-debug
+          path: |
+            src-tauri/gen/apple/build/*/*.ipa
+            src-tauri/gen/ios/build/*/*.ipa
+
+      - name: Upload IPA (release)
+        if: env.IS_DEBUG != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-ios
