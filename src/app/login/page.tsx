@@ -87,6 +87,10 @@ export default function LoginPage() {
           }
           if (data.data.userToken) {
             localStorage.setItem("bili_live_user_token", data.data.userToken);
+            // 稳定设备令牌：本机登录账号以它为准，且不会被 admin 模拟切换覆盖
+            if (!localStorage.getItem("bili_live_device_token")) {
+              localStorage.setItem("bili_live_device_token", data.data.userToken);
+            }
           }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {

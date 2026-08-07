@@ -6,7 +6,6 @@ import { isOffline } from "@/lib/offline";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
 import { checkBlindBox } from "@/lib/bilibili/gift-api";
-import { buildMockAnchorGiftsResponse } from "@/lib/revenue";
 import { getBuvidCookie } from "@/lib/bilibili/client";
 import { promises as fs } from "fs";
 import path from "path";
@@ -539,10 +538,9 @@ export async function GET(request: Request) {
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
-    console.log(`[AnchorGifts] 未找到 session，返回模拟数据`);
-    const mockData = buildMockAnchorGiftsResponse();
+    console.log(`[AnchorGifts] 未找到 session，需要重新登录`);
     return NextResponse.json(
-      { code: 0, message: "mock", data: mockData },
+      { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
   }
@@ -551,10 +549,9 @@ export async function GET(request: Request) {
   if (!offline) {
     const credentialResult = await ensureValidCredential(session);
     if (!credentialResult.valid) {
-      console.log(`[AnchorGifts] B站凭证失效，返回模拟数据`);
-      const mockData = buildMockAnchorGiftsResponse();
+      console.log(`[AnchorGifts] B站凭证失效，需要重新登录`);
       return NextResponse.json(
-        { code: 0, message: "needs-relogin", data: mockData },
+        { code: 0, message: "needs-relogin", data: null },
         { status: 200 },
       );
     }

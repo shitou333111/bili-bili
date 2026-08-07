@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { serverApiUrl } from "@/lib/server-api";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import { isMobileDevice } from "@/lib/device";
 
 type FoamTreeCtor = any;
 let FoamTreePromise: Promise<FoamTreeCtor> | null = null;
@@ -330,8 +331,10 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       wireframeDrawingTimeout: 0,
       wireframeLabelDrawingTimeout: 0,
       wireframeContentDecorationDrawing: "always",
-      finalCompleteDrawMaxDuration: 500,
-      finalIncrementalDrawMaxDuration: 500,
+      // 强制完整同步渲染（0=不限时）：避免在慢速设备（尤其安卓）上渐进式渲染
+      // 把面积小、位于底部的大量单元格跳过未绘制，导致下方出现无法显示的空白。
+      finalCompleteDrawMaxDuration: 0,
+      finalIncrementalDrawMaxDuration: 0,
       fadeDuration: 300,
       zoomMouseWheelDuration: 300,
       groupContentDecoratorTriggering: "onSurfaceDirty",
@@ -395,6 +398,9 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
         ctx.restore();
       },
       onGroupHover: (e: any) => {
+        // 移动端不使用 hover（触碰/滑动不会清除 hover 状态，导致昵称气泡固定显示），
+        // 移动端仅通过点击(点按)显示提示框；桌面端保留 hover。
+        if (isMobileDevice()) return;
         if (e.group) {
           setTooltip({
             x: mousePosRef.current.x, y: mousePosRef.current.y,
@@ -592,7 +598,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
         className="relative mx-auto flex flex-col items-center max-h-screen overflow-y-auto"
-        style={{ width: canvasDims.w + 32, paddingTop: "16px", paddingBottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }}
+        style={{ width: canvasDims.w + 32, paddingTop: "calc(16px + var(--safe-top, 0px))", paddingBottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }}
         onClick={(e) => e.stopPropagation()}
       >
         <p className="text-white/80 text-sm mb-1 w-full text-center truncate px-2" title={title}>{title}</p>

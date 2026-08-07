@@ -6,6 +6,7 @@ import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import Dropdown from "@/components/Dropdown";
 
 function formatProfit(profit: number): string {
   if (profit >= 0) return `+${profit}`;
@@ -125,18 +126,18 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <select
+          <Dropdown
             value={selectedAnchor}
-            onChange={(e) => setSelectedAnchor(e.target.value)}
-            className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-black/65 outline-none focus:border-black/30 flex-shrink-0"
-          >
-            <option value="">全部主播</option>
-            {activity.profit.anchors.map((anchor) => (
-              <option key={anchor.ruid} value={anchor.ruid}>
-                {anchor.rname || `主播${anchor.ruid}`}
-              </option>
-            ))}
-          </select>
+            onChange={setSelectedAnchor}
+            className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-black/65 outline-none flex-shrink-0"
+            options={[
+              { value: "", label: "全部主播" },
+              ...activity.profit.anchors.map((anchor) => ({
+                value: String(anchor.ruid),
+                label: anchor.rname || `主播${anchor.ruid}`,
+              })),
+            ]}
+          />
           {filteredCertifications.length > 0 && (
             <button
               onClick={() => { setShowCertModal(true); setCertIndex(0); }}

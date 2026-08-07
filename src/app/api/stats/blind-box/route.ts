@@ -3,7 +3,6 @@ import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/ses
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchBlindBoxDrawStream, checkBlindBox } from "@/lib/bilibili/gift-api";
 import { getBlindBoxInfo, saveBlindBoxInfo, type BlindBoxGift } from "@/lib/blind-box-db";
-import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { saveGiftsToDb, getGiftImg } from "@/lib/gift-db";
 import { isOffline } from "@/lib/offline";
@@ -332,196 +331,6 @@ function getDateRange(records: BlindBoxDrawRecord[]): { start: string; end: stri
   return { start: earliest, end: latest };
 }
 
-// 构建模拟的盲盒统计数据（未登录时返回）
-function buildMockBlindBoxStats(): BlindBoxProfitResult[] {
-  const results: BlindBoxProfitResult[] = [];
-
-  // 心动盲盒模拟数据
-  const XINDONG_ID = 32251;
-  const xindongGifts = [
-    { gift_id: 32132, gift_name: "浪漫城堡", gift_img: "", unitPrice: 12450, count: 200, totalValue: 2490000 },
-    { gift_id: 31231, gift_name: "星愿水晶球", gift_img: "", unitPrice: 1000, count: 300, totalValue: 300000 },
-    { gift_id: 32252, gift_name: "心动信笺", gift_img: "", unitPrice: 50, count: 1500, totalValue: 75000 },
-    { gift_id: 32253, gift_name: "樱花雨", gift_img: "", unitPrice: 100, count: 800, totalValue: 80000 },
-    { gift_id: 32254, gift_name: "星空奶茶", gift_img: "", unitPrice: 200, count: 600, totalValue: 120000 },
-    { gift_id: 32255, gift_name: "棒棒糖", gift_img: "", unitPrice: 10, count: 3000, totalValue: 30000 },
-    { gift_id: 32256, gift_name: "小心心", gift_img: "", unitPrice: 5, count: 5000, totalValue: 25000 },
-  ];
-  const xindongDrawCount = xindongGifts.reduce((s, g) => s + g.count, 0);
-  const xindongBlindPrice = 150;
-  const xindongTotalSpent = xindongDrawCount * xindongBlindPrice;
-  const xindongTotalEarned = xindongGifts.reduce((s, g) => s + g.totalValue, 0);
-
-  results.push({
-    blindBoxId: XINDONG_ID,
-    blindBoxName: "心动盲盒",
-    blindBoxImg: "",
-    blindPrice: xindongBlindPrice,
-    totalSpent: xindongTotalSpent,
-    totalEarned: xindongTotalEarned,
-    profit: xindongTotalEarned - xindongTotalSpent,
-    drawCount: xindongDrawCount,
-    recordCount: xindongDrawCount,
-    dateRange: { start: "2025-07-10 10:00:00", end: "2026-07-20 22:30:00" },
-    anchors: [
-      { ruid: 100000001, rname: "模拟主播-星辰", count: 2800 },
-      { ruid: 100000002, rname: "模拟主播-月华", count: 2300 },
-      { ruid: 100000003, rname: "模拟主播-清风", count: 1900 },
-      { ruid: 100000004, rname: "模拟主播-小鹿", count: 1500 },
-      { ruid: 100000005, rname: "模拟主播-月月", count: 1200 },
-      { ruid: 100000006, rname: "模拟主播-晓晓", count: 900 },
-      { ruid: 100000007, rname: "模拟主播-阿言", count: 700 },
-      { ruid: 100000008, rname: "模拟主播-糖果", count: 500 },
-      { ruid: 100000009, rname: "模拟主播-小鱼", count: 300 },
-      { ruid: 100000010, rname: "模拟主播-小樱", count: 200 },
-    ],
-    filter: { ruid: null, dateRange: "all" },
-    gifts: xindongGifts,
-    castleStats: [
-      {
-        ruid: 100000001,
-        rname: "模拟主播-星辰",
-        totalCount: 68,
-        dates: [
-          { date: "2025-07-15", count: 2 },
-          { date: "2025-08-10", count: 3 },
-          { date: "2025-09-15", count: 5 },
-          { date: "2025-10-20", count: 4 },
-          { date: "2025-11-25", count: 3 },
-          { date: "2025-12-31", count: 6 },
-          { date: "2026-01-15", count: 4 },
-          { date: "2026-02-14", count: 8 },
-          { date: "2026-03-20", count: 5 },
-          { date: "2026-04-10", count: 3 },
-          { date: "2026-05-20", count: 7 },
-          { date: "2026-06-15", count: 6 },
-          { date: "2026-07-15", count: 12 },
-        ],
-      },
-      {
-        ruid: 100000002,
-        rname: "模拟主播-月华",
-        totalCount: 45,
-        dates: [
-          { date: "2025-08-08", count: 2 },
-          { date: "2025-09-20", count: 3 },
-          { date: "2025-10-15", count: 4 },
-          { date: "2025-12-25", count: 6 },
-          { date: "2026-01-20", count: 3 },
-          { date: "2026-02-14", count: 5 },
-          { date: "2026-03-30", count: 4 },
-          { date: "2026-05-01", count: 5 },
-          { date: "2026-06-01", count: 7 },
-          { date: "2026-07-10", count: 6 },
-        ],
-      },
-      {
-        ruid: 100000003,
-        rname: "模拟主播-清风",
-        totalCount: 32,
-        dates: [
-          { date: "2025-08-20", count: 2 },
-          { date: "2025-10-10", count: 3 },
-          { date: "2025-12-05", count: 2 },
-          { date: "2026-01-25", count: 3 },
-          { date: "2026-03-15", count: 4 },
-          { date: "2026-04-10", count: 5 },
-          { date: "2026-05-25", count: 6 },
-          { date: "2026-06-30", count: 3 },
-          { date: "2026-07-05", count: 4 },
-        ],
-      },
-      {
-        ruid: 100000004,
-        rname: "模拟主播-小鹿",
-        totalCount: 24,
-        dates: [
-          { date: "2025-09-05", count: 1 },
-          { date: "2025-11-11", count: 2 },
-          { date: "2026-01-01", count: 3 },
-          { date: "2026-02-22", count: 2 },
-          { date: "2026-04-15", count: 4 },
-          { date: "2026-05-30", count: 5 },
-          { date: "2026-07-01", count: 3 },
-          { date: "2026-07-18", count: 4 },
-        ],
-      },
-      {
-        ruid: 100000005,
-        rname: "模拟主播-月月",
-        totalCount: 18,
-        dates: [
-          { date: "2025-10-01", count: 2 },
-          { date: "2025-12-12", count: 1 },
-          { date: "2026-01-18", count: 3 },
-          { date: "2026-03-08", count: 2 },
-          { date: "2026-04-22", count: 3 },
-          { date: "2026-05-30", count: 4 },
-          { date: "2026-06-25", count: 2 },
-          { date: "2026-07-20", count: 1 },
-        ],
-      },
-      {
-        ruid: 100000006,
-        rname: "模拟主播-晓晓",
-        totalCount: 12,
-        dates: [
-          { date: "2025-11-05", count: 1 },
-          { date: "2026-02-10", count: 2 },
-          { date: "2026-04-01", count: 2 },
-          { date: "2026-05-15", count: 3 },
-          { date: "2026-06-20", count: 2 },
-          { date: "2026-07-12", count: 2 },
-        ],
-      },
-    ],
-    castleGift: { gift_id: 32132, gift_name: "浪漫城堡", gift_img: "", price: 12450 },
-  });
-
-  // 活动盲盒模拟数据（如果配置了）
-  const activityId = BLIND_BOX_CONFIG.current_activity_blind_box_id ?? null;
-  if (activityId && activityId !== XINDONG_ID) {
-    const activityGifts = [
-      { gift_id: 35685, gift_name: "星辉碎片", gift_img: "", unitPrice: 500, count: 200, totalValue: 100000 },
-      { gift_id: 35686, gift_name: "月光宝盒", gift_img: "", unitPrice: 200, count: 300, totalValue: 60000 },
-      { gift_id: 35687, gift_name: "小星星", gift_img: "", unitPrice: 50, count: 800, totalValue: 40000 },
-      { gift_id: 35688, gift_name: "彩虹糖", gift_img: "", unitPrice: 20, count: 1200, totalValue: 24000 },
-      { gift_id: 35689, gift_name: "气球", gift_img: "", unitPrice: 10, count: 2000, totalValue: 20000 },
-    ];
-    const activityDrawCount = activityGifts.reduce((s, g) => s + g.count, 0);
-    const activityBlindPrice = 100;
-    const activityTotalSpent = activityDrawCount * activityBlindPrice;
-    const activityTotalEarned = activityGifts.reduce((s, g) => s + g.totalValue, 0);
-
-    results.push({
-      blindBoxId: activityId,
-      blindBoxName: "活动盲盒（模拟）",
-      blindBoxImg: "",
-      blindPrice: activityBlindPrice,
-      totalSpent: activityTotalSpent,
-      totalEarned: activityTotalEarned,
-      profit: activityTotalEarned - activityTotalSpent,
-      drawCount: activityDrawCount,
-      recordCount: activityDrawCount,
-      dateRange: { start: "2026-06-15 14:00:00", end: "2026-07-20 21:00:00" },
-      anchors: [
-        { ruid: 100000001, rname: "模拟主播-星辰", count: 800 },
-        { ruid: 100000002, rname: "模拟主播-月华", count: 600 },
-        { ruid: 100000004, rname: "模拟主播-小鹿", count: 450 },
-        { ruid: 100000006, rname: "模拟主播-晓晓", count: 350 },
-        { ruid: 100000007, rname: "模拟主播-阿言", count: 250 },
-        { ruid: 100000008, rname: "模拟主播-糖果", count: 180 },
-      ],
-      filter: { ruid: null, dateRange: "all" },
-      gifts: activityGifts,
-      castleStats: [],
-      castleGift: null,
-    });
-  }
-
-  return results;
-}
-
 // 计算盲盒盈亏
 function calculateProfit(
   blindBoxId: number,
@@ -605,10 +414,8 @@ export async function GET(request: Request) {
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
-    // 未登录时返回模拟的盲盒统计数据
-    const mockData = buildMockBlindBoxStats();
-    return NextResponse.json<ApiResponse<BlindBoxProfitResult[]>>(
-      { code: 0, message: "mock", data: mockData },
+    return NextResponse.json<ApiResponse<null>>(
+      { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
   }

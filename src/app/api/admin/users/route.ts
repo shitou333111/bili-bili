@@ -36,6 +36,8 @@ export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const cookieSid = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`))?.[1] ?? null;
   const currentSid = url.searchParams.get("_sid") ?? cookieSid ?? null;
+  // 本机登录标识：用于标记“本机登录”账号并置顶（Tauri WebView 可能不发送 cookie，用 query 参数）
+  const deviceToken = url.searchParams.get("_device_token") ?? null;
 
   const state = await readState();
   // 按 mid 去重，保留最新的记录
@@ -61,9 +63,17 @@ export async function GET(request: Request) {
         lastUpload: lastUpload || undefined,
         // 默认选中当前浏览器登录账号（而非全局 currentSid）
         isCurrent: s.sid === currentSid,
+        // 本机登录：属于当前设备的稳定设备令牌
+        isLocal: !!deviceToken && s.userToken === deviceToken,
       };
     })
   );
 
-  return NextResponse.json({ code: 0, data: { users, currentSid } });
+  // 本机登录账号置顶，其余按更新时间倒序
+  users.sort((a, b) => {
+    if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  return NextResponse.json({ code: 0, data: { users, currentSid, deviceToken } });
 }

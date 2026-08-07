@@ -45,7 +45,8 @@ export default function PieTooltip({ active, payload, coordinate }: PieTooltipPr
         top: y,
         maxWidth: maxW,
         width: "max-content",
-        zIndex: 60,
+        // 低于头像分布图弹窗(z-50)，避免饼图提示框浮到弹窗图层上方
+        zIndex: 40,
       }}
     >
       <div className="font-medium break-words whitespace-normal" style={{ color: fill || "#1f1c17" }}>

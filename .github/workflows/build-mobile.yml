@@ -236,6 +236,25 @@ jobs:
       - name: Init iOS project
         run: cargo tauri ios init
 
+      - name: Configure iOS Info.plist permissions
+        shell: bash
+        run: |
+          # 定位生成的 Info.plist（Tauri 2 可能在 gen/ios 或 gen/apple）
+          INFO_PLIST=$(find src-tauri/gen/ios -name "Info.plist" -path "*App*" 2>/dev/null | head -n 1)
+          if [ -z "$INFO_PLIST" ]; then
+            INFO_PLIST=$(find src-tauri/gen/apple -name "Info.plist" 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$INFO_PLIST" ]; then
+            echo "!! 未找到 Info.plist"
+            exit 1
+          fi
+          echo "Editing Info.plist: $INFO_PLIST"
+          # 保存图片到相册权限说明（pldownloader 必需，缺失会导致保存时崩溃）
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 需要访问相册以将你生成的图片保存到照片库" "$INFO_PLIST"
+          # 允许通过"文件"App 访问应用文档（便于导出 JSON 等）
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$INFO_PLIST"
+
       - name: Build iOS IPA
         run: |
           if [ "$IS_DEBUG" = "true" ]; then

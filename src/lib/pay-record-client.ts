@@ -46,7 +46,7 @@ type PayRecordResponse = {
 };
 
 type PayRecordSnapshot = {
-  source: "mock" | "real";
+  source: "real";
   month: string;
   nextId: number;
   totalRecords: number;

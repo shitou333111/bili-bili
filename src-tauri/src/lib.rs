@@ -51,6 +51,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_pldownloader::init())
         // 启动时调整主窗口：
         // 宽度 = page-config.json 的 page_max_width（单一源头，TypeScript 也读同一文件）
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。

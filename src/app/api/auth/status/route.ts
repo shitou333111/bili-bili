@@ -30,11 +30,11 @@ export async function GET(request: Request) {
 
   // 离线模式：跳过 B 站校验，视为已登录（仍可就地读取缓存数据）
   if (isOffline(url)) {
-    return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string }>>(
+    return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string; mid: number; face?: string }>>(
       {
         code: 0,
         message: "active (offline)",
-        data: { loggedIn: true, sid: session.sid, uname: session.uname },
+        data: { loggedIn: true, sid: session.sid, uname: session.uname, mid: session.mid, face: session.face },
       },
       { status: 200 },
     );
@@ -45,22 +45,22 @@ export async function GET(request: Request) {
 
   if (!credentialResult.valid) {
     // 凭证失效且刷新失败，需要重新登录
-    return NextResponse.json<ApiResponse<{ loggedIn: false; expired: true; sid: string; uname: string }>>(
+    return NextResponse.json<ApiResponse<{ loggedIn: false; expired: true; sid: string; uname: string; mid: number; face?: string }>>(
       {
         code: 0,
         message: "needs relogin",
-        data: { loggedIn: false, expired: true, sid: session.sid, uname: session.uname },
+        data: { loggedIn: false, expired: true, sid: session.sid, uname: session.uname, mid: session.mid, face: session.face },
       },
       { status: 200 },
     );
   }
 
   // 凭证有效
-  return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string }>>(
+  return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string; mid: number; face?: string }>>(
     {
       code: 0,
       message: "active",
-      data: { loggedIn: true, sid: session.sid, uname: session.uname },
+      data: { loggedIn: true, sid: session.sid, uname: session.uname, mid: session.mid, face: session.face },
     },
     { status: 200 },
   );

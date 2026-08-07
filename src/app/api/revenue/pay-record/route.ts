@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchRealPayRecordSnapshot } from "@/lib/bilibili/app";
@@ -9,6 +8,39 @@ import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
+
+/** 由本地缓存记录构建快照（纯本地聚合，不发 B站请求） */
+async function buildCachedSnapshot(records: RawGiftRecord[]) {
+  const allRecords = records.map(r => ({
+    ...r,
+    totalCoins: Number((r.pay_coin || r.coin).replace(/,/g, "")) || 0,
+    giftNameKey: r.gift_name,
+  }));
+  const giftCatalog = Array.from(
+    allRecords.reduce((map, record) => {
+      const key = `${record.gift_id}_${record.gift_name}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          giftName: record.gift_name,
+          giftImg: record.gift_img,
+          giftId: record.gift_id,
+          latestTimestamp: record.timestamp,
+        });
+      }
+      return map;
+    }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
+  );
+  const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
+  return {
+    source: "real" as const,
+    month: new Date().toISOString().slice(0, 7).replace("-", ""),
+    nextId: allRecords.length > 0 ? allRecords[allRecords.length - 1].id : 0,
+    totalRecords: allRecords.length,
+    totalCoins,
+    giftCatalog,
+    records: allRecords,
+  };
+}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -22,9 +54,20 @@ export async function GET(request: Request) {
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
-    const snapshot = buildMockPayRecordSnapshot();
-    return NextResponse.json<ApiResponse<typeof snapshot>>(
-      { code: 0, message: "mock snapshot", data: snapshot },
+    // 无会话：前端应已拦截跳转登录页，此处兜底返回 needs-relogin
+    return NextResponse.json<ApiResponse<null>>(
+      { code: 0, message: "needs-relogin", data: null },
+      { status: 200 },
+    );
+  }
+
+  // 快速模式（本地优先）：只读本地缓存，跳过 B站校验与拉取，立即返回。
+  // 客户端先显示本地数据，随后再后台调用普通模式同步 B站。
+  if (url.searchParams.get("fast") === "1") {
+    const cachedRecords = await readPayRecords(session.mid, session.uname);
+    const result = await buildCachedSnapshot(cachedRecords);
+    return NextResponse.json<ApiResponse<typeof result>>(
+      { code: 0, message: cachedRecords.length > 0 ? "cached snapshot" : "empty cached", data: result },
       { status: 200 },
     );
   }
@@ -33,35 +76,7 @@ export async function GET(request: Request) {
   if (isOffline(url)) {
     const cachedRecords = await readPayRecords(session.mid, session.uname);
     if (cachedRecords.length > 0) {
-      const allRecords = cachedRecords.map(r => ({
-        ...r,
-        totalCoins: Number((r.pay_coin || r.coin).replace(/,/g, "")) || 0,
-        giftNameKey: r.gift_name,
-      }));
-      const giftCatalog = Array.from(
-        allRecords.reduce((map, record) => {
-          const key = `${record.gift_id}_${record.gift_name}`;
-          if (!map.has(key)) {
-            map.set(key, {
-              giftName: record.gift_name,
-              giftImg: record.gift_img,
-              giftId: record.gift_id,
-              latestTimestamp: record.timestamp,
-            });
-          }
-          return map;
-        }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
-      );
-      const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
-      const result = {
-        source: "real" as const,
-        month: new Date().toISOString().slice(0, 7).replace("-", ""),
-        nextId: allRecords.length > 0 ? allRecords[allRecords.length - 1].id : 0,
-        totalRecords: allRecords.length,
-        totalCoins,
-        giftCatalog,
-        records: allRecords,
-      };
+      const result = await buildCachedSnapshot(cachedRecords);
       return NextResponse.json<ApiResponse<typeof result>>(
         { code: 0, message: "cached snapshot", data: result },
         { status: 200 },
@@ -69,13 +84,12 @@ export async function GET(request: Request) {
     }
   }
 
-  // 验证 B站凭证，失效则尝试刷新，刷新失败则返回 mock 并要求重新登录
+  // 验证 B站凭证，失效则尝试刷新，刷新失败则要求重新登录
   const credentialResult = await ensureValidCredential(session);
   if (!credentialResult.valid) {
     console.log("[PayRecord] B站凭证失效且刷新失败，需要重新登录");
-    const snapshot = buildMockPayRecordSnapshot();
-    return NextResponse.json<ApiResponse<typeof snapshot>>(
-      { code: 0, message: "needs-relogin", data: snapshot },
+    return NextResponse.json<ApiResponse<null>>(
+      { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
   }
@@ -197,10 +211,10 @@ export async function GET(request: Request) {
         );
       }
     } catch {}
-    
-    const snapshot = buildMockPayRecordSnapshot();
-    return NextResponse.json<ApiResponse<typeof snapshot>>(
-      { code: 0, message: "mock snapshot", data: snapshot },
+
+    // 无缓存数据可降级，返回需要重新登录
+    return NextResponse.json<ApiResponse<null>>(
+      { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
   }

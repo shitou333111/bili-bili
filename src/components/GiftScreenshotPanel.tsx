@@ -6,6 +6,7 @@ import { serverApiUrl } from "@/lib/server-api";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import Dropdown from "@/components/Dropdown";
 
 // ==================== 类型定义 ====================
 
@@ -1633,27 +1634,23 @@ export default function GiftScreenshotPanel({
         </div>
 
         {/* 价格筛选下拉 */}
-        <select
-          value={priceFilter}
-          onChange={e => setPriceFilter(Number(e.target.value))}
+        <Dropdown
+          value={String(priceFilter)}
+          onChange={v => setPriceFilter(Number(v))}
           className="rounded-lg border border-black/10 bg-white px-2 py-1.5 text-xs text-black/65 outline-none"
-        >
-          {PRICE_OPTIONS.map(opt => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
+          options={PRICE_OPTIONS.map(opt => ({ value: String(opt.value), label: opt.label }))}
+        />
 
         {/* 粉丝下拉 */}
-        <select
+        <Dropdown
           value={fanFilter}
-          onChange={e => setFanFilter(e.target.value)}
+          onChange={setFanFilter}
           className="rounded-lg border border-black/10 bg-white px-2 py-1.5 text-xs text-black/65 outline-none"
-        >
-          <option value="">全部粉丝</option>
-          {fanList.map(f => (
-            <option key={f.uid} value={f.uid}>{f.uname}</option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "全部粉丝" },
+            ...fanList.map(f => ({ value: String(f.uid), label: f.uname })),
+          ]}
+        />
 
         {selectedGifts.length > 0 && (
           <button

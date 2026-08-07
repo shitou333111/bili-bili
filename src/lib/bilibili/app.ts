@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
 import type { AuthSession } from "@/lib/auth/session";
 import type { PayRecordSnapshot } from "@/lib/revenue";
-import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 
 type PayRecordItem = {
   id: number;
@@ -221,14 +220,13 @@ export async function fetchRealPayRecordSnapshot(
 }
 
 export async function fetchSnapshotWithFallback(session: AuthSession | null) {
-  if (!session) return buildMockPayRecordSnapshot();
-  if (!session.biliSessdata) return buildMockPayRecordSnapshot();
-
-  try {
-    // 不传 nextId，从第一页（最新记录）开始，自动翻页获取全部
-    const snapshot = await fetchRealPayRecordSnapshot(session);
-    return snapshot;
-  } catch {
-    return buildMockPayRecordSnapshot();
+  if (!session) {
+    throw new Error("未登录");
   }
+  if (!session.biliSessdata) {
+    throw new Error("缺少 SESSDATA");
+  }
+
+  // 不传 nextId，从第一页（最新记录）开始，自动翻页获取全部
+  return fetchRealPayRecordSnapshot(session);
 }

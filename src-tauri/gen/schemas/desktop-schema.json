@@ -6213,6 +6213,108 @@
           "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
         },
         {
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`",
+          "type": "string",
+          "const": "pldownloader:default",
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`"
+        },
+        {
+          "description": "Enables the copy_file_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-copy-file-path",
+          "markdownDescription": "Enables the copy_file_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_private command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-download-private",
+          "markdownDescription": "Enables the download_private command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_public command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-download-public",
+          "markdownDescription": "Enables the download_public command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ping command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-ping",
+          "markdownDescription": "Enables the ping command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_file_private_from_buffer command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-save-file-private-from-buffer",
+          "markdownDescription": "Enables the save_file_private_from_buffer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_file_private_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-save-file-private-from-path",
+          "markdownDescription": "Enables the save_file_private_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_file_public_from_buffer command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-save-file-public-from-buffer",
+          "markdownDescription": "Enables the save_file_public_from_buffer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_file_public_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:allow-save-file-public-from-path",
+          "markdownDescription": "Enables the save_file_public_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_file_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-copy-file-path",
+          "markdownDescription": "Denies the copy_file_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_private command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-download-private",
+          "markdownDescription": "Denies the download_private command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_public command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-download-public",
+          "markdownDescription": "Denies the download_public command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ping command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-ping",
+          "markdownDescription": "Denies the ping command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_file_private_from_buffer command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-save-file-private-from-buffer",
+          "markdownDescription": "Denies the save_file_private_from_buffer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_file_private_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-save-file-private-from-path",
+          "markdownDescription": "Denies the save_file_private_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_file_public_from_buffer command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-save-file-public-from-buffer",
+          "markdownDescription": "Denies the save_file_public_from_buffer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_file_public_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "pldownloader:deny-save-file-public-from-path",
+          "markdownDescription": "Denies the save_file_public_from_path command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures what kind of\noperations are available from the store plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-load`\n- `allow-get-store`\n- `allow-set`\n- `allow-get`\n- `allow-has`\n- `allow-delete`\n- `allow-clear`\n- `allow-reset`\n- `allow-keys`\n- `allow-values`\n- `allow-entries`\n- `allow-length`\n- `allow-reload`\n- `allow-save`",
           "type": "string",
           "const": "store:default",

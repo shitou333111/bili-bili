@@ -131,41 +131,6 @@ function getDateStr(timestamp: number): string {
   return `${y}-${m}-${day}`;
 }
 
-function buildMockOtherStats(): OtherStatsResponse {
-  return {
-    giftStats: {
-      gifts: [
-        { gift_id: 34003, gift_name: "天选福袋", gift_img: "", totalNum: 15, totalValue: 1500, unitPrice: 100 },
-        { gift_id: 34016, gift_name: "天选之星", gift_img: "", totalNum: 8, totalValue: 800, unitPrice: 100 },
-      ],
-      totalCount: 23,
-      totalValue: 2300,
-      hasLuckyTitle: true,
-    },
-    dayStats: {
-      totalDays: 150,
-      maxConsecutiveDays: 45,
-      maxConsecutiveStart: "2026-01-15",
-      maxConsecutiveEnd: "2026-03-01",
-      maxDaysInYear: 200,
-      maxDaysInYearRange: { start: "2025-08-01", end: "2026-07-23" },
-    },
-    roomStats: [
-      {
-        ruid: 100000001,
-        rname: "模拟主播-星辰",
-        totalDays: 80,
-        maxConsecutiveDays: 35,
-        maxConsecutiveStart: "2026-03-01",
-        maxConsecutiveEnd: "2026-04-05",
-        maxDaysInYear: 180,
-        maxDaysInYearRange: { start: "2025-09-01", end: "2026-07-23" },
-      },
-    ],
-    dateRange: { start: "2025-06-01", end: "2026-07-23" },
-  };
-}
-
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
@@ -176,9 +141,9 @@ export async function GET(request: Request) {
   const session = await getActiveSessionFromCookie(sid);
 
   if (!session) {
-    console.log("[OtherStats] 未登录，返回模拟数据");
-    return NextResponse.json<ApiResponse<OtherStatsResponse>>(
-      { code: 0, message: "mock", data: buildMockOtherStats() },
+    console.log("[OtherStats] 未登录，需要重新登录");
+    return NextResponse.json<ApiResponse<null>>(
+      { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
   }
@@ -209,8 +174,14 @@ export async function GET(request: Request) {
     const records = await readPayRecords(session.mid, session.uname || "");
 
     if (records.length === 0) {
+      const empty: OtherStatsResponse = {
+        giftStats: { gifts: [], totalCount: 0, totalValue: 0, hasLuckyTitle: false },
+        dayStats: { totalDays: 0, maxConsecutiveDays: 0, maxConsecutiveStart: "", maxConsecutiveEnd: "", maxDaysInYear: 0, maxDaysInYearRange: { start: "", end: "" } },
+        roomStats: [],
+        dateRange: null,
+      };
       return NextResponse.json<ApiResponse<OtherStatsResponse>>(
-        { code: 0, message: "ok", data: buildMockOtherStats() },
+        { code: 0, message: "empty", data: empty },
         { status: 200 },
       );
     }

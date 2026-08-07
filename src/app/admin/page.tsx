@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { serverApiUrl } from "@/lib/server-api";
+import Dropdown from "@/components/Dropdown";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -20,6 +21,7 @@ type User = {
   updatedAt: string;
   lastUpload?: string;
   isCurrent: boolean;
+  isLocal?: boolean;
 };
 
 type BlindBoxItem = { id: number; name: string; icon: string };
@@ -80,9 +82,13 @@ export default function AdminPage() {
   const loadData = useCallback(async () => {
     // 附带当前浏览器登录账号的 sid，用于默认选中当前用户
     const sid = typeof window !== "undefined" ? localStorage.getItem("bili_live_sid") : null;
+    // 本机登录标识（稳定设备令牌），用于标记“本机登录”账号并置顶
+    const deviceToken = typeof window !== "undefined"
+      ? (localStorage.getItem("bili_live_device_token") ?? localStorage.getItem("bili_live_user_token") ?? "")
+      : "";
     const usersUrl = sid
-      ? `/api/admin/users?_sid=${encodeURIComponent(sid)}`
-      : "/api/admin/users";
+      ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
+      : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
     const [usersRes, configRes] = await Promise.all([
       fetch(serverApiUrl(usersUrl)),
       fetch(serverApiUrl("/api/admin/config")),
@@ -370,6 +376,7 @@ export default function AdminPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
+                      {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
                       {user.isCurrent && <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">当前</span>}
                     </div>
                     <div className="text-[10px] text-black/30 mt-0.5">UID {user.mid}</div>
@@ -572,15 +579,12 @@ export default function AdminPage() {
                         placeholder="自动获取名称"
                         className="flex-1 min-w-[120px] rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
                       />
-                      <select
+                      <Dropdown
                         value={act.type}
-                        onChange={(e) => updateActivity(i, "type", e.target.value)}
-                        className="rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30 bg-white"
-                      >
-                        {config.valid_activity_types.map((t) => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => updateActivity(i, "type", v)}
+                        className="w-32 shrink-0 rounded border border-black/10 bg-white px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                        options={config.valid_activity_types.map((t) => ({ value: t, label: t }))}
+                      />
                       <button onClick={() => removeActivity(i)} className="text-xs text-[#e74c3c] hover:underline ml-auto">删除</button>
                     </div>
                     <input

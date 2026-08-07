@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { buildMockPayRecordSnapshot } from "@/lib/revenue";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
@@ -17,6 +16,8 @@ import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import { downloadJsonFile } from "@/lib/download-json";
+import Dropdown from "@/components/Dropdown";
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts * 1000);
@@ -39,7 +40,7 @@ type Account = {
 };
 
 type Snapshot = {
-  source: "mock" | "real";
+  source: "real";
   month: string;
   nextId: number;
   totalRecords: number;
@@ -776,8 +777,14 @@ export default function HomePage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
   const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot">("home");
-  // 饼图选中状态 - 用于移动端点击显示tooltip
-  const [pieActiveIndex, setPieActiveIndex] = useState<number | null>(null);
+  // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框
+  const [pieActive, setPieActive] = useState<{ chart: "all" | "period"; index: number } | null>(null);
+  const [pieTipPos, setPieTipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 挂载标记：避免在渲染分支中直接使用 isMobileDevice() 造成 SSR/客户端不一致（Hydration 报错）。
+  // 服务端与客户端首次渲染都按桌面处理，挂载后再按真实设备切换。
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const pieIsMobile = mounted && isMobileDevice();
   type FanItem = { mid: number; uname: string; face: string; attribute: number; mtime: number };
   const [fansList, setFansList] = useState<FanItem[]>([]);
   const [fansTotal, setFansTotal] = useState(0);
@@ -801,10 +808,16 @@ export default function HomePage() {
   const [showAdminPwd, setShowAdminPwd] = useState(false);
   const [adminPwd, setAdminPwd] = useState("");
   const [adminPwdError, setAdminPwdError] = useState(false);
-  const [adminUsed, setAdminUsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return !!localStorage.getItem("bili_live_admin_used");
-  });
+  const [adminUsed, setAdminUsed] = useState(false);
+
+  // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
+  // 否则服务端渲染(false)与客户端首次渲染(true)不一致会触发 Hydration 报错，
+  // 进而导致 React 重建组件树、iOS 上部分按钮失去响应。
+  useEffect(() => {
+    if (typeof window !== "undefined" && localStorage.getItem("bili_live_admin_used")) {
+      setAdminUsed(true);
+    }
+  }, []);
 
   // 后台静默登录 admin：有已保存的密码则直接向服务器验证，无需弹窗；失败才弹窗
   function attemptAdminLogin() {
@@ -883,9 +896,11 @@ export default function HomePage() {
   const [showCastleModal, setShowCastleModal] = useState(false);
   const [selectedCastleStat, setSelectedCastleStat] = useState<CastleStat | null>(null);
   const [selectedCastleGift, setSelectedCastleGift] = useState<{ gift_id: number; gift_name: string; gift_img: string; price: number } | null>(null);
-  const [isMockMode, setIsMockMode] = useState(false);
-  const [apiLoggedIn, setApiLoggedIn] = useState(false);
   const [showHistoricalDebug, setShowHistoricalDebug] = useState(false);
+  const [apiLoggedIn, setApiLoggedIn] = useState(false);
+  // 后台同步中（刷新按钮显示三点动画）；首次使用无本地会话（直接扫码登录）
+  const [syncing, setSyncing] = useState(false);
+  const [isFirstTime, setIsFirstTime] = useState(false);
   // 在线状态（离线时使用本地缓存数据，并禁用需要联网的功能）
   const isOnline = useOnlineStatus();
 
@@ -894,9 +909,69 @@ export default function HomePage() {
     document.documentElement.style.setProperty("--page-max-width", `${PAGE_MAX_WIDTH_NUM}px`);
   }, []);
 
+  // 本地优先：返回用户先快速显示本地缓存，再后台同步 B站；首次使用直接扫码登录
   useEffect(() => {
-    fetchData();
+    initLocalFirst();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function initLocalFirst() {
+    const hasSession = typeof window !== "undefined" && !!localStorage.getItem("bili_live_sid");
+    if (!hasSession) {
+      // 首次使用：无本地会话 → 直接跳转扫码登录页，不显示任何数据/模拟数据
+      setIsFirstTime(true);
+      setLoading(false);
+      setApiLoggedIn(false);
+      window.location.href = "/login";
+      return;
+    }
+    // 返回用户：先快速显示本地数据（不发 B站），再后台同步
+    setSyncing(true);
+    setLoading(false);
+    try {
+      await loadCachedQuick();
+      await fetchData();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  /** 快速加载本地缓存（不发 B站），用于本地优先的即时显示 */
+  async function loadCachedQuick() {
+    try {
+      const [accountsRes, snapshotRes, statusRes] = await Promise.all([
+        fetch(apiUrl("/api/auth/accounts"), { cache: "no-store" }),
+        fetch(apiUrl("/api/revenue/pay-record?fast=1"), { cache: "no-store" }),
+        fetch(apiUrl("/api/auth/status"), { cache: "no-store" }),
+      ]);
+      const accountsData = await accountsRes.json();
+      const snapshotData = await snapshotRes.json();
+      const statusData = await statusRes.json();
+      setAccounts(accountsData.data?.accounts || []);
+      if (snapshotData.data) {
+        setSnapshot(snapshotData.data);
+        // 无本地缓存：显示首次初始化提示
+        setIsFirstTime(snapshotData.message === "empty cached");
+      }
+      if (statusData.data?.loggedIn && statusData.data?.sid) {
+        localStorage.setItem("bili_live_sid", statusData.data.sid);
+        const matched = accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data.sid) || null;
+        setCurrentAccount({
+          sid: statusData.data.sid,
+          uname: statusData.data.uname,
+          mid: statusData.data.mid,
+          face: statusData.data.face || matched?.face || "",
+          source: matched?.source || "qr",
+          updatedAt: matched?.updatedAt || "",
+        });
+        setApiLoggedIn(true);
+      } else if (statusData.data?.expired) {
+        setApiLoggedIn(false);
+      }
+    } catch {
+      // 忽略，fetchData 会处理
+    }
+  }
 
   // 点击空白区域关闭统计规则弹窗
   const statsRulesRef = useRef<HTMLDivElement>(null);
@@ -946,7 +1021,8 @@ export default function HomePage() {
 function apiUrl(path: string): string {
   if (typeof window === "undefined") return path;
   const sid = localStorage.getItem("bili_live_sid");
-  const userToken = localStorage.getItem("bili_live_user_token");
+  // 用户令牌统一使用“稳定设备令牌”：本机登录账号以它为准，且不会因 admin 模拟切换被覆盖
+  const userToken = getDeviceToken();
   const params: string[] = [];
   if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
   if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
@@ -962,6 +1038,21 @@ function apiUrl(path: string): string {
   }
   // Tauri 模式下需转换为完整 URL（静态前端无服务器处理相对路径）
   return serverApiUrl(url);
+}
+
+/**
+ * 获取本设备的稳定设备令牌。
+ * 该令牌用于标识“本机登录”账号，一旦生成便不再改变（admin 模拟切换不会覆盖它）。
+ * 首次调用时从旧的 bili_live_user_token 继承，避免老用户重新登录。
+ */
+function getDeviceToken(): string {
+  if (typeof window === "undefined") return "";
+  let dt = localStorage.getItem("bili_live_device_token");
+  if (!dt) {
+    dt = localStorage.getItem("bili_live_user_token") || "";
+    if (dt) localStorage.setItem("bili_live_device_token", dt);
+  }
+  return dt;
 }
 
 async function fetchData() {
@@ -983,11 +1074,19 @@ async function fetchData() {
         setApiLoggedIn(true);
         // 同步 localStorage，确保 admin 页据此标记当前激活用户
         localStorage.setItem("bili_live_sid", statusData.data.sid);
-        setCurrentAccount(accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data?.sid) || null);
-        setIsMockMode(false);
+        // 当前账号优先用 status 返回的完整信息（即使该账号是服务器上的其他用户，也能正确显示昵称/头像）
+        const matched = accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data?.sid) || null;
+        setCurrentAccount({
+          sid: statusData.data.sid,
+          uname: statusData.data.uname,
+          mid: statusData.data.mid,
+          face: statusData.data.face || matched?.face || "",
+          source: matched?.source || "qr",
+          updatedAt: matched?.updatedAt || "",
+        });
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
-        // B站凭证失效且刷新失败，展示模拟数据
+        // B站凭证失效且刷新失败 → 需要重新登录
         await handleAuthExpired();
         setLoading(false);
         return;
@@ -1000,22 +1099,13 @@ async function fetchData() {
           await handleAuthExpired();
           setLoading(false);
           return;
-        } else if (snapshotData.message === "mock snapshot") {
-          setIsMockMode(true);
-          setAuthError("当前查看的是模拟数据，切换账号查看自己数据");
         } else {
-          setIsMockMode(false);
           setAuthError(null);
         }
-      } else {
-        // 没有真实数据，回退到模拟数据
-        setSnapshot(buildMockPayRecordSnapshot());
-        setIsMockMode(true);
-        setAuthError("当前查看的是模拟数据，切换账号查看自己数据");
       }
 
-      // 有真实数据或模拟数据时获取统计（模拟模式下 API 返回模拟数据）
-      if (snapshotData.data?.source === "real" || snapshotData.data?.source === "mock") {
+      // 有真实数据时获取统计
+      if (snapshotData.data?.source === "real") {
         await Promise.all([
           fetchStats(),
           fetchCertifications(),
@@ -1361,7 +1451,7 @@ async function fetchData() {
   }
 
   async function refreshData() {
-    setLoading(true);
+    setSyncing(true);
     setAuthError(null);
     try {
       const snapshotRes = await fetch(apiUrl("/api/revenue/pay-record?refresh=true"), { cache: "no-store" });
@@ -1371,15 +1461,12 @@ async function fetchData() {
         // 根据 message 判断数据来源
         if (snapshotData.message === "needs-relogin") {
           await handleAuthExpired();
-          setLoading(false);
           return;
         } else if (snapshotData.message === "cached snapshot") {
           setAuthError("B站请求失败，当前显示的是历史缓存数据。");
-        } else if (snapshotData.message === "mock snapshot") {
-          setAuthError("未登录B站，查看的是模拟数据。扫码登录查看自己的数据");
         }
       }
-      if (snapshotData.data?.source === "real" || snapshotData.data?.source === "mock") {
+      if (snapshotData.data?.source === "real") {
         await Promise.all([
           fetchStats(),
           fetchCertifications(),
@@ -1390,7 +1477,7 @@ async function fetchData() {
       console.error("Failed to refresh data:", error);
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
-      setLoading(false);
+      setSyncing(false);
       setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
     }
   }
@@ -1419,40 +1506,32 @@ async function fetchData() {
   async function logout() {
     try {
       await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
-      setCurrentAccount(null);
-      setSnapshot(buildMockPayRecordSnapshot());
-      setBlindBoxStats(null);
-      setSynthesisStats(null);
     } catch (error) {
       console.error("Failed to logout:", error);
     }
-  }
-
-  function switchToMock() {
-    setSnapshot(buildMockPayRecordSnapshot());
-    setBlindBoxStats(null);
-    setSynthesisStats(null);
-    setIsMockMode(true);
-    setAuthError("当前查看的是模拟数据，切换账号查看自己数据");
-    // 模拟模式下立即调用统计API获取模拟统计数据
-    fetchStats();
-    fetchCertifications();
-    fetchOtherStats();
-  }
-
-  /** 登录凭证失效时：清除会话，展示模拟数据，不跳转登录页 */
-  async function handleAuthExpired() {
-    await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
+    // 清除本地会话并回到登录页
+    localStorage.removeItem("bili_live_sid");
     setCurrentAccount(null);
     setApiLoggedIn(false);
-    setSnapshot(buildMockPayRecordSnapshot());
+    setSnapshot(null);
     setBlindBoxStats(null);
     setSynthesisStats(null);
-    setIsMockMode(true);
-    setAuthError("B站登录已失效，当前查看的是模拟数据");
-    fetchStats();
-    fetchCertifications();
-    fetchOtherStats();
+    window.location.href = "/login";
+  }
+
+  /** 登录凭证失效时：清除会话并跳转登录页重新登录 */
+  async function handleAuthExpired() {
+    try {
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
+    } catch { /* ignore */ }
+    localStorage.removeItem("bili_live_sid");
+    setCurrentAccount(null);
+    setApiLoggedIn(false);
+    setSnapshot(null);
+    setBlindBoxStats(null);
+    setSynthesisStats(null);
+    setAuthError("B站登录已失效，请重新登录");
+    window.location.href = "/login";
   }
 
   const isLoggedIn = Boolean(currentAccount) || apiLoggedIn;
@@ -1731,6 +1810,18 @@ async function fetchData() {
         </div>
       )}
 
+      {/* 首次初始化提示：无本地数据、正在后台拉取时全屏提示 */}
+      {isFirstTime && syncing && (
+        <div className="fixed inset-0 z-[9999] bg-[#f5f5f5]/95 backdrop-blur flex items-center justify-center px-6">
+          <div className="text-center max-w-xs">
+            <div className="w-10 h-10 border-[3px] border-[#1f1c17] border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+            <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
+            <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会变快。</p>
+          </div>
+        </div>
+      )}
+
       {/* Revenue module - 保持挂载，切换模块时仅切换 display，避免重新绘制图表/卡顿 */}
       <div className="min-h-full flex flex-col" style={{ display: activeModule === "revenue" ? "flex" : "none" }}>
         {/* Loading state (only for revenue module) */}
@@ -1765,16 +1856,24 @@ async function fetchData() {
                   </button>
                 ))}
               </div>
-              {/* 刷新按钮（右侧）：缺口弧形边框，与左侧按钮组同高，环形与时间同时显示 */}
+              {/* 刷新按钮（右侧）：缺口弧形边框；同步中显示三点动画，否则显示时间/“刷新” */}
               <div className="shrink-0">
                 <button
                   onClick={refreshData}
-                  disabled={loading}
+                  disabled={syncing || loading}
                   className="refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px]"
                 >
-                  {lastRefreshTime ? (
+                  {syncing ? (
+                    <span className="relative z-10 flex items-center gap-[2px] text-[#22c55e] select-none">
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "0ms" }} />
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "150ms" }} />
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "300ms" }} />
+                    </span>
+                  ) : lastRefreshTime ? (
                     <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
-                  ) : null}
+                  ) : (
+                    <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">刷新</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -1842,14 +1941,12 @@ async function fetchData() {
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium text-black/65">最新记录（验证是否最新）</span>
                       {isRealSnapshot && (
-                        <a
-                          href="/api/export/json"
-                          download
-                          onClick={() => showToast("JSON 已开始下载")}
+                        <button
+                          onClick={() => downloadJsonFile()}
                           className="rounded-full border border-[#1f1c17] px-3 py-0.5 text-xs font-medium text-[#1f1c17] transition hover:bg-black/5 active:scale-95"
                         >
                           下载全部数据
-                        </a>
+                        </button>
                       )}
                     </div>
                     <div className="flex items-center justify-between text-sm">
@@ -2017,14 +2114,19 @@ async function fetchData() {
                                     paddingAngle={0}
                                     isAnimationActive={false}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    onClick={(data: any, index: number) => {
+                                    onClick={(data: any, index: number, e: any) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
                                         const ruidStr = String(data.ruid);
                                         setOverviewAnchor(ruidStr === overviewAnchor ? "" : ruidStr);
                                         setSelectedDay(null);
                                       }
-                                      // 移动端点击切换tooltip显示
-                                      setPieActiveIndex(pieActiveIndex === index ? null : index);
+                                      // 点击扇形：选中/取消选中。移动端只有选中才显示提示框
+                                      setPieActive(pieActive?.chart === "all" && pieActive?.index === index ? null : { chart: "all", index });
+                                      // 记录点击位置，用于移动端提示框定位（约束在视口内）
+                                      const pt = (e as any)?.clientX;
+                                      if (typeof pt === "number") {
+                                        setPieTipPos({ x: (e as any).clientX, y: (e as any).clientY });
+                                      }
                                     }}
                                     cursor="pointer"
                                   >
@@ -2037,9 +2139,22 @@ async function fetchData() {
                                       />
                                     ))}
                                   </Pie>
-                                  <Tooltip
-                                    content={<PieTooltip />}
-                                  />
+                                  {/* 桌面端用 hover 显示提示框 */}
+                                  {!pieIsMobile && (
+                                    <Tooltip content={<PieTooltip />} />
+                                  )}
+                                  {/* 移动端：仅选中时显示提示框 */}
+                                  {pieIsMobile && pieActive?.chart === "all" && allTimePieData[pieActive.index] && (
+                                    <PieTooltip
+                                      active
+                                      coordinate={pieTipPos}
+                                      payload={[{
+                                        name: allTimePieData[pieActive.index].rname,
+                                        value: allTimePieData[pieActive.index].coins,
+                                        payload: { fill: allTimePieData[pieActive.index].fill, battery: allTimePieData[pieActive.index].battery },
+                                      }]}
+                                    />
+                                  )}
                                 </PieChart>
                               </ResponsiveContainer>
                             </div>
@@ -2086,14 +2201,18 @@ async function fetchData() {
                                     paddingAngle={0}
                                     isAnimationActive={false}
                                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    onClick={(data: any, index: number) => {
+                                    onClick={(data: any, index: number, e: any) => {
                                       if (data?.ruid !== null && data?.ruid !== undefined) {
                                         const ruidStr = String(data.ruid);
                                         setOverviewAnchor(ruidStr === overviewAnchor ? "" : ruidStr);
                                         setSelectedDay(null);
                                       }
-                                      // 移动端点击切换tooltip显示
-                                      setPieActiveIndex(pieActiveIndex === index ? null : index);
+                                      // 点击扇形：选中/取消选中。移动端只有选中才显示提示框
+                                      setPieActive(pieActive?.chart === "period" && pieActive?.index === index ? null : { chart: "period", index });
+                                      const pt = (e as any)?.clientX;
+                                      if (typeof pt === "number") {
+                                        setPieTipPos({ x: (e as any).clientX, y: (e as any).clientY });
+                                      }
                                     }}
                                     cursor="pointer"
                                   >
@@ -2106,9 +2225,22 @@ async function fetchData() {
                                       />
                                     ))}
                                   </Pie>
-                                  <Tooltip
-                                    content={<PieTooltip />}
-                                  />
+                                  {/* 桌面端用 hover 显示提示框 */}
+                                  {!pieIsMobile && (
+                                    <Tooltip content={<PieTooltip />} />
+                                  )}
+                                  {/* 移动端：仅选中时显示提示框 */}
+                                  {pieIsMobile && pieActive?.chart === "period" && periodPieData[pieActive.index] && (
+                                    <PieTooltip
+                                      active
+                                      coordinate={pieTipPos}
+                                      payload={[{
+                                        name: periodPieData[pieActive.index].rname,
+                                        value: periodPieData[pieActive.index].coins,
+                                        payload: { fill: periodPieData[pieActive.index].fill, battery: periodPieData[pieActive.index].battery },
+                                      }]}
+                                    />
+                                  )}
                                 </PieChart>
                               </ResponsiveContainer>
                             </div>
@@ -2118,18 +2250,19 @@ async function fetchData() {
 
                       {/* Anchor dropdown - uses periodAnchors when date selected, else overviewAnchors */}
                       <div className="mt-1">
-                        <select
+                        <Dropdown
                           value={overviewAnchor}
-                          onChange={(e) => { setOverviewAnchor(e.target.value); setSelectedDay(null); }}
+                          onChange={(v) => { setOverviewAnchor(v); setSelectedDay(null); }}
+                          placeholder="全部主播（电池）"
                           className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-black/80 outline-none"
-                        >
-                          <option value="">全部主播（电池）</option>
-                          {(selectedMonth ? periodAnchors : overviewAnchors).map((anchor) => (
-                            <option key={anchor.ruid} value={anchor.ruid}>
-                              {anchor.rname} ({anchor.coins})
-                            </option>
-                          ))}
-                        </select>
+                          options={[
+                            { value: "", label: "全部主播（电池）" },
+                            ...(selectedMonth ? periodAnchors : overviewAnchors).map((a) => ({
+                              value: String(a.ruid),
+                              label: `${a.rname} (${a.coins})`,
+                            })),
+                          ]}
+                        />
                       </div>
                     </div>
                   </div>
@@ -2276,18 +2409,18 @@ async function fetchData() {
                                 </button>
                               ))}
                             </div>
-                            <select
+                            <Dropdown
                               value={currentFilter.ruid}
-                              onChange={(e) => handleAnchorFilter(stat.blindBoxId, e.target.value)}
-                              className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none focus:border-black/30"
-                            >
-                              <option value="">全部主播</option>
-                              {stat.anchors.map((anchor) => (
-                                <option key={anchor.ruid} value={anchor.ruid}>
-                                  {anchor.rname} ({anchor.count})
-                                </option>
-                              ))}
-                            </select>
+                              onChange={(v) => handleAnchorFilter(stat.blindBoxId, v)}
+                              className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
+                              options={[
+                                { value: "", label: "全部主播" },
+                                ...stat.anchors.map((a) => ({
+                                  value: String(a.ruid),
+                                  label: `${a.rname} (${a.count})`,
+                                })),
+                              ]}
+                            />
                           </div>
 
                           {/* Row 3: 统计数据 */}
@@ -2800,32 +2933,30 @@ async function fetchData() {
                 )}
               </div>
 
-              {/* 用户卡片：显示当前账号头像+昵称，可滚动切换账号（置于页面下方） */}
+              {/* 用户卡片：显示当前账号头像+昵称，可切换本机账号（置于页面下方） */}
               <div className="rounded-xl border border-black/10 bg-white/85 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur mt-3">
-                {isLoggedIn || isMockMode ? (
+                {isLoggedIn ? (
                   <>
                     <div className="flex items-center gap-3 mb-3">
-                      {isMockMode ? (
-                        <div className="w-12 h-12 rounded-full bg-[#1f1c17] flex items-center justify-center text-xl">🎮</div>
-                      ) : currentAccount?.face ? (
+                      {currentAccount?.face ? (
                         <img src={fixImageUrl(currentAccount.face)} alt="" className="w-12 h-12 rounded-full object-cover" />
                       ) : (
                         <div className="w-12 h-12 rounded-full bg-black/5 flex items-center justify-center text-lg text-black/40">{currentAccount?.uname?.slice(0, 1) || "?"}</div>
                       )}
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold truncate">{isMockMode ? "模拟数据" : (currentAccount?.uname || currentAccount?.mid || "未命名账号")}</div>
+                        <div className="text-sm font-semibold truncate">{currentAccount?.uname || currentAccount?.mid || "未命名账号"}</div>
                         <div className="text-xs text-black/40">点击下方账号即可切换</div>
                       </div>
-                      {!isMockMode && currentAccount?.mid && (
+                      {currentAccount?.mid && (
                         <span className="ml-auto text-[10px] text-black/30">UID {currentAccount.mid}</span>
                       )}
                     </div>
-                    {/* 账号列表：区域内滚动，显式展示所有账号（当前账号已显示在最上方，不再重复列出） */}
+                    {/* 账号列表：只显示本机登录的账号（当前账号已显示在最上方，不再重复列出） */}
                     <div className="space-y-1.5">
                       {accounts
-                        .filter((acc) => isMockMode || acc.sid !== currentAccount?.sid)
+                        .filter((acc) => acc.sid !== currentAccount?.sid)
                         .map((acc) => {
-                        const isSelected = !isMockMode && acc.sid === currentAccount?.sid;
+                        const isSelected = acc.sid === currentAccount?.sid;
                         return (
                           <button
                             key={acc.sid}
@@ -2840,28 +2971,9 @@ async function fetchData() {
                               <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">{acc.uname.slice(0, 1)}</span>
                             )}
                             <span className="truncate flex-1">{acc.uname}</span>
-                            {isSelected && (
-                              <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            )}
                           </button>
                         );
                       })}
-                      <button
-                        onClick={switchToMock}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-sm transition ${
-                          isMockMode ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
-                        }`}
-                      >
-                        <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">🎮</span>
-                        <span>模拟数据</span>
-                        {isMockMode && (
-                          <svg className="w-4 h-4 ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        )}
-                      </button>
                     </div>
                     <div className="flex gap-2 mt-3">
                       <Link href="/login" className="flex-1 rounded-lg border border-black/10 py-2 text-center text-sm text-black/70 hover:bg-black/5 transition">
@@ -2897,7 +3009,10 @@ async function fetchData() {
                     setVersionClickCount(next);
                     if (next >= 3) {
                       setVersionClickCount(0);
-                      attemptAdminLogin();
+                      // 三连击仅显示"管理后台"卡片，不再直接进入 admin。
+                      // 点击"管理后台"卡片才触发登录流程（首次弹密码框/非首次后台静默登录）。
+                      localStorage.setItem("bili_live_admin_used", "1");
+                      setAdminUsed(true);
                     }
                   }}
                   className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"

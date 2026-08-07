@@ -12,6 +12,7 @@ import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import Dropdown from "@/components/Dropdown";
 
 type AnchorGiftRecord = {
   uid: number;
@@ -870,18 +871,19 @@ async function fetchData() {
                         })()}
 
                         <div className="mt-1">
-                          <select
+                          <Dropdown
                             value={selectedFan}
-                            onChange={(e) => { setSelectedFan(e.target.value); setSelectedDay(null); }}
+                            onChange={(v) => { setSelectedFan(v); setSelectedDay(null); }}
+                            placeholder="全部粉丝（电池）"
                             className="w-full rounded border border-black/10 bg-white px-2 py-1 text-xs text-black/80 outline-none"
-                          >
-                            <option value="">全部粉丝（电池）</option>
-                            {(selectedMonth ? periodFans : allFans).map((fan) => (
-                              <option key={fan.uid} value={fan.uid}>
-                                {fan.uname} ({formatBattery(fan.hamster)})
-                              </option>
-                            ))}
-                          </select>
+                            options={[
+                              { value: "", label: "全部粉丝（电池）" },
+                              ...(selectedMonth ? periodFans : allFans).map((fan) => ({
+                                value: String(fan.uid),
+                                label: `${fan.uname} (${formatBattery(fan.hamster)})`,
+                              })),
+                            ]}
+                          />
                         </div>
                       </div>
                     </div>
@@ -1008,10 +1010,9 @@ async function fetchData() {
                                     );
                                   })}
                               </div>
-                              <select
+                              <Dropdown
                                 value={blindBoxFanFilter}
-                                onChange={(e) => {
-                                  const fanUid = e.target.value;
+                                onChange={(fanUid) => {
                                   setBlindBoxFanFilter(fanUid);
                                   const dateParam = blindBoxDateFilter !== "all" ? `dateRange=${blindBoxDateFilter}` : "";
                                   const fanParam = fanUid ? `fan=${fanUid}` : "";
@@ -1021,15 +1022,15 @@ async function fetchData() {
                                     if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
                                   });
                                 }}
-                                className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none focus:border-black/30"
-                              >
-                                <option value="">全部粉丝</option>
-                                {(fullBlindBoxAnchors[bb.gift_id] ?? bb.anchors).map((a) => (
-                                  <option key={a.ruid} value={a.ruid}>
-                                    {a.rname} ({a.count})
-                                  </option>
-                                ))}
-                              </select>
+                                className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
+                                options={[
+                                  { value: "", label: "全部粉丝" },
+                                  ...(fullBlindBoxAnchors[bb.gift_id] ?? bb.anchors).map((a) => ({
+                                    value: String(a.ruid),
+                                    label: `${a.rname} (${a.count})`,
+                                  })),
+                                ]}
+                              />
                             </div>
 
                             {/* Row 3: 统计数据 */}

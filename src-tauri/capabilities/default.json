@@ -20,6 +20,7 @@
     "fs:allow-appdata-write-recursive",
     "fs:allow-appdata-meta-recursive",
     "store:default",
-    "opener:default"
+    "opener:default",
+    "pldownloader:default"
   ]
 }

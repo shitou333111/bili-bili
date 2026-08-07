@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { readPayRecords, getBeijingTime } from "@/lib/user-data";
-import { generateMockRecords } from "@/lib/revenue";
 import type { RawGiftRecord } from "@/lib/revenue";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
-  const sidMatch = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`));
-  const sid = sidMatch?.[1] ?? null;
+  const url = new URL(request.url);
+  // 会话 ID：优先 cookie，fallback 到 query 参数（Tauri WebView 可能不发送 cookie）
+  const sid = url.searchParams.get("_sid")
+    ?? cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`))?.[1]
+    ?? null;
   const session = await getActiveSessionFromCookie(sid);
 
   let records: RawGiftRecord[];
@@ -32,8 +34,10 @@ export async function GET(request: Request) {
       source: session.source,
     };
   } else {
-    records = generateMockRecords();
-    fileName = "bili-revenue-mock.json";
+    return NextResponse.json(
+      { code: 403, message: "未登录" },
+      { status: 403 },
+    );
   }
 
   const totalCoins = records.reduce((sum, r) => {
