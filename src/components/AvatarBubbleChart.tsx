@@ -599,11 +599,13 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     : `单元格面积代表消费额，共显示 ${displayCount} 个粉丝`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      {/* 外层可滚动容器，min-h-full + items-center：内容矮时垂直居中，内容高时顶部对齐并自然下滚，
+          避免 iOS 上“居中 + 内部滚动”导致图表底部被截断/不可达 */}
+      <div className="min-h-full flex items-center justify-center px-4" onClick={(e) => e.stopPropagation()}>
       <div
-        className="relative mx-auto flex flex-col items-center max-h-screen overflow-y-auto"
+        className="relative flex flex-col items-center"
         style={{ width: canvasDims.w + 32, paddingTop: "calc(16px + var(--safe-top, 0px))", paddingBottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }}
-        onClick={(e) => e.stopPropagation()}
       >
         <p className="text-white/80 text-sm mb-1 w-full text-center truncate px-2" title={title}>{title}</p>
         <p className="text-white/40 text-xs mb-2">{noteText}</p>
@@ -653,6 +655,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
           </div>
         )}
 
+      </div>
       </div>
     </div>
   );

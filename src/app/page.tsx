@@ -821,6 +821,21 @@ export default function HomePage() {
     }
   }, []);
 
+  // 恢复上次成功的刷新时间（本地优先原则：静默后台同步完成后也会写入时间）
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("bili_live_last_refresh");
+      if (saved) setLastRefreshTime(saved);
+    }
+  }, []);
+
+  /** 记录刷新成功时间并持久化，供本次与下次打开显示 */
+  function noteRefreshTime() {
+    const t = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    setLastRefreshTime(t);
+    try { localStorage.setItem("bili_live_last_refresh", t); } catch { /* ignore */ }
+  }
+
   // 后台静默登录 admin：有已保存的密码则直接向服务器验证，无需弹窗；失败才弹窗
   function attemptAdminLogin() {
     const cred = localStorage.getItem("bili_live_admin_cred");
@@ -842,7 +857,9 @@ export default function HomePage() {
         .then(async (res) => {
           if (res.ok) {
             // 静默登录成功，直接进入 admin，不显示登录框
-            window.location.href = serverApiUrl("/admin");
+            // 用本地路径 /admin（而非 serverApiUrl("/admin")）加载同源的 admin 页面，
+            // 保证与首页共享 localStorage（跨源会导致密码/设备令牌/sid 读取失败，引发二次弹窗等连锁问题）。
+            window.location.href = "/admin";
           } else {
             // 密码已变更等原因导致自动登录失败，弹出模态框重新输入
             localStorage.removeItem("bili_live_admin_cred");
@@ -875,7 +892,8 @@ export default function HomePage() {
       setAdminUsed(true);
       setShowAdminPwd(false);
       setAdminPwd("");
-      window.location.href = serverApiUrl("/admin");
+      // 进入同源本地 /admin（与首页共享 localStorage），避免跨源导致二次登录/无法识别当前账号
+      window.location.href = "/admin";
     } else {
       setAdminPwdError(true);
     }
@@ -1119,6 +1137,8 @@ async function fetchData(background = false) {
           fetchCertifications(),
           fetchOtherStats(),
         ]);
+        // 后台静默同步成功也记录刷新时间（本地优先：打开即显示）
+        noteRefreshTime();
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -1486,7 +1506,7 @@ async function fetchData(background = false) {
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
       setSyncing(false);
-      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
+      noteRefreshTime();
     }
   }
 

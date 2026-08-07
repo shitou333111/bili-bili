@@ -40,10 +40,12 @@ export async function GET(request: Request) {
   const deviceToken = url.searchParams.get("_device_token") ?? null;
 
   const state = await readState();
-  // 本机会话（bili-live-state.json 只存本机登录账号）
+  // 本机会话（bili-live-state.json 只存本机登录账号）。
+  // 只有携带了与客户端一致的 deviceToken 时，才把对应账号标记为"本机"。
+  // 未携带/不匹配 deviceToken 时一律不标记为"本机"（避免把服务器上残留的其他设备账号误标为"本机"）。
   const localSessions = deviceToken
     ? state.sessions.filter((s) => s.userToken === deviceToken)
-    : state.sessions;
+    : [];
 
   // users-list.json 是服务器上的"使用用户表"，包含所有（含服务器收集的）用户
   const usersList: UsersListEntry[] = await readUsersList();
@@ -61,6 +63,7 @@ export async function GET(request: Request) {
   for (const s of localSessions) {
     const existing = map.get(s.mid);
     map.set(s.mid, {
+      sid: s.sid,
       mid: s.mid,
       uname: s.uname,
       face: s.face,
@@ -74,7 +77,7 @@ export async function GET(request: Request) {
     Array.from(map.values()).map(async (u) => {
       const lastUpload = await getLastUploadDate(u.mid);
       return {
-        sid: null, // 非本机账号无本地会话 sid
+        sid: u.sid ?? null, // 本机登录账号才有本地会话 sid（可用于切换）
         uname: u.uname,
         mid: u.mid,
         face: u.face,
@@ -82,7 +85,7 @@ export async function GET(request: Request) {
         createdAt: "",
         updatedAt: u.updatedAt,
         lastUpload: lastUpload || undefined,
-        isCurrent: false, // 本机登录账号才可能是"当前"
+        isCurrent: u.sid !== null && u.sid === currentSid, // 标记当前激活账号
         isLocal: !!u.isLocal,
       };
     })

@@ -28,9 +28,10 @@ export default function SafeAreaStyler() {
     if (isTauri) {
       if (isIOS) {
         // iOS：刘海 + Home indicator，顶部安全距离（在实测值基础上减3px，避免与通知栏间空白过大）；
-        // 托盘栏上移：上一版误用了"减小 bottom"导致反而下移3px，现从 9px 增大到 15px（净上移6px）
+        // 托盘栏上移：上一版误用了"减小 bottom"导致反而下移3px，从 9px 增大到 15px（净上移6px），
+        // 再上移 3px → 18px，满足"只调 iOS 向上移动3px"
         safeTop = "calc(env(safe-area-inset-top, 47px) - 3px)";
-        dockBottom = "15px";
+        dockBottom = "18px";
       } else if (isAndroid) {
         // Android：状态栏，留少量安全距离，托盘栏上移（增大 bottom），避免偏低
         safeTop = "env(safe-area-inset-top, 24px)";
@@ -53,6 +54,8 @@ export default function SafeAreaStyler() {
 
     doc.style.setProperty("--safe-top", safeTop);
     doc.style.setProperty("--dock-bottom", dockBottom);
+    // 标记平台，供 CSS 做平台差异化（如安卓托盘下方背景透明）
+    doc.setAttribute("data-platform", isIOS ? "ios" : isAndroid ? "android" : "other");
   }, []);
 
   return null;

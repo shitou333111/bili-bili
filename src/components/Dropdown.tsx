@@ -41,11 +41,11 @@ export default function Dropdown({ value, onChange, options, className = "", pla
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const margin = 12;
-    // 列表宽度取触发按钮与视口的较小值，保证四周留边距
-    const width = Math.min(rect.width, window.innerWidth - margin * 2);
+    // 列表宽度取触发按钮与视口的较小值（最小 150，保证四周留边距且不过窄）
+    const width = Math.min(Math.max(rect.width, 150), window.innerWidth - margin * 2);
     let top = rect.bottom + 4;
     // 预估列表高度（受 max-height 限制），若超出视口则向上弹出
-    const estimatedH = Math.min(options.length * 32 + 16, 220);
+    const estimatedH = Math.min(options.length * 40 + 16, 280);
     if (top + estimatedH > window.innerHeight - margin) {
       top = Math.max(margin, rect.top - estimatedH - 4);
     }
@@ -104,7 +104,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
       {open && pos && (
         <div
           ref={listRef}
-          className="fixed z-[70] max-h-[220px] overflow-y-auto rounded-lg border border-black/10 bg-white shadow-xl"
+          className="fixed z-[70] max-h-[280px] overflow-y-auto rounded-lg border border-black/10 bg-white shadow-xl"
           style={{ top: pos.top, left: pos.left, width: pos.width }}
         >
           {options.map((o) => (
@@ -115,7 +115,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
                 onChange(o.value);
                 setOpen(false);
               }}
-              className={`block w-full px-3 py-2 text-left text-xs transition ${
+              className={`block w-full px-3.5 py-2.5 text-left text-[13px] transition ${
                 o.value === value ? "bg-[#1f1c17] text-white" : "text-black/70 hover:bg-black/5"
               }`}
             >
