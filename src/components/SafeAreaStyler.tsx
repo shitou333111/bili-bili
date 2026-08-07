@@ -28,9 +28,9 @@ export default function SafeAreaStyler() {
     if (isTauri) {
       if (isIOS) {
         // iOS：刘海 + Home indicator，顶部安全距离（在实测值基础上减3px，避免与通知栏间空白过大）；
-        // 托盘栏上移3px（减小 bottom）
+        // 托盘栏上移：上一版误用了"减小 bottom"导致反而下移3px，现从 9px 增大到 15px（净上移6px）
         safeTop = "calc(env(safe-area-inset-top, 47px) - 3px)";
-        dockBottom = "9px";
+        dockBottom = "15px";
       } else if (isAndroid) {
         // Android：状态栏，留少量安全距离，托盘栏上移（增大 bottom），避免偏低
         safeTop = "env(safe-area-inset-top, 24px)";

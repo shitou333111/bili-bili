@@ -1,0 +1,1000 @@
+{
+  "exportedAt": "2026-07-31 23:12:15",
+  "totalRecords": 80,
+  "records": [
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510655,
+      "settle_type": 1,
+      "reward_name": "盛夏鎏光",
+      "reward_value": 3000000,
+      "card_idx": [
+        1,
+        5,
+        4,
+        3,
+        7,
+        6,
+        2
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510588,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510579,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510570,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        7,
+        6,
+        4,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510505,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510498,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510487,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        3,
+        5,
+        6,
+        4,
+        7,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510418,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        1,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510374,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510362,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        3,
+        7,
+        4,
+        2,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510349,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785510322,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        5,
+        2,
+        6,
+        4,
+        7,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785509939,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        5,
+        7,
+        1,
+        2,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785509830,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785509823,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        6,
+        1,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785352257,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        3,
+        1,
+        6,
+        7,
+        4,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785352093,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        6,
+        7,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785352073,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        4,
+        5,
+        1,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785352009,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785351999,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785351990,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785351984,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        2,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785351971,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785349337,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785349332,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        3,
+        7,
+        4,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785344001,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343993,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343988,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343983,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        6,
+        4,
+        5,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343968,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        1,
+        7,
+        4,
+        2,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343939,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        7,
+        4,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343927,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343920,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343860,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        7,
+        1,
+        4,
+        5,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343746,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        2,
+        5,
+        6,
+        1,
+        4,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343508,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343448,
+      "settle_type": 1,
+      "reward_name": "萤光枕梦",
+      "reward_value": 120000,
+      "card_idx": [
+        5,
+        4,
+        6,
+        3,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343432,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343425,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343418,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        5,
+        1,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343409,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343402,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        4,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343394,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        3,
+        4,
+        5,
+        7,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343376,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        4,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343368,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343295,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343289,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343278,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        5,
+        7,
+        2,
+        6,
+        4,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343244,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        3,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343235,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        5,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343131,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        5,
+        1,
+        3,
+        6,
+        2,
+        7,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343012,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785343005,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        1,
+        2,
+        3,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342993,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342916,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        5,
+        6,
+        7,
+        2,
+        3,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342866,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        2,
+        1,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342855,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        4,
+        5,
+        3,
+        1,
+        2,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342774,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        1,
+        3,
+        5,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342760,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342727,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        5,
+        4,
+        6,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342689,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        4,
+        6,
+        7,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785342013,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785167899,
+      "settle_type": 1,
+      "reward_name": "清溪鱼戏",
+      "reward_value": 50000,
+      "card_idx": [
+        7,
+        5,
+        6,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785076263,
+      "settle_type": 1,
+      "reward_name": "云屿栖风",
+      "reward_value": 300000,
+      "card_idx": [
+        2,
+        5,
+        6,
+        7,
+        3,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785076007,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        5,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1785075962,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        7,
+        2,
+        4,
+        8
+      ]
+    },
+    {
+      "ruid": 355373607,
+      "settle_time": 1784920586,
+      "settle_type": 1,
+      "reward_name": "月夜清荷",
+      "reward_value": 20000,
+      "card_idx": [
+        6,
+        3,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784920451,
+      "settle_type": 1,
+      "reward_name": "清溪鱼戏",
+      "reward_value": 50000,
+      "card_idx": [
+        7,
+        4,
+        2,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784920312,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784920301,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        6,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784906641,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        7,
+        2,
+        4,
+        1,
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884034,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884029,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884023,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884016,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884009,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784884002,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784883995,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        3,
+        9
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784883986,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784883978,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        1,
+        5,
+        9
+      ]
+    }
+  ]
+}

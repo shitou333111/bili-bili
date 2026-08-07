@@ -14,9 +14,8 @@ const CASTLE_ID = 32132; // 浪漫城堡
 const XINDONG_PRICE = 150; // 心动盲盒单价
 const DATA_DIR = path.join(process.cwd(), ".data");
 
-function getBlindBoxRecordsDir(mid: number, uname: string): string {
-  const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-  return path.join(DATA_DIR, `uid_${mid}_${safeName}`);
+function getBlindBoxRecordsDir(mid: number, _uname?: string): string {
+  return path.join(DATA_DIR, `uid_${mid}`);
 }
 
 type DrawRecord = {

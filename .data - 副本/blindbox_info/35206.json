@@ -1,0 +1,57 @@
+{
+  "blind_box_id": 35206,
+  "blind_box_name": "幸运盲盒",
+  "blind_box_img": "",
+  "blind_price": 50,
+  "gifts": [
+    {
+      "gift_id": 35211,
+      "price": 600,
+      "gift_name": "星愿花园",
+      "gift_img": "https://s1.hdslb.com/bfs/live/61ad06ac8b28732443d8639cc2087f4dc6a2b1ca.png",
+      "is_win_gift": 0,
+      "chance": "0.4%"
+    },
+    {
+      "gift_id": 35210,
+      "price": 200,
+      "gift_name": "福灵小兽",
+      "gift_img": "https://s1.hdslb.com/bfs/live/c9740b1646be8b028b6d90253cda2b79fa9a23d2.png",
+      "is_win_gift": 0,
+      "chance": "2.7%"
+    },
+    {
+      "gift_id": 35209,
+      "price": 100,
+      "gift_name": "梦雾纸签",
+      "gift_img": "https://s1.hdslb.com/bfs/live/ee4281781ecf14bef08e3114b1a7c4e8a548d7f4.png",
+      "is_win_gift": 0,
+      "chance": "5%"
+    },
+    {
+      "gift_id": 35208,
+      "price": 52,
+      "gift_name": "星光铃铛",
+      "gift_img": "https://s1.hdslb.com/bfs/live/a2e8254f5c533a9b3f00201a8878c37fffd40651.png",
+      "is_win_gift": 0,
+      "chance": "52.1%"
+    },
+    {
+      "gift_id": 35311,
+      "price": 25,
+      "gift_name": "好运柚叶",
+      "gift_img": "https://s1.hdslb.com/bfs/live/792e1ae4e92cc33fa323970c55464ff6240959f0.png",
+      "is_win_gift": 0,
+      "chance": "25%"
+    },
+    {
+      "gift_id": 35207,
+      "price": 15,
+      "gift_name": "幸运泡泡",
+      "gift_img": "https://s1.hdslb.com/bfs/live/3ffb357cca0d74346148b96d80d01ec492a82b61.png",
+      "is_win_gift": 0,
+      "chance": "14.8%"
+    }
+  ],
+  "updated_at": "2026-07-24 03:25:27"
+}

@@ -335,8 +335,7 @@ export async function fetchPayRecords(
     return { code: -1, message: "无有效 B站 Cookie" };
   }
 
-  const safeName = session.uname.replace(/[\\/:*?"<>|]/g, "_");
-  const dataDir = `${await platform.getDataDir()}/uid_${session.mid}_${safeName}`;
+  const dataDir = `${await platform.getDataDir()}/uid_${session.mid}`;
   const recordsPath = `${dataDir}/pay-records.json`;
 
   // 读取已有记录

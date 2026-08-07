@@ -755,6 +755,8 @@ function CastleStatModal({
 export default function HomePage() {
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // 当前账号是否"本机登录"（仅本机登录账号持有 B站凭证，可更新数据）
+  const [isLocalAccount, setIsLocalAccount] = useState(true);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshTime, setLastRefreshTime] = useState<string>("");
@@ -834,6 +836,8 @@ export default function HomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
+        // Tauri 下前端与服务器跨源，必须携带凭证，admin 会话 cookie 才能被持久化供 /admin 复用
+        credentials: "include",
       })
         .then(async (res) => {
           if (res.ok) {
@@ -862,6 +866,7 @@ export default function HomePage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: adminPwd }),
+      credentials: "include",
     });
     if (res.ok) {
       // 记住密码，下次自动静默登录
@@ -925,12 +930,12 @@ export default function HomePage() {
       window.location.href = "/login";
       return;
     }
-    // 返回用户：先快速显示本地数据（不发 B站），再后台同步
+    // 返回用户：先快速显示本地数据（不发 B站），再后台静默同步（不阻塞界面）
     setSyncing(true);
     setLoading(false);
     try {
       await loadCachedQuick();
-      await fetchData();
+      await fetchData(true); // background：仅刷新按钮动画，无阻塞遮罩
     } finally {
       setSyncing(false);
     }
@@ -964,6 +969,8 @@ export default function HomePage() {
           source: matched?.source || "qr",
           updatedAt: matched?.updatedAt || "",
         });
+        // 是否本机登录：accounts 仅返回本机登录账号（/api/auth/accounts 已按设备令牌过滤）
+        setIsLocalAccount(!!matched);
         setApiLoggedIn(true);
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
@@ -1055,8 +1062,9 @@ function getDeviceToken(): string {
   return dt;
 }
 
-async function fetchData() {
-    setLoading(true);
+async function fetchData(background = false) {
+    // 后台同步（返回用户本地优先、或手动刷新）时不弹阻塞遮罩，仅走 syncing（刷新按钮三点动画）
+    if (!background) setLoading(true);
     try {
       const [accountsRes, snapshotRes] = await Promise.all([
         fetch(apiUrl("/api/auth/accounts"), { cache: "no-store" }),
@@ -1830,7 +1838,6 @@ async function fetchData() {
             <div className="flex flex-col items-center gap-3">
               <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
               <p className="text-sm text-black/45">加载中...</p>
-              <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
             </div>
           </div>
         )}
@@ -1859,9 +1866,15 @@ async function fetchData() {
               {/* 刷新按钮（右侧）：缺口弧形边框；同步中显示三点动画，否则显示时间/“刷新” */}
               <div className="shrink-0">
                 <button
-                  onClick={refreshData}
-                  disabled={syncing || loading}
-                  className="refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px]"
+                  onClick={() => {
+                    if (!isLocalAccount) {
+                      showToast("非本机登录账号，没有登录凭证，无法更新数据");
+                      return;
+                    }
+                    refreshData();
+                  }}
+                  disabled={syncing || loading || !isLocalAccount}
+                  className={`refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px] ${!isLocalAccount ? "opacity-40" : ""}`}
                 >
                   {syncing ? (
                     <span className="relative z-10 flex items-center gap-[2px] text-[#22c55e] select-none">
@@ -3065,8 +3078,8 @@ async function fetchData() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { setToolsPage("home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1 text-xs text-black/50 hover:text-black/80 transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                  <button onClick={() => { setToolsPage("home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
                   <span className="text-sm font-semibold">粉丝清理</span>
@@ -3180,8 +3193,8 @@ async function fetchData() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { setToolsPage("home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1 text-xs text-black/50 hover:text-black/80 transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                  <button onClick={() => { setToolsPage("home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
                   <span className="text-sm font-semibold">粉丝牌清理</span>

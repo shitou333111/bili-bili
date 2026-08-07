@@ -340,7 +340,11 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       groupContentDecoratorTriggering: "onSurfaceDirty",
       attributionWeight: 0,
       attributionText: "",
-      attributionLogo: "",
+      // 用透明 1x1 GIF 强制不绘制 attribution 徽标：
+      // 只设置 "" 时，导出原分辨率(1080×1920)的图片仍可能残留右下角 logo
+      // （屏幕上因 CSS 缩放显得极小看不见，导出后即暴露），故必须用透明图替换。
+      attributionLogo:
+        "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
       descriptionGroupPolygonDrawn: false,
       backgroundColor: "#f6f1e9",
       groupColorDecorator: (opts: any, props: any, vars: any) => {

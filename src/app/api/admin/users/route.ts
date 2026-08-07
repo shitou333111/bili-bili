@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
 import { readState, getSessionCookieName } from "@/lib/auth/session";
+import { readUsersList, type UsersListEntry } from "@/lib/user-data";
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -13,11 +14,10 @@ async function checkAdmin(request: Request): Promise<boolean> {
   return validateAdminSession(sid);
 }
 
-/** 获取用户上传数据的最后更新时间 */
-async function getLastUploadDate(mid: number, uname: string): Promise<string | null> {
+/** 获取用户上传数据的最后更新时间（用 uid_<mid> 目录） */
+async function getLastUploadDate(mid: number): Promise<string | null> {
   try {
-    const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-    const metaPath = path.join(process.cwd(), ".data", "uploads", `uid_${mid}_${safeName}`, "_upload_meta.json");
+    const metaPath = path.join(process.cwd(), ".data", "uploads", `uid_${mid}`, "_upload_meta.json");
     const raw = await fs.readFile(metaPath, "utf-8");
     const meta = JSON.parse(raw);
     return meta.last_upload || null;
@@ -36,35 +36,54 @@ export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const cookieSid = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`))?.[1] ?? null;
   const currentSid = url.searchParams.get("_sid") ?? cookieSid ?? null;
-  // 本机登录标识：用于标记“本机登录”账号并置顶（Tauri WebView 可能不发送 cookie，用 query 参数）
+  // 本机登录标识：用于标记“本机登录”账号并置顶
   const deviceToken = url.searchParams.get("_device_token") ?? null;
 
   const state = await readState();
-  // 按 mid 去重，保留最新的记录
-  const seen = new Map<number, typeof state.sessions[0]>();
-  for (const s of state.sessions) {
-    const existing = seen.get(s.mid);
-    if (!existing || new Date(s.updatedAt) > new Date(existing.updatedAt)) {
-      seen.set(s.mid, s);
-    }
+  // 本机会话（bili-live-state.json 只存本机登录账号）
+  const localSessions = deviceToken
+    ? state.sessions.filter((s) => s.userToken === deviceToken)
+    : state.sessions;
+
+  // users-list.json 是服务器上的"使用用户表"，包含所有（含服务器收集的）用户
+  const usersList: UsersListEntry[] = await readUsersList();
+
+  // 以 mid 为主键合并：本机会话提供 face/source/是否本机；users-list 提供昵称与更新时间
+  const map = new Map<number, any>();
+  for (const entry of usersList) {
+    map.set(entry.mid, {
+      mid: entry.mid,
+      uname: entry.uname,
+      updatedAt: entry.updatedAt,
+      isLocal: false,
+    });
+  }
+  for (const s of localSessions) {
+    const existing = map.get(s.mid);
+    map.set(s.mid, {
+      mid: s.mid,
+      uname: s.uname,
+      face: s.face,
+      source: s.source,
+      updatedAt: existing ? existing.updatedAt : s.updatedAt,
+      isLocal: true,
+    });
   }
 
   const users = await Promise.all(
-    Array.from(seen.values()).map(async (s) => {
-      const lastUpload = await getLastUploadDate(s.mid, s.uname);
+    Array.from(map.values()).map(async (u) => {
+      const lastUpload = await getLastUploadDate(u.mid);
       return {
-        sid: s.sid,
-        uname: s.uname,
-        mid: s.mid,
-        face: s.face,
-        source: s.source,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
+        sid: null, // 非本机账号无本地会话 sid
+        uname: u.uname,
+        mid: u.mid,
+        face: u.face,
+        source: u.source ?? "upload",
+        createdAt: "",
+        updatedAt: u.updatedAt,
         lastUpload: lastUpload || undefined,
-        // 默认选中当前浏览器登录账号（而非全局 currentSid）
-        isCurrent: s.sid === currentSid,
-        // 本机登录：属于当前设备的稳定设备令牌
-        isLocal: !!deviceToken && s.userToken === deviceToken,
+        isCurrent: false, // 本机登录账号才可能是"当前"
+        isLocal: !!u.isLocal,
       };
     })
   );

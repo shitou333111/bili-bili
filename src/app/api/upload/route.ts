@@ -4,7 +4,7 @@
  * POST - 接收 Tauri 客户端上传的原始数据 JSON 文件
  * GET  - 管理员查看指定用户的数据（需要 admin session）
  * 
- * 数据存储结构：.data/uploads/uid_MID_NICKNAME/
+ * 数据存储结构：.data/uploads/uid_MID/  （只用 uid，昵称会变）
  *   每个用户的数据文件直接存储在该目录下
  */
 
@@ -14,6 +14,7 @@ import path from "path";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
 import { loadGiftDb, saveGiftDb } from "@/lib/gift-db";
+import { upsertUserInList } from "@/lib/user-data";
 
 export const dynamic = "force-dynamic";
 
@@ -58,11 +59,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ code: -1, message: "参数不完整" }, { status: 400 });
     }
 
-    const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-    const userDir = path.join(UPLOADS_DIR, `uid_${mid}_${safeName}`);
+    // 用户文件夹用 uid_<mid>（只用 uid，昵称会变；客户端已按新结构上传）
+    const userDir = path.join(UPLOADS_DIR, `uid_${mid}`);
     await ensureDir(userDir);
 
-    // 保存所有文件
+    // 增量上传：只写本次携带的文件（客户端只会带"相比上次有更新"的文件），覆盖旧文件
     for (const [filename, content] of Object.entries(files)) {
       const filePath = path.join(userDir, filename);
       // 如果是 JSON 字符串，格式化后保存
@@ -83,6 +84,9 @@ export async function POST(request: NextRequest) {
       files: Object.keys(files),
     };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+
+    // 维护使用用户表 users-list.json（uid/昵称/更新时间=当前）
+    await upsertUserInList(mid, uname);
 
     console.log(`[Upload] 收到 ${uname}(uid:${mid}) 的数据: ${Object.keys(files).join(", ")}`);
 
@@ -165,9 +169,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ code: 0, data: { users } });
     }
 
-    // 返回指定用户的数据文件
-    const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-    const userDir = path.join(UPLOADS_DIR, `uid_${mid}_${safeName}`);
+    // 返回指定用户的数据文件（用 uid_<mid> 查找）
+    const userDir = path.join(UPLOADS_DIR, `uid_${mid}`);
     await ensureDir(userDir);
 
     const files: Record<string, string> = {};

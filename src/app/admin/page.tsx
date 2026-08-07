@@ -51,16 +51,48 @@ export default function AdminPage() {
   // 活动名称映射（从本地活动信息 JSON 读取，只读展示）
   const [activityNames, setActivityNames] = useState<Record<string, string>>({});
 
-  const checkAdminSession = useCallback(async () => {
-    const res = await fetch(serverApiUrl("/api/admin/session"));
-    const data = await res.json();
-    setAdminLoggedIn(data.data?.valid ?? false);
-    setChecking(false);
+  const checkAdminSession = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch(serverApiUrl("/api/admin/session"), { credentials: "include" });
+      const data = await res.json();
+      if (data.data?.valid) {
+        setAdminLoggedIn(true);
+        setChecking(false); // 已有有效会话，直接放行
+        return true;
+      }
+    } catch { /* ignore */ }
+    // 无有效会话：保持 checking，交由 silentLogin 尝试，避免登录框闪现
+    return false;
+  }, []);
+
+  // 静默登录：有已保存的密码则后台自动验证，避免重复弹出密码框（跨源 cookie 未持久化时的兜底）
+  const silentLogin = useCallback(async () => {
+    const cred = typeof window !== "undefined" ? localStorage.getItem("bili_live_admin_cred") : null;
+    let ok = false;
+    if (cred) {
+      let password = "";
+      try { password = atob(cred); } catch { password = ""; }
+      if (password) {
+        try {
+          const res = await fetch(serverApiUrl("/api/admin/login"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password }),
+            credentials: "include",
+          });
+          if (res.ok) { setAdminLoggedIn(true); ok = true; }
+        } catch { /* ignore */ }
+      }
+    }
+    setChecking(false); // 无论成败都结束 loading，失败则显示登录表单
+    return ok;
   }, []);
 
   useEffect(() => {
-    checkAdminSession();
-  }, [checkAdminSession]);
+    checkAdminSession().then((loggedIn) => {
+      if (!loggedIn) silentLogin();
+    });
+  }, [checkAdminSession, silentLogin]);
 
   const loadActivityNames = useCallback(async (activities: ActivityItem[]) => {
     const names: Record<string, string> = {};
@@ -114,6 +146,7 @@ export default function AdminPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: loginForm.password }),
+        credentials: "include",
       });
       if (res.ok) {
         setAdminLoggedIn(true);
@@ -127,7 +160,12 @@ export default function AdminPage() {
     setLoginLoading(false);
   };
 
-  const handleImpersonate = async (sid: string) => {
+  const handleImpersonate = async (sid: string | null) => {
+    // 非本机登录账号（服务器收集）无本地会话，无法切换为本机会话
+    if (!sid) {
+      alert("该账号为服务器收集的账号，无本机登录凭证，请用「加载远程数据」查看其数据");
+      return;
+    }
     const res = await fetch(serverApiUrl("/api/admin/impersonate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },

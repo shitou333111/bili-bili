@@ -69,10 +69,16 @@ export default function Dropdown({ value, onChange, options, className = "", pla
     };
   }, [open]);
 
-  // 页面滚动/尺寸变化时关闭，避免位置错乱
+  // 页面滚动/尺寸变化时关闭，避免位置错乱。
+  // 注意：下拉列表自身内部滚动（overflow-y-auto）也会冒泡 scroll 事件，需忽略，否则"一滑动就消失"。
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
+    const close = (e: Event) => {
+      const t = e.target as Node;
+      // 滚动发生在下拉列表内部 → 不关闭
+      if (listRef.current && listRef.current.contains(t)) return;
+      setOpen(false);
+    };
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     return () => {

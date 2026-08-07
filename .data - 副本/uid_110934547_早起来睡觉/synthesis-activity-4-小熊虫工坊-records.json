@@ -1,0 +1,186 @@
+{
+  "exportedAt": "2026-08-07 21:11:21",
+  "totalRecords": 18,
+  "records": [
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:07:59",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:07:59",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:07:59",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:07:59",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:06:06",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:06:06",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:06:06",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:06:06",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 3000,
+      "record_type": 2,
+      "status": 1,
+      "mtime": "2026-08-07 00:06:06",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-06 21:44:19",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-06 21:44:17",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-06 21:44:16",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-06 21:44:12",
+      "gift_info": null,
+      "ruid": 306936843
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-04 18:44:51",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-04 18:44:50",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-04 18:44:49",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-04 18:44:48",
+      "gift_info": null,
+      "ruid": 488750234
+    },
+    {
+      "goods_num": 1,
+      "pay_price": 3000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-08-04 18:44:47",
+      "gift_info": null,
+      "ruid": 488750234
+    }
+  ]
+}

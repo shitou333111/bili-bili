@@ -1,0 +1,73 @@
+{
+  "blind_box_id": 35684,
+  "blind_box_name": "猪猪侠盲盒",
+  "blind_box_img": "",
+  "blind_price": 90,
+  "gifts": [
+    {
+      "gift_id": 35685,
+      "price": 90,
+      "gift_name": "发猪疯",
+      "gift_img": "https://s1.hdslb.com/bfs/live/d35589be80eedfea3e1c83c2bca716fbacf54f56.png",
+      "is_win_gift": 0,
+      "chance": "45%"
+    },
+    {
+      "gift_id": 35686,
+      "price": 90,
+      "gift_name": "猪脑过载",
+      "gift_img": "https://s1.hdslb.com/bfs/live/0a736033513fe0e40786d8fded5ab9549ccc16f2.png",
+      "is_win_gift": 0,
+      "chance": "29%"
+    },
+    {
+      "gift_id": 35687,
+      "price": 90,
+      "gift_name": "KPI猪",
+      "gift_img": "https://s1.hdslb.com/bfs/live/428b5875064a6978ef03babe2c7ec2e9878eadff.png",
+      "is_win_gift": 0,
+      "chance": "10%"
+    },
+    {
+      "gift_id": 35688,
+      "price": 90,
+      "gift_name": "随波猪流",
+      "gift_img": "https://s1.hdslb.com/bfs/live/209b628d20c058374dc0411d1e44fee67be1a5a1.png",
+      "is_win_gift": 0,
+      "chance": "7%"
+    },
+    {
+      "gift_id": 35689,
+      "price": 90,
+      "gift_name": "爱莫能猪",
+      "gift_img": "https://s1.hdslb.com/bfs/live/bdf685d4e58ffe32644787aca2740ea35e7679a4.png",
+      "is_win_gift": 0,
+      "chance": "5%"
+    },
+    {
+      "gift_id": 35690,
+      "price": 90,
+      "gift_name": "孤猪一掷",
+      "gift_img": "https://s1.hdslb.com/bfs/live/47d805f735bef1f33cf6a5ef0c06aee96adde8ec.png",
+      "is_win_gift": 0,
+      "chance": "3%"
+    },
+    {
+      "gift_id": 35691,
+      "price": 90,
+      "gift_name": "猪事皆宜",
+      "gift_img": "https://s1.hdslb.com/bfs/live/fc9791bbae1a6094dc4af2f1e23c53000497b0c5.png",
+      "is_win_gift": 0,
+      "chance": "1%"
+    },
+    {
+      "gift_id": 35692,
+      "price": 90,
+      "gift_name": "猪愿清单",
+      "gift_img": "https://s1.hdslb.com/bfs/live/4b8bc4646e73b7fcce7168173868e125112db79d.png",
+      "is_win_gift": 0,
+      "chance": "0%"
+    }
+  ],
+  "updated_at": "2026-07-24 01:04:04"
+}

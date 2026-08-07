@@ -38,6 +38,18 @@ const BILIBILI_LIVE_HEADERS: Record<string, string> = {
 /** 服务器地址（配置中心 + 数据收集） */
 const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
 
+/** 稳定内容哈希：用于增量上传判断文件是否有变化 */
+function contentHash(s: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619) >>> 0;
+    h2 = Math.imul(h2 ^ (c ^ (i & 0xff)), 31) >>> 0;
+  }
+  return h1.toString(16) + h2.toString(16) + "-" + s.length.toString(16);
+}
+
 export const tauriPlatform: Platform = {
   name: "tauri",
   isNative: true,
@@ -191,10 +203,30 @@ export const tauriPlatform: Platform = {
 
   async uploadUserData(mid: number, uname: string, files: Record<string, string>): Promise<void> {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    const { appDataDir, join } = await import("@tauri-apps/api/path");
+    const { readTextFile, writeTextFile } = await import("@tauri-apps/plugin-fs");
+
+    // 增量上传：记录每个文件上次上传的内容哈希，只上传有变化的文件
+    const statePath = await join(await appDataDir(), "data", "upload-state.json");
+    let prev: Record<string, Record<string, string>> = {};
+    try { prev = JSON.parse(await readTextFile(statePath)); } catch { /* 首次无记录 */ }
+    const userPrev = prev[String(mid)] ?? {};
+
+    const toSend: Record<string, string> = {};
+    for (const [name, content] of Object.entries(files)) {
+      const h = contentHash(content);
+      if (userPrev[name] !== h) toSend[name] = content;
+    }
+
+    if (Object.keys(toSend).length === 0) {
+      console.log(`[Upload] ${uname}(uid:${mid}) 所有文件均未变化，跳过上传`);
+      return;
+    }
+
     const formData = new FormData();
     formData.append("mid", String(mid));
     formData.append("uname", uname);
-    for (const [filename, content] of Object.entries(files)) {
+    for (const [filename, content] of Object.entries(toSend)) {
       const blob = new Blob([content], { type: "application/json" });
       formData.append("files", blob, filename);
     }
@@ -202,6 +234,12 @@ export const tauriPlatform: Platform = {
       method: "POST",
       body: formData,
     });
+
+    // 上传成功后才更新哈希，下次据此判断哪些文件有变化
+    const next = { ...userPrev };
+    for (const [name, content] of Object.entries(toSend)) next[name] = contentHash(content);
+    prev[String(mid)] = next;
+    try { await writeTextFile(statePath, JSON.stringify(prev)); } catch { /* ignore */ }
   },
 
   async fetchRemoteUserData(mid: number, uname: string): Promise<Record<string, string>> {

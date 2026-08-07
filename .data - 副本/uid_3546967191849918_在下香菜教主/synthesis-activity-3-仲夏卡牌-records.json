@@ -1,0 +1,40 @@
+{
+  "exportedAt": "2026-08-01 00:04:05",
+  "totalRecords": 3,
+  "records": [
+    {
+      "ruid": 3546746267372236,
+      "settle_time": 1784894473,
+      "settle_type": 1,
+      "reward_name": "清溪鱼戏",
+      "reward_value": 50000,
+      "card_idx": [
+        3,
+        5,
+        6,
+        -1
+      ]
+    },
+    {
+      "ruid": 3546746267372236,
+      "settle_time": 1784894409,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        8
+      ]
+    },
+    {
+      "ruid": 3546746267372236,
+      "settle_time": 1784894402,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        2,
+        9
+      ]
+    }
+  ]
+}

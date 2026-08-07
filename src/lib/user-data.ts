@@ -3,6 +3,39 @@ import path from "path";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 
+// ====== 使用用户表 users-list.json ======
+
+const USERS_LIST_FILE = path.join(DATA_DIR, "users-list.json");
+
+export type UsersListEntry = { mid: number; uname: string; updatedAt: string };
+
+/** 读取 users-list.json（每个用户一条：uid/昵称/最近更新时间） */
+export async function readUsersList(): Promise<UsersListEntry[]> {
+  try {
+    const raw = await fs.readFile(USERS_LIST_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 写入 users-list.json */
+export async function writeUsersList(list: UsersListEntry[]): Promise<void> {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(USERS_LIST_FILE, JSON.stringify(list, null, 2), "utf8");
+}
+
+/** 更新用户在 users-list.json 中的记录（昵称用最新、更新时间=当前） */
+export async function upsertUserInList(mid: number, uname: string): Promise<void> {
+  const list = await readUsersList();
+  const idx = list.findIndex((u) => u.mid === mid);
+  const entry: UsersListEntry = { mid, uname, updatedAt: new Date().toISOString() };
+  if (idx >= 0) list[idx] = entry;
+  else list.push(entry);
+  await writeUsersList(list);
+}
+
 /** 获取北京时间字符串 (UTC+8) */
 export function getBeijingTime(): string {
   const now = new Date();
@@ -16,11 +49,9 @@ export function sanitizeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_");
 }
 
-/** Get user's data directory: .data/uid_MID_NICKNAME */
-export function getUserDataDir(mid: number, uname: string): string {
-  // Sanitize uname: remove special characters
-  const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-  return path.join(DATA_DIR, `uid_${mid}_${safeName}`);
+/** Get user's data directory: .data/uid_MID （只用 uid，昵称会变，文件夹名保持不变） */
+export function getUserDataDir(mid: number, _uname?: string): string {
+  return path.join(DATA_DIR, `uid_${mid}`);
 }
 
 /** Ensure user data directory exists */

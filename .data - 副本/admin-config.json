@@ -1,0 +1,52 @@
+{
+  "current_activity_blind_box_ids": [
+    35684
+  ],
+  "blind_boxes": [
+    {
+      "id": 32251,
+      "name": "心动盲盒",
+      "icon": "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png"
+    },
+    {
+      "id": 35684,
+      "name": "猪猪侠盲盒",
+      "icon": "https://s1.hdslb.com/bfs/live/48307f9c584235ade71c59de9c93eaa607b03388.png"
+    },
+    {
+      "id": 35206,
+      "name": "幸运盲盒",
+      "icon": "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png"
+    }
+  ],
+  "synthesis_activities": [
+    {
+      "id": "activity-3",
+      "type": "card_flip",
+      "info_url": "",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/cardplay/PlayRecord?config_id=8",
+      "active": true
+    },
+    {
+      "id": "activity-2",
+      "type": "slot_draw",
+      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id=9",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneRecord?conf_id=9",
+      "active": true
+    },
+    {
+      "id": "activity-1",
+      "type": "material_package",
+      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/HalfInit?config_id=sp_2076590402963353600",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/PlayRecord?config_id=sp_2076590402963353600",
+      "active": true
+    },
+    {
+      "id": "activity-4",
+      "type": "slot_draw",
+      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id=10",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneRecord?conf_id=10",
+      "active": true
+    }
+  ]
+}

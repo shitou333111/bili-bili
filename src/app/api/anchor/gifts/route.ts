@@ -58,9 +58,8 @@ const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStre
 
 // ==================== 工具函数 ====================
 
-function getRecordsDir(mid: number, uname: string): string {
-  const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-  return path.join(DATA_DIR, `uid_${mid}_${safeName}`);
+function getRecordsDir(mid: number, _uname?: string): string {
+  return path.join(DATA_DIR, `uid_${mid}`);
 }
 
 async function ensureDir(dir: string) {

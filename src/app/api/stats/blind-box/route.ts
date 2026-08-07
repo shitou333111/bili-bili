@@ -112,9 +112,8 @@ function calculateCastleStats(
   };
 }
 
-function getBlindBoxRecordsDir(mid: number, uname: string): string {
-  const safeName = uname.replace(/[\\/:*?"<>|]/g, "_");
-  return path.join(DATA_DIR, `uid_${mid}_${safeName}`);
+function getBlindBoxRecordsDir(mid: number, _uname?: string): string {
+  return path.join(DATA_DIR, `uid_${mid}`);
 }
 
 // 确保目录存在

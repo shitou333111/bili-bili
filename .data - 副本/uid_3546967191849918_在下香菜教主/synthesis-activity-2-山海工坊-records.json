@@ -1,0 +1,56 @@
+{
+  "exportedAt": "2026-08-01 00:04:04",
+  "totalRecords": 4,
+  "records": [
+    {
+      "goods_num": 0,
+      "pay_price": 0,
+      "refund_price": 0,
+      "record_type": 4,
+      "status": 1,
+      "mtime": "2026-07-14 03:06:28",
+      "gift_info": {
+        "gift_id": 35730,
+        "gift_name": "海图一角",
+        "gift_img": "https://i0.hdslb.com/bfs/live/4e94e3f83d45d24c66b086d5c1ccdea711bd0c44.png",
+        "gift_price": 25000
+      },
+      "ruid": 3494375835306308
+    },
+    {
+      "goods_num": 6,
+      "pay_price": 18000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-07-14 03:06:24",
+      "gift_info": null,
+      "ruid": 3494375835306308
+    },
+    {
+      "goods_num": 0,
+      "pay_price": 0,
+      "refund_price": 0,
+      "record_type": 4,
+      "status": 1,
+      "mtime": "2026-07-14 03:06:17",
+      "gift_info": {
+        "gift_id": 35729,
+        "gift_name": "纸船渡海",
+        "gift_img": "https://i0.hdslb.com/bfs/live/064740d9cb3dcb3e5f8a17e918059caec74ce329.png",
+        "gift_price": 12000
+      },
+      "ruid": 3494375835306308
+    },
+    {
+      "goods_num": 6,
+      "pay_price": 18000,
+      "refund_price": 0,
+      "record_type": 1,
+      "status": 1,
+      "mtime": "2026-07-14 03:06:10",
+      "gift_info": null,
+      "ruid": 3494375835306308
+    }
+  ]
+}

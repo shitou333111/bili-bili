@@ -13,6 +13,7 @@
 
 import { showToast } from "@/lib/toast";
 import { serverApiUrl } from "@/lib/server-api";
+import { saveFilePublicFromBuffer } from "tauri-plugin-pldownloader-api";
 
 /** 判断是否为 Tauri 移动端 */
 function isTauriMobile(): boolean {
@@ -51,20 +52,25 @@ export async function downloadJsonFile() {
     return;
   }
 
-  // 移动端 Tauri：用系统分享面板分享 JSON 文件
+  // 移动端 Tauri：通过 pldownloader 插件保存到系统存储（Android→Downloads/相册，iOS→"文件"App/相册）
   if (isTauriMobile()) {
-    const file = new File([blob], filename, { type: "application/json" });
-    const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
-    if (typeof nav.canShare === "function" && nav.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file] });
-        showToast("已打开分享面板，请选择保存位置");
+    try {
+      const data = await blob.arrayBuffer();
+      const res = await saveFilePublicFromBuffer({
+        data,
+        fileName: filename,
+        mimeType: "application/json",
+      });
+      if (res && (res.uri || res.path)) {
+        showToast("JSON 已保存");
         return;
-      } catch {
-        // 用户取消
       }
+    } catch (err) {
+      console.error("[downloadJson] 插件保存失败:", err);
+      showToast("JSON 保存失败，请检查网络与存储权限");
+      return;
     }
-    showToast("未保存到本机，请在分享面板选择保存位置");
+    showToast("JSON 保存失败，请重试");
     return;
   }
 

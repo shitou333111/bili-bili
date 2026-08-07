@@ -1,0 +1,20 @@
+{
+  "exportedAt": "2026-07-31 23:50:48",
+  "totalRecords": 1,
+  "records": [
+    {
+      "ruid": 3546967191849918,
+      "settle_time": 1784908513,
+      "settle_type": 1,
+      "reward_name": "荔枝沙冰",
+      "reward_value": 5000,
+      "card_idx": [
+        6,
+        7,
+        5,
+        4,
+        9
+      ]
+    }
+  ]
+}
