@@ -239,21 +239,37 @@ jobs:
       - name: Configure iOS Info.plist permissions
         shell: bash
         run: |
-          # 定位生成的 Info.plist（Tauri 2 可能在 gen/ios 或 gen/apple）
-          INFO_PLIST=$(find src-tauri/gen/ios -name "Info.plist" -path "*App*" 2>/dev/null | head -n 1)
-          if [ -z "$INFO_PLIST" ]; then
-            INFO_PLIST=$(find src-tauri/gen/apple -name "Info.plist" 2>/dev/null | head -n 1)
-          fi
-          if [ -z "$INFO_PLIST" ]; then
-            echo "!! 未找到 Info.plist"
+          set -euo pipefail
+          # 定位应用主 Info.plist：遍历 gen/ios 与 gen/apple，取 CFBundlePackageType=APPL（App）的那个
+          APP_PLIST=""
+          for plist in $(find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null); do
+            if /usr/libexec/PlistBuddy -c "Print :CFBundlePackageType" "$plist" 2>/dev/null | grep -q "APPL"; then
+              APP_PLIST="$plist"
+              break
+            fi
+          done
+          if [ -z "$APP_PLIST" ]; then
+            echo "!! 未找到应用 Info.plist (CFBundlePackageType=APPL)"
+            echo "生成的 Info.plist 列表:"
+            find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null || true
             exit 1
           fi
-          echo "Editing Info.plist: $INFO_PLIST"
+          echo "Editing app Info.plist: $APP_PLIST"
+          # 不存在才添加，避免重复 key 导致 PlistBuddy Add 报错
+          add_key() {
+            local key="$1" type="$2" value="$3"
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$APP_PLIST" >/dev/null 2>&1; then
+              echo "Key $key already present, skip"
+            else
+              /usr/libexec/PlistBuddy -c "Add :$key $type $value" "$APP_PLIST"
+              echo "Added $key"
+            fi
+          }
           # 保存图片到相册权限说明（pldownloader 必需，缺失会导致保存时崩溃）
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 需要访问相册以将你生成的图片保存到照片库" "$INFO_PLIST"
+          add_key "NSPhotoLibraryAddUsageDescription" "string" "需要访问相册以将你生成的图片保存到照片库"
           # 允许通过"文件"App 访问应用文档（便于导出 JSON 等）
-          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$INFO_PLIST"
+          add_key "UIFileSharingEnabled" "bool" "true"
+          add_key "LSSupportsOpeningDocumentsInPlace" "bool" "true"
 
       - name: Build iOS IPA
         run: |
