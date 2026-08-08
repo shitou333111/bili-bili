@@ -76,6 +76,7 @@ a {
   -webkit-overflow-scrolling: touch;
   will-change: transform;
   transform: translate3d(0, 0, 0);
+  z-index: 0; /* 显式设定层叠层级，确保底部托盘栏（z-index:9999）在其上方 */
 }
 
 /* ===== iOS 悬浮底部托盘导航栏（Dock Bar） ===== */
@@ -91,6 +92,7 @@ a {
   z-index: 9999;
   pointer-events: none;
   padding: 0 12px;
+  isolation: isolate; /* 强制创建独立层叠上下文，防止 iOS Safari 上层元素覆盖点击区域 */
 }
 
 /* 2. 苹果毛玻璃胶囊托盘（完全参照参考代码改编） */
@@ -104,7 +106,6 @@ a {
   max-width: 600px;
   border-radius: 28px;
   background: rgba(255, 255, 255, 0.92);
-  /* iOS 上 backdrop-filter 极其消耗 GPU，移动端降级为不透明背景 + 减弱阴影 */
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   box-shadow:
@@ -122,22 +123,6 @@ a {
   transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
 }
 
-/* 移动端：移除 backdrop-filter 和复杂阴影，用纯色背景替代，避免 iOS GPU 合成层开销 */
-@media (max-width: 600px) {
-  .bottom-dock {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    background: rgba(255, 255, 255, 0.95);
-    box-shadow:
-      0 4px 20px rgba(0, 0, 0, 0.15),
-      inset 0 1px rgba(255, 255, 255, 0.4);
-  }
-  /* 移动端关闭霓虹光晕，减少 GPU 合成层 */
-  .bottom-dock::before {
-    display: none;
-  }
-}
-
 /* 3. 托盘外发光霓虹光晕效果 */
 .bottom-dock::before {
   content: "";
@@ -148,6 +133,7 @@ a {
   opacity: 0.25;
   filter: blur(10px);
   z-index: -1;
+  pointer-events: none; /* 防止 iOS WebKit 上层叠上下文覆盖按钮点击区域 */
 }
 
 /* 4. 托盘内部按钮 */

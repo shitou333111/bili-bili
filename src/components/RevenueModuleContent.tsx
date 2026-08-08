@@ -239,7 +239,8 @@ interface RevenueModuleContentProps {
   pieActive: { chart: "all" | "period"; index: number } | null;
   pieIsMobile: boolean;
   pieTipPos: { x: number; y: number };
-  monthGiftSummaryNew: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>;
+  monthGiftSummaryNew: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number; displayCoins: number }>;
+  giftListSpendingTotal: number;
   actualDateRange: { start: string; end: string } | null;
   showGiftSaveModal: boolean;
   blindBoxStats: BlindBoxStats | null;
@@ -318,6 +319,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     pieIsMobile,
     pieTipPos,
     monthGiftSummaryNew,
+    giftListSpendingTotal,
     actualDateRange,
     showGiftSaveModal,
     blindBoxStats,
@@ -822,7 +824,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                         : actualDateRange ? `${actualDateRange.start} ~ ${actualDateRange.end}` : "全部时间"}
                     </span>
                     <span className="ml-2 text-xs font-semibold text-black/65">
-                      {monthGiftSummaryNew.reduce((s, g) => s + g.coins, 0)}电池
+                      {giftListSpendingTotal}电池
                     </span>
                   </h3>
                   {monthGiftSummaryNew.length > 0 && (
@@ -855,9 +857,9 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                                 <span className="font-medium text-xs">{gift.gift_name}</span>
                               </div>
                             </td>
-                            <td className="px-3 py-1.5 text-right text-xs">{Math.round(gift.coins / gift.count)}</td>
+                            <td className="px-3 py-1.5 text-right text-xs">{Math.round(gift.displayCoins / gift.count)}</td>
                             <td className="px-3 py-1.5 text-right text-xs">{gift.count}</td>
-                            <td className="px-3 py-1.5 text-right text-xs">{gift.coins}</td>
+                            <td className="px-3 py-1.5 text-right text-xs">{gift.displayCoins}</td>
                           </tr>
                         ))}
                       </tbody>

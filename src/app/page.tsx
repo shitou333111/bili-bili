@@ -261,7 +261,7 @@ function GiftSaveModal({
   selectedDay,
   actualDateRange,
 }: {
-  gifts: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>;
+  gifts: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number; displayCoins: number }>;
   userName: string;
   dateRange: string;
   anchorName: string;
@@ -275,7 +275,7 @@ function GiftSaveModal({
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const totalCount = gifts.reduce((s, g) => s + g.count, 0);
-  const totalCoins = gifts.reduce((s, g) => s + g.coins, 0);
+  const totalCoins = gifts.reduce((s, g) => s + g.displayCoins, 0);
 
   const datePartStr = selectedMonth
     ? `${selectedMonth.slice(0, 4)}.${selectedMonth.slice(4, 6)}${selectedDay !== null ? `.${String(selectedDay).padStart(2, "0")}` : ""}`
@@ -1592,7 +1592,7 @@ async function fetchData(background = false) {
     overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
     maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
     consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
-    monthGiftSummaryNew, actualDateRange,
+    monthGiftSummaryNew, actualDateRange, giftListSpendingTotal,
   } = useMemo(() => {
   const filteredOverviewRecords = snapshot ? (overviewAnchor
     ? snapshot.records.filter((r) => {
@@ -1793,36 +1793,49 @@ async function fetchData(background = false) {
   const earnedGiftCount = earnedGiftRecords.reduce((sum, r) => sum + r.gift_num, 0);
   const earnedGiftTypes = new Set(earnedGiftRecords.map(r => r.gift_name)).size;
 
-  // 礼物清单汇总（所有实际送出的礼物，排除合成原料gift_id=1；天选礼物按图片链接分组）
+  // 礼物清单汇总
+  // 显示逻辑：列出所有实际送出的礼物（含包裹道具），排除合成材料
+  // 合成材料判断：gift_id=1 且不在天选礼物/红包礼物列表，且 gift_name 不是"礼物天选"
+  // displayCoins：用于清单展示的礼物价值（包裹道具=礼物本身价值，其他=实际花费）
+  // coins：用于标题栏动态花费汇总的实际消费（包裹道具=0，其他=实际花费）
+  // 验证：全部时间全部主播时，coins 汇总 = 顶部"消费电池"总数
+  const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
+  // 标题栏动态花费汇总（全部实际消费，不含包裹道具，不受清单显示过滤影响）
+  const giftListSpendingTotal = rawRecords
+    .filter(r => r.bag_desc !== "包裹道具")
+    .reduce((sum, r) => sum + recordActualCoins(r), 0);
   const monthGiftSummaryNew = (() => {
-    const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
-    const summaryRecords = rawRecords.filter(r => {
-      if (r.gift_id !== 1) return true;    // 正常礼物
-      return isTianxuanRecord(r);           // 天选礼物（gift_id=1 但属天选）保留
-    });
-    const map = new Map<string, { uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>();
-    for (const r of summaryRecords) {
+    // 合成材料排除：gift_id=1 且不在天选/红包列表，且不是"礼物天选"
+    const tianxuanGiftIds = new Set((synthesisStats?.tianxuanGifts ?? []).map(g => g.id));
+    const redPocketGiftIds = new Set((synthesisStats?.redPocketGifts ?? []).map(g => g.id));
+    const map = new Map<string, { uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number; displayCoins: number }>();
+    for (const r of rawRecords) {
+      // 排除合成材料：gift_id=1 且不在天选/红包列表，且不是"礼物天选"
+      if (r.gift_id === 1 && r.gift_name !== "礼物天选" && !tianxuanGiftIds.has(r.gift_id) && !redPocketGiftIds.has(r.gift_id)) continue;
       const isTx = isTianxuanRecord(r);
       // 天选礼物按图片链接分组（同一链接=同一类），正常礼物按名称分组
       const key = isTx ? `tx_${r.gift_img}` : r.gift_name;
       const existing = map.get(key) ?? {
         uid: key,
         gift_id: r.gift_id,
-        gift_name: r.gift_name, // 天选礼物名称统一为"礼物天选"
+        gift_name: r.gift_name,
         gift_img: isTx ? (fixImageUrl(r.gift_img) ?? "") : (giftImgMap.get(`${r.gift_id}_${r.gift_name}`) ?? fixImageUrl(r.gift_img) ?? ""),
         count: 0,
         coins: 0,
+        displayCoins: 0,
       };
       existing.count += r.gift_num;
-      // 实际花费电池 = totalCoins - refund_price；包裹道具不计算花费（非实际消费）
-      existing.coins += isTx ? tianxuanCoins(r) : (r.bag_desc === "包裹道具" ? 0 : recordActualCoins(r));
+      // coins：实际花费（包裹道具=0，因为不是消费；自发天选是真实消费，正常计费）
+      existing.coins += (r.bag_desc === "包裹道具") ? 0 : recordActualCoins(r);
+      // displayCoins：清单展示用（包裹道具=礼物本身价值，其他=实际花费）
+      existing.displayCoins += (r.bag_desc === "包裹道具") ? r.totalCoins : recordActualCoins(r);
       if (!existing.gift_img && r.gift_img) {
         existing.gift_img = fixImageUrl(r.gift_img);
         existing.gift_id = r.gift_id;
       }
       map.set(key, existing);
     }
-    return Array.from(map.values()).sort((a, b) => b.coins - a.coins);
+    return Array.from(map.values()).sort((a, b) => b.displayCoins - a.displayCoins);
   })();
 
   // 实际日期范围（从第一条到最后一条礼物记录）
@@ -1836,9 +1849,9 @@ async function fetchData(background = false) {
       overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
       maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
       consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
-      monthGiftSummaryNew, actualDateRange,
+      monthGiftSummaryNew, actualDateRange, giftListSpendingTotal,
     };
-  }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount]);
+  }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount, synthesisStats]);
 
   // 底部托盘导航：切换页面
   function handleDockChange(tab: DockTabKey) {
@@ -1916,6 +1929,7 @@ async function fetchData(background = false) {
           pieIsMobile={pieIsMobile}
           pieTipPos={pieTipPos}
           monthGiftSummaryNew={monthGiftSummaryNew}
+          giftListSpendingTotal={giftListSpendingTotal}
           actualDateRange={actualDateRange}
           showGiftSaveModal={showGiftSaveModal}
           blindBoxStats={blindBoxStats}

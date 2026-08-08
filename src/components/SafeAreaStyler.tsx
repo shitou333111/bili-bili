@@ -32,7 +32,7 @@ export default function SafeAreaStyler() {
         // 再上移 3px → 18px，满足"只调 iOS 向上移动3px"
         safeTop = "calc(env(safe-area-inset-top, 47px) - 3px)";
         // 再上移 2px：15→18→20→22
-        dockBottom = "42px";
+        dockBottom = "30px";
       } else if (isAndroid) {
         // Android：状态栏，留少量安全距离，托盘栏上移（增大 bottom），避免偏低
         safeTop = "env(safe-area-inset-top, 24px)";

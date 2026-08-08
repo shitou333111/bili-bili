@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { serverApiUrl } from "@/lib/server-api";
 import Dropdown from "@/components/Dropdown";
+import SafeAreaStyler from "@/components/SafeAreaStyler";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -141,6 +142,7 @@ export default function AdminPage() {
     const deviceToken = typeof window !== "undefined"
       ? (localStorage.getItem("bili_live_device_token") ?? localStorage.getItem("bili_live_user_token") ?? "")
       : "";
+    console.log("[admin] loadData: sid=", sid, "deviceToken=", deviceToken?.slice(0, 8) + "...");
     const usersUrl = sid
       ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
       : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
@@ -150,6 +152,12 @@ export default function AdminPage() {
     ]);
     const usersData = await usersRes.json();
     const configData = await configRes.json();
+    console.log("[admin] usersData.code=", usersData.code, "users count=", usersData.data?.users?.length, "currentSid=", usersData.data?.currentSid, "deviceToken=", usersData.data?.deviceToken);
+    if (usersData.data?.users) {
+      usersData.data.users.forEach((u: any) => {
+        if (u.isLocal || u.isCurrent) console.log("[admin] user:", u.uname, "isLocal=", u.isLocal, "isCurrent=", u.isCurrent, "sid=", u.sid?.slice(0, 8));
+      });
+    }
     if (usersData.code === 0) setUsers(usersData.data.users);
     else if (usersData.code === 403) {
       // 会话失效：清除本地 sid 并提示重新登录
@@ -390,6 +398,7 @@ export default function AdminPage() {
     // 静默校验/自动登录中，不渲染任何登录框，避免闪烁
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#faf9f6]">
+        <SafeAreaStyler />
         <div className="w-8 h-8 border-2 border-black/15 border-t-black/40 rounded-full animate-spin"></div>
       </div>
     );
@@ -398,6 +407,7 @@ export default function AdminPage() {
   if (!adminLoggedIn) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#faf9f6]">
+        <SafeAreaStyler />
         <div className="w-full max-w-xs rounded-xl border border-black/10 bg-white p-6 shadow-sm">
           <h1 className="text-base font-bold text-center mb-4">管理员登录</h1>
           {loginError && <p className="text-xs text-[#e74c3c] mb-2 text-center">{loginError}</p>}
@@ -423,7 +433,8 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden">
+    <div className="min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
+      <SafeAreaStyler />
       <div className="max-w-3xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -449,7 +460,7 @@ export default function AdminPage() {
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {filteredUsers.map((user) => (
                 <div key={user.mid} className={`flex items-center gap-3 rounded-lg border p-2.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
-                  <img src={fixImageUrl(user.face || "")} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
+                  {user.face ? <img src={fixImageUrl(user.face)} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" /> : <div className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
