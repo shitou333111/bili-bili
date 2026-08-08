@@ -45,8 +45,6 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-space-grotesk), Arial, Helvetica, sans-serif;
-  /* 顶部通知栏/刘海安全区（--safe-top 由 SafeAreaStyler 按平台注入） */
-  padding-top: var(--safe-top, 0px);
 }
 
 a {
@@ -67,11 +65,10 @@ a {
   display: none;
 }
 
-/* 主页面容器高度：视口高度减去顶部安全区。
-   注意：calc 内 - 号两侧必须有空格，否则 CSS 解析失败（这正是此前页面无法向下滚动的根因）。
-   用类而非 Tailwind 任意值，避免 calc()+var() 在任意值中的转义问题。 */
+/* 主页面容器：填满视口，顶部安全区用 padding-top 内缩（避免 body padding-top 导致底部漏出背景色） */
 .page-main {
-  height: calc(100dvh - var(--safe-top, 0px));
+  height: 100dvh;
+  padding-top: var(--safe-top, 0px);
 }
 
 /* ===== iOS 悬浮底部托盘导航栏（Dock Bar） ===== */
@@ -293,4 +290,17 @@ a {
     height: 30px;
     font-size: 15px;
   }
+}
+
+/* ===== 隐藏 FoamTree 右下角公司 logo（attribution） ===== */
+/* foamtree 在容器内动态创建 attribution 元素，通过 CSS 强制隐藏，确保网页和下载图片均无 logo */
+[class*="foamtree"] [class*="attribution"],
+[class*="foamtree"] [class*="logo"],
+[class*="foamtree"] img[src*="carrotsearch"],
+.visualization-attribution,
+.attribution-container {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }

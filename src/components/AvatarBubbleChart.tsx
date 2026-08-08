@@ -108,7 +108,8 @@ function computeInitialSize() {
     document.body.removeChild(probe);
   } catch { /* ignore */ }
   const sideMargin = 32; // 左右留边（内容两侧各 16px）
-  const overhead = 150;  // 标题 + 说明 + 底部两个按钮 + 外边距的固定垂直开销
+  // 标题 + 说明文字 + 底部两个按钮 + 外边距 + 模态框 padding 的固定垂直开销
+  const overhead = 200;
   const maxW = Math.max(200, viewW - sideMargin);
   const maxH = Math.max(200, viewH - topPad - bottomPad - overhead);
   let w = Math.min(maxW, 800);
@@ -319,7 +320,10 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       descriptionGroup: false,
       descriptionGroupSize: 0,
       descriptionGroupMinHeight: 0,
-      groupLabelDecorator: () => void 0,
+      groupLabelDecorator: (opts: any, props: any, vars: any) => {
+        // 移动端和桌面端都隐藏直接显示的昵称标签，仅通过点击/hover 气泡框展示
+        vars.labelText = "";
+      },
       groupLabelFontSize: 0,
       groupLabelMinFontSize: 0,
       groupBorderWidth: 0,
@@ -356,13 +360,11 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       fadeDuration: 300,
       zoomMouseWheelDuration: 300,
       groupContentDecoratorTriggering: "onSurfaceDirty",
-      attributionWeight: 0,
-      attributionText: "",
-      // 用透明 1x1 GIF 强制不绘制 attribution 徽标：
-      // 只设置 "" 时，导出原分辨率(1080×1920)的图片仍可能残留右下角 logo
-      // （屏幕上因 CSS 缩放显得极小看不见，导出后即暴露），故必须用透明图替换。
+      // 用透明 1x1 GIF 强制不绘制 attribution 徽标
       attributionLogo:
         "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+      attributionWeight: 0,
+      attributionText: "",
       descriptionGroupPolygonDrawn: false,
       backgroundColor: "#f6f1e9",
       groupColorDecorator: (opts: any, props: any, vars: any) => {

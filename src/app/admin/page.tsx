@@ -137,7 +137,7 @@ export default function AdminPage() {
   const loadData = useCallback(async () => {
     // 附带当前浏览器登录账号的 sid，用于默认选中当前用户
     const sid = typeof window !== "undefined" ? localStorage.getItem("bili_live_sid") : null;
-    // 本机登录标识（稳定设备令牌），用于标记“本机登录”账号并置顶
+    // 本机登录标识（稳定设备令牌），用于标记"本机登录"账号并置顶
     const deviceToken = typeof window !== "undefined"
       ? (localStorage.getItem("bili_live_device_token") ?? localStorage.getItem("bili_live_user_token") ?? "")
       : "";
@@ -151,9 +151,21 @@ export default function AdminPage() {
     const usersData = await usersRes.json();
     const configData = await configRes.json();
     if (usersData.code === 0) setUsers(usersData.data.users);
+    else if (usersData.code === 403) {
+      // 会话失效：清除本地 sid 并提示重新登录
+      try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
+      setAdminLoggedIn(false);
+      setChecking(false);
+      return;
+    }
     if (configData.code === 0) {
       setConfig(configData.data);
       loadActivityNames(configData.data.synthesis_activities ?? []);
+    } else if (configData.code === 403) {
+      try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
+      setAdminLoggedIn(false);
+      setChecking(false);
+      return;
     }
   }, [loadActivityNames]);
 

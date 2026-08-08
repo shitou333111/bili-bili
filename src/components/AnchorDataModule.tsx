@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
@@ -212,7 +212,7 @@ function GiftSaveModal({
   );
 }
 
-export default function AnchorDataModule({
+const AnchorDataModule = memo(function AnchorDataModule({
   anchorName = "",
   anchorFace = "",
   mid = 0,
@@ -1191,4 +1191,6 @@ async function fetchData() {
       )}
     </div>
   );
-}
+});
+
+export default AnchorDataModule;

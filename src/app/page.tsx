@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, memo } from "react";
 import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
@@ -1808,7 +1808,8 @@ async function fetchData(background = false) {
         coins: 0,
       };
       existing.count += r.gift_num;
-      existing.coins += isTx ? tianxuanCoins(r) : r.totalCoins;
+      // 实际花费电池 = totalCoins - refund_price；包裹道具不计算花费（非实际消费）
+      existing.coins += isTx ? tianxuanCoins(r) : (r.bag_desc === "包裹道具" ? 0 : recordActualCoins(r));
       if (!existing.gift_img && r.gift_img) {
         existing.gift_img = fixImageUrl(r.gift_img);
         existing.gift_id = r.gift_id;
@@ -2039,11 +2040,6 @@ async function fetchData(background = false) {
                       const minWidth = Math.max(monthlyData.length * (barWidth + 4) + 20, 100);
                       const shouldSkipLabels = monthlyData.length > 8;
 
-                      function formatCoinsForTooltip(value: number) {
-                        if (value >= 10000) return `${(value / 10000).toFixed(1)}万 电池`;
-                        return `${value} 电池`;
-                      }
-
                       return (
                         <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none">
                           <div className="text-[10px] text-black/45">月度统计</div>
@@ -2052,20 +2048,7 @@ async function fetchData(background = false) {
                               <ResponsiveContainer width="100%" height={170} minWidth={0}>
                                 <BarChart data={monthlyData} margin={{ top: 16, right: 2, left: 2, bottom: 2 }}>
                                   <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
-                                  <Tooltip
-                                    content={({ active, label, payload }: any) => {
-                                      if (active && payload && payload.length) {
-                                        return (
-                                          <div style={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff", padding: "8px 12px", fontSize: "12px" }}>
-                                            <p style={{ margin: 0, fontWeight: 500 }}>{monthLabel(String(label))}</p>
-                                            <p style={{ margin: "4px 0 0 0", color: "#1f1c17" }}>{formatCoinsForTooltip(Number(payload[0].value))}</p>
-                                          </div>
-                                        );
-                                      }
-                                      return null;
-                                    }}
-                                  />
-                                  <Bar dataKey="coins" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer" isAnimationActive={false}
+                                  <Bar dataKey="coins" radius={[3, 3, 0, 0]} barSize={barWidth} isAnimationActive={false} activeBar={false}
                                     onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                     label={(props: any) => {
                                       const { x, y, width, value, index } = props;

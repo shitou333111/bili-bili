@@ -23,7 +23,7 @@ export function middleware(request: NextRequest) {
     );
     response.headers.set(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, Cookie",
+      "Content-Type, Authorization, Cookie, X-Admin-Sid",
     );
 
     // 处理 OPTIONS 预检请求
