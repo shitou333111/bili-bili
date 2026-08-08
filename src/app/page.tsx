@@ -1570,6 +1570,8 @@ async function fetchData(background = false) {
   const isTianxuanRecord = (r: any) => r.ruid === 0 && !r.r_uname;
   const tianxuanCoins = (r: any) => r.totalCoins - (Number(r.refund_price) || 0);
   const tianxuanUid = currentAccount?.mid ?? 0;
+  // 每条记录的实际消费电池数 = totalCoins - refund_price（退款的电池不算实际花费）
+  const recordActualCoins = (r: any) => r.totalCoins - (Number(r.refund_price) || 0);
 
   // ===== 派生数据聚合：useMemo 缓存 =====
   // 这是"iOS 卡顿/点击没反应"的系统性根因修复。
@@ -1583,7 +1585,7 @@ async function fetchData(background = false) {
     filteredOverviewRecords, monthlyData, recentRecords, giftImgMap,
     overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
     maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
-    consumptionCoins, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
+    consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
     monthGiftSummaryNew, actualDateRange,
   } = useMemo(() => {
   const filteredOverviewRecords = snapshot ? (overviewAnchor
@@ -1594,14 +1596,21 @@ async function fetchData(background = false) {
       })
     : snapshot.records.filter(r => r.status_msg !== "已退回")) : [];
 
-  // 按月份聚合数据
+  // 账户维度记录（不按主播筛选）：用于顶部统计、月度柱状图、日历图、主播饼图。
+  // 这些"总数"只随日期变化，不随主播选择变化。
+  const accountOverviewRecords = snapshot ? snapshot.records.filter(r => r.status_msg !== "已退回") : [];
+  // 账户维度真实消费记录：排除包裹道具（合成产出、天选、红包都不是实际消费）
+  const accountConsumptionRecords = accountOverviewRecords.filter(r => r.bag_desc !== "包裹道具");
+
+  // 按月份聚合数据（跟随主播筛选；排除包裹道具，扣减退款）
   const monthlyData: MonthlyData[] = snapshot ? (() => {
     const map = new Map<string, { coins: number; count: number }>();
     for (const r of filteredOverviewRecords) {
+      if (r.bag_desc === "包裹道具") continue;
       const d = new Date(r.timestamp * 1000);
       const key = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
       const existing = map.get(key) || { coins: 0, count: 0 };
-      existing.coins += isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins;
+      existing.coins += recordActualCoins(r);
       existing.count += 1;
       map.set(key, existing);
     }
@@ -1632,11 +1641,11 @@ async function fetchData(background = false) {
     // 以 Map<ruid> 做 UID 整合：天选与本账号其他"给自己消费"（ruid===当前uid）自动合并到同一项，
     // 不会把天选单独当作该账号的全部消费。
     const map = new Map<number, { rname: string; coins: number }>();
-    for (const r of snapshot.records) {
+    for (const r of accountConsumptionRecords) {
       const isTianxuan = isTianxuanRecord(r);
       const ruid = isTianxuan ? tianxuanUid : r.ruid;
       const existing = map.get(ruid) ?? { rname: isTianxuan ? (currentAccount?.uname || "自己") : r.r_uname, coins: 0 };
-      existing.coins += isTianxuan ? tianxuanCoins(r) : r.totalCoins;
+      existing.coins += recordActualCoins(r);
       map.set(ruid, existing);
     }
     return Array.from(map.entries())
@@ -1646,7 +1655,7 @@ async function fetchData(background = false) {
 
   // 按选定日期范围计算的主播分布（不受 anchor 筛选影响，用于右侧饼图+下拉）
   const periodAnchors: Array<{ ruid: number; rname: string; coins: number }> = snapshot ? (() => {
-    let records = snapshot.records;
+    let records = accountConsumptionRecords;
     if (selectedMonth) {
       records = records.filter((r) => {
         const d = new Date(r.timestamp * 1000);
@@ -1666,7 +1675,7 @@ async function fetchData(background = false) {
       const isTianxuan = isTianxuanRecord(r);
       const ruid = isTianxuan ? tianxuanUid : r.ruid;
       const existing = map.get(ruid) ?? { rname: isTianxuan ? (currentAccount?.uname || "自己") : r.r_uname, coins: 0 };
-      existing.coins += isTianxuan ? tianxuanCoins(r) : r.totalCoins;
+      existing.coins += recordActualCoins(r);
       map.set(ruid, existing);
     }
     return Array.from(map.entries())
@@ -1683,7 +1692,7 @@ async function fetchData(background = false) {
       })
     : [];
 
-  // 当日记录（按 selectedDay 筛选）
+  // 当日记录（按 selectedDay 筛选，按主播筛选，用于礼物清单）
   const dayRecords = selectedDay !== null
     ? monthRecords.filter((r) => {
         const d = new Date(r.timestamp * 1000);
@@ -1691,13 +1700,14 @@ async function fetchData(background = false) {
       })
     : [];
 
-  // 每日聚合数据（用于日历）
+  // 每日聚合数据（用于日历；跟随主播筛选，排除包裹道具，扣减退款）
   const dailyData: Map<number, number> = (() => {
     const map = new Map<number, number>();
     for (const r of monthRecords) {
+      if (r.bag_desc === "包裹道具") continue;
       const d = new Date(r.timestamp * 1000);
       const day = d.getDate();
-      map.set(day, (map.get(day) ?? 0) + (isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins));
+      map.set(day, (map.get(day) ?? 0) + recordActualCoins(r));
     }
     return map;
   })();
@@ -1767,10 +1777,10 @@ async function fetchData(background = false) {
   // Compute unique gift types (by gift_id + gift_name to handle same gift_id with different names)
   const giftTypeCount = snapshot ? new Set(snapshot.records.map(r => `${r.gift_id}_${r.gift_name}`)).size : 0;
 
-  // 消费电池数：排除所有包裹道具（合成产出、天选、红包都不是实际消费）
-  const consumptionCoins = filteredOverviewRecords
-    .filter(r => r.bag_desc !== "包裹道具")
-    .reduce((sum, r) => sum + (isTianxuanRecord(r) ? tianxuanCoins(r) : r.totalCoins), 0);
+  // 消费电池数（账户汇总，不随主播筛选变化）：所有消费记录 - 包裹道具，每条记录扣减退款
+  const consumptionCoins = accountConsumptionRecords.reduce((sum, r) => sum + recordActualCoins(r), 0);
+  // 消费次数（账户汇总）：真实消费记录条数（排除包裹道具）
+  const consumptionCount = accountConsumptionRecords.length;
 
   // 赚取礼物统计（包裹道具，排除合成消费gift_id=1）
   const earnedGiftRecords = filteredOverviewRecords.filter(r => r.bag_desc === "包裹道具" && r.gift_id !== 1);
@@ -1818,7 +1828,7 @@ async function fetchData(background = false) {
       filteredOverviewRecords, monthlyData, recentRecords, giftImgMap,
       overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
       maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
-      consumptionCoins, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
+      consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
       monthGiftSummaryNew, actualDateRange,
     };
   }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount]);
@@ -1968,7 +1978,7 @@ async function fetchData(background = false) {
                   </div>
                   <div className="rounded-lg border border-black/10 bg-[#fff7ef] p-3">
                     <div className="text-xs text-black/45">消费次数</div>
-                    <div className="mt-1 text-xl font-semibold">{filteredOverviewRecords.filter(r => r.bag_desc !== "包裹道具").length}</div>
+                    <div className="mt-1 text-xl font-semibold">{consumptionCount.toLocaleString()}</div>
                   </div>
                   <div className="rounded-lg border border-black/10 bg-[#f0f7ee] p-3">
                     <div className="text-xs text-black/45">礼物种类</div>

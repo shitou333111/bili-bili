@@ -82,8 +82,9 @@ export default function Dropdown({ value, onChange, options, className = "", pla
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent | TouchEvent) => {
-      const t = e.target as Node;
-      if (btnRef.current?.contains(t) || listRef.current?.contains(t)) return;
+      // resize/scroll 等事件的 target 可能是 window/document，非 Node，需先判断再 contains
+      const t = e.target;
+      if (t instanceof Node && (btnRef.current?.contains(t) || listRef.current?.contains(t))) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
@@ -99,9 +100,11 @@ export default function Dropdown({ value, onChange, options, className = "", pla
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
-      const t = e.target as Node;
+      // resize 的 target 是 window（非 Node）；scroll 的 target 也可能是 document/window。
+      // 先判断 isNode 再调用 contains，否则会抛 "parameter 1 is not of type 'Node'"。
+      const t = e.target;
       // 滚动发生在下拉列表内部 → 不关闭
-      if (listRef.current && listRef.current.contains(t)) return;
+      if (t instanceof Node && listRef.current?.contains(t)) return;
       setOpen(false);
     };
     window.addEventListener("scroll", close, true);
