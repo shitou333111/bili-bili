@@ -62,7 +62,8 @@ export async function downloadJsonFile() {
         mimeType: "application/json",
       });
       if (res && (res.uri || res.path)) {
-        showToast("JSON 已保存");
+        const loc = res.path || res.uri || "";
+        showToast(`JSON 已保存到 ${loc}`);
         return;
       }
     } catch (err) {
@@ -83,5 +84,5 @@ export async function downloadJsonFile() {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(objectUrl);
-  showToast("JSON 已开始下载");
+  showToast("JSON 已下载到浏览器默认下载文件夹");
 }
