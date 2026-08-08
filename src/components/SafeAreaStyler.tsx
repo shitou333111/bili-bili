@@ -31,7 +31,8 @@ export default function SafeAreaStyler() {
         // 托盘栏上移：上一版误用了"减小 bottom"导致反而下移3px，从 9px 增大到 15px（净上移6px），
         // 再上移 3px → 18px，满足"只调 iOS 向上移动3px"
         safeTop = "calc(env(safe-area-inset-top, 47px) - 3px)";
-        dockBottom = "18px";
+        // 再上移 2px：15→18→20
+        dockBottom = "20px";
       } else if (isAndroid) {
         // Android：状态栏，留少量安全距离，托盘栏上移（增大 bottom），避免偏低
         safeTop = "env(safe-area-inset-top, 24px)";
@@ -54,8 +55,6 @@ export default function SafeAreaStyler() {
 
     doc.style.setProperty("--safe-top", safeTop);
     doc.style.setProperty("--dock-bottom", dockBottom);
-    // 标记平台，供 CSS 做平台差异化（如安卓托盘下方背景透明）
-    doc.setAttribute("data-platform", isIOS ? "ios" : isAndroid ? "android" : "other");
   }, []);
 
   return null;

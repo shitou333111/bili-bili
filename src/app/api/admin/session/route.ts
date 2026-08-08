@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
+import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const name = getAdminCookieName();
-  const match = cookieHeader.match(new RegExp(`${name}=([^;]+)`));
-  const sid = match?.[1] ?? null;
-  const valid = await validateAdminSession(sid);
+  const valid = await validateAdminSession(getAdminSid(request));
   return NextResponse.json({ code: 0, data: { valid } });
 }

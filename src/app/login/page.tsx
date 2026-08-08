@@ -220,7 +220,7 @@ export default function LoginPage() {
             扫码登录 B 站账号
           </h1>
           <p className="mt-4 text-sm leading-6 text-justify text-black/65">
-            使用哔哩哔哩手机APP扫码，在手机上确认登录。本网站只获取你的登录凭证，无法知道密码，更不会也无法更改密码或对账号安全方面做出任何更改。
+            使用哔哩哔哩手机APP扫码，在手机上确认登录。登录凭证存在本机，没有安全问题。
           </p>
 
           <div className="mt-8 flex justify-center">

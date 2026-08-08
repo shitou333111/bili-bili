@@ -86,17 +86,35 @@ function formatValue(v: number): string {
   return String(v);
 }
 
-/** 初始尺寸计算（同步，避免首次渲染时尺寸不对） */
+/** 计算让"标题栏+头像图+底部两个按钮"整体不滚动地放进屏幕的图表尺寸 */
 function computeInitialSize() {
-  if (typeof window === "undefined") return { w: 360, h: 640 };
-  const sideMargin = 16;
-  const reserved = 160;
-  const maxW = window.innerWidth - sideMargin;
-  const maxH = window.innerHeight - reserved;
+  if (typeof window === "undefined") return { w: 340, h: 600 };
+  const viewW = window.innerWidth;
+  const viewH = window.innerHeight;
+  // 顶部安全区（--safe-top 已由 SafeAreaStyler 注入，解析其数值）
+  let topPad = 0;
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--safe-top").trim();
+    const n = parseFloat(v);
+    if (!isNaN(n)) topPad = n;
+  } catch { /* ignore */ }
+  // 底部安全区：用探针元素读取 env(safe-area-inset-bottom) 的实际像素
+  let bottomPad = 0;
+  try {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;left:0;bottom:0;width:100%;height:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none";
+    document.body.appendChild(probe);
+    bottomPad = probe.offsetHeight || 0;
+    document.body.removeChild(probe);
+  } catch { /* ignore */ }
+  const sideMargin = 32; // 左右留边（内容两侧各 16px）
+  const overhead = 150;  // 标题 + 说明 + 底部两个按钮 + 外边距的固定垂直开销
+  const maxW = Math.max(200, viewW - sideMargin);
+  const maxH = Math.max(200, viewH - topPad - bottomPad - overhead);
   let w = Math.min(maxW, 800);
-  let h = w * DOWNLOAD_H / DOWNLOAD_W;
-  if (h > maxH) { h = maxH; w = h * DOWNLOAD_W / DOWNLOAD_H; }
-  return { w: Math.round(w), h: Math.round(h) };
+  let h = Math.round(w * DOWNLOAD_H / DOWNLOAD_W);
+  if (h > maxH) { h = Math.round(maxH); w = Math.round(h * DOWNLOAD_W / DOWNLOAD_H); }
+  return { w: Math.round(w), h };
 }
 
 export default function AvatarFoamTreeChart({ items, title, loading: externalLoading, loadingText, onClose }: AvatarBubbleChartProps) {
@@ -551,21 +569,18 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     };
   }, []);
 
-  // 响应式尺寸
+  // 响应式尺寸（随窗口/旋转变化重算，确保整体不滚动地放进屏幕）
   useEffect(() => {
     function updateSize() {
-      const sideMargin = 16;
-      const reserved = 160;
-      const maxW = window.innerWidth - sideMargin;
-      const maxH = window.innerHeight - reserved;
-      let w = Math.min(maxW, 800);
-      let h = w * DOWNLOAD_H / DOWNLOAD_W;
-      if (h > maxH) { h = maxH; w = h * DOWNLOAD_W / DOWNLOAD_H; }
-      setCanvasDims({ w: Math.round(w), h: Math.round(h) });
+      setCanvasDims(computeInitialSize());
     }
     updateSize();
     window.addEventListener("resize", updateSize);
-    return () => window.removeEventListener("resize", updateSize);
+    window.addEventListener("orientationchange", updateSize);
+    return () => {
+      window.removeEventListener("resize", updateSize);
+      window.removeEventListener("orientationchange", updateSize);
+    };
   }, []);
 
   function generateImageDataUrl(): string | null {
@@ -573,8 +588,19 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     try {
       const canvas = containerRef.current.querySelector("canvas") as HTMLCanvasElement | null;
       if (!canvas) return null;
-      // canvas固定渲染1080×1920，直接toDataURL导出原生分辨率，无缩放损失
-      return canvas.toDataURL("image/png");
+      // 拷贝一份，在拷贝上用背景色覆盖右下角可能残留的 foamtree attribution logo 区域。
+      // 即使 attributionLogo 已设为透明图，某些导出路径仍可能画出 logo，这里作确定性兜底：
+      // 背景色与图背景一致(#f6f1e9)，logo 区域本就被背景色填充，覆盖后视觉无差异，
+      // 又能确保下载的图片绝无公司 logo。
+      const copy = document.createElement("canvas");
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const cctx = copy.getContext("2d");
+      if (!cctx) return canvas.toDataURL("image/png");
+      cctx.drawImage(canvas, 0, 0);
+      cctx.fillStyle = "#f6f1e9";
+      cctx.fillRect(copy.width - 240, copy.height - 60, 240, 60);
+      return copy.toDataURL("image/png");
     } catch (err) {
       console.error("生成图片失败:", err);
       return null;
@@ -599,13 +625,11 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     : `单元格面积代表消费额，共显示 ${displayCount} 个粉丝`;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      {/* 外层可滚动容器，min-h-full + items-center：内容矮时垂直居中，内容高时顶部对齐并自然下滚，
-          避免 iOS 上“居中 + 内部滚动”导致图表底部被截断/不可达 */}
-      <div className="min-h-full flex items-center justify-center px-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4" onClick={onClose}>
       <div
         className="relative flex flex-col items-center"
-        style={{ width: canvasDims.w + 32, paddingTop: "calc(16px + var(--safe-top, 0px))", paddingBottom: "calc(88px + env(safe-area-inset-bottom, 0px))" }}
+        style={{ width: canvasDims.w + 32 }}
+        onClick={(e) => e.stopPropagation()}
       >
         <p className="text-white/80 text-sm mb-1 w-full text-center truncate px-2" title={title}>{title}</p>
         <p className="text-white/40 text-xs mb-2">{noteText}</p>
@@ -655,7 +679,6 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
           </div>
         )}
 
-      </div>
       </div>
     </div>
   );

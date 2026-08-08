@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
+import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { checkBlindBox } from "@/lib/bilibili/gift-api";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
@@ -7,10 +7,7 @@ import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 export const dynamic = "force-dynamic";
 
 async function checkAdmin(request: Request): Promise<boolean> {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));
-  const sid = match?.[1] ?? null;
-  return validateAdminSession(sid);
+  return validateAdminSession(getAdminSid(request));
 }
 
 export async function GET(request: Request) {

@@ -34,6 +34,23 @@ type AdminConfigData = {
   valid_activity_types: string[];
 };
 
+/** 读取本地保存的管理员会话 sid */
+function getStoredAdminSid(): string | null {
+  try {
+    return typeof window !== "undefined" ? localStorage.getItem("bili_live_admin_sid") : null;
+  } catch { return null; }
+}
+
+/**
+ * 管理员 API 请求封装：始终附带 X-Admin-Sid 请求头 + credentials。
+ * 原因：Tauri(iOS/Android) 前端与服务器跨源，登录 cookie 用 SameSite=lax 不会随跨源 fetch 发送，
+ * 导致 admin 内容为空。改为登录后把 sid 存本地，每个请求显式带上请求头，绕开跨源 cookie 限制。
+ */
+function adminFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = { ...(options.headers as Record<string, string> | undefined), ...(getStoredAdminSid() ? { "X-Admin-Sid": getStoredAdminSid()! } : {}) };
+  return fetch(url, { ...options, headers, credentials: "include" });
+}
+
 export default function AdminPage() {
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
   // 首次进入时静默校验/自动登录，期间不渲染登录框，避免“弹出后自动消失”的闪烁
@@ -53,7 +70,7 @@ export default function AdminPage() {
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch(serverApiUrl("/api/admin/session"), { credentials: "include" });
+      const res = await adminFetch(serverApiUrl("/api/admin/session"));
       const data = await res.json();
       if (data.data?.valid) {
         setAdminLoggedIn(true);
@@ -80,7 +97,13 @@ export default function AdminPage() {
             body: JSON.stringify({ password }),
             credentials: "include",
           });
-          if (res.ok) { setAdminLoggedIn(true); ok = true; }
+          if (res.ok) {
+            const data = await res.json();
+            if (data.sid) {
+              try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
+            }
+            setAdminLoggedIn(true); ok = true;
+          }
         } catch { /* ignore */ }
       }
     }
@@ -100,7 +123,7 @@ export default function AdminPage() {
       activities.map(async (act) => {
         if (!act.id) return;
         try {
-          const res = await fetch(serverApiUrl(`/api/admin/activity-info?activity_id=${encodeURIComponent(act.id)}`));
+          const res = await adminFetch(serverApiUrl(`/api/admin/activity-info?activity_id=${encodeURIComponent(act.id)}`));
           const data = await res.json();
           if (data.code === 0 && data.data?.name) {
             names[act.id] = data.data.name;
@@ -122,8 +145,8 @@ export default function AdminPage() {
       ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
       : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
     const [usersRes, configRes] = await Promise.all([
-      fetch(serverApiUrl(usersUrl)),
-      fetch(serverApiUrl("/api/admin/config")),
+      adminFetch(serverApiUrl(usersUrl)),
+      adminFetch(serverApiUrl("/api/admin/config")),
     ]);
     const usersData = await usersRes.json();
     const configData = await configRes.json();
@@ -149,6 +172,10 @@ export default function AdminPage() {
         credentials: "include",
       });
       if (res.ok) {
+        const data = await res.json();
+        if (data.sid) {
+          try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
+        }
         setAdminLoggedIn(true);
       } else {
         const data = await res.json();
@@ -166,7 +193,7 @@ export default function AdminPage() {
       alert("该账号为服务器收集的账号，无本机登录凭证，请用「加载远程数据」查看其数据");
       return;
     }
-    const res = await fetch(serverApiUrl("/api/admin/impersonate"), {
+    const res = await adminFetch(serverApiUrl("/api/admin/impersonate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sid }),
@@ -185,7 +212,7 @@ export default function AdminPage() {
   const handleLoadRemoteData = async (user: User) => {
     try {
       // 先从服务器拉取该用户的数据文件
-      const res = await fetch(serverApiUrl(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`));
+      const res = await adminFetch(serverApiUrl(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`));
       const data = await res.json();
       if (data.code !== 0) {
         alert("加载失败: " + (data.message || "未知错误"));
@@ -209,7 +236,7 @@ export default function AdminPage() {
   const handleSaveConfig = async () => {
     if (!config) return;
     setConfigSaved(false);
-    const res = await fetch(serverApiUrl("/api/admin/config"), {
+    const res = await adminFetch(serverApiUrl("/api/admin/config"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
@@ -307,7 +334,7 @@ export default function AdminPage() {
     if (!box.id || box.id <= 0) return;
     setFetchingName(index);
     try {
-      const res = await fetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
+      const res = await adminFetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
       const data = await res.json();
       if (data.code === 0 && data.data?.name) {
         const boxes = [...config.blind_boxes];

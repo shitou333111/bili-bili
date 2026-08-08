@@ -28,6 +28,30 @@ interface DropdownProps {
   placeholder?: string;
 }
 
+/**
+ * 测量"最长选项"的渲染宽度（保证列表内所有选项单行显示、不换行）。
+ * 用隐藏 span 实测文本宽度；若 label 不是纯字符串则取其文本内容。
+ */
+function measureOptionsWidth(options: DropdownOption[]): number {
+  try {
+    const span = document.createElement("span");
+    span.style.cssText =
+      "position:absolute;visibility:hidden;white-space:nowrap;font-size:13px;padding:0 14px;";
+    document.body.appendChild(span);
+    let max = 0;
+    for (const o of options) {
+      const label = o.label;
+      span.textContent = typeof label === "string" ? label : String(label ?? "");
+      max = Math.max(max, span.offsetWidth);
+    }
+    document.body.removeChild(span);
+    // 加上选项内边距(28px)与右侧箭头/间距(~16px)
+    return max + 44;
+  } catch {
+    return 0;
+  }
+}
+
 export default function Dropdown({ value, onChange, options, className = "", placeholder = "请选择" }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -41,11 +65,12 @@ export default function Dropdown({ value, onChange, options, className = "", pla
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const margin = 12;
-    // 列表宽度取触发按钮与视口的较小值（最小 150，保证四周留边距且不过窄）
-    const width = Math.min(Math.max(rect.width, 150), window.innerWidth - margin * 2);
+    // 宽度：取"最长选项"的宽度（保证所有选项不换行），再与按钮宽度、最小宽度比较，最终受视口限制
+    const maxOptionWidth = measureOptionsWidth(options);
+    const width = Math.min(Math.max(rect.width, maxOptionWidth, 160), window.innerWidth - margin * 2);
     let top = rect.bottom + 4;
     // 预估列表高度（受 max-height 限制），若超出视口则向上弹出
-    const estimatedH = Math.min(options.length * 40 + 16, 280);
+    const estimatedH = Math.min(options.length * 44 + 16, 300);
     if (top + estimatedH > window.innerHeight - margin) {
       top = Math.max(margin, rect.top - estimatedH - 4);
     }
@@ -104,7 +129,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
       {open && pos && (
         <div
           ref={listRef}
-          className="fixed z-[70] max-h-[280px] overflow-y-auto rounded-lg border border-black/10 bg-white shadow-xl"
+          className="fixed z-[70] max-h-[300px] overflow-y-auto rounded-lg border border-black/10 bg-white shadow-xl"
           style={{ top: pos.top, left: pos.left, width: pos.width }}
         >
           {options.map((o) => (
@@ -115,7 +140,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
                 onChange(o.value);
                 setOpen(false);
               }}
-              className={`block w-full px-3.5 py-2.5 text-left text-[13px] transition ${
+              className={`block w-full whitespace-nowrap px-4 py-2.5 text-left text-[13px] transition ${
                 o.value === value ? "bg-[#1f1c17] text-white" : "text-black/70 hover:bg-black/5"
               }`}
             >

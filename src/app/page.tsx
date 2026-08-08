@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
@@ -1571,7 +1571,21 @@ async function fetchData(background = false) {
   const tianxuanCoins = (r: any) => r.totalCoins - (Number(r.refund_price) || 0);
   const tianxuanUid = currentAccount?.mid ?? 0;
 
-  // 按主播筛选记录（天选记录归到当前登录账号 uid）
+  // ===== 派生数据聚合：useMemo 缓存 =====
+  // 这是"iOS 卡顿/点击没反应"的系统性根因修复。
+  // 此前这些聚合(按主播过滤、按月/日、按礼物 name 去重、排序等)在组件【每次渲染】都会
+  // 重新对全部 records(可上万条)执行 filter/sort/reduce。而 page.tsx 是单一巨型组件，
+  // 任何状态变化(点击托盘切换、粉丝/粉丝牌按钮、返回首页等无关操作)都会触发整页重渲染，
+  // 全部重算一遍。安卓 WebView 用 V8(JIT 快)几乎无感，iOS 用 JavaScriptCore 明显慢，
+  // 于是每次点击都卡顿数百毫秒，表现为"点了没反应"。
+  // 修复：用 useMemo 缓存，仅当真正影响结果的输入变化时才重算，其余渲染直接复用缓存。
+  const {
+    filteredOverviewRecords, monthlyData, recentRecords, giftImgMap,
+    overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
+    maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
+    consumptionCoins, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
+    monthGiftSummaryNew, actualDateRange,
+  } = useMemo(() => {
   const filteredOverviewRecords = snapshot ? (overviewAnchor
     ? snapshot.records.filter((r) => {
         if (r.status_msg === "已退回") return false;
@@ -1799,6 +1813,15 @@ async function fetchData(background = false) {
     const sorted = [...filteredOverviewRecords].sort((a, b) => a.timestamp - b.timestamp);
     return { start: formatDateShort(formatTimestamp(sorted[0].timestamp)), end: formatDateShort(formatTimestamp(sorted[sorted.length - 1].timestamp)) };
   })() : null;
+
+    return {
+      filteredOverviewRecords, monthlyData, recentRecords, giftImgMap,
+      overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
+      maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
+      consumptionCoins, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
+      monthGiftSummaryNew, actualDateRange,
+    };
+  }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount]);
 
   // 底部托盘导航：切换页面
   function handleDockChange(tab: DockTabKey) {

@@ -1,15 +1,12 @@
 import { NextResponse } from "next/server";
-import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
+import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { readAdminConfig, writeAdminConfig, validateActivityType, getValidActivityTypes, type AdminConfig } from "@/lib/admin-config";
 import { BLIND_BOX_CONFIG, SYNTHESIS_CONFIG } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
 async function checkAdmin(request: Request): Promise<boolean> {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));
-  const sid = match?.[1] ?? null;
-  return validateAdminSession(sid);
+  return validateAdminSession(getAdminSid(request));
 }
 
 function getDefaultConfig() {

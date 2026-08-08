@@ -60,3 +60,23 @@ export async function validateAdminSession(sid: string | null): Promise<boolean>
 export function getAdminCookieName() {
   return ADMIN_COOKIE_NAME;
 }
+
+/**
+ * 从请求中解析管理员会话标识，按优先级：
+ *   1. query 参数 admin_sid
+ *   2. 请求头 X-Admin-Sid
+ *   3. Cookie admin_sid
+ *
+ * 原因：Tauri (iOS/Android) 中前端与服务器跨源（tauri://localhost → http://服务器），
+ * 且登录 cookie 用 SameSite=lax，跨源 fetch 不会携带该 cookie，导致 admin 页面内容为空。
+ * 因此改为在登录成功后由前端把 sid 显式带在请求头/查询串里，绕开跨源 cookie 限制。
+ */
+export function getAdminSid(request: Request): string | null {
+  const url = new URL(request.url);
+  const qs = url.searchParams.get("admin_sid");
+  if (qs) return qs;
+  const header = request.headers.get("x-admin-sid");
+  if (header) return header;
+  const cookieHeader = request.headers.get("cookie") ?? "";
+  return cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([^;]+)`))?.[1] ?? null;
+}

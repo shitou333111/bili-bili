@@ -74,27 +74,6 @@ a {
   height: calc(100dvh - var(--safe-top, 0px));
 }
 
-/* ===== 安卓专属：托盘下方背景透明，让托盘四周透明悬浮 =====
-   用户反馈：安卓上页面主体底色(#f5f5f5)一直延伸到屏幕最底，托盘下方一段是实色、不透明。
-   这里仅对安卓（data-platform="android"）生效：
-   - html/body 背景透明，露出窗口背景
-   - page-main 底部（托盘下方）改为透明，托盘真正悬浮
-   不影响 iOS / 桌面（它们不带 data-platform="android"）。 */
-html[data-platform="android"],
-html[data-platform="android"] body {
-  background: transparent;
-}
-
-[data-platform="android"] .page-main {
-  background: linear-gradient(
-    to top,
-    transparent 0,
-    transparent calc(var(--dock-bottom, 26px) + 44px),
-    #f5f5f5 calc(var(--dock-bottom, 26px) + 44px),
-    #f5f5f5 100%
-  );
-}
-
 /* ===== iOS 悬浮底部托盘导航栏（Dock Bar） ===== */
 /* 1. 悬浮容器（定位在页面最底部，居中，容器穿透） */
 .bottom-dock-container {

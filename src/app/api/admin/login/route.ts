@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   }
 
   const sid = await createAdminSession();
-  const res = NextResponse.json({ code: 0, message: "ok" });
+  const res = NextResponse.json({ code: 0, message: "ok", sid });
   res.cookies.set(getAdminCookieName(), sid, {
     httpOnly: true,
     sameSite: "lax",

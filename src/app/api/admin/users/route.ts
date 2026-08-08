@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { validateAdminSession, getAdminCookieName } from "@/lib/auth/admin";
+import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { readState, getSessionCookieName } from "@/lib/auth/session";
 import { readUsersList, type UsersListEntry } from "@/lib/user-data";
 import { promises as fs } from "fs";
@@ -8,10 +8,7 @@ import path from "path";
 export const dynamic = "force-dynamic";
 
 async function checkAdmin(request: Request): Promise<boolean> {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(new RegExp(`${getAdminCookieName()}=([^;]+)`));
-  const sid = match?.[1] ?? null;
-  return validateAdminSession(sid);
+  return validateAdminSession(getAdminSid(request));
 }
 
 /** 获取用户上传数据的最后更新时间（用 uid_<mid> 目录） */
