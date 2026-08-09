@@ -25,7 +25,7 @@ export type AuthSession = {
   biliSessdata: string;
   biliRefreshToken: string;
   biliCookies?: string[];
-  source: "qr" | "dev";
+  source: "qr" | "dev" | "server";
   userToken: string; // 用户级别标识，用于隔离不同浏览器/设备的账号
   createdAt: string;
   updatedAt: string;

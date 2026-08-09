@@ -579,8 +579,13 @@ export async function GET(request: Request) {
     // 从拉取到的记录中判断昨日是否有数据
     let yesterdayAvailable = true;
 
+    // 昨日可用性：以 B站 API 返回的 ready 标识为准（ready=1 表示昨日数据已汇总完成，
+    // 即使昨日无收礼记录也应可点击；ready=0 表示官方尚未更新，需置灰）。
+    // 无 API 返回（离线/未拉取到昨日分段）时回退到本地记录判断。
+    let yesterdayApiReady: boolean | null = null;
+
     /** 获取指定月份(payload按整个自然月)内的所有记录，自动翻页 */
-    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string): Promise<{ records: GiftRecord[]; pages: number }> {
+    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string): Promise<{ records: GiftRecord[]; pages: number; ready?: number }> {
       const records: GiftRecord[] = [];
       let rateLimited = false; // 412限流标记，触发后切换慢速模式
 
@@ -634,12 +639,13 @@ export async function GET(request: Request) {
       const totalPages = firstPage.data?.total_page ?? 0;
       const totalHamster = firstPage.data?.total_hamster ?? 0;
       const listLen = firstPage.data?.list?.length ?? 0;
+      const ready = firstPage.data?.ready;
       console.log(`[AnchorGifts] ${begin}~${end} 第0页: total_pages=${totalPages} total_hamster=${totalHamster} list_len=${listLen}`);
 
       // total_page=0 表示该月没有数据，跳过（不是错误）
       if (totalPages === 0) {
         console.log(`[AnchorGifts] ${begin}~${end} 无数据(total_page=0)，跳过`);
-        return { records, pages: 0 };
+        return { records, pages: 0, ready };
       }
 
       // 第0页的数据
@@ -678,7 +684,7 @@ export async function GET(request: Request) {
         }
       }
       const pages = stoppedEarly ? 1 : totalPages;
-      return { records, pages };
+      return { records, pages, ready };
     }
 
     // ==================== 统一获取逻辑 ====================
@@ -730,6 +736,13 @@ export async function GET(request: Request) {
         return await fetchRange(chunk.start, chunk.end, existingKeyCounter, buvidCookie);
       });
 
+      // 从包含"昨日"的最近分段响应中读取 ready 标识，判断官方昨日数据是否已更新
+      for (const result of chunkResults) {
+        if (result && result.ready !== undefined) {
+          yesterdayApiReady = result.ready === 1;
+        }
+      }
+
       // 合并结果并去重
       fetchedNewPages = 0;
       for (const result of chunkResults) {
@@ -773,9 +786,12 @@ export async function GET(request: Request) {
       }
     }
 
-    // 从拉取到的记录中判断昨日是否有数据（避免额外API调用触发限流）
-    if (allRecords.length > 0) {
-      const yesterdayDate = yesterdayStr.slice(0, 4) + "-" + yesterdayStr.slice(4, 6) + "-" + yesterdayStr.slice(6, 8);
+    // 昨日可用性：优先采用 B站 API 的 ready 标识（ready=1 即官方已更新昨日数据，
+    // 即使昨日无收礼记录也应可点击）；未拉取到昨日分段时回退到本地记录判断。
+    const yesterdayDate = yesterdayStr.slice(0, 4) + "-" + yesterdayStr.slice(4, 6) + "-" + yesterdayStr.slice(6, 8);
+    if (yesterdayApiReady !== null) {
+      yesterdayAvailable = yesterdayApiReady;
+    } else if (allRecords.length > 0) {
       yesterdayAvailable = allRecords.some(r => r.time.startsWith(yesterdayDate));
       if (!yesterdayAvailable) {
         console.log(`[AnchorGifts] 昨日(${yesterdayStr})无数据，官方可能尚未更新`);

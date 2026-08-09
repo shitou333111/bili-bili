@@ -44,21 +44,61 @@ async function webPost<T>(path: string, body?: unknown): Promise<T> {
 export const authApi = {
   /** 获取账号列表 */
   async getAccounts(): Promise<{ code: number; data: { accounts: unknown[] } }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientGetAccounts } = await import("./auth/client-auth");
+      return clientGetAccounts(platform);
+    }
     return webFetch("/api/auth/accounts");
   },
 
   /** 获取登录状态 */
-  async getStatus(): Promise<{ code: number; data: { isLoggedIn: boolean; uname?: string; mid?: number } }> {
+  async getStatus(): Promise<{ code: number; message?: string; data: { loggedIn: boolean; reason?: string; expired?: boolean; sid?: string; uname?: string; mid?: number; face?: string } }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientGetStatus } = await import("./auth/client-auth");
+      return clientGetStatus(platform);
+    }
     return webFetch("/api/auth/status");
+  },
+
+  /** 生成登录二维码 */
+  async generateQR(): Promise<{ code: number; message: string; data?: { qrcode_key: string; url: string; image: string } }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientQRGenerate } = await import("./auth/client-auth");
+      return clientQRGenerate(platform);
+    }
+    return webFetch("/api/auth/qr/generate");
+  },
+
+  /** 轮询二维码登录状态 */
+  async pollQR(qrcodeKey: string): Promise<{ code: number; message: string; data?: { code: number; message: string; url: string; refresh_token: string; timestamp: number; sid?: string; userToken?: string } }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientQRPoll } = await import("./auth/client-auth");
+      return clientQRPoll(platform, qrcodeKey);
+    }
+    return webFetch(`/api/auth/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`);
   },
 
   /** 切换账号 */
   async switchAccount(sid: string): Promise<{ code: number }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientSwitch } = await import("./auth/client-auth");
+      return clientSwitch(platform, sid);
+    }
     return webPost("/api/auth/switch", { sid });
   },
 
   /** 登出 */
   async logout(): Promise<void> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { clientLogout } = await import("./auth/client-auth");
+      return clientLogout(platform);
+    }
     await fetch(serverApiUrl("/api/auth/logout"), { method: "POST" });
   },
 };
@@ -73,7 +113,7 @@ export const anchorApi = {
       // Tauri: 直接调用 B站 API 并本地处理
       // 这里需要导入完整的礼物拉取逻辑
       const { fetchAnchorGifts } = await import("./anchor-gifts-client");
-      return fetchAnchorGifts(platform, refresh);
+      return fetchAnchorGifts(platform, { refresh });
     }
     const url = refresh ? "/api/anchor/gifts?refresh=true" : "/api/anchor/gifts";
     return webFetch(url);

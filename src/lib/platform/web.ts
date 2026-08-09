@@ -1,10 +1,17 @@
 /**
- * Web 平台实现 - 通过 Next.js API routes 和 Node.js 模块
+ * Web 平台实现 - 浏览器环境
+ *
+ * Web 模式下，所有 B站 数据与本地文件操作均通过服务器路由（/api/...）完成，
+ * 浏览器端不需要（也无法）直接读写服务器文件系统或直连 B站。
+ *
+ * 该实现只用于：
+ * 1. 检测 isNative = false（决定走服务器路由）
+ * 2. 提供浏览器可用的 fetchBilibiliJson / fetchRaw / getBuvidCookie / randomUUID
+ *
+ * 依赖 Node 内置模块（fs/path/crypto publicEncrypt）的方法在浏览器中不可用，
+ * 且在本架构下不会被调用（数据流走服务器路由），故统一抛错以避免误用。
  */
 
-import { randomUUID, publicEncrypt, constants } from "crypto";
-import { promises as fs } from "fs";
-import path from "path";
 import type { Platform, FetchJsonOptions, RawResponse } from "./types";
 
 // B站请求头（与 bilibili/client.ts 保持一致）
@@ -35,7 +42,10 @@ const BILIBILI_LIVE_HEADERS: Record<string, string> = {
   "Origin": "https://live.bilibili.com",
 };
 
-const DATA_DIR = path.join(process.cwd(), ".data");
+/** Web 浏览器下不可用的能力（数据流走服务器路由，不应被调用） */
+function unavailable(name: string): never {
+  throw new Error(`[webPlatform] ${name} 在浏览器不可用，请通过服务器路由访问`);
+}
 
 export const webPlatform: Platform = {
   name: "web",
@@ -105,58 +115,44 @@ export const webPlatform: Platform = {
     }
   },
 
-  // ========== 文件 I/O ==========
+  // ========== 文件 I/O（浏览器不可用）==========
 
-  async readFile(filePath: string): Promise<string> {
-    return fs.readFile(filePath, "utf-8");
+  async readFile(_filePath: string): Promise<string> {
+    return unavailable("readFile");
   },
 
-  async writeFile(filePath: string, data: string): Promise<void> {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, data, "utf-8");
+  async writeFile(_filePath: string, _data: string): Promise<void> {
+    unavailable("writeFile");
   },
 
-  async mkdir(dirPath: string): Promise<void> {
-    await fs.mkdir(dirPath, { recursive: true });
+  async mkdir(_dirPath: string): Promise<void> {
+    unavailable("mkdir");
   },
 
-  async readdir(dirPath: string): Promise<string[]> {
-    try {
-      return await fs.readdir(dirPath);
-    } catch {
-      return [];
-    }
+  async readdir(_dirPath: string): Promise<string[]> {
+    return unavailable("readdir");
   },
 
-  async unlink(filePath: string): Promise<void> {
-    try {
-      await fs.unlink(filePath);
-    } catch {}
+  async unlink(_filePath: string): Promise<void> {
+    unavailable("unlink");
   },
 
-  async exists(filePath: string): Promise<boolean> {
-    try {
-      await fs.access(filePath);
-      return true;
-    } catch {
-      return false;
-    }
+  async exists(_filePath: string): Promise<boolean> {
+    return unavailable("exists");
   },
 
   async getDataDir(): Promise<string> {
-    return DATA_DIR;
+    return unavailable("getDataDir");
   },
 
-  // ========== 会话管理 ==========
+  // ========== 会话管理（浏览器走服务器路由）==========
 
   async getSessionState() {
-    const { readState } = await import("@/lib/auth/session");
-    return readState();
+    return { currentSid: null as string | null, sessions: [] };
   },
 
-  async setSessionState(state) {
-    const { writeState } = await import("@/lib/auth/session");
-    return writeState(state);
+  async setSessionState() {
+    unavailable("setSessionState");
   },
 
   // ========== 配置/数据 ==========
@@ -188,17 +184,21 @@ export const webPlatform: Platform = {
   // ========== 工具 ==========
 
   getProjectRoot(): string {
-    return process.cwd();
+    return unavailable("getProjectRoot");
   },
 
   randomUUID(): string {
-    return randomUUID();
+    const c = (globalThis as any).crypto;
+    if (c?.randomUUID) return c.randomUUID();
+    // 降级：Math.random 拼接（仅 Web 浏览器，非安全场景）
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+      const r = (Math.random() * 16) | 0;
+      const v = ch === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
   },
 
-  publicEncrypt(key: string, data: Buffer): Buffer {
-    return publicEncrypt(
-      { key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
-      data,
-    );
+  publicEncrypt(): Buffer {
+    return unavailable("publicEncrypt");
   },
 };

@@ -7,9 +7,12 @@ import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
+import { dataFetch } from "@/lib/client-fetch";
+import { uploadAllUserData } from "@/lib/stats-client";
 import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
+import { getPlatform } from "@/lib/platform";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
@@ -20,6 +23,16 @@ import { saveMobileOrDownload } from "@/lib/save-image";
 import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
 import { RevenueModuleContent } from "@/components/RevenueModuleContent";
+
+// Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
+async function closeApp() {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().close();
+  } catch {
+    // 非 Tauri（浏览器调试等）下忽略，交由浏览器默认行为处理
+  }
+}
 
 function formatTimestamp(ts: number) {
   const date = new Date(ts * 1000);
@@ -37,7 +50,7 @@ type Account = {
   uname: string;
   mid: number;
   face?: string;
-  source: "qr" | "dev";
+  source: "qr" | "dev" | "server";
   updatedAt: string;
 };
 
@@ -324,13 +337,13 @@ function GiftSaveModal({
           <div className="bg-white px-4 py-4">
             <div className="grid grid-cols-3 gap-x-2 gap-y-2">
               {gifts.slice(0, 59).map((g) => (
-                <div key={g.uid} className="flex items-center gap-1 text-sm py-0.5">
+                <div key={g.uid} className="flex items-center justify-center gap-1 text-sm py-0.5">
                   {g.gift_img ? <img src={fixImageUrl(g.gift_img)} alt="" className="w-7 h-7 rounded flex-shrink-0" crossOrigin="anonymous" /> : <span className="text-[12px] text-black/50 truncate max-w-[55px] flex-shrink-0">{g.gift_name}</span>}
                   <span className="truncate text-black/70 text-sm">×{g.count}</span>
                 </div>
               ))}
               {gifts.length > 59 && (
-                <div className="flex items-center gap-1 text-sm py-0.5">
+                <div className="flex items-center justify-center gap-1 text-sm py-0.5">
                   <span className="truncate text-black/40 text-sm">...</span>
                 </div>
               )}
@@ -776,6 +789,8 @@ export default function HomePage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [overviewAnchor, setOverviewAnchor] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
+  // 首次获取消费/收益记录时的进度提示（text: 说明文字, ratio: 0~1 可选）
+  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
   const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
@@ -789,6 +804,68 @@ export default function HomePage() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const pieIsMobile = mounted && isMobileDevice();
+
+  // ===== 应用内返回栈（History API）：解决 系统返回键 不起效 =====
+  // 本应用是"标签页式"SPA，模块切换只改 React 状态、不产生真实浏览器历史。
+  // Tauri Android WebView 的返回键默认调用 history.back()（触发 popstate）、
+  // iOS 无原生导航控制器（无左滑返回）。这里在每次切换模块/工具子页时 pushState
+  // 记录一个应用内视图栈，系统返回键触发 popstate 时恢复上一个视图，栈空时回到根视图。
+  const activeModuleRef = useRef(activeModule);
+  const toolsPageRef = useRef(toolsPage);
+  useEffect(() => { activeModuleRef.current = activeModule; }, [activeModule]);
+  useEffect(() => { toolsPageRef.current = toolsPage; }, [toolsPage]);
+  const navStackRef = useRef<Array<{ module: string; toolsPage: string }>>([]);
+
+  // 导航前调用：把当前视图压栈并 pushState，使系统返回键可触发 popstate 回退
+  const pushView = useCallback((nextModule: string, nextToolsPage: string) => {
+    navStackRef.current.push({ module: activeModuleRef.current, toolsPage: toolsPageRef.current });
+    window.history.pushState({ __inApp: true }, "");
+    // 直接更新状态（不重新触发 setActiveModule 里的 push）
+    setActiveModule(nextModule as any);
+    setToolsPage(nextToolsPage as any);
+  }, []);
+
+  // 栈空时拦截一次并提示"再按一次退出"（防止误触直接退出）
+  const exitToastTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (navStackRef.current.length > 0) {
+        const prev = navStackRef.current.pop()!;
+        setActiveModule(prev.module as any);
+        setToolsPage(prev.toolsPage as any);
+        return;
+      }
+      // 栈空：已回到根视图。拦截一次并提示，2 秒内再次按返回才真正退出
+      if (exitToastTimer.current !== null) {
+        window.clearTimeout(exitToastTimer.current);
+        exitToastTimer.current = null;
+        closeApp();
+        return;
+      }
+      showToast("再按一次退出应用");
+      // 重新压入一条历史记录，使下一次系统返回键仍触发 popstate（而非浏览器直接退出），
+      // 以便我们能控制"第二次返回才退出"的时机。
+      window.history.pushState({ __inApp: true }, "");
+      exitToastTimer.current = window.setTimeout(() => {
+        exitToastTimer.current = null;
+      }, 2000);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // 登录页"取消登录"返回：跳回主页后恢复"帮助"模块
+  useEffect(() => {
+    const ret = sessionStorage.getItem("bili_live_return");
+    if (ret) {
+      sessionStorage.removeItem("bili_live_return");
+      if (ret === "help") {
+        setActiveModule("screenshot");
+        setToolsPage("home");
+      }
+    }
+  }, []);
   type FanItem = { mid: number; uname: string; face: string; attribute: number; mtime: number };
   const [fansList, setFansList] = useState<FanItem[]>([]);
   const [fansTotal, setFansTotal] = useState(0);
@@ -965,9 +1042,9 @@ export default function HomePage() {
   async function loadCachedQuick() {
     try {
       const [accountsRes, snapshotRes, statusRes] = await Promise.all([
-        fetch(apiUrl("/api/auth/accounts"), { cache: "no-store" }),
-        fetch(apiUrl("/api/revenue/pay-record?fast=1"), { cache: "no-store" }),
-        fetch(apiUrl("/api/auth/status"), { cache: "no-store" }),
+        dataFetch("/api/auth/accounts", { cache: "no-store" }),
+        dataFetch("/api/revenue/pay-record?fast=1", { cache: "no-store" }),
+        dataFetch("/api/auth/status", { cache: "no-store" }),
       ]);
       const accountsData = await accountsRes.json();
       const snapshotData = await snapshotRes.json();
@@ -1044,51 +1121,31 @@ export default function HomePage() {
     return () => window.removeEventListener("resize", applyZoom);
   }, []);
 
-  /** 构造带 session ID 和 userToken 的 API URL（Tauri WebView 可能不发送 cookie） */
-function apiUrl(path: string): string {
-  if (typeof window === "undefined") return path;
-  const sid = localStorage.getItem("bili_live_sid");
-  // 用户令牌统一使用“稳定设备令牌”：本机登录账号以它为准，且不会因 admin 模拟切换被覆盖
-  const userToken = getDeviceToken();
-  const params: string[] = [];
-  if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
-  if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
-  // 离线时通知服务器返回本地缓存数据（而不是 mock/401）
-// 用 navigator.onLine 同步判断，确保请求发出时状态准确（hook 状态在挂载后异步同步）
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    params.push("offline=1");
-  }
-  let url = path;
-  if (params.length > 0) {
-    const sep = path.includes("?") ? "&" : "?";
-    url = `${path}${sep}${params.join("&")}`;
-  }
-  // Tauri 模式下需转换为完整 URL（静态前端无服务器处理相对路径）
-  return serverApiUrl(url);
-}
+  // 收益模块（AnchorDataModule）的 fetchData 注册引用，供页面统一刷新时调用（收益随页面一起更新）
+  const anchorRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
-/**
- * 获取本设备的稳定设备令牌。
- * 该令牌用于标识“本机登录”账号，一旦生成便不再改变（admin 模拟切换不会覆盖它）。
- * 首次调用时从旧的 bili_live_user_token 继承，避免老用户重新登录。
- */
-function getDeviceToken(): string {
-  if (typeof window === "undefined") return "";
-  let dt = localStorage.getItem("bili_live_device_token");
-  if (!dt) {
-    dt = localStorage.getItem("bili_live_user_token") || "";
-    if (dt) localStorage.setItem("bili_live_device_token", dt);
-  }
-  return dt;
-}
+  /** 刷新收尾：先让收益模块重新拉取，再统一上传本账号所有变化的数据（哈希判断，未变则跳过） */
+  const finishRefresh = async () => {
+    try {
+      if (anchorRefreshRef.current) await anchorRefreshRef.current();
+    } catch {
+      // 收益拉取失败不阻塞其余流程
+    }
+    try {
+      const platform = await getPlatform();
+      await uploadAllUserData(platform);
+    } catch {
+      // 上传失败不影响本地展示
+    }
+  };
 
-async function fetchData(background = false) {
+  async function fetchData(background = false) {
     // 后台同步（返回用户本地优先、或手动刷新）时不弹阻塞遮罩，仅走 syncing（刷新按钮三点动画）
     if (!background) setLoading(true);
     try {
       const [accountsRes, snapshotRes] = await Promise.all([
-        fetch(apiUrl("/api/auth/accounts"), { cache: "no-store" }),
-        fetch(apiUrl("/api/revenue/pay-record"), { cache: "no-store" }),
+        dataFetch("/api/auth/accounts", { cache: "no-store" }),
+        dataFetch("/api/revenue/pay-record", { cache: "no-store" }, (p) => setFetchProgress({ text: p.text, ratio: p.ratio })),
       ]);
 
       const accountsData = await accountsRes.json();
@@ -1096,7 +1153,7 @@ async function fetchData(background = false) {
 
       setAccounts(accountsData.data?.accounts || []);
 
-      const statusRes = await fetch(apiUrl("/api/auth/status"), { cache: "no-store" });
+      const statusRes = await dataFetch("/api/auth/status", { cache: "no-store" });
       const statusData = await statusRes.json();
       if (statusData.data?.loggedIn && statusData.data?.sid) {
         setApiLoggedIn(true);
@@ -1139,6 +1196,8 @@ async function fetchData(background = false) {
           fetchCertifications(),
           fetchOtherStats(),
         ]);
+        // 收益随页面一起拉取 + 统一上传本账号所有变化的数据
+        await finishRefresh();
         // 后台静默同步成功也记录刷新时间（本地优先：打开即显示）
         noteRefreshTime();
       }
@@ -1146,6 +1205,7 @@ async function fetchData(background = false) {
       console.error("Failed to fetch data:", error);
     } finally {
       setLoading(false);
+      setFetchProgress(null);
     }
   }
 
@@ -1163,9 +1223,22 @@ async function fetchData(background = false) {
         if (qs) blindBoxUrl += `?${qs}`;
       }
 
+      // 筛选（主播/日期）变化时只重新拉取盲盒统计，不触发合成/其他统计的重新拉取，
+      // 避免不必要的自动更新与网络请求。
+      if (filters) {
+        const blindBoxRes = await dataFetch(blindBoxUrl, { cache: "no-store" });
+        const blindBoxData = await blindBoxRes.json();
+        if (blindBoxData.message === "needs-relogin") {
+          await handleAuthExpired();
+          return;
+        }
+        if (blindBoxData.code === 0) setBlindBoxStats(blindBoxData.data);
+        return;
+      }
+
       const [blindBoxRes, synthesisRes] = await Promise.all([
-        fetch(apiUrl(blindBoxUrl), { cache: "no-store" }),
-        fetch(apiUrl("/api/stats/synthesis"), { cache: "no-store" }),
+        dataFetch(blindBoxUrl, { cache: "no-store" }),
+        dataFetch("/api/stats/synthesis", { cache: "no-store" }),
       ]);
       const [blindBoxData, synthesisData] = await Promise.all([
         blindBoxRes.json(),
@@ -1203,7 +1276,7 @@ async function fetchData(background = false) {
 
   async function fetchCertifications() {
     try {
-      const res = await fetch(apiUrl("/api/stats/certification"), { cache: "no-store" });
+      const res = await dataFetch("/api/stats/certification", { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         await handleAuthExpired();
@@ -1219,7 +1292,7 @@ async function fetchData(background = false) {
 
   async function fetchOtherStats() {
     try {
-      const res = await fetch(apiUrl("/api/stats/other"), { cache: "no-store" });
+      const res = await dataFetch("/api/stats/other", { cache: "no-store" });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         await handleAuthExpired();
@@ -1252,7 +1325,7 @@ async function fetchData(background = false) {
       value: a.coins,
       face: isSelfAnchor(a) ? selfFace : (anchorFaces[a.ruid] || ""),
     }));
-    setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像..." });
+    setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像...\n首次加载需要等待几分钟，请耐心等待" });
 
     // 找出还没有头像的uid（只针对top300）
     const missingUids = topAnchors.filter(a => !anchorFaces[a.ruid]).map(a => a.ruid);
@@ -1267,7 +1340,7 @@ async function fetchData(background = false) {
         for (let i = 0; i < missingUids.length; i += batchSize) {
           const batch = missingUids.slice(i, i + batchSize);
           try {
-            const res = await fetch(apiUrl(`/api/tools/user-info?uids=${batch.join(",")}`), { cache: "no-store" });
+            const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}`, { cache: "no-store" });
             const data = await res.json();
             if (data.code === 0 && data.data) {
               for (const [uidStr, info] of Object.entries(data.data)) {
@@ -1304,7 +1377,7 @@ async function fetchData(background = false) {
       anchorData[a.ruid] = { name: a.rname, face: faces[a.ruid] || "" };
     }
     if (Object.keys(anchorData).length > 0) {
-      fetch(apiUrl("/api/user-data/write"), {
+      dataFetch("/api/user-data/write", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "received-anchors-list", data: anchorData }),
@@ -1321,7 +1394,7 @@ async function fetchData(background = false) {
     setFansLoading(true);
     setFansMsg("");
     try {
-      const res = await fetch(apiUrl(`/api/tools/fans?pn=${pn}&ps=50`), { cache: "no-store" });
+      const res = await dataFetch(`/api/tools/fans?pn=${pn}&ps=50`, { cache: "no-store" });
       const data = await res.json();
       if (data.code === -101) {
         setFansMsg(data.message);
@@ -1365,7 +1438,7 @@ async function fetchData(background = false) {
     setFansRemoving(true);
     setFansMsg("");
     try {
-      const res = await fetch(apiUrl("/api/tools/remove-fan"), {
+      const res = await dataFetch("/api/tools/remove-fan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fids }),
@@ -1404,7 +1477,7 @@ async function fetchData(background = false) {
     setMedalsLoading(true);
     setMedalsMsg("");
     try {
-      const res = await fetch(apiUrl(`/api/tools/medals?page=${page}`), { cache: "no-store" });
+      const res = await dataFetch(`/api/tools/medals?page=${page}`, { cache: "no-store" });
       const data = await res.json();
       if (data.code === 0 && data.data) {
         const allItems = [...(data.data.list || []), ...(data.data.special_list || [])];
@@ -1426,7 +1499,7 @@ async function fetchData(background = false) {
     setMedalsRemoving(true);
     setMedalsMsg("");
     try {
-      const res = await fetch(apiUrl("/api/tools/delete-medal"), {
+      const res = await dataFetch("/api/tools/delete-medal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ medal_id: medalId }),
@@ -1462,7 +1535,7 @@ async function fetchData(background = false) {
     let failed = 0;
     for (const medalId of medalsSelected) {
       try {
-        const res = await fetch(apiUrl("/api/tools/delete-medal"), {
+        const res = await dataFetch("/api/tools/delete-medal", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ medal_id: medalId }),
@@ -1489,7 +1562,7 @@ async function fetchData(background = false) {
     setSyncing(true);
     setAuthError(null);
     try {
-      const snapshotRes = await fetch(apiUrl("/api/revenue/pay-record?refresh=true"), { cache: "no-store" });
+      const snapshotRes = await dataFetch("/api/revenue/pay-record?refresh=true", { cache: "no-store" });
       const snapshotData = await snapshotRes.json();
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
@@ -1507,6 +1580,8 @@ async function fetchData(background = false) {
           fetchCertifications(),
           fetchOtherStats(),
         ]);
+        // 收益随页面一起拉取 + 统一上传本账号所有变化的数据
+        await finishRefresh();
       }
     } catch (error) {
       console.error("Failed to refresh data:", error);
@@ -1517,10 +1592,68 @@ async function fetchData(background = false) {
     }
   }, []);
 
-  async function switchAccount(sid: string) {
-    setLoading(true);
+  /**
+   * 服务器账号（source=server）刷新：从自建服务器重新拉取该账号数据，覆盖本机 uid_<mid> 本地缓存。
+   * 服务器账号本机无 B站 登录凭证，无法增量更新，只能整体从服务器重载。
+   */
+  const reloadServerData = useCallback(async () => {
+    if (!currentAccount?.mid) return;
+    setSyncing(true);
+    setAuthError(null);
     try {
-      const res = await fetch(apiUrl("/api/auth/switch"), {
+      const platform = await getPlatform();
+      const res = await fetch(`${serverApiUrl("/api/server-data")}?mid=${currentAccount.mid}`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.code !== 0) {
+        setAuthError("从服务器重新加载失败: " + (data.message || "未知错误"));
+        return;
+      }
+      const files = data.data?.files ?? {};
+      const fileNames = Object.keys(files);
+      if (fileNames.length === 0) {
+        setAuthError("服务器暂无该账号数据，无法重新加载。");
+        return;
+      }
+      // 覆盖本机 uid_<mid> 数据文件
+      const dir = `${await platform.getDataDir()}/uid_${currentAccount.mid}`;
+      await platform.mkdir(dir);
+      for (const name of fileNames) {
+        await platform.writeFile(`${dir}/${name}`, files[name]);
+      }
+      // 一并覆盖全局盲盒信息（名称/单价/爆出礼物对照表）
+      if (data.data?.blindboxInfo && typeof data.data.blindboxInfo === "object") {
+        const bbDir = `${await platform.getDataDir()}/blindbox_info`;
+        await platform.mkdir(bbDir);
+        for (const [id, info] of Object.entries(data.data.blindboxInfo as Record<string, unknown>)) {
+          if (!/^\d+$/.test(id)) continue;
+          await platform.writeFile(`${bbDir}/${id}.json`, JSON.stringify(info, null, 2));
+        }
+      }
+      showToast("已从服务器重新加载数据");
+      // 覆盖本地缓存后重新读取本地快照与统计
+      await loadCachedQuick();
+      await fetchData(true);
+      noteRefreshTime();
+    } catch (err) {
+      console.error("reloadServerData error:", err);
+      setAuthError("从服务器重新加载失败，请检查网络连接。");
+    } finally {
+      setSyncing(false);
+    }
+  }, [currentAccount, loadCachedQuick, fetchData]);
+
+  /** 刷新入口：服务器账号从服务器重载，本机账号走 B站 增量刷新 */
+  const handleRefresh = useCallback(async () => {
+    if (currentAccount?.source === "server") {
+      await reloadServerData();
+    } else {
+      await refreshData();
+    }
+  }, [currentAccount, reloadServerData, refreshData]);
+
+  async function switchAccount(sid: string) {
+    try {
+      const res = await dataFetch("/api/auth/switch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sid }),
@@ -1529,18 +1662,23 @@ async function fetchData(background = false) {
       if (data.code === 0) {
         // 同步 localStorage，确保 admin 页依据最新 sid 标记当前激活用户
         localStorage.setItem("bili_live_sid", sid);
-        await fetchData();
+        // 本地优先：切换到本机其他账号时先展示其本地缓存，再后台静默同步（不弹阻塞遮罩）
+        setSyncing(true);
+        try {
+          await loadCachedQuick();
+          await fetchData(true);
+        } finally {
+          setSyncing(false);
+        }
       }
     } catch (error) {
       console.error("Failed to switch account:", error);
-    } finally {
-      setLoading(false);
     }
   }
 
   async function logout() {
     try {
-      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
+      await dataFetch("/api/auth/logout", { method: "POST" });
     } catch (error) {
       console.error("Failed to logout:", error);
     }
@@ -1557,7 +1695,7 @@ async function fetchData(background = false) {
   /** 登录凭证失效时：清除会话并跳转登录页重新登录 */
   async function handleAuthExpired() {
     try {
-      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
+      await dataFetch("/api/auth/logout", { method: "POST" });
     } catch { /* ignore */ }
     localStorage.removeItem("bili_live_sid");
     setCurrentAccount(null);
@@ -1856,10 +1994,10 @@ async function fetchData(background = false) {
 
   // 底部托盘导航：切换页面
   function handleDockChange(tab: DockTabKey) {
-    if (tab === "fans") { setActiveModule("revenue"); setToolsPage("home"); }
-    else if (tab === "anchor") { setActiveModule("anchor"); setToolsPage("home"); }
-    else if (tab === "help") { setActiveModule("screenshot"); setToolsPage("home"); }
-    else { setActiveModule("pending"); }
+    if (tab === "fans") { pushView("revenue", "home"); }
+    else if (tab === "anchor") { pushView("anchor", "home"); }
+    else if (tab === "help") { pushView("screenshot", "home"); }
+    else { pushView("pending", "home"); }
   }
   // 当前托盘高亮项
   const dockTab: DockTabKey = activeModule === "revenue" ? "fans"
@@ -1893,15 +2031,27 @@ async function fetchData(background = false) {
       )}
 
       {/* 首次初始化提示：无本地数据、正在后台拉取时全屏提示 */}
-      {isFirstTime && syncing && (
+      {isFirstTime && syncing && createPortal(
         <div className="fixed inset-0 z-[9999] bg-[#f5f5f5]/95 backdrop-blur flex items-center justify-center px-6">
-          <div className="text-center max-w-xs">
+          <div className="text-center max-w-xs w-full">
             <div className="w-10 h-10 border-[3px] border-[#1f1c17] border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
             <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
             <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
             <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会变快。</p>
+            {fetchProgress && (
+              <div className="mt-5">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
+                  <div
+                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
+                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
+                  ></div>
+                </div>
+                <p className="mt-2 text-xs text-black/55">{fetchProgress.text}</p>
+              </div>
+            )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Revenue module - 保持挂载，切换模块时仅切换 display，避免重新绘制图表/卡顿 */}
@@ -1950,7 +2100,8 @@ async function fetchData(background = false) {
           statsRulesRef={statsRulesRef}
           giftListRulesRef={giftListRulesRef}
           setActiveTab={setActiveTab}
-          refreshData={refreshData}
+          refreshData={handleRefresh}
+          isServerAccount={currentAccount?.source === "server"}
           setSelectedMonth={setSelectedMonth}
           setSelectedDay={setSelectedDay}
           setOverviewAnchor={setOverviewAnchor}
@@ -1987,6 +2138,8 @@ async function fetchData(background = false) {
           anchorFace={fixImageUrl(currentAccount?.face ?? "")}
           mid={currentAccount?.mid ?? 0}
           uname={currentAccount?.uname ?? ""}
+          isServerAccount={currentAccount?.source === "server"}
+          onFetchRequest={anchorRefreshRef}
         />
       </div>
 
@@ -2011,9 +2164,9 @@ async function fetchData(background = false) {
                         showOfflineToast("当前处于离线模式，无法使用此项功能");
                         return;
                       }
-                      if (tool.title === "粉丝清理") { setToolsPage("fans"); loadFans(1); }
-                      else if (tool.title === "粉丝牌清理") { setToolsPage("medal"); loadMedals(1); }
-                      else { setToolsPage("screenshot"); }
+                      if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
+                      else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
+                      else { pushView("screenshot", "screenshot"); }
                     }}
                     className={`rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
                       disabled
@@ -2145,7 +2298,7 @@ async function fetchData(background = false) {
             )}
 
             {/* Admin 密码弹窗 */}
-            {showAdminPwd && (
+            {showAdminPwd && createPortal(
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(false); }}>
                 <div className="rounded-xl border border-black/10 bg-white p-6 shadow-xl w-72" onClick={(e) => e.stopPropagation()}>
                   <h3 className="text-sm font-semibold text-center mb-4">管理员验证</h3>
@@ -2178,7 +2331,8 @@ async function fetchData(background = false) {
                     </button>
                   </div>
                 </div>
-              </div>
+              </div>,
+              document.body
             )}
 
             {/* 粉丝清理 */}
@@ -2186,7 +2340,7 @@ async function fetchData(background = false) {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { setToolsPage("home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView("screenshot", "home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -2301,7 +2455,7 @@ async function fetchData(background = false) {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { setToolsPage("home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView("screenshot", "home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -2413,7 +2567,7 @@ async function fetchData(background = false) {
             {activeModule === "screenshot" && toolsPage === "screenshot" && (
               <div className="space-y-4">
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => setToolsPage("home")} className="flex items-center gap-1 text-xs text-black/50 hover:text-black/80 transition">
+                  <button onClick={() => pushView("screenshot", "home")} className="flex items-center gap-1 text-xs text-black/50 hover:text-black/80 transition">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -2519,11 +2673,23 @@ async function fetchData(background = false) {
       {/* Loading Overlay - only covers content area, header above is still clickable */}
       {loading && (
         <div className="absolute inset-0 z-[9999] bg-white/70 backdrop-blur-sm flex items-center justify-center">
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center gap-4 w-full max-w-[300px] px-6">
             <div className="w-12 h-12 border-4 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
             <p className="text-base font-medium text-[#1f1c17]">正在加载数据...</p>
             <p className="text-sm text-black/45">切换账号需要重新获取数据，请耐心等待</p>
-            <p className="text-xs text-black/30">首次加载可能需要几分钟</p>
+            {fetchProgress ? (
+              <div className="w-full">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
+                  <div
+                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
+                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
+                  ></div>
+                </div>
+                <p className="mt-2 text-xs text-black/55 text-center">{fetchProgress.text}</p>
+              </div>
+            ) : (
+              <p className="text-xs text-black/30">首次加载可能需要几分钟</p>
+            )}
           </div>
         </div>
       )}

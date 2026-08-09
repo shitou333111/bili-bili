@@ -1,16 +1,33 @@
 /**
  * Tauri 客户端 - 主播礼物数据获取
- * 
+ *
  * 在 Tauri 环境下，直接调用 B站 API（通过平台层解决 CORS），
- * 数据存储在本地文件系统。
- * 
+ * 数据存储在本地文件系统，并复刻服务器 /api/anchor/gifts 的完整统计逻辑
+ * （giftSummary / fanDistribution / monthlyData / otherStats / blindBoxProfits 及 dateRange/fan 过滤）。
+ *
  * 逻辑与 src/app/api/anchor/gifts/route.ts 对应，但运行在客户端。
  */
 
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
+import { BLIND_BOX_CONFIG } from "./config";
+import {
+  resolveSession,
+  buildCookie,
+  getEffectiveBlindBoxConfig,
+  getAllBlindBoxInfo,
+  saveBlindBoxInfo,
+  checkBlindBox,
+  readGiftDb,
+  saveGiftsToDb,
+  getGiftImg,
+  type BlindBoxInfo,
+  type BlindBoxGift,
+  type EffectiveBlindBoxConfig,
+} from "./stats-client";
 
-// 类型定义（与 API route 保持一致）
+// ==================== 类型定义（与 API route 保持一致） ====================
+
 type BiliGiftRecord = {
   uid: number;
   uname: string;
@@ -28,6 +45,7 @@ type BiliGiftStreamResponse = {
   code: number;
   message: string;
   data?: {
+    ready: number;
     total_page: number;
     total_count: number;
     total_hamster: number;
@@ -35,7 +53,45 @@ type BiliGiftStreamResponse = {
   };
 };
 
-// 常量
+type RecordsMetaData = {
+  end_date?: string;
+  last_fetch?: string;
+  total_page?: number;
+};
+
+export type AnchorGiftsResult = {
+  totalHamster: number;
+  totalRmb: number;
+  totalCount: number;
+  totalPage: number;
+  giftTypes: number;
+  fanCount: number;
+  monthlyData: Array<{ month: string; hamster: number; count: number }>;
+  fanDistribution: Array<{ uid: number; uname: string; hamster: number; giftCount: number }>;
+  giftSummary: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
+  dateRange: { start: string; end: string } | null;
+  blindBoxProfit: unknown;
+  blindBoxProfits: unknown[];
+  otherStats: {
+    dayStats: { totalDays: number; maxConsecutiveDays: number };
+    fanStats: Array<{
+      uid: number;
+      uname: string;
+      totalDays: number;
+      maxConsecutiveDays: number;
+      consecutiveStart: string;
+      consecutiveEnd: string;
+    }>;
+  };
+  records: BiliGiftRecord[];
+  filter: { dateRange: string; fan: string };
+  metadata: RecordsMetaData | null;
+  fetchedNewPages: number;
+  yesterdayAvailable: boolean;
+};
+
+// ==================== 常量 ====================
+
 const REQUEST_INTERVAL_MS = 1500;
 const SLOW_REQUEST_INTERVAL_MS = 4000;
 const PAGE_RETRY_COUNT = 3;
@@ -44,55 +100,9 @@ const RATE_LIMIT_COOLDOWN_MS = 30_000;
 const MONTH_CONCURRENCY = 1;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
-function formatDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}${m}${day}`;
-}
+const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
 
-function generateMonthChunks(start: string, end: string): { start: string; end: string }[] {
-  const chunks: { start: string; end: string }[] = [];
-  const startDate = new Date(
-    parseInt(start.slice(0, 4)),
-    parseInt(start.slice(4, 6)) - 1,
-    parseInt(start.slice(6, 8)),
-  );
-  const endDate = new Date(
-    parseInt(end.slice(0, 4)),
-    parseInt(end.slice(4, 6)) - 1,
-    parseInt(end.slice(6, 8)),
-  );
-
-  let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-  while (current <= endDate) {
-    const year = current.getFullYear();
-    const month = current.getMonth() + 1;
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    if (lastDay > endDate) {
-      chunks.push({
-        start: formatDate(firstDay),
-        end: formatDate(endDate),
-      });
-    } else {
-      chunks.push({
-        start: formatDate(firstDay),
-        end: formatDate(lastDay),
-      });
-    }
-    current.setMonth(current.getMonth() + 1);
-  }
-  return chunks;
-}
-
-function getYesterdayStr(): string {
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const beijing = new Date(utc + 8 * 3600000);
-  beijing.setDate(beijing.getDate() - 1);
-  return formatDate(beijing);
-}
+// ==================== 日期工具 ====================
 
 function getBeijingTime(): string {
   const now = new Date();
@@ -101,8 +111,145 @@ function getBeijingTime(): string {
   return local.toISOString().replace("T", " ").slice(0, 19);
 }
 
+function getYesterdayStr(): string {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const beijing = new Date(utc + 8 * 3600000);
+  beijing.setDate(beijing.getDate() - 1);
+  const y = beijing.getFullYear();
+  const m = String(beijing.getMonth() + 1).padStart(2, "0");
+  const d = String(beijing.getDate()).padStart(2, "0");
+  return `${y}${m}${d}`;
+}
+
+function getDatePart(time: string): string {
+  return time.split(" ")[0];
+}
+
+/** YYYYMMDD -> Date（北京时间） */
+function parseDateStr(s: string): Date {
+  const y = Number(s.slice(0, 4));
+  const m = Number(s.slice(4, 6)) - 1;
+  const d = Number(s.slice(6, 8));
+  return new Date(Date.UTC(y, m, d));
+}
+
+/** Date -> YYYYMMDD（北京时间） */
+function formatDate(d: Date): string {
+  const utc = d.getTime() + d.getTimezoneOffset() * 60000;
+  const beijing = new Date(utc + 8 * 3600000);
+  const y = beijing.getFullYear();
+  const m = String(beijing.getMonth() + 1).padStart(2, "0");
+  const day = String(beijing.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+/** 计算最长连续天数 */
+function calcMaxConsecutive(sortedDates: string[]): { max: number; start: string; end: string } {
+  if (sortedDates.length === 0) return { max: 0, start: "", end: "" };
+  let maxLen = 1;
+  let maxStart = sortedDates[0];
+  let maxEnd = sortedDates[0];
+  let curLen = 1;
+  let curStart = sortedDates[0];
+  for (let i = 1; i < sortedDates.length; i++) {
+    const prev = new Date(sortedDates[i - 1]);
+    const cur = new Date(sortedDates[i]);
+    const diffDays = Math.round((cur.getTime() - prev.getTime()) / 86400000);
+    if (diffDays === 1) {
+      curLen++;
+    } else {
+      if (curLen > maxLen) {
+        maxLen = curLen;
+        maxStart = curStart;
+        maxEnd = sortedDates[i - 1];
+      }
+      curLen = 1;
+      curStart = sortedDates[i];
+    }
+  }
+  if (curLen > maxLen) {
+    maxLen = curLen;
+    maxStart = curStart;
+    maxEnd = sortedDates[sortedDates.length - 1];
+  }
+  return { max: maxLen, start: maxStart, end: maxEnd };
+}
+
+/** 日期范围过滤 */
+function getDateRangeFilter(type: string): { start: Date; end: Date } | null {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (type) {
+    case "today": {
+      const end = new Date(today);
+      end.setDate(end.getDate() + 1);
+      return { start: today, end };
+    }
+    case "yesterday": {
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayEnd = new Date(today);
+      return { start: yesterday, end: yesterdayEnd };
+    }
+    case "thisWeek": {
+      const dayOfWeek = today.getDay();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      const nextMonday = new Date(monday);
+      nextMonday.setDate(nextMonday.getDate() + 7);
+      return { start: monday, end: nextMonday };
+    }
+    case "thisMonth": {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      return { start, end };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * 按自然月边界分割日期范围（B站 API 不支持跨自然月查询）
+ */
+function generateMonthChunks(begin: string, end: string): Array<{ start: string; end: string }> {
+  const chunks: Array<{ start: string; end: string }> = [];
+  const by = Number(begin.slice(0, 4));
+  const bm = Number(begin.slice(4, 6));
+  const bd = Number(begin.slice(6, 8));
+  const ey = Number(end.slice(0, 4));
+  const em = Number(end.slice(4, 6));
+  const ed = Number(end.slice(6, 8));
+
+  let y = by, m = bm;
+  let isFirst = true;
+  while (y < ey || (y === ey && m <= em)) {
+    const startDay = isFirst ? String(bd).padStart(2, "0") : "01";
+    const start = `${y}${String(m).padStart(2, "0")}${startDay}`;
+    isFirst = false;
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    let endDay: string;
+    if (y === ey && m === em) {
+      endDay = String(ed).padStart(2, "0");
+    } else {
+      endDay = String(lastDay).padStart(2, "0");
+    }
+    const endStr = `${y}${String(m).padStart(2, "0")}${endDay}`;
+    chunks.push({ start, end: endStr });
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return chunks;
+}
+
+// ==================== 记录 key ====================
+
 function recordKey(r: BiliGiftRecord): string {
-  return `${r.uid}|${r.time}|${r.gift_id}|${r.num}`;
+  return `${r.time}_${r.uid}_${r.gift_id}_${r.num}`;
 }
 
 function buildRecordKeyCounter(records: BiliGiftRecord[]): Map<string, number> {
@@ -114,265 +261,648 @@ function buildRecordKeyCounter(records: BiliGiftRecord[]): Map<string, number> {
   return counter;
 }
 
+// ==================== 存储 ====================
+
+async function userDataDir(platform: Platform, mid: number): Promise<string> {
+  return `${await platform.getDataDir()}/uid_${mid}`;
+}
+
+async function readJson<T>(platform: Platform, filePath: string): Promise<T | null> {
+  try {
+    if (!(await platform.exists(filePath))) return null;
+    const raw = await platform.readFile(filePath);
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function readRecordsWithMeta(
+  platform: Platform,
+  mid: number,
+): Promise<{ records: BiliGiftRecord[]; meta: RecordsMetaData | null }> {
+  const dir = await userDataDir(platform, mid);
+  const filePath = `${dir}/anchor-gifts-records.json`;
+  const parsed = await readJson<unknown>(platform, filePath);
+  if (!parsed) return { records: [], meta: null };
+  if (Array.isArray(parsed)) return { records: parsed as BiliGiftRecord[], meta: null };
+  const obj = parsed as { records?: BiliGiftRecord[]; end_date?: string; last_fetch?: string; total_page?: number };
+  return {
+    records: obj.records ?? [],
+    meta: obj.end_date !== undefined
+      ? { end_date: obj.end_date, last_fetch: obj.last_fetch, total_page: obj.total_page }
+      : null,
+  };
+}
+
+async function saveRecordsWithMeta(
+  platform: Platform,
+  mid: number,
+  records: BiliGiftRecord[],
+  meta: RecordsMetaData,
+): Promise<void> {
+  const dir = await userDataDir(platform, mid);
+  await platform.mkdir(dir);
+  const filePath = `${dir}/anchor-gifts-records.json`;
+  await platform.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        last_fetch: meta.last_fetch ?? getBeijingTime(),
+        end_date: meta.end_date,
+        total_page: meta.total_page,
+        total_count: records.length,
+        records,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+// ==================== API 调用 ====================
+
 async function fetchGiftStreamPage(
   platform: Platform,
   cookie: string,
   csrf: string,
   page: number,
-  begin: string,
-  end: string,
+  beginDate: string,
+  endDate: string,
   buvidCookie?: string,
 ): Promise<BiliGiftStreamResponse> {
-  const url = `https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getGiftStreamList?${new URLSearchParams({
-    page: String(page),
-    begin,
-    end,
-    csrf,
-    csrf_token: csrf,
-  }).toString()}`;
+  const body = [
+    `page=${page}`,
+    `gift_id=0`,
+    `begin_date=${beginDate}`,
+    `end_date=${endDate}`,
+    `uname=`,
+    `goods_id=`,
+    `csrf_token=${csrf}`,
+    `csrf=${csrf}`,
+  ].join("&");
 
-  let fullCookie = cookie;
-  if (buvidCookie) {
-    fullCookie = `${cookie}; ${buvidCookie}`;
+  const fullCookie = buvidCookie ? `${cookie};${buvidCookie}` : cookie;
+
+  if (page === 0) {
+    console.log(`[AnchorGifts-Tauri][API] 请求 page=0 begin=${beginDate} end=${endDate}`);
   }
-
-  return platform.fetchBilibiliJson<BiliGiftStreamResponse>({
-    url,
-    cookie: fullCookie,
-    live: true,
-  });
-}
-
-/**
- * Tauri 客户端拉取主播礼物数据
- * 
- * 流程：
- * 1. 从 platform store 读取当前 session
- * 2. 验证 B站 凭证
- * 3. 读取已有记录和元数据
- * 4. 计算需要拉取的月份范围
- * 5. 逐月拉取 B站 API
- * 6. 保存到本地文件
- * 7. 上传到服务器
- */
-export async function fetchAnchorGifts(
-  platform: Platform,
-  refresh?: boolean,
-): Promise<unknown> {
-  const state = await platform.getSessionState();
-  const sid = state.currentSid;
-  if (!sid) {
-    return { code: -1, message: "未登录" };
-  }
-
-  const session = state.sessions.find((s) => s.sid === sid);
-  if (!session) {
-    return { code: -1, message: "会话无效" };
-  }
-
-  // 验证 B站 凭证
-  const cookie = session.biliCookies?.length
-    ? session.biliCookies.join("; ")
-    : `SESSDATA=${session.biliSessdata}`;
 
   try {
-    const navResult = await platform.fetchBilibiliJson<{
-      code: number;
-      data?: { isLogin: boolean };
-    }>({
-      url: "https://api.bilibili.com/x/web-interface/nav",
-      cookie,
+    const result = await platform.fetchBilibiliJson<BiliGiftStreamResponse>({
+      url: GIFT_STREAM_API,
+      method: "POST",
+      body,
+      cookie: fullCookie,
+      live: true,
     });
-
-    if (navResult.code !== 0 || !navResult.data?.isLogin) {
-      return { code: -1, message: "B站凭证已失效，请重新登录" };
+    if (page === 0) {
+      console.log(
+        `[AnchorGifts-Tauri][API] 响应 page=0: code=${result.code} total_page=${result.data?.total_page ?? -1} total_count=${result.data?.total_count ?? -1} list_len=${result.data?.list?.length ?? 0}`,
+      );
     }
-  } catch {
-    return { code: -1, message: "B站凭证验证失败" };
+    return result;
+  } catch (err: any) {
+    // 412 限流：包装错误信息，供上层识别
+    if (err?.message?.includes("412")) {
+      throw new Error("412 限流");
+    }
+    throw err;
   }
+}
 
-  const csrf = session.biliCookies
-    ?.find((c) => c.startsWith("bili_jct="))
-    ?.split("=")[1] ?? "";
+// ==================== 盲盒统计（对应服务器 route 的盲盒盈亏） ====================
 
-  // 读取已有记录和元数据
-  const dataDir = `${await platform.getDataDir()}/uid_${session.mid}`;
-  const recordsPath = `${dataDir}/anchor-gifts-records.json`;
+type BlindBoxProfit = {
+  gift_id: number;
+  name: string;
+  drawCount: number;
+  totalHamster: number;
+  cost: number;
+  profit: number;
+  gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
+  img: string;
+  blindPrice: number;
+  anchors: Array<{ ruid: number; rname: string; count: number }>;
+  dateRange: { start: string; end: string } | null;
+};
 
-  let existingRecords: BiliGiftRecord[] = [];
-  let meta: { end_date?: string; total_page?: number } | null = null;
+/**
+ * 主导出：主播礼物数据
+ * @param refresh 是否强制刷新
+ * @param dateRange 日期范围过滤（all/today/yesterday/thisWeek/thisMonth）
+ * @param fan 粉丝 uid 过滤（逗号分隔）
+ */
+/** 获取进度回调：用于首屏/刷新时按月份显示进度条 */
+export type FetchProgressHandler = (p: {
+  text: string;
+  ratio?: number;
+  current?: number;
+  total?: number;
+}) => void;
 
-  if (await platform.exists(recordsPath)) {
-    try {
-      const raw = await platform.readFile(recordsPath);
-      const parsed = JSON.parse(raw);
-      existingRecords = parsed.records ?? [];
-      if (parsed.end_date) {
-        meta = { end_date: parsed.end_date, total_page: parsed.total_page };
-      }
-    } catch {}
+export async function fetchAnchorGifts(
+  platform: Platform,
+  opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler } = {},
+): Promise<{ code: number; message: string; data?: AnchorGiftsResult | null }> {
+  const { refresh = false, dateRange = "all", fan = "", onProgress } = opts;
+
+  const session = await resolveSession(platform);
+  if (!session) {
+    return { code: 0, message: "needs-relogin", data: null };
   }
+  const cookie = buildCookie(session);
+  const csrf = cookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
 
-  const yesterdayStr = getYesterdayStr();
+  try {
+    const { records: existingRecords, meta } = await readRecordsWithMeta(platform, session.mid);
+    let allRecords = existingRecords;
+    let fetchedNewPages = 0;
 
-  // 计算起始日期
-  const startDate = (() => {
-    if (meta?.end_date && !refresh) {
-      return meta.end_date;
-    }
-    const now = new Date();
-    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-    const beijing = new Date(utc + 8 * 3600000);
-    const startYear = beijing.getFullYear() - 3;
-    const startMonth = beijing.getMonth() + 1;
-    const beginYear = startMonth === 12 ? startYear + 1 : startYear;
-    const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
-    return `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
-  })();
+    const yesterdayStr = getYesterdayStr();
 
-  if (startDate > yesterdayStr) {
-    return { code: 0, data: { records: existingRecords, newPages: 0 } };
-  }
+    // 昨日可用性：以 B站 API 返回的 ready 标识为准（ready=1 表示昨日数据已汇总完成，
+    // 即使昨日无收礼记录也应可点击；ready=0 表示官方尚未更新，需置灰）。
+    // 无 API 返回（source=server / 离线 / 未拉取到昨日分段）时回退到本地记录判断。
+    let yesterdayApiReady: boolean | null = null;
 
-  const buvidCookie = await platform.getBuvidCookie().catch(() => "");
-  const chunks = generateMonthChunks(startDate, yesterdayStr);
-
-  console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月`);
-
-  const existingKeyCounter = existingRecords.length > 0
-    ? buildRecordKeyCounter(existingRecords)
-    : undefined;
-
-  let allRecords = [...existingRecords];
-  let fetchedPages = 0;
-  let hasNewRecords = false;
-
-  // 逐月拉取（并发数=1 避免限流）
-  for (const chunk of chunks) {
-    const records: BiliGiftRecord[] = [];
-    let rateLimited = false;
-
-    // 第0页
-    let firstPage: BiliGiftStreamResponse | null = null;
-    for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
-      try {
-        const result = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
-        if (result.code === 0) {
-          firstPage = result;
-          break;
-        }
-        if (result.code === 1301000) {
-          console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 数据已过期，跳过`);
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
-      } catch (err: any) {
-        if (err?.message?.includes("412")) {
-          rateLimited = true;
-          await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
-        } else {
-          await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
-        }
+    const startDate = (() => {
+      // 与服务器 route 保持一致：只用 end_date 决定起始日期。
+      // - end_date 非空 → 从 end_date 开始增量获取
+      // - end_date 为空但已有本地记录（旧缓存）→ 从已有记录最新时间开始增量获取，
+      //   避免每次全量拉取 3 年数据
+      // - 两者皆无 → 首次使用，从3年前下个月开始
+      // refresh=true 只是代表用户手动触发，不影响起始日期判断
+      if (meta?.end_date) {
+        return meta.end_date;
       }
-    }
-
-    if (!firstPage || firstPage.code === 1301000) continue;
-
-    const totalPages = firstPage.data?.total_page ?? 0;
-    if (totalPages === 0) continue;
-
-    if (firstPage.data?.list?.length) {
-      records.push(...firstPage.data.list);
-    }
-
-    // 翻页
-    for (let p = 1; p < totalPages; p++) {
-      // 连续匹配检测
-      if (existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
-        const lastN = records.slice(-CONSECUTIVE_MATCH_THRESHOLD);
-        const allMatch = lastN.every((r) => {
-          const key = recordKey(r);
-          return (existingKeyCounter.get(key) ?? 0) > 0;
-        });
-        if (allMatch) break;
+      if (existingRecords.length > 0) {
+        let maxTime = existingRecords[0].time;
+        for (const r of existingRecords) {
+          if (r.time > maxTime) maxTime = r.time;
+        }
+        // "YYYY-MM-DD HH:mm:ss" -> YYYYMMDD
+        return maxTime.slice(0, 10).replace(/-/g, "");
       }
+      const now = new Date();
+      const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+      const beijing = new Date(utc + 8 * 3600000);
+      const startYear = beijing.getFullYear() - 3;
+      const startMonth = beijing.getMonth() + 1;
+      const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+      const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+      return `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+    })();
 
-      const interval = rateLimited ? SLOW_REQUEST_INTERVAL_MS : REQUEST_INTERVAL_MS;
-      await new Promise((r) => setTimeout(r, interval));
+    // 纯服务器收集账号（source=server）无 B站 Cookie，无法从 B站 拉取增量，
+    // 直接基于已从自建服务器拉取到本地的 anchor-gifts-records.json 计算统计。
+    if (session.source !== "server" && startDate <= yesterdayStr) {
+      const buvidCookie = await platform.getBuvidCookie().catch(() => "");
+      const chunks = generateMonthChunks(startDate, yesterdayStr);
+      console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月`);
 
-      let success = false;
-      for (let attempt = 0; attempt <= PAGE_RETRY_COUNT; attempt++) {
-        try {
-          const result = await fetchGiftStreamPage(platform, cookie, csrf, p, chunk.start, chunk.end, buvidCookie);
-          if (result.code === 0 && result.data?.list) {
-            records.push(...result.data.list);
-            success = true;
-            break;
-          }
-        } catch (err: any) {
-          if (err?.message?.includes("412")) {
-            rateLimited = true;
-            await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS + attempt * 10_000));
-          } else {
+      const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
+      const totalChunks = chunks.length;
+      // 第一个有数据的月份下标；进度只从该月起算（前导无数据月份仅显示"探测中"）
+      let firstDataCi = -1;
+
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        const records: BiliGiftRecord[] = [];
+        let rateLimited = false;
+
+        // 第0页
+        let firstPage: BiliGiftStreamResponse | null = null;
+        for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
+          try {
+            const result = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
+            if (result.code === 0) {
+              firstPage = result;
+              break;
+            }
+            if (result.code === 1301000) {
+              console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 数据已过期，跳过`);
+              break;
+            }
             await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+          } catch (err: any) {
+            if (err?.message?.includes("412")) {
+              rateLimited = true;
+              await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
+            } else {
+              await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+            }
           }
         }
-      }
-      if (!success) {
-        // 保存部分数据，下次继续
-        const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
-        await platform.writeFile(recordsPath, JSON.stringify({
-          last_fetch: getBeijingTime(),
-          end_date: chunk.start,
-          total_page: (meta?.total_page ?? 0) + fetchedPages,
-          total_count: allSorted.length,
-          records: allSorted,
-        }, null, 2));
-        return { code: 0, data: { records: allSorted, newPages: fetchedPages, partial: true } };
-      }
-    }
 
-    // 去重并合并
-    for (const r of records) {
-      if (existingKeyCounter) {
-        const key = recordKey(r);
-        const existingCount = existingKeyCounter.get(key) ?? 0;
-        if (existingCount > 0) {
-          existingKeyCounter.set(key, existingCount - 1);
+        if (!firstPage || firstPage.code === 1301000) {
+          onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
           continue;
         }
+
+        // 从包含"昨日"的最近分段响应中读取 ready 标识，判断官方昨日数据是否已更新
+        if (chunk.end === yesterdayStr && firstPage.data) {
+          yesterdayApiReady = firstPage.data.ready === 1;
+        }
+
+        const totalPages = firstPage.data?.total_page ?? 0;
+        if (totalPages === 0) {
+          onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
+          continue;
+        }
+
+        // 该月有数据：从第一个有数据的月份起算进度（总月份 = 该月到现在）
+        if (firstDataCi === -1) firstDataCi = ci;
+        const dataTotal = totalChunks - firstDataCi;
+        const dataDone = ci - firstDataCi + 1;
+        onProgress?.({
+          text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${dataDone}/${dataTotal}）`,
+          ratio: dataDone / dataTotal,
+          current: dataDone,
+          total: dataTotal,
+        });
+
+        if (firstPage.data?.list?.length) {
+          records.push(...firstPage.data.list);
+        }
+
+        // 翻页
+        for (let p = 1; p < totalPages; p++) {
+          if (existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
+            const lastN = records.slice(-CONSECUTIVE_MATCH_THRESHOLD);
+            const allMatch = lastN.every((r) => {
+              const key = recordKey(r);
+              return (existingKeyCounter.get(key) ?? 0) > 0;
+            });
+            if (allMatch) break;
+          }
+
+          const interval = rateLimited ? SLOW_REQUEST_INTERVAL_MS : REQUEST_INTERVAL_MS;
+          await new Promise((r) => setTimeout(r, interval));
+
+          let success = false;
+          for (let attempt = 0; attempt <= PAGE_RETRY_COUNT; attempt++) {
+            try {
+              const result = await fetchGiftStreamPage(platform, cookie, csrf, p, chunk.start, chunk.end, buvidCookie);
+              if (result.code === 0 && result.data?.list) {
+                records.push(...result.data.list);
+                success = true;
+                break;
+              }
+            } catch (err: any) {
+              if (err?.message?.includes("412")) {
+                rateLimited = true;
+                await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS + attempt * 10_000));
+              } else {
+                await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+              }
+            }
+          }
+          if (!success) {
+            const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
+            await saveRecordsWithMeta(platform, session.mid, allSorted, {
+              end_date: chunk.start,
+              total_page: (meta?.total_page ?? 0) + fetchedNewPages,
+              last_fetch: getBeijingTime(),
+            });
+            break;
+          }
+        }
+
+        // 去重并合并
+        for (const r of records) {
+          if (existingKeyCounter) {
+            const key = recordKey(r);
+            const existingCount = existingKeyCounter.get(key) ?? 0;
+            if (existingCount > 0) {
+              existingKeyCounter.set(key, existingCount - 1);
+              continue;
+            }
+          }
+          allRecords.push(r);
+        }
+        fetchedNewPages += Math.min(records.length > 0 ? 1 : 0, totalPages);
       }
-      allRecords.push(r);
-      hasNewRecords = true;
-    }
-    fetchedPages += Math.min(records.length > 0 ? 1 : 0, totalPages);
-  }
 
-  const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
-  await platform.writeFile(recordsPath, JSON.stringify({
-    last_fetch: getBeijingTime(),
-    end_date: yesterdayStr,
-    total_page: (meta?.total_page ?? 0) + fetchedPages,
-    total_count: allSorted.length,
-    records: allSorted,
-  }, null, 2));
-
-  // 上传到服务器
-  if (hasNewRecords) {
-    try {
-      const files: Record<string, string> = {};
-      files["anchor-gifts-records.json"] = JSON.stringify({
-        last_fetch: getBeijingTime(),
+      allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
+      await saveRecordsWithMeta(platform, session.mid, allRecords, {
         end_date: yesterdayStr,
-        total_count: allSorted.length,
-        records: allSorted,
+        total_page: (meta?.total_page ?? 0) + fetchedNewPages,
+        last_fetch: getBeijingTime(),
       });
-      await platform.uploadUserData(session.mid, session.uname, files);
-      console.log("[AnchorGifts-Tauri] 数据已上传到服务器");
-    } catch (err) {
-      console.warn("[AnchorGifts-Tauri] 数据上传失败:", err);
     }
-  }
 
-  return { code: 0, data: { records: allSorted, newPages: fetchedPages } };
+    // ==================== 统计 ====================
+
+    const dateFilter = getDateRangeFilter(dateRange);
+    const fanUids = fan
+      ? fan.split(",").map((s) => Number(s.trim())).filter((n) => !isNaN(n))
+      : [];
+
+    const filteredRecords = allRecords.filter((r) => {
+      if (dateFilter) {
+        const t = new Date(r.time).getTime();
+        if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) return false;
+      }
+      if (fanUids.length > 0 && !fanUids.includes(r.uid)) return false;
+      return true;
+    });
+
+    // 礼物汇总 / 粉丝分布 / 月度汇总 / 日期集合
+    const giftMap = new Map<number, { name: string; num: number; hamster: number }>();
+    const fanMap = new Map<number, { uname: string; hamster: number; giftCount: number; dateSet: Set<string> }>();
+    const monthlyMap = new Map<string, { hamster: number; count: number }>();
+    const dateSet = new Set<string>();
+    let totalHamster = 0;
+
+    // 盲盒统计
+    const blindBoxCountMap = new Map<number, { num: number; hamster: number }>();
+    const blindBoxGiftCountMap = new Map<number, Map<number, { name: string; num: number; hamster: number }>>();
+    const blindBoxFanMap = new Map<number, Map<number, { uname: string; count: number }>>();
+    const blindBoxDateSet = new Map<number, Set<string>>();
+
+    // 盲盒配置与反向映射
+    const blindBoxConfig: EffectiveBlindBoxConfig = await getEffectiveBlindBoxConfig(platform);
+    const blindBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
+    const allBlindBoxInfo = await getAllBlindBoxInfo(platform);
+
+    // 本地没有或信息异常（名称兜底为"盲盒_<id>"、单价<=0、礼物列表为空）的盲盒信息时，从 B站 API 获取。
+    // 与 stats-client 保持一致：本地即使已有条目，只要名称/单价/礼物不完整就重新拉取，
+    // 避免早期误存"盲盒_<id>"、单价0 的坏缓存一直显示异常。
+    // source=server 账号无 B站 Cookie，拉取必然失败，跳过并在后面直接使用本地（已从服务器拉取）的盲盒信息。
+    for (const blindBoxId of blindBoxIds) {
+      const info = allBlindBoxInfo[blindBoxId];
+      const needsBlindBoxInfo =
+        !info ||
+        !info.gifts ||
+        info.gifts.length === 0 ||
+        !info.blind_box_name ||
+        info.blind_price <= 0 ||
+        info.blind_box_name === `盲盒_${blindBoxId}`;
+      if (needsBlindBoxInfo && session.source !== "server") {
+        try {
+          const checkResult = await checkBlindBox(platform, blindBoxId, cookie);
+          if (checkResult) {
+            await saveBlindBoxInfo(platform, session.mid, session.uname, blindBoxId, {
+              gift_name: checkResult.blindGiftName,
+              gift_img: "",
+              price: checkResult.blindPrice,
+              gifts: checkResult.gifts,
+            });
+            allBlindBoxInfo[blindBoxId] = {
+              blind_box_id: blindBoxId,
+              blind_box_name: checkResult.blindGiftName,
+              blind_box_img: "",
+              blind_price: checkResult.blindPrice,
+              gifts: checkResult.gifts,
+              updated_at: getBeijingTime(),
+            };
+          }
+        } catch (err) {
+          console.error(`[AnchorGifts-Tauri] 获取盲盒 ${blindBoxId} 信息失败:`, err);
+        }
+      }
+    }
+
+    const giftIdToBlindBoxId = new Map<number, number>();
+    for (const [blindBoxIdStr, info] of Object.entries(allBlindBoxInfo)) {
+      const blindBoxId = Number(blindBoxIdStr);
+      if (info.gifts) {
+        for (const g of info.gifts) {
+          giftIdToBlindBoxId.set(g.gift_id, blindBoxId);
+        }
+      }
+    }
+
+    for (const r of filteredRecords) {
+      totalHamster += r.hamster;
+      dateSet.add(getDatePart(r.time));
+
+      // 礼物汇总
+      const existingGift = giftMap.get(r.gift_id);
+      if (existingGift) {
+        existingGift.num += r.num;
+        existingGift.hamster += r.hamster;
+      } else {
+        giftMap.set(r.gift_id, { name: r.name, num: r.num, hamster: r.hamster });
+      }
+
+      // 粉丝分布
+      const fan = fanMap.get(r.uid);
+      if (fan) {
+        fan.hamster += r.hamster;
+        fan.giftCount += r.num;
+        fan.dateSet.add(getDatePart(r.time));
+      } else {
+        fanMap.set(r.uid, {
+          uname: r.uname,
+          hamster: r.hamster,
+          giftCount: r.num,
+          dateSet: new Set([getDatePart(r.time)]),
+        });
+      }
+
+      // 月度汇总
+      const d = new Date(r.time);
+      const monthKey = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const monthly = monthlyMap.get(monthKey);
+      if (monthly) {
+        monthly.hamster += r.hamster;
+        monthly.count += r.num;
+      } else {
+        monthlyMap.set(monthKey, { hamster: r.hamster, count: r.num });
+      }
+
+      // 盲盒统计
+      const bbId = giftIdToBlindBoxId.get(r.gift_id);
+      if (bbId !== undefined) {
+        const bbCount = blindBoxCountMap.get(bbId);
+        if (bbCount) {
+          bbCount.num += r.num;
+          bbCount.hamster += r.hamster;
+        } else {
+          blindBoxCountMap.set(bbId, { num: r.num, hamster: r.hamster });
+        }
+
+        let giftMapForBB = blindBoxGiftCountMap.get(bbId);
+        if (!giftMapForBB) {
+          giftMapForBB = new Map();
+          blindBoxGiftCountMap.set(bbId, giftMapForBB);
+        }
+        const giftBB = giftMapForBB.get(r.gift_id);
+        if (giftBB) {
+          giftBB.num += r.num;
+          giftBB.hamster += r.hamster;
+        } else {
+          giftMapForBB.set(r.gift_id, { name: r.name, num: r.num, hamster: r.hamster });
+        }
+
+        let fanMapForBB = blindBoxFanMap.get(bbId);
+        if (!fanMapForBB) {
+          fanMapForBB = new Map();
+          blindBoxFanMap.set(bbId, fanMapForBB);
+        }
+        const fanBB = fanMapForBB.get(r.uid);
+        if (fanBB) {
+          fanBB.count += r.num;
+        } else {
+          fanMapForBB.set(r.uid, { uname: r.uname, count: r.num });
+        }
+
+        let datesForBB = blindBoxDateSet.get(bbId);
+        if (!datesForBB) {
+          datesForBB = new Set();
+          blindBoxDateSet.set(bbId, datesForBB);
+        }
+        datesForBB.add(getDatePart(r.time));
+      }
+    }
+
+    // 保存盲盒内礼物信息到 gift-db
+    for (const info of Object.values(allBlindBoxInfo)) {
+      if (info.gifts) {
+        await saveGiftsToDb(platform, info.gifts.map((g) => ({ gift_id: g.gift_id, name: g.gift_name, img: g.gift_img })));
+      }
+    }
+
+    // 保存礼物名称到 gift-db
+    const giftDb = await readGiftDb(platform);
+    await saveGiftsToDb(
+      platform,
+      Array.from(giftMap.entries()).map(([gift_id, v]) => ({
+        gift_id,
+        name: v.name,
+        img: giftDb.gifts?.[gift_id]?.img ?? "",
+      })),
+    );
+
+    // 构建盲盒盈亏
+    const blindBoxProfits: BlindBoxProfit[] = [];
+    for (const blindBoxId of blindBoxIds) {
+      const count = blindBoxCountMap.get(blindBoxId);
+      const info = allBlindBoxInfo[blindBoxId];
+      const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
+      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? (await getGiftImg(platform, blindBoxId)) ?? "";
+      const drawCount = count?.num ?? 0;
+      const totalHamsterBB = count?.hamster ?? 0;
+      const blindPrice = (info?.blind_price ?? 0) * 50;
+      const cost = drawCount * blindPrice;
+
+      const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }> = [];
+      const giftCountMap = blindBoxGiftCountMap.get(blindBoxId);
+      if (info?.gifts) {
+        for (const g of info.gifts) {
+          const actualCount = giftCountMap?.get(g.gift_id);
+          gifts.push({
+            gift_id: g.gift_id,
+            name: g.gift_name,
+            num: actualCount?.num ?? 0,
+            hamster: actualCount?.hamster ?? 0,
+            img: giftDb.gifts?.[g.gift_id]?.img ?? g.gift_img ?? "",
+          });
+        }
+      }
+
+      const fanMapForBB = blindBoxFanMap.get(blindBoxId);
+      const anchors = fanMapForBB
+        ? Array.from(fanMapForBB.entries())
+            .map(([ruid, v]) => ({ ruid: Number(ruid), rname: v.uname, count: v.count }))
+            .sort((a, b) => b.count - a.count)
+        : [];
+
+      const datesForBB = blindBoxDateSet.get(blindBoxId);
+      const sortedDates = datesForBB ? Array.from(datesForBB).sort() : [];
+      const dateRangeBB = sortedDates.length > 0
+        ? { start: sortedDates[0], end: sortedDates[sortedDates.length - 1] }
+        : null;
+
+      blindBoxProfits.push({
+        gift_id: blindBoxId,
+        name: boxName,
+        drawCount,
+        totalHamster: totalHamsterBB,
+        cost,
+        profit: totalHamsterBB - cost,
+        gifts,
+        img: boxImg,
+        blindPrice: (info?.blind_price ?? 0) / 2,
+        anchors,
+        dateRange: dateRangeBB,
+      });
+    }
+
+    // 兼容旧版
+    const blindBoxProfit = blindBoxProfits.length > 0 ? blindBoxProfits[0] : null;
+
+    const giftSummary = Array.from(giftMap.entries())
+      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: giftDb.gifts?.[gift_id]?.img ?? "" }))
+      .sort((a, b) => b.hamster - a.hamster);
+
+    const fanDistribution = Array.from(fanMap.entries())
+      .map(([uid, v]) => ({ uid, uname: v.uname, hamster: v.hamster, giftCount: v.giftCount }))
+      .sort((a, b) => b.hamster - a.hamster);
+
+    const monthlyData = Array.from(monthlyMap.entries())
+      .map(([month, v]) => ({ month, hamster: v.hamster, count: v.count }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    const sortedDates = Array.from(dateSet).sort();
+    const computedDateRange = sortedDates.length > 0
+      ? { start: sortedDates[0], end: sortedDates[sortedDates.length - 1] }
+      : null;
+
+    // 粉丝送礼天数统计
+    const fanStats = Array.from(fanMap.entries())
+      .map(([uid, v]) => {
+        const sortedFanDates = Array.from(v.dateSet).sort();
+        const consecutive = calcMaxConsecutive(sortedFanDates);
+        return {
+          uid,
+          uname: v.uname,
+          totalDays: v.dateSet.size,
+          maxConsecutiveDays: consecutive.max,
+          consecutiveStart: consecutive.start,
+          consecutiveEnd: consecutive.end,
+        };
+      })
+      .sort((a, b) => b.totalDays - a.totalDays);
+
+    const allConsecutive = calcMaxConsecutive(sortedDates);
+
+    const yesterdayDate = yesterdayStr.slice(0, 4) + "-" + yesterdayStr.slice(4, 6) + "-" + yesterdayStr.slice(6, 8);
+    // 优先采用 B站 API 的 ready 标识；未拉取到昨日分段时回退到本地记录判断
+    const yesterdayAvailable =
+      yesterdayApiReady !== null
+        ? yesterdayApiReady
+        : allRecords.some((r) => r.time.startsWith(yesterdayDate));
+
+    const data: AnchorGiftsResult = {
+      totalHamster,
+      totalRmb: totalHamster / 100,
+      totalCount: filteredRecords.length,
+      totalPage: (meta?.total_page ?? 0) + fetchedNewPages,
+      giftTypes: giftMap.size,
+      fanCount: fanMap.size,
+      monthlyData,
+      fanDistribution,
+      giftSummary,
+      dateRange: computedDateRange,
+      blindBoxProfit,
+      blindBoxProfits,
+      otherStats: {
+        dayStats: { totalDays: sortedDates.length, maxConsecutiveDays: allConsecutive.max },
+        fanStats,
+      },
+      records: filteredRecords,
+      filter: { dateRange, fan },
+      metadata: meta,
+      fetchedNewPages,
+      yesterdayAvailable,
+    };
+
+    return { code: 0, message: "ok", data };
+  } catch (err: any) {
+    console.error("[AnchorGifts-Tauri] 获取礼物流水失败:", err?.message || err);
+    return { code: 500, message: `获取礼物流水失败: ${err?.message || String(err)}`, data: null };
+  }
 }

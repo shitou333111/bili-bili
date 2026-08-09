@@ -84,14 +84,24 @@ export const tauriPlatform: Platform = {
       headers,
     });
 
-    // Tauri HTTP plugin 返回的 Response 与 Web 标准兼容
+    // Tauri HTTP plugin 返回的 Response 已暴露 set-cookie 响应头（见 plugin-http dist-js）
     return {
       ok: response.ok,
       status: response.status,
       text: () => response.text(),
       json: <T>() => response.json() as Promise<T>,
       headers: {
-        getSetCookie: () => [],
+        getSetCookie: () => {
+          try {
+            if (typeof response.headers.getSetCookie === "function") {
+              return response.headers.getSetCookie();
+            }
+            const raw = response.headers.get("set-cookie");
+            return raw ? [raw] : [];
+          } catch {
+            return [];
+          }
+        },
       },
     };
   },

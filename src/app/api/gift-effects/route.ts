@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { promises as fs, existsSync, statSync } from "fs";
-import path from "path";
 
 export const dynamic = "force-dynamic";
 
@@ -48,32 +46,20 @@ type EffectJsonConfig = {
 
 // ==================== 常量 ====================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const EFFECTS_FILE = path.join(DATA_DIR, "gift_effects.json");
 const BILI_API = "https://api.live.bilibili.com/xlive/general-interface/v1/fullScSpecialEffect/GetEffectConfListV2?platform=pc";
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12小时缓存
 
-// ==================== 存储操作（仅作为网络失败时的兜底） ====================
+// ==================== 内存缓存（公开数据，客户端直连 B站 自取自用，不落盘到 .data） ====================
 
-/** 检查本地缓存是否有效（存在且未超过12小时） */
+let effectsCache: { data: GiftEffectsResponse; timestamp: number } | null = null;
+
+/** 检查内存缓存是否有效（未超过12小时） */
 function isCacheValid(): boolean {
-  if (!existsSync(EFFECTS_FILE)) return false;
-  try {
-    const stat = statSync(EFFECTS_FILE);
-    const age = Date.now() - stat.mtimeMs;
-    return age < CACHE_TTL_MS;
-  } catch {
-    return false;
-  }
+  return effectsCache !== null && Date.now() - effectsCache.timestamp < CACHE_TTL_MS;
 }
 
-async function readEffectsFile(): Promise<GiftEffectsResponse | null> {
-  try {
-    const raw = await fs.readFile(EFFECTS_FILE, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+function readEffectsCache(): GiftEffectsResponse | null {
+  return effectsCache?.data ?? null;
 }
 
 async function fetchEffectsFromBili(): Promise<GiftEffectsResponse | null> {
@@ -95,8 +81,8 @@ async function fetchEffectsFromBili(): Promise<GiftEffectsResponse | null> {
       console.error(`[GiftEffects] API错误 code=${data.code}`);
       return null;
     }
-    // 后台异步保存到本地文件（不阻塞响应），作为下次网络失败时的兜底
-    fs.writeFile(EFFECTS_FILE, JSON.stringify(data, null, 2), "utf-8").catch(() => {});
+    // 写入内存缓存，作为本次进程内后续请求的兜底
+    effectsCache = { data, timestamp: Date.now() };
     return data;
   } catch (err) {
     console.error("[GiftEffects] 从B站获取特效列表失败:", err);
@@ -168,15 +154,10 @@ export async function GET(request: Request) {
       effectsData = await fetchEffectsFromBili();
     }
 
-    // 如果网络获取失败，回退到本地缓存
+    // 如果网络获取失败，回退到内存缓存
     if (!effectsData) {
-      if (cacheValid) {
-        console.log("[GiftEffects] 使用本地缓存（< 12小时）");
-        effectsData = await readEffectsFile();
-      } else {
-        console.log("[GiftEffects] 网络获取失败，尝试使用本地缓存兜底");
-        effectsData = await readEffectsFile();
-      }
+      console.log("[GiftEffects] 网络获取失败，尝试使用内存缓存兜底");
+      effectsData = readEffectsCache();
     }
 
     const effectMap = effectsData ? buildEffectMap(effectsData) : new Map<number, GiftEffectInfo>();

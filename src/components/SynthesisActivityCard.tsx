@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { SynthesisActivityStats, SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
@@ -259,7 +260,7 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
         </div>
       )}
 
-      {selectedGift && (
+      {selectedGift && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setSelectedGift(null)}>
           <div
             className="relative mx-4 w-full max-w-md max-h-[80vh] rounded-xl border border-black/10 bg-white p-6 shadow-2xl flex flex-col"
@@ -361,7 +362,8 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
               </table>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {showCertModal && filteredCertifications.length > 0 && (
@@ -445,7 +447,7 @@ function CertificationModal({
     if (currentIndex < total - 1) onIndexChange(currentIndex + 1);
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
       <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
@@ -651,6 +653,7 @@ function CertificationModal({
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

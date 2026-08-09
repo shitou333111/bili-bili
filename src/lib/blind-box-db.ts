@@ -109,3 +109,20 @@ export async function saveBlindBoxInfo(
   };
   await fs.writeFile(filePath, JSON.stringify(info, null, 2), "utf8");
 }
+
+/**
+ * 保存全局盲盒信息（仅当文件不存在时写入；已存在则直接丢弃）。
+ * 盲盒信息是公开数据、人人相同，用户随数据回传时无需覆盖服务器已有副本。
+ */
+export async function saveBlindBoxInfoIfMissing(blindBoxId: number, content: string): Promise<boolean> {
+  await ensureDir(BLIND_BOX_INFO_DIR);
+  const filePath = getBlindBoxInfoPath(blindBoxId);
+  try {
+    await fs.access(filePath);
+    return false; // 已存在，丢弃
+  } catch {
+    // 不存在，写入
+  }
+  await fs.writeFile(filePath, content, "utf8");
+  return true;
+}

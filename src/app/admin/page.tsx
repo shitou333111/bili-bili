@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { serverApiUrl } from "@/lib/server-api";
+import { getPlatform } from "@/lib/platform";
+import { dataFetch } from "@/lib/client-fetch";
 import Dropdown from "@/components/Dropdown";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 
@@ -68,6 +70,8 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   // 活动名称映射（从本地活动信息 JSON 读取，只读展示）
   const [activityNames, setActivityNames] = useState<Record<string, string>>({});
+  // 从服务器拉取账号数据时的阻塞遮罩
+  const [serverLoading, setServerLoading] = useState(false);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -153,12 +157,45 @@ export default function AdminPage() {
     const usersData = await usersRes.json();
     const configData = await configRes.json();
     console.log("[admin] usersData.code=", usersData.code, "users count=", usersData.data?.users?.length, "currentSid=", usersData.data?.currentSid, "deviceToken=", usersData.data?.deviceToken);
+
+    // 本机/当前标记：Tauri 本地会话为准（PC/iOS 会话只存本机，服务器 deviceToken 匹配不到）
+    let finalUsers = usersData.data?.users ?? [];
+    try {
+      const platform = await getPlatform();
+      if (platform.isNative) {
+        const state = await platform.getSessionState();
+        const localSessions = state.sessions;
+        const localCurrentSid = state.currentSid;
+        finalUsers = finalUsers.map((u: any) => {
+          const local = localSessions.find((s) => s.mid === u.mid);
+          if (!local) return { ...u, isLocal: false, isCurrent: false };
+          const isCurrent = local.sid === localCurrentSid;
+          // 本机 = 在本机登录、有 B站 登录凭证、可从 B站更新数据的账号。
+          // 服务器收集账号（source=server）本机无其登录凭证，仅可查看，不算本机。
+          const isLocal = local.source !== "server";
+          return {
+            ...u,
+            sid: local.sid ?? u.sid,
+            face: local.face ?? u.face,
+            uname: local.uname ?? u.uname,
+            isLocal,
+            isCurrent,
+          };
+        });
+        // 本机账号置顶，其余按更新时间倒序
+        finalUsers.sort((a: any, b: any) => {
+          if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        });
+      }
+    } catch { /* 非原生环境忽略 */ }
+
     if (usersData.data?.users) {
-      usersData.data.users.forEach((u: any) => {
+      finalUsers.forEach((u: any) => {
         if (u.isLocal || u.isCurrent) console.log("[admin] user:", u.uname, "isLocal=", u.isLocal, "isCurrent=", u.isCurrent, "sid=", u.sid?.slice(0, 8));
       });
     }
-    if (usersData.code === 0) setUsers(usersData.data.users);
+    if (usersData.code === 0) setUsers(finalUsers);
     else if (usersData.code === 403) {
       // 会话失效：清除本地 sid 并提示重新登录
       try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
@@ -180,6 +217,38 @@ export default function AdminPage() {
   useEffect(() => {
     if (adminLoggedIn) loadData();
   }, [adminLoggedIn, loadData]);
+
+  // 服务器收集账号无本地头像，用 B站公开信息接口按 UID 补齐头像（已尝试过的 mid 不再重复请求）
+  const avatarAttempted = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (!adminLoggedIn || users.length === 0) return;
+    const missing = users.filter((u) => !u.face && u.mid && !avatarAttempted.current.has(u.mid));
+    if (missing.length === 0) return;
+    missing.forEach((u) => avatarAttempted.current.add(u.mid));
+    let cancelled = false;
+    (async () => {
+      try {
+        const batchSize = 20;
+        const faces: Record<number, string> = {};
+        for (let i = 0; i < missing.length; i += batchSize) {
+          const batch = missing.slice(i, i + batchSize).map((u) => u.mid);
+          const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}`, { cache: "no-store" });
+          const data = await res.json();
+          if (data.code === 0 && data.data) {
+            for (const [midStr, info] of Object.entries(data.data as Record<string, { face?: string }>)) {
+              const mid = Number(midStr);
+              if (info?.face) faces[mid] = info.face;
+            }
+          }
+        }
+        if (!cancelled && Object.keys(faces).length > 0) {
+          setUsers((prev) => prev.map((u) => (faces[u.mid] ? { ...u, face: faces[u.mid] } : u)));
+        }
+      } catch { /* 头像补齐失败不影响列表 */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminLoggedIn, users]);
 
   const handleLogin = async () => {
     setLoginLoading(true);
@@ -207,18 +276,38 @@ export default function AdminPage() {
     setLoginLoading(false);
   };
 
-  const handleImpersonate = async (sid: string | null) => {
-    // 非本机登录账号（服务器收集）无本地会话，无法切换为本机会话
-    if (!sid) {
-      alert("该账号为服务器收集的账号，无本机登录凭证，请用「加载远程数据」查看其数据");
-      return;
-    }
-    console.log("[admin] impersonate: switching to sid=", sid?.slice(0, 8) + "...");
+  const handleImpersonate = async (user: User) => {
     try {
+      // Tauri 本地模式：凭证只存本机，直接切换本地会话 currentSid
+      const platform = await getPlatform();
+      if (platform.isNative) {
+        const state = await platform.getSessionState();
+        // 优先用传入 sid；若该 sid 非本机会话，则尝试按 mid 匹配本机会话
+        let targetSid: string | null = user.sid;
+        if (!targetSid || !state.sessions.some((s) => s.sid === targetSid)) {
+          targetSid = state.sessions.find((s) => s.mid === user.mid)?.sid ?? null;
+        }
+        if (!targetSid) {
+          // 无本机会话（纯服务器收集账号）：本地无凭证，无法切换，直接返回（不弹提示）
+          return;
+        }
+        const { clientSwitch } = await import("@/lib/auth/client-auth");
+        const res = await clientSwitch(platform, targetSid);
+        if (res.code !== 0) {
+          alert("切换失败: " + (res.message || "未知错误"));
+          return;
+        }
+        // 同步 localStorage sid（供首页快速识别当前账号）
+        localStorage.setItem("bili_live_sid", targetSid);
+        setUsers((prev) => prev.map((u) => ({ ...u, isCurrent: u.mid === user.mid })));
+        console.log("[admin] impersonate: local session switched, sid=", targetSid!.slice(0, 8) + "...");
+        return;
+      }
+
       const res = await adminFetch(serverApiUrl("/api/admin/impersonate"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sid }),
+        body: JSON.stringify({ sid: user.sid }),
       });
       const data = await res.json();
       console.log("[admin] impersonate response: code=", data.code, "userToken=", data.data?.userToken?.slice(0, 8) + "...");
@@ -226,21 +315,25 @@ export default function AdminPage() {
         alert("切换失败: " + (data.message || "未知错误"));
         return;
       }
-      // 更新 localStorage 中的 sid，确保首页识别当前账号
-      localStorage.setItem("bili_live_sid", sid);
+      if (user.sid) localStorage.setItem("bili_live_sid", user.sid);
       // 注意：不更新 userToken/deviceToken，保持设备标识稳定
-      setUsers((prev) =>
-        prev.map((u) => ({ ...u, isCurrent: u.sid === sid })),
-      );
-      console.log("[admin] impersonate: localStorage updated, sid=", sid?.slice(0, 8) + "...");
+      setUsers((prev) => prev.map((u) => ({ ...u, isCurrent: u.mid === user.mid })));
+      console.log("[admin] impersonate: localStorage updated, sid=", user.sid?.slice(0, 8) + "...");
     } catch (err) {
       console.error("[admin] impersonate error:", err);
       alert("切换失败: " + (err instanceof Error ? err.message : "网络错误"));
     }
   };
 
-  const handleLoadRemoteData = async (user: User) => {
+  /**
+   * 从自建服务器加载某账号数据并切换过去（用于"纯服务器收集、本机无 B站 凭证"的账号）。
+   * 流程：拉取服务器数据 → 保存到本地 uid_<mid> → 创建/切换本机会话(source=server) → 返回首页。
+   * 期间显示与首次登录一致的加载遮罩（无法使用月度数据进度条，故为不确定进度条）。
+   */
+  const loadRemoteAndSwitch = async (user: User) => {
+    setServerLoading(true);
     try {
+      const platform = await getPlatform();
       // 先从服务器拉取该用户的数据文件
       const res = await adminFetch(serverApiUrl(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`));
       const data = await res.json();
@@ -254,12 +347,38 @@ export default function AdminPage() {
         alert("该用户暂无上传数据");
         return;
       }
-      // 切换到该用户并跳转到首页
-      await handleImpersonate(user.sid);
-      alert(`已加载 ${user.uname} 的 ${fileNames.length} 个数据文件 (${fileNames.join(", ")})，即将跳转首页`);
+      // 保存数据文件到本地 uid_<mid>（与本地数据存储结构一致）
+      const dir = `${await platform.getDataDir()}/uid_${user.mid}`;
+      await platform.mkdir(dir);
+      for (const name of fileNames) {
+        await platform.writeFile(`${dir}/${name}`, files[name]);
+      }
+      // 一并保存全局盲盒信息（名称/单价/爆出礼物对照表），供盲盒/合成页正确显示。
+      // 盲盒信息全局共享、非按用户存放，服务器账号无 B站 Cookie 无法自行获取，必须随切换拉取。
+      if (data.data?.blindboxInfo && typeof data.data.blindboxInfo === "object") {
+        const bbDir = `${await platform.getDataDir()}/blindbox_info`;
+        await platform.mkdir(bbDir);
+        for (const [id, info] of Object.entries(data.data.blindboxInfo as Record<string, unknown>)) {
+          if (!/^\d+$/.test(id)) continue;
+          await platform.writeFile(`${bbDir}/${id}.json`, JSON.stringify(info, null, 2));
+        }
+      }
+      // 创建/切换本机会话（source=server，无 B站 Cookie，数据展示依赖上述本地文件）
+      const { clientCreateServerSession } = await import("@/lib/auth/client-auth");
+      const sess = await clientCreateServerSession(platform, { mid: user.mid, uname: user.uname, face: user.face });
+      if (sess.code !== 0 || !sess.data) {
+        alert("创建本地会话失败: " + (sess.message || "未知错误"));
+        return;
+      }
+      // 同步 localStorage sid（供首页快速识别当前账号）
+      try { localStorage.setItem("bili_live_sid", sess.data.sid); } catch { /* ignore */ }
+      setUsers((prev) => prev.map((u) => ({ ...u, isCurrent: u.mid === user.mid })));
+      console.log(`[admin] 已从服务器加载 ${user.uname} 的 ${fileNames.length} 个数据文件，切换到该账号`);
       window.location.href = "/";
     } catch (err) {
       alert("加载失败: " + (err instanceof Error ? err.message : "网络错误"));
+    } finally {
+      setServerLoading(false);
     }
   };
 
@@ -475,34 +594,27 @@ export default function AdminPage() {
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
                       {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
-                      {user.isCurrent && <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">当前</span>}
                     </div>
                     <div className="text-[10px] text-black/30 mt-0.5">UID {user.mid}</div>
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-                      <span className="text-[10px] text-black/30">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</span>
-                      {user.lastUpload && (
-                        <span className="text-[10px] text-[#2ecc71]">
-                          数据: {new Date(user.lastUpload).toLocaleString("zh-CN").slice(0, 10)}
-                        </span>
-                      )}
-                    </div>
+                    <div className="text-[10px] text-black/30 mt-0.5">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</div>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {user.lastUpload && (
+                    {user.isLocal ? (
+                      !user.isCurrent && (
+                        <button
+                          onClick={() => handleImpersonate(user).then(() => { window.location.href = "/"; })}
+                          className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
+                        >
+                          切换
+                        </button>
+                      )
+                    ) : (
                       <button
-                        onClick={() => handleLoadRemoteData(user)}
+                        onClick={() => loadRemoteAndSwitch(user)}
                         className="rounded-lg border border-[#2ecc71]/30 bg-[#2ecc71]/5 px-2 py-1 text-[10px] text-[#2ecc71] hover:bg-[#2ecc71]/10 transition"
-                        title="加载该用户上传的数据"
+                        title="从服务器查看该用户数据（本机无其登录凭证，仅可查看）"
                       >
-                        加载数据
-                      </button>
-                    )}
-                    {!user.isCurrent && (
-                      <button
-                        onClick={() => { handleImpersonate(user.sid); window.location.href = "/"; }}
-                        className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
-                      >
-                        切换
+                        查看数据
                       </button>
                     )}
                   </div>
@@ -706,6 +818,23 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      {/* 从服务器拉取账号数据的加载遮罩（样式与首次登录一致，因无月度数据进度故为不确定进度条） */}
+      {serverLoading && (
+        <div className="fixed inset-0 z-[9999] bg-white/70 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4 w-full max-w-[300px] px-6">
+            <div className="w-12 h-12 border-4 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-base font-medium text-[#1f1c17]">加载中...</p>
+            <p className="text-sm text-black/45">正在从服务器拉取该账号数据，请耐心等待</p>
+            <div className="w-full">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
+                <div className="h-full rounded-full bg-[#1f1c17] w-1/3 progress-indeterminate"></div>
+              </div>
+              <p className="mt-2 text-xs text-black/55 text-center">从自建服务器获取数据，非 B站数据</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

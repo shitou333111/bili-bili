@@ -8,7 +8,7 @@
     - dev 模式（默认）：使用 cargo tauri dev，同时启动开发服务器和 Tauri 窗口
     - prod 模式：使用已构建的 bili-live.exe + 独立服务器
 
-    脚本会轮询 .data/uploads/ 目录，检测新上传的 pay-records.json，
+    脚本会轮询 .data/uid_<mid>/ 目录，检测新上传的 pay-records.json，
     验证数据完整性，并输出测试报告。
 
 .PARAMETER Mode
@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path "$ScriptDir\.."
-$UploadsDir = "$ProjectRoot\.data\uploads"
+$UploadsDir = "$ProjectRoot\.data"
 $ExePath = "$ProjectRoot\src-tauri\target\release\bili-live.exe"
 $ServerPort = 3000
 $ServerUrl = "http://localhost:$ServerPort"
@@ -59,7 +59,9 @@ function Wait-ForServer($url, $maxRetries = 60) {
 function Get-UploadSnapshot {
     $snapshot = @{}
     if (Test-Path $UploadsDir) {
-        Get-ChildItem $UploadsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem $UploadsDir -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -match '^uid_\d+$'
+        } | ForEach-Object {
             $metaPath = Join-Path $_.FullName "_upload_meta.json"
             if (Test-Path $metaPath) {
                 try {
@@ -289,8 +291,7 @@ if ($uploadDetected -and $detectedUser) {
     Write-Host "  文件:   $($detectedUser.files -join ', ')" -ForegroundColor White
     Write-Host ""
 
-    $safeName = $detectedUser.uname -replace '[\\/:*?"<>|]', '_'
-    $userDir = "$UploadsDir\uid_$($detectedUser.mid)_$safeName"
+    $userDir = "$UploadsDir\uid_$($detectedUser.mid)"
     $allValid = $true
 
     Write-Host "--- 文件验证 ---" -ForegroundColor Yellow

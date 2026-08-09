@@ -1,7 +1,9 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { serverApiUrl } from "@/lib/server-api";
+import { dataFetch } from "@/lib/client-fetch";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import { isMobileDevice } from "@/lib/device";
@@ -180,7 +182,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
         refreshingRef.current.add(id);
         refreshAttemptedRef.current.add(id);
         console.log(`[AvatarChart] 头像加载失败，尝试刷新URL: uid=${id}`);
-        fetch(serverApiUrl(`/api/tools/user-info?uids=${id}&refresh=1`), { cache: "no-store" })
+        dataFetch(`/api/tools/user-info?uids=${id}&refresh=1`, { cache: "no-store" })
           .then(r => r.json())
           .then(data => {
             refreshingRef.current.delete(id);
@@ -626,8 +628,8 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     ? `单元格面积代表贡献度，共显示 ${displayCount} 个主播`
     : `单元格面积代表消费额，共显示 ${displayCount} 个粉丝`;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4 touch-none overscroll-contain" onClick={onClose}>
       <div
         className="relative flex flex-col items-center"
         style={{ width: canvasDims.w + 32 }}
@@ -647,8 +649,10 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
           {isLoading && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-white">
               <div className="w-10 h-10 border-[3px] border-[#b8a99a] border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-sm text-[#6b5f52]">
-                {externalLoading ? (loadingText || "正在获取数据...") : "正在加载头像图片..."}
+              <p className="text-sm text-[#6b5f52] whitespace-pre-line text-center">
+                {(externalLoading ? (loadingText || "正在获取数据...") : "正在加载头像图片...")
+                  .split(/<br\s*\/?>/i)
+                  .join("\n")}
               </p>
               {!externalLoading && progress.total > 0 && (
                 <div className="w-48 mt-1">
@@ -682,6 +686,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
         )}
 
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -230,6 +230,15 @@ a {
   animation: dot-blink 1s infinite ease-in-out;
 }
 
+/* 不定进度条（总月份未知时来回滑动） */
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.progress-indeterminate {
+  animation: progress-slide 1.4s infinite ease-in-out;
+}
+
 /* ===== 模态框下载/关闭按钮统一样式（胶囊状、紧凑、点击动效） ===== */
 .modal-action-btn {
   display: inline-flex;

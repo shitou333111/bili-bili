@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { serverFetch } from "@/lib/server-api";
+import { authApi } from "@/lib/api";
 
 type QRGenerateResponse = {
   code: number;
@@ -33,8 +33,15 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [qrKey, setQrKey] = useState("");
   const [countdown, setCountdown] = useState(0);
+  const [hasLoginUser, setHasLoginUser] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
+
+  // 是否已有登录用户：首次使用（无任何登录凭证）时不显示"取消登录"；
+  // 有登录用户时显示，点击返回"帮助"页面。
+  useEffect(() => {
+    setHasLoginUser(!!localStorage.getItem("bili_live_sid"));
+  }, []);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -77,20 +84,13 @@ export default function LoginPage() {
       }
 
       try {
-        const data = await serverFetch<QRPollResponse>(`/api/auth/qr/poll?qrcode_key=${encodeURIComponent(key)}`);
+        const data = await authApi.pollQR(key);
 
         if (data.code === 0 && data.data?.code === 0) {
           clearPollTimer();
-          // 存储 SID 和 userToken 到 localStorage，持久化以便下次打开自动登录
+          // 存储 SID 到 localStorage，持久化以便下次打开自动登录
           if (data.data.sid) {
             localStorage.setItem("bili_live_sid", data.data.sid);
-          }
-          if (data.data.userToken) {
-            localStorage.setItem("bili_live_user_token", data.data.userToken);
-            // 稳定设备令牌：本机登录账号以它为准，且不会被 admin 模拟切换覆盖
-            if (!localStorage.getItem("bili_live_device_token")) {
-              localStorage.setItem("bili_live_device_token", data.data.userToken);
-            }
           }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {
@@ -139,7 +139,7 @@ export default function LoginPage() {
     setStatus("正在生成登录二维码...");
 
     try {
-      const data = await serverFetch<QRGenerateResponse>("/api/auth/qr/generate");
+      const data = await authApi.generateQR();
 
       if (!data.data?.qrcode_key) {
         throw new Error(data.message || "二维码生成失败");
@@ -213,7 +213,7 @@ export default function LoginPage() {
   }, [loadQR, clearPollTimer]);
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#fff0d8_0%,_#f4efe7_36%,_#e9eff8_100%)] px-4 py-10 text-[#1f1c17]">
+    <main className="min-h-screen bg-[#f5f5f5] px-4 py-10 text-[#1f1c17]">
       <section className="mx-auto w-full max-w-md">
         <article className="rounded-[2rem] border border-black/10 bg-white/82 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
           <h1 className="font-[family-name:var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-center">
@@ -263,32 +263,26 @@ export default function LoginPage() {
             </button>
           </div>
 
-          <div className="mt-6 flex justify-center">
-            <button
-              type="button"
-              onClick={async () => {
-                clearPollTimer();
-                // 清除登录会话，避免主页检测到过期session后跳回登录页
-                try {
-                  await serverFetch("/api/auth/logout", { method: "POST" });
-                } catch {
-                  // 离线或网络错误时忽略，仍可返回上一页
-                }
-                // 返回到打开登录页面前的页面（取消登录模态框）
-                if (window.history.length > 1) {
-                  window.history.back();
-                } else {
+          {/* 已有登录用户时显示"取消登录"：返回帮助页（不清除现有登录会话） */}
+          {hasLoginUser && (
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  clearPollTimer();
+                  // 记录返回目标，跳回主页后由主页恢复"帮助"模块
+                  sessionStorage.setItem("bili_live_return", "help");
                   window.location.href = "/";
-                }
-              }}
-              className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-              取消登录
-            </button>
-          </div>
+                }}
+                className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                取消登录
+              </button>
+            </div>
+          )}
         </article>
       </section>
     </main>

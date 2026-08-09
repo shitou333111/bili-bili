@@ -983,6 +983,34 @@ export function saveGiftDb(db: GiftDb): void {
   }
 }
 
+/**
+ * 并集合并两个 gift-db（用于不同用户回传的整包 gift-db）。
+ *
+ * 用户对 gift-db 的更新只会"补充增加、不会删减"，因此合并 = 并集，天然幂等、可交换、无丢失：
+ * - gifts（按 gift_id 的 map）：入站 id 不存在则写入；已存在但缺 img 而入站有 img 则补齐。
+ * - tianxuan_gift_ids / red_pocket_gift_ids：并集去重。
+ *
+ * 注意：绝不会以 incoming 整体覆盖 existing，从而避免并发回传丢失其他用户的贡献。
+ */
+export function mergeGiftDbUnion(existing: GiftDb, incoming: GiftDb | null | undefined): GiftDb {
+  if (!incoming) return existing;
+  const gifts: Record<number, GiftDbEntry> = { ...existing.gifts };
+  for (const [rawId, g] of Object.entries(incoming.gifts ?? {})) {
+    const gid = Number(rawId);
+    if (!gifts[gid] || (!gifts[gid].img && g.img)) {
+      gifts[gid] = { name: g.name, img: g.img };
+    }
+  }
+  const result: GiftDb = { ...existing, gifts };
+  if (incoming.tianxuan_gift_ids) {
+    result.tianxuan_gift_ids = [...new Set([...(result.tianxuan_gift_ids || []), ...incoming.tianxuan_gift_ids])];
+  }
+  if (incoming.red_pocket_gift_ids) {
+    result.red_pocket_gift_ids = [...new Set([...(result.red_pocket_gift_ids || []), ...incoming.red_pocket_gift_ids])];
+  }
+  return result;
+}
+
 /** 批量保存礼物信息到 gift-db.json */
 export async function saveGiftsToDb(giftInfos: Array<{ gift_id: number; name: string; img: string }>): Promise<void> {
   await withWriteLock(() => {

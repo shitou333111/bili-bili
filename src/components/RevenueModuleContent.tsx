@@ -202,7 +202,7 @@ type Account = {
   uname: string;
   mid: number;
   face?: string;
-  source: "qr" | "dev";
+  source: "qr" | "dev" | "server";
   updatedAt: string;
 };
 
@@ -214,6 +214,7 @@ interface RevenueModuleContentProps {
   syncing: boolean;
   loading: boolean;
   isLocalAccount: boolean;
+  isServerAccount: boolean;
   lastRefreshTime: string;
   consumptionCoins: number;
   consumptionCount: number;
@@ -301,6 +302,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     syncing,
     loading,
     isLocalAccount,
+    isServerAccount,
     lastRefreshTime,
     consumptionCoins,
     consumptionCount,
@@ -376,6 +378,12 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
       {/* Content - Revenue module */}
       {snapshot && (
         <div className="content-wrapper px-2 min-w-0 py-3">
+        {/* 服务器账号顶部提示：本机无登录凭证，仅可查看；刷新从服务器重载 */}
+        {isServerAccount && (
+          <div className="mb-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-800 text-xs leading-relaxed">
+            这是服务器收集账号，本机无登录凭证，数据仅可查看。点击右上角刷新将从服务器重新加载该账号数据并覆盖本地缓存。
+          </div>
+        )}
         {/* L3 Tab bar - segmented control, sticky at top, 整体居中 */}
           <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
             {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
@@ -394,18 +402,23 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                 </button>
               ))}
             </div>
-            {/* 刷新按钮（右侧）：缺口弧形边框；同步中显示三点动画，否则显示时间/“刷新” */}
+            {/* 刷新按钮（右侧）：缺口弧形边框；同步中显示三点动画，否则显示时间/“刷新”。
+                服务器账号点击后从服务器重载数据；本机账号走 B站 增量刷新。 */}
             <div className="shrink-0">
               <button
                 onClick={() => {
+                  if (isServerAccount) {
+                    refreshData();
+                    return;
+                  }
                   if (!isLocalAccount) {
                     showToast("非本机登录账号，没有登录凭证，无法更新数据");
                     return;
                   }
                   refreshData();
                 }}
-                disabled={syncing || loading || !isLocalAccount}
-                className={`refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px] ${!isLocalAccount ? "opacity-40" : ""}`}
+                disabled={syncing || loading || (!isLocalAccount && !isServerAccount)}
+                className={`refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px] ${!isLocalAccount && !isServerAccount ? "opacity-40" : ""}`}
               >
                 {syncing ? (
                   <span className="relative z-10 flex items-center gap-[2px] text-[#22c55e] select-none">

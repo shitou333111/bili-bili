@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef, memo } from "react";
+import { useState, useEffect, useRef, memo, type MutableRefObject } from "react";
+import { createPortal } from "react-dom";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
+import { dataFetch } from "@/lib/client-fetch";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
@@ -146,7 +148,7 @@ function GiftSaveModal({
     }
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
       <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
@@ -208,7 +210,8 @@ function GiftSaveModal({
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -217,15 +220,23 @@ const AnchorDataModule = memo(function AnchorDataModule({
   anchorFace = "",
   mid = 0,
   uname = "",
+  isServerAccount = false,
+  onFetchRequest = null,
 }: {
   anchorName?: string;
   anchorFace?: string;
   mid?: number;
   uname?: string;
+  /** 是否为服务器收集账号：本机无登录凭证，仅可查看；顶部显示提示横幅 */
+  isServerAccount?: boolean;
+  /** 父级 ref：页面统一刷新时调用本组件 fetchData，使收益数据随页面一起更新 */
+  onFetchRequest?: MutableRefObject<(() => Promise<void>) | null> | null;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshTime, setLastRefreshTime] = useState<string>("");
+  // 收益记录按月获取进度（首次拉取时展示进度条）
+  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "gift_screenshot" | "other">("revenue");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
@@ -247,6 +258,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
     fetchData();
   }, []);
 
+  // 每次渲染把最新 fetchData 注册到父级 ref，供页面统一刷新时调用（收益随页面一起更新）
+  useEffect(() => {
+    if (onFetchRequest) {
+      onFetchRequest.current = fetchData;
+    }
+  });
+
   // 加载礼物数据库
   useEffect(() => {
     fetch(serverApiUrl("/api/gift-db"))
@@ -259,36 +277,15 @@ const AnchorDataModule = memo(function AnchorDataModule({
       .catch(() => {});
   }, []);
 
-  /** 构造带 session ID 和 userToken 的 API URL（Tauri WebView 可能不发送 cookie） */
-function apiUrl(path: string): string {
-  if (typeof window === "undefined") return path;
-  const sid = localStorage.getItem("bili_live_sid");
-  const userToken = localStorage.getItem("bili_live_user_token");
-  const params: string[] = [];
-  if (sid) params.push(`_sid=${encodeURIComponent(sid)}`);
-  if (userToken) params.push(`_user_token=${encodeURIComponent(userToken)}`);
-  // 离线时通知服务器返回本地缓存数据（而不是 mock/401）
-  // 用 navigator.onLine 同步判断，确保请求发出时状态准确（hook 状态在挂载后异步同步）
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    params.push("offline=1");
-  }
-  let url = path;
-  if (params.length > 0) {
-    const sep = path.includes("?") ? "&" : "?";
-    url = `${path}${sep}${params.join("&")}`;
-  }
-  // Tauri 模式下需转换为完整 URL（静态前端无服务器处理相对路径）
-  return serverApiUrl(url);
-}
-
-async function fetchData() {
+  async function fetchData() {
     setLoading(true);
     setAuthError(null);
+    setFetchProgress(null);
     // 重置盲盒筛选条件
     setBlindBoxDateFilter("all");
     setBlindBoxFanFilter("");
     try {
-      const res = await fetch(apiUrl("/api/anchor/gifts"), { cache: "no-store" });
+      const res = await dataFetch("/api/anchor/gifts", { cache: "no-store" }, (p) => setFetchProgress({ text: p.text, ratio: p.ratio }));
       const data = await res.json();
       if (data.message === "needs-relogin") {
         setAuthError("B站登录已失效，请重新扫码登录。");
@@ -336,7 +333,7 @@ async function fetchData() {
       value: Math.round(f.hamster / 100),
       face: fanFaces[f.uid] || "",
     }));
-    setFanBubbleData({ items: initialItems, title: "送礼粉丝分布", loading: true, loadingText: "正在获取粉丝头像..." });
+    setFanBubbleData({ items: initialItems, title: "送礼粉丝分布", loading: true, loadingText: "正在获取粉丝头像...<br /> 首次加载需要等待几分钟，请耐心等待" });
 
     // 找出还没有头像的uid（只针对top300）
     const missingUids = topFans.filter(f => !fanFaces[f.uid]).map(f => f.uid);
@@ -351,7 +348,7 @@ async function fetchData() {
         for (let i = 0; i < missingUids.length; i += batchSize) {
           const batch = missingUids.slice(i, i + batchSize);
           try {
-            const res = await fetch(apiUrl(`/api/tools/user-info?uids=${batch.join(",")}&mid=${mid}&uname=${encodeURIComponent(uname)}`), { cache: "no-store" });
+            const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}&mid=${mid}&uname=${encodeURIComponent(uname)}`, { cache: "no-store" });
             const data = await res.json();
             if (data.code === 0 && data.data) {
               for (const [uidStr, info] of Object.entries(data.data)) {
@@ -531,11 +528,22 @@ async function fetchData() {
 
       {/* Loading state */}
       {loading && !stats && (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-3">
+        <div className="flex-1 flex items-center justify-center px-8">
+          <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-black/45">加载中...</p>
             <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
+            {fetchProgress && (
+              <div className="w-full mt-1">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
+                  <div
+                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
+                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
+                  ></div>
+                </div>
+                <p className="mt-2 text-xs text-black/55 text-center">{fetchProgress.text}</p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -544,6 +552,12 @@ async function fetchData() {
       {stats && (
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-3">
           <div className="content-wrapper px-2 min-w-0">
+            {/* 服务器账号顶部提示：本机无登录凭证，仅可查看；刷新从服务器重载（与主页同一位置/样式） */}
+            {isServerAccount && (
+              <div className="mb-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-800 text-xs leading-relaxed">
+                这是服务器收集账号，本机无登录凭证，数据仅可查看。点击右上角刷新将从服务器重新加载该账号数据并覆盖本地缓存。
+              </div>
+            )}
             {/* Tab bar - segmented control, sticky at top, 整体居中 */}
             <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
               {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
@@ -993,7 +1007,7 @@ async function fetchData() {
                                         setBlindBoxDateFilter(key);
                                         const fanParam = blindBoxFanFilter ? `&fan=${blindBoxFanFilter}` : "";
                                         const url = `/api/anchor/gifts${key !== "all" ? `?dateRange=${key}${fanParam}` : (fanParam ? `?${fanParam.slice(1)}` : "")}`;
-                                        fetch(apiUrl(url), { cache: "no-store" }).then(r => r.json()).then(data => {
+                                        dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
                                           if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
                                         });
                                       }}
@@ -1018,7 +1032,7 @@ async function fetchData() {
                                   const fanParam = fanUid ? `fan=${fanUid}` : "";
                                   const params = [dateParam, fanParam].filter(Boolean).join("&");
                                   const url = `/api/anchor/gifts${params ? `?${params}` : ""}`;
-                                  fetch(apiUrl(url), { cache: "no-store" }).then(r => r.json()).then(data => {
+                                  dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
                                     if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
                                   });
                                 }}

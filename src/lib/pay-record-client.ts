@@ -69,6 +69,9 @@ const DEFAULT_APP_KEY = "1d8b6e7d45233436";
 const DEFAULT_APP_SECRET = "560c52ccd288fed045859ed18bffd973";
 const PAGE_SIZE = 20;
 const MAX_PAGES = 1000;
+const REQUEST_RETRY_COUNT = 3;
+const REQUEST_BACKOFF_MS = 1000;
+const RATE_LIMIT_COOLDOWN_MS = 30_000;
 
 // ==================== MD5 实现（纯 JS，用于客户端签名） ====================
 
@@ -312,9 +315,48 @@ function buildSnapshot(records: PayRecordItem[], month: string): PayRecordSnapsh
 
 // ==================== 主函数 ====================
 
+/**
+ * 带重试的 payRecord 请求。
+ * 网络瞬时失败（如 Tauri HTTP 插件连接/TLS 抖动）时指数退避重试；
+ * 412 限流时冷却后重试，避免一次性丢弃整个增量拉取。
+ */
+async function fetchPayRecordPageWithRetry(
+  platform: Platform,
+  url: string,
+  cookie: string,
+): Promise<PayRecordResponse> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= REQUEST_RETRY_COUNT; attempt++) {
+    try {
+      const response = await platform.fetchBilibiliJson<PayRecordResponse>({
+        url,
+        cookie,
+        mobile: true,
+      });
+      // 已拿到业务响应（无论 code 是否 0），交由调用方处理，不再重试
+      return response;
+    } catch (err: any) {
+      lastErr = err;
+      const isRateLimit = err?.message?.includes("412");
+      if (isRateLimit) {
+        console.warn(`[PayRecordClient] 第 ${attempt + 1} 次请求触发412限流，冷却 ${RATE_LIMIT_COOLDOWN_MS}ms 后重试`);
+        await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
+      } else {
+        const delay = REQUEST_BACKOFF_MS * Math.pow(2, attempt);
+        if (attempt < REQUEST_RETRY_COUNT) {
+          console.warn(`[PayRecordClient] 请求失败，等待 ${delay}ms 后重试 ${attempt + 1}/${REQUEST_RETRY_COUNT + 1}: ${err?.message || err}`);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export async function fetchPayRecords(
   platform: Platform,
   refresh?: boolean,
+  onProgress?: (p: { text: string; ratio?: number; current?: number; total?: number }) => void,
 ): Promise<{ code: number; message: string; data?: PayRecordSnapshot }> {
   const state = await platform.getSessionState();
   const sid = state.currentSid;
@@ -353,6 +395,14 @@ export async function fetchPayRecords(
   const existingMaxId = getMaxId(existingRecords);
   console.log(`[PayRecordClient] 已有 ${existingRecords.length} 条记录，最新id=${existingMaxId}`);
 
+  // 纯服务器收集账号（source=server）无 B站 Cookie，无法从 B站 拉取增量，直接读本地缓存
+  if (session.source === "server") {
+    const cachedSnapshot = buildSnapshot(existingRecords, new Date().toISOString().slice(0, 7).replace("-", ""));
+    return existingRecords.length > 0
+      ? { code: 0, message: "cached snapshot", data: cachedSnapshot }
+      : { code: 0, message: "empty cached", data: cachedSnapshot };
+  }
+
   try {
     // 从 B站 获取新数据（增量）
     const allRecords: PayRecordItem[] = [];
@@ -369,11 +419,7 @@ export async function fetchPayRecords(
       }
 
       const url = buildPayRecordUrl(cookie, nextId);
-      const response = await platform.fetchBilibiliJson<PayRecordResponse>({
-        url,
-        cookie,
-        mobile: true,
-      });
+      const response = await fetchPayRecordPageWithRetry(platform, url, cookie);
 
       if (response.code !== 0 || !response.data?.list) {
         throw new Error(response.message || "payRecord request failed");
@@ -387,11 +433,22 @@ export async function fetchPayRecords(
       }
 
       let hasNewRecord = false;
+      let reachedExisting = false;
       for (const item of list) {
+        // 已命中本地已有记录（id 单调递减，遇到 <= existingMaxId 即后续均为旧数据），停止翻页
+        if (existingMaxId > 0 && item.id <= existingMaxId) {
+          reachedExisting = true;
+          break;
+        }
         if (seenIds.has(item.id)) continue;
         seenIds.add(item.id);
         allRecords.push(item);
         hasNewRecord = true;
+      }
+
+      if (reachedExisting) {
+        console.log(`[PayRecordClient] 第 ${pageCount} 页已命中已有记录，停止翻页（增量完成）`);
+        break;
       }
 
       if (!hasNewRecord) {
@@ -401,6 +458,11 @@ export async function fetchPayRecords(
 
       nextId = response.data.params?.next_id;
       console.log(`[PayRecordClient] 第 ${pageCount} 页: ${list.length} 条, nextId=${nextId}`);
+      onProgress?.({
+        text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
+        current: allRecords.length,
+        total: 0,
+      });
     } while (nextId);
 
     // 合并：新记录在前，已有记录在后
@@ -432,16 +494,6 @@ export async function fetchPayRecords(
 
     console.log(`[PayRecordClient] 新增 ${allRecords.length} 条，合并后共 ${dedupedRecords.length} 条`);
 
-    // 上传到服务器
-    try {
-      const files: Record<string, string> = {
-        "pay-records.json": JSON.stringify(fileData),
-      };
-      await platform.uploadUserData(session.mid, session.uname, files);
-    } catch (uploadErr) {
-      console.warn("[PayRecordClient] 上传服务器失败（不影响本地数据）:", uploadErr);
-    }
-
     const snapshot = buildSnapshot(dedupedRecords, month);
     return { code: 0, message: "real snapshot", data: snapshot };
   } catch (err) {
@@ -458,4 +510,42 @@ export async function fetchPayRecords(
 
     return { code: -1, message: err instanceof Error ? err.message : "获取数据失败" };
   }
+}
+
+/**
+ * 快速模式（本地优先）：只读本地缓存，不发 B站 请求，立即返回。
+ * 对应服务器 /api/revenue/pay-record?fast=1 的逻辑。
+ */
+export async function fetchCachedPayRecords(
+  platform: Platform,
+): Promise<{ code: number; message: string; data?: PayRecordSnapshot }> {
+  const state = await platform.getSessionState();
+  const sid = state.currentSid;
+  if (!sid) {
+    return { code: -1, message: "未登录" };
+  }
+  const session = state.sessions.find((s) => s.sid === sid);
+  if (!session) {
+    return { code: -1, message: "会话无效" };
+  }
+
+  const recordsPath = `${await platform.getDataDir()}/uid_${session.mid}/pay-records.json`;
+  let existingRecords: PayRecordItem[] = [];
+  try {
+    if (await platform.exists(recordsPath)) {
+      const raw = await platform.readFile(recordsPath);
+      const parsed = JSON.parse(raw);
+      existingRecords = Array.isArray(parsed) ? parsed : (parsed.records ?? []);
+    }
+  } catch {
+    // 文件不存在或解析失败
+  }
+
+  if (existingRecords.length === 0) {
+    const snapshot = buildSnapshot([], new Date().toISOString().slice(0, 7).replace("-", ""));
+    return { code: 0, message: "empty cached", data: snapshot };
+  }
+
+  const snapshot = buildSnapshot(existingRecords, new Date().toISOString().slice(0, 7).replace("-", ""));
+  return { code: 0, message: "cached snapshot", data: snapshot };
 }

@@ -11,16 +11,20 @@ async function checkAdmin(request: Request): Promise<boolean> {
   return validateAdminSession(getAdminSid(request));
 }
 
-/** 获取用户上传数据的最后更新时间（用 uid_<mid> 目录） */
+/** 获取用户数据的最后更新时间（读规范每用户数据目录 .data/uid_<mid>/ 中最新数据文件的 mtime）。 */
 async function getLastUploadDate(mid: number): Promise<string | null> {
   try {
-    const metaPath = path.join(process.cwd(), ".data", "uploads", `uid_${mid}`, "_upload_meta.json");
-    const raw = await fs.readFile(metaPath, "utf-8");
-    const meta = JSON.parse(raw);
-    return meta.last_upload || null;
-  } catch {
-    return null;
-  }
+    const dir = path.join(process.cwd(), ".data", `uid_${mid}`);
+    const names = await fs.readdir(dir);
+    let latest = 0;
+    for (const name of names) {
+      if (name.startsWith("_")) continue;
+      const st = await fs.stat(path.join(dir, name));
+      if (st.mtimeMs > latest) latest = st.mtimeMs;
+    }
+    if (latest > 0) return new Date(latest).toISOString();
+  } catch { /* 目录不存在则忽略 */ }
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -70,7 +74,8 @@ export async function GET(request: Request) {
       face: s.face,
       source: s.source,
       updatedAt: existing ? existing.updatedAt : s.updatedAt,
-      isLocal: true,
+      // 本机 = 有 B站 登录凭证（source!=="server"）的账号；服务器收集账号仅可查看，不算本机
+      isLocal: s.source !== "server",
     });
   }
 

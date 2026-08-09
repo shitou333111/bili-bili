@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
+import { dataFetch } from "@/lib/client-fetch";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
@@ -676,7 +677,7 @@ export default function GiftScreenshotPanel({
       for (let i = 0; i < apiUids.length; i += batchSize) {
         const batch = apiUids.slice(i, i + batchSize);
         try {
-          const res = await fetch(serverApiUrl(`/api/tools/user-info?uids=${batch.join(",")}`));
+          const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}`);
           const data = await res.json();
           if (data.code === 0 && data.data) {
             for (const [uidStr, info] of Object.entries(data.data)) {
