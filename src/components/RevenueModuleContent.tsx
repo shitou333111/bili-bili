@@ -811,7 +811,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                         <div className="absolute left-5 top-0 z-50 w-72 bg-white border border-black/10 rounded-lg shadow-lg p-3 text-xs text-black/70 leading-relaxed">
                           <div className="font-medium text-black/90 mb-1.5">礼物清单规则</div>
                           <div>罗列所有实际送出的礼物（含合成、天选、红包）。</div>
-                          <div className="mt-1">电池数 = 实际消费的电池，所以这里的电池数并不精确等于列表中礼物的总价值</div>
+                          <div className="mt-1">电池数 = 实际消费的电池，所以这里的电池数并不精确等于列表中礼物的总价值。电池数以消费时间计，礼物清单以送出时间计。比如第一天花费了1万电池玩合成活动，得到了2万电池的礼物，礼物第二天送出。那么第一天电池消费1万，礼物清单没有任何礼物，第二天电池消费0，礼物清单列有2万价值的礼物。</div>
                         </div>
                       )}
                     </div>

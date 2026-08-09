@@ -213,20 +213,30 @@ export default function AdminPage() {
       alert("该账号为服务器收集的账号，无本机登录凭证，请用「加载远程数据」查看其数据");
       return;
     }
-    const res = await adminFetch(serverApiUrl("/api/admin/impersonate"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sid }),
-    });
-    const data = await res.json();
-    // 更新 localStorage 中的 userToken 与 sid，确保首页和 admin 默认选中一致
-    if (data.data?.userToken) {
-      localStorage.setItem("bili_live_user_token", data.data.userToken);
+    console.log("[admin] impersonate: switching to sid=", sid?.slice(0, 8) + "...");
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/impersonate"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sid }),
+      });
+      const data = await res.json();
+      console.log("[admin] impersonate response: code=", data.code, "userToken=", data.data?.userToken?.slice(0, 8) + "...");
+      if (data.code !== 0) {
+        alert("切换失败: " + (data.message || "未知错误"));
+        return;
+      }
+      // 更新 localStorage 中的 sid，确保首页识别当前账号
+      localStorage.setItem("bili_live_sid", sid);
+      // 注意：不更新 userToken/deviceToken，保持设备标识稳定
+      setUsers((prev) =>
+        prev.map((u) => ({ ...u, isCurrent: u.sid === sid })),
+      );
+      console.log("[admin] impersonate: localStorage updated, sid=", sid?.slice(0, 8) + "...");
+    } catch (err) {
+      console.error("[admin] impersonate error:", err);
+      alert("切换失败: " + (err instanceof Error ? err.message : "网络错误"));
     }
-    localStorage.setItem("bili_live_sid", sid);
-    setUsers((prev) =>
-      prev.map((u) => ({ ...u, isCurrent: u.sid === sid })),
-    );
   };
 
   const handleLoadRemoteData = async (user: User) => {

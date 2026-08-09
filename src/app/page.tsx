@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
@@ -2539,17 +2540,20 @@ async function fetchData(background = false) {
 
       </div> {/* End of scrollable content area */}
 
-      {/* iOS 苹果风格悬浮底部托盘导航栏 */}
-      <BottomDock
-        tabs={[
-          { key: "fans", label: "粉丝" },
-          { key: "anchor", label: "主播" },
-          { key: "pending", label: "待定" },
-          { key: "help", label: "帮助" },
-        ]}
-        activeKey={dockTab}
-        onChange={handleDockChange}
-      />
+      {/* iOS 苹果风格悬浮底部托盘导航栏 —— 通过 Portal 渲染到 body 层，完全脱离 page-main 的层叠上下文，避免 iOS Safari 上 transform 合成层覆盖点击区域 */}
+      {mounted && createPortal(
+        <BottomDock
+          tabs={[
+            { key: "fans", label: "粉丝" },
+            { key: "anchor", label: "主播" },
+            { key: "pending", label: "待定" },
+            { key: "help", label: "帮助" },
+          ]}
+          activeKey={dockTab}
+          onChange={handleDockChange}
+        />,
+        document.body
+      )}
 
       {/* 欧皇/非酋认证弹窗 */}
       {showCertModal && certifications.length > 0 && (

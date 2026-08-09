@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readState, getSessionCookieName } from "@/lib/auth/session";
+import { readState, getSessionCookieName, getUserTokenCookieName, getSessionBySid } from "@/lib/auth/session";
 import { readUsersList, type UsersListEntry } from "@/lib/user-data";
 import { promises as fs } from "fs";
 import path from "path";
@@ -33,16 +33,20 @@ export async function GET(request: Request) {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const cookieSid = cookieHeader.match(new RegExp(`${getSessionCookieName()}=([^;]+)`))?.[1] ?? null;
   const currentSid = url.searchParams.get("_sid") ?? cookieSid ?? null;
-  // 本机登录标识：用于标记“本机登录”账号并置顶
-  const deviceToken = url.searchParams.get("_device_token") ?? null;
+  // 本机登录标识：优先 query 参数，fallback 到 cookie（Tauri 下 localStorage 可能跨源未同步）
+  const queryDeviceToken = url.searchParams.get("_device_token") ?? null;
+  const cookieDeviceToken = cookieHeader.match(new RegExp(`${getUserTokenCookieName()}=([^;]+)`))?.[1] ?? null;
+  const deviceToken = queryDeviceToken || cookieDeviceToken || null;
 
   const state = await readState();
   // 本机会话（bili-live-state.json 只存本机登录账号）。
-  // 只有携带了与客户端一致的 deviceToken 时，才把对应账号标记为"本机"。
-  // 未携带/不匹配 deviceToken 时一律不标记为"本机"（避免把服务器上残留的其他设备账号误标为"本机"）。
   const localSessions = deviceToken
     ? state.sessions.filter((s) => s.userToken === deviceToken)
     : [];
+
+  // 通过 currentSid 查找当前登录用户（即使 deviceToken 为空也能标记当前用户）
+  const currentSession = currentSid ? await getSessionBySid(currentSid) : null;
+  const currentMid = currentSession?.mid ?? null;
 
   // users-list.json 是服务器上的"使用用户表"，包含所有（含服务器收集的）用户
   const usersList: UsersListEntry[] = await readUsersList();
@@ -82,7 +86,7 @@ export async function GET(request: Request) {
         createdAt: "",
         updatedAt: u.updatedAt,
         lastUpload: lastUpload || undefined,
-        isCurrent: u.sid !== null && u.sid === currentSid, // 标记当前激活账号
+        isCurrent: (u.sid !== null && u.sid === currentSid) || (currentMid !== null && u.mid === currentMid), // 标记当前激活账号
         isLocal: !!u.isLocal,
       };
     })
