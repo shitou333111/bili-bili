@@ -225,6 +225,17 @@ jobs:
       - name: Install Tauri CLI (Rust)
         run: cargo install tauri-cli --locked
 
+      - name: Dump tauri info (for issue report)
+        shell: bash
+        run: |
+          echo "===== cargo tauri info ====="
+          cargo tauri info 2>&1 || true
+          echo "===== rustc / cargo versions ====="
+          rustc --version
+          cargo --version
+          echo "===== resolved iOS deps (Cargo.lock) ====="
+          grep -E '^name = "(tauri|tauri-runtime-wry|tauri-runtime|wry|tao)"$' Cargo.lock -A1 | grep -E 'name|version' | head -40 || true
+
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
