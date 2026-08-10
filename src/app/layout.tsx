@@ -4,6 +4,8 @@ import "./globals.css";
 import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import ToastHost from "@/components/ToastHost";
+// TEMP 诊断：定位 iOS 竖屏左侧死区，触摸网格页。定位完成后删除以下 import 与渲染。
+import TouchTestPage from "./touch-test/page";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -44,7 +46,8 @@ export default function RootLayout({
         <ExternalLinkHandler />
         <SafeAreaStyler />
         <ToastHost />
-        {children}
+        {/* TEMP 诊断：启动即进入触摸网格页 */}
+        <TouchTestPage />
       </body>
     </html>
   );

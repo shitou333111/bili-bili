@@ -23,7 +23,6 @@ import { saveMobileOrDownload } from "@/lib/save-image";
 import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
 import { RevenueModuleContent } from "@/components/RevenueModuleContent";
-import TouchTestPage from "./touch-test/page";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
 async function closeApp() {
@@ -769,8 +768,6 @@ function CastleStatModal({
 }
 
 export default function HomePage() {
-  // TEMP 诊断：临时启动到触摸网格页，定位 iOS 竖屏左侧死区。定位完成后删除本行。
-  return <TouchTestPage />;
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   // 当前账号是否"本机登录"（仅本机登录账号持有 B站凭证，可更新数据）
@@ -2055,11 +2052,11 @@ export default function HomePage() {
               <div className="mt-5">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
                   <div
-                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress?.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
-                    style={fetchProgress?.ratio !== undefined ? { width: `${Math.max(4, Math.round((fetchProgress?.ratio ?? 0) * 100))}%` } : undefined}
+                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
+                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
                   ></div>
                 </div>
-                <p className="mt-2 text-xs text-black/55">{fetchProgress?.text}</p>
+                <p className="mt-2 text-xs text-black/55">{fetchProgress.text}</p>
               </div>
             )}
           </div>
