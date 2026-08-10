@@ -2055,11 +2055,11 @@ export default function HomePage() {
               <div className="mt-5">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
                   <div
-                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
-                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
+                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress?.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
+                    style={fetchProgress?.ratio !== undefined ? { width: `${Math.max(4, Math.round((fetchProgress?.ratio ?? 0) * 100))}%` } : undefined}
                   ></div>
                 </div>
-                <p className="mt-2 text-xs text-black/55">{fetchProgress.text}</p>
+                <p className="mt-2 text-xs text-black/55">{fetchProgress?.text}</p>
               </div>
             )}
           </div>
