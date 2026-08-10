@@ -42,6 +42,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# tauri default icon (replaced by public/orig_icon.png)
+app-icon.png
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

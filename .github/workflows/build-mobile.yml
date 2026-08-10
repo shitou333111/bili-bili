@@ -140,11 +140,14 @@ jobs:
           NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: npm run build:tauri
 
-      - name: Generate app icons for Android
-        run: cargo tauri icon public/orig_icon.png
+      - name: Replace default icon with custom icon
+        run: cp public/orig_icon.png app-icon.png
 
       - name: Init Android project
         run: cargo tauri android init
+
+      - name: Generate app icons for Android
+        run: cargo tauri icon public/orig_icon.png
 
       - name: Build Android APK
         env:
@@ -230,11 +233,14 @@ jobs:
           NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: npm run build:tauri
 
-      - name: Generate app icons for iOS
-        run: cargo tauri icon public/orig_icon.png
+      - name: Replace default icon with custom icon
+        run: cp public/orig_icon.png app-icon.png
 
       - name: Init iOS project
         run: cargo tauri ios init
+
+      - name: Generate app icons for iOS
+        run: cargo tauri icon public/orig_icon.png
 
       - name: Configure iOS Info.plist permissions
         shell: bash
