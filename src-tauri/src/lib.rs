@@ -46,12 +46,20 @@ fn debug_acl(webview: tauri::Webview) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_pldownloader::init())
+        .plugin(tauri_plugin_pldownloader::init());
+
+    // iOS: 禁用 WKWebView 自动 content inset（contentInsetAdjustmentBehavior = .never），
+    // 修复 iOS 18.4+ WebKit 回归（#289715）导致的触摸坐标偏移死区问题。
+    // 需在触碰 webview / safe-area 的其它插件之前注册。
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_ios_webview_insets::init());
+
+    builder
         // 启动时调整主窗口：
         // 宽度 = page-config.json 的 page_max_width（单一源头，TypeScript 也读同一文件）
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
