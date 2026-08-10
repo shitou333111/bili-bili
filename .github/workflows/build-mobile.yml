@@ -245,19 +245,19 @@ jobs:
         shell: bash
         run: |
           echo "===== iOS gen 目录结构 ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -maxdepth 4 -type d 2>/dev/null | sort
+          find src-tauri/gen/ios src-tauri/gen/apple -maxdepth 4 -type d 2>/dev/null || true
           echo ""
           echo "===== 关键文件列表 (mm/swift/project.yml/Info.plist) ====="
-          find src-tauri/gen/ios src-tauri/gen/apple \( -name "*.mm" -o -name "*.swift" -o -name "project.yml" -o -name "Info.plist" \) 2>/dev/null | sort
+          find src-tauri/gen/ios src-tauri/gen/apple \( -name "*.mm" -o -name "*.swift" -o -name "project.yml" -o -name "Info.plist" \) 2>/dev/null || true
           echo ""
           echo "===== main.mm ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "main.mm" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null
+          find src-tauri/gen/ios src-tauri/gen/apple -name "main.mm" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null || true
           echo ""
           echo "===== project.yml ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "project.yml" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null
+          find src-tauri/gen/ios src-tauri/gen/apple -name "project.yml" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null || true
           echo ""
           echo "===== Info.plist 列表 ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null | sort
+          find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null || true
 
       - name: Upload iOS native sources (diagnose)
         uses: actions/upload-artifact@v4
