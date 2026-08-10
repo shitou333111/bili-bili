@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { createPortal } from "react-dom";
 
 /**
  * 自定义下拉框（替代原生 <select>）
@@ -15,10 +14,8 @@ import { createPortal } from "react-dom";
  *   - 列表约束在视口内（四周留边距），不铺满屏幕，内部滚动；
  *   - 点击列表外任意处收起。
  *
- * 定位说明：列表通过 createPortal 渲染到 document.body。
- * 页面主滚动容器 .page-scroll-area 带 transform: translate3d(0,0,0)（iOS GPU 合成优化），
- * 会使内部 position:fixed 的元素变成相对该容器定位，滚动后列表位置错乱（越往下越偏上）。
- * 通过 Portal 挂到 body 层，脱离该 transform 容器，fixed 恢复相对视口定位。
+ * 定位说明：列表用 position:fixed 相对视口定位（页面主滚动容器已移除 transform，
+ * 不再会破坏 fixed 定位，因此无需再通过 Portal 挂到 body）。
  */
 
 interface DropdownOption {
@@ -135,7 +132,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
         </svg>
       </button>
 
-      {open && pos && createPortal(
+      {open && pos && (
         <div
           ref={listRef}
           className="fixed z-[70] max-h-[300px] overflow-y-auto rounded-lg border border-black/10 bg-white shadow-xl"
@@ -156,8 +153,7 @@ export default function Dropdown({ value, onChange, options, className = "", pla
               {o.label}
             </button>
           ))}
-        </div>,
-        document.body
+        </div>
       )}
     </>
   );

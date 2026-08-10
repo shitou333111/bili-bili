@@ -884,6 +884,16 @@ export default function HomePage() {
     if (offlineToastTimer.current) window.clearTimeout(offlineToastTimer.current);
     offlineToastTimer.current = window.setTimeout(() => setOfflineToast(""), 2000);
   }
+  // 复活曲截图页内容托管在网站服务器上（会变动），打包时不再内置，改为打开服务器页面
+  async function openScreenshotPage() {
+    const url = serverApiUrl("/screenshot");
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    } catch {
+      window.open(url, "_blank");
+    }
+  }
   // 版本号卡片连续点击 → admin 入口（点击3次），已使用过 admin 后再其他工具页显示入口卡片
   const [versionClickCount, setVersionClickCount] = useState(0);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
@@ -2150,23 +2160,25 @@ export default function HomePage() {
               <>
               <div className="grid grid-cols-1 gap-3">
                 {[
-                  { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", offlineOnly: true },
-                  { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", offlineOnly: true },
-                  { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", offlineOnly: false },
+                  { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
+                  { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
+                  { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
                 ].map((tool) => {
-                  // 仅离线模式禁用需要联网的工具（粉丝清理/粉丝牌清理）
-                  const disabled = !isOnline && tool.offlineOnly;
+                  // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
+                  const serverAccount = currentAccount?.source === "server";
+                  const disabled = tool.needsLogin && (serverAccount || !isOnline);
                   return (
                   <button
                     key={tool.title}
                     onClick={() => {
                       if (disabled) {
-                        showOfflineToast("当前处于离线模式，无法使用此项功能");
+                        if (serverAccount) showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+                        else showOfflineToast("当前处于离线模式，无法使用此项功能");
                         return;
                       }
                       if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
                       else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
-                      else { pushView("screenshot", "screenshot"); }
+                      else { openScreenshotPage(); }
                     }}
                     className={`rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
                       disabled
@@ -2563,101 +2575,6 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* 复活曲截图 */}
-            {activeModule === "screenshot" && toolsPage === "screenshot" && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => pushView("screenshot", "home")} className="flex items-center gap-1 text-xs text-black/50 hover:text-black/80 transition">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                    返回
-                  </button>
-                  <span className="text-sm font-semibold">复活曲截图</span>
-                </div>
-
-                <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur space-y-5">
-                  <div className="text-center">
-                    <div className="text-5xl mb-3">📸</div>
-                    <h3 className="text-xl font-bold">复活曲截图工具</h3>
-                    <p className="text-base text-black/50 mt-1">直播多人局必备，解决复活曲倒计时投屏和医药费争议</p>
-                  </div>
-
-                  <hr className="border-black/5" />
-
-                  <div className="space-y-3">
-                    <h4 className="text-base font-semibold">你是否遇到过这些问题？</h4>
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <span className="text-[#e74c3c] leading-relaxed shrink-0">●</span>
-                        <span className="text-base text-black/70 leading-relaxed">多人局时，不知道怎么把复活曲倒计时清晰方便地投屏出来给观众看</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <span className="text-[#e74c3c] leading-relaxed shrink-0">●</span>
-                        <span className="text-base text-black/70 leading-relaxed">最后偷塔守塔不确定有没有掉地上，而主持人没有截图，医药费有争议。而又不好意思争论，只能选择默默吃亏</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <hr className="border-black/5" />
-
-                  <div className="space-y-3">
-                    <h4 className="text-base font-semibold">软件功能</h4>
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <span className="text-[#2ecc71] leading-relaxed shrink-0">✓</span>
-                        <span className="text-base text-black/70 leading-relaxed">方便地将复活曲倒计时投屏出来，一次操作长久有效，不用重复设置</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <span className="text-[#2ecc71] leading-relaxed shrink-0">✓</span>
-                        <span className="text-base text-black/70 leading-relaxed">复活曲结束时自动精确地截屏直播画面，确定各位的分数，进而确定医药费</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <hr className="border-black/5" />
-
-                  <div className="text-center">
-                    <a
-                      href="https://pan.baidu.com/s/1B8IbxCR9g6bZvE3zZp75-Q?pwd=0000"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-block rounded-lg bg-[#1f1c17] px-6 py-3 text-base font-medium hover:opacity-90 transition"
-                      style={{ color: "#fff" }}
-                    >
-                      百度网盘下载（提取码: 0000）
-                    </a>
-                  </div>
-
-                  <hr className="border-black/5" />
-
-                  <div className="space-y-3">
-                    <h4 className="text-base font-semibold">软件界面预览</h4>
-                    <div className="flex justify-center">
-                      <img
-                        src="/复活曲截图软件.png"
-                        alt="复活曲截图软件界面"
-                        className="rounded-lg border border-black/10 max-w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <hr className="border-black/5" />
-
-                  <div className="space-y-3">
-                    <h4 className="text-base font-semibold">使用教程</h4>
-                    <div className="aspect-video w-full rounded-lg overflow-hidden border border-black/10">
-                      <iframe
-                        src="//player.bilibili.com/player.html?bvid=BV1P8K66qE7Y&autoplay=0"
-                        allowFullScreen
-                        className="w-full h-full"
-                        scrolling="no"
-                        frameBorder="0"
-                      />
-                    </div>
-                    <p className="text-sm text-black/40 text-center">详细使用方法请观看视频</p>
-                  </div>
-                </div>
-              </div>
-            )}
         </div>
       </div>
 
@@ -2706,20 +2623,17 @@ export default function HomePage() {
 
       </div> {/* End of scrollable content area */}
 
-      {/* iOS 苹果风格悬浮底部托盘导航栏 —— 通过 Portal 渲染到 body 层，完全脱离 page-main 的层叠上下文，避免 iOS Safari 上 transform 合成层覆盖点击区域 */}
-      {mounted && createPortal(
-        <BottomDock
-          tabs={[
-            { key: "fans", label: "粉丝" },
-            { key: "anchor", label: "主播" },
-            { key: "pending", label: "待定" },
-            { key: "help", label: "帮助" },
-          ]}
-          activeKey={dockTab}
-          onChange={handleDockChange}
-        />,
-        document.body
-      )}
+      {/* iOS 苹果风格悬浮底部托盘导航栏（fixed 定位相对视口，无需 Portal 绕过 transform） */}
+      <BottomDock
+        tabs={[
+          { key: "fans", label: "粉丝" },
+          { key: "anchor", label: "主播" },
+          { key: "pending", label: "待定" },
+          { key: "help", label: "帮助" },
+        ]}
+        activeKey={dockTab}
+        onChange={handleDockChange}
+      />
 
       {/* 欧皇/非酋认证弹窗 */}
       {showCertModal && certifications.length > 0 && (

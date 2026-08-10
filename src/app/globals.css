@@ -71,11 +71,9 @@ a {
   padding-top: var(--safe-top, 0px);
 }
 
-/* iOS 原生动量滚动 + GPU 合成层提示 */
+/* iOS 原生动量滚动 */
 .page-scroll-area {
   -webkit-overflow-scrolling: touch;
-  will-change: transform;
-  transform: translate3d(0, 0, 0);
   z-index: 0; /* 显式设定层叠层级，确保底部托盘栏（z-index:9999）在其上方 */
 }
 
