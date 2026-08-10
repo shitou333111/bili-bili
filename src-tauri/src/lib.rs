@@ -65,31 +65,38 @@ pub fn run() {
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
         // 窗口初始隐藏，设置尺寸/位置后再 show()，避免先闪默认大小再变形。
         .setup(|app| {
-            // 从 page-config.json 读取页面最大宽度（编译时嵌入，运行时解析）
-            let page_max_width: f64 = {
-                let raw = include_str!("../../src/lib/page-config.json");
-                let v: serde_json::Value = serde_json::from_str(raw).unwrap_or(serde_json::json!({"page_max_width": 1000}));
-                v["page_max_width"].as_f64().unwrap_or(1000.0)
-            };
             if let Some(window) = app.get_webview_window("main") {
-                if let Some(monitor) = window.current_monitor().ok().flatten() {
-                    let scale = monitor.scale_factor();
-                    let wa = monitor.work_area();
-                    // work_area 返回物理像素，转换为逻辑像素
-                    let avail_w = wa.size.width as f64 / scale;
-                    let avail_h = wa.size.height as f64 / scale;
-                    let avail_x = wa.position.x as f64 / scale;
-                    let avail_y = wa.position.y as f64 / scale;
-                    // 宽度固定等于页面最大宽度（逻辑像素，内容刚好铺满窗口）
-                    let w = page_max_width;
-                    // 高度：按 16:9 计算，但不超过可用区域 90%
-                    let h0 = w * 16.0 / 9.0;
-                    let h = if h0 <= avail_h * 0.9 { h0 } else { avail_h * 0.9 };
-                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
-                    // 相对可用区域居中（不遮挡任务栏）
-                    let x = avail_x + ((avail_w - w) / 2.0).round();
-                    let y = avail_y + ((avail_h - h) / 2.0).round();
-                    let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+                // 仅桌面端调整窗口尺寸/位置（页面最大宽度来自 page-config.json，单一源头）。
+                // 移动端（iOS/Android）窗口天然全屏，绝不能 set_size/set_position：
+                // iOS 上 set_size(600)+居中会把 WebView 向左偏移 (屏宽-600)/2，
+                // 产生"左侧约 103px 触摸死区"（命中区不覆盖，渲染无错位）——见诊断记录。
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                {
+                    let page_max_width: f64 = {
+                        let raw = include_str!("../../src/lib/page-config.json");
+                        let v: serde_json::Value = serde_json::from_str(raw)
+                            .unwrap_or(serde_json::json!({"page_max_width": 1000}));
+                        v["page_max_width"].as_f64().unwrap_or(1000.0)
+                    };
+                    if let Some(monitor) = window.current_monitor().ok().flatten() {
+                        let scale = monitor.scale_factor();
+                        let wa = monitor.work_area();
+                        // work_area 返回物理像素，转换为逻辑像素
+                        let avail_w = wa.size.width as f64 / scale;
+                        let avail_h = wa.size.height as f64 / scale;
+                        let avail_x = wa.position.x as f64 / scale;
+                        let avail_y = wa.position.y as f64 / scale;
+                        // 宽度固定等于页面最大宽度（逻辑像素，内容刚好铺满窗口）
+                        let w = page_max_width;
+                        // 高度：按 16:9 计算，但不超过可用区域 90%
+                        let h0 = w * 16.0 / 9.0;
+                        let h = if h0 <= avail_h * 0.9 { h0 } else { avail_h * 0.9 };
+                        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
+                        // 相对可用区域居中（不遮挡任务栏）
+                        let x = avail_x + ((avail_w - w) / 2.0).round();
+                        let y = avail_y + ((avail_h - h) / 2.0).round();
+                        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+                    }
                 }
                 let _ = window.show();
             }
