@@ -240,29 +240,32 @@ jobs:
         run: cargo tauri ios init
 
       # 诊断：导出 Tauri 生成的 iOS 原生工程，用于排查 WKWebView 布局/触摸问题
+      # Tauri 2.x 部分版本把 iOS 工程放在 gen/apple/ios，部分放在 gen/ios，这里两个都查
       - name: Dump iOS native project (diagnose touch/layout)
         shell: bash
         run: |
           echo "===== iOS gen 目录结构 ====="
-          find src-tauri/gen -maxdepth 4 -type d 2>/dev/null | sort
+          find src-tauri/gen/ios src-tauri/gen/apple -maxdepth 4 -type d 2>/dev/null | sort
           echo ""
-          echo "===== 所有 Swift 文件列表 ====="
-          find src-tauri/gen -name "*.swift" 2>/dev/null | sort
+          echo "===== 关键文件列表 (mm/swift/project.yml/Info.plist) ====="
+          find src-tauri/gen/ios src-tauri/gen/apple \( -name "*.mm" -o -name "*.swift" -o -name "project.yml" -o -name "Info.plist" \) 2>/dev/null | sort
           echo ""
-          echo "===== 关键 Swift 文件内容 ====="
-          for f in $(find src-tauri/gen -name "ContentView.swift" -o -name "App.swift" -o -name "Lib.swift" -o -name "*View*.swift" 2>/dev/null); do
-            echo "----- FILE: $f -----"
-            cat "$f"
-            echo ""
-          done
-          echo "===== Info.plist 相关 ====="
-          find src-tauri/gen -name "Info.plist" 2>/dev/null | sort
+          echo "===== main.mm ====="
+          find src-tauri/gen/ios src-tauri/gen/apple -name "main.mm" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null
+          echo ""
+          echo "===== project.yml ====="
+          find src-tauri/gen/ios src-tauri/gen/apple -name "project.yml" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null
+          echo ""
+          echo "===== Info.plist 列表 ====="
+          find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null | sort
 
       - name: Upload iOS native sources (diagnose)
         uses: actions/upload-artifact@v4
         with:
           name: ios-native-sources
-          path: src-tauri/gen/ios
+          path: |
+            src-tauri/gen/ios
+            src-tauri/gen/apple
           if-no-files-found: warn
 
       - name: Generate app icons for iOS
