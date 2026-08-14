@@ -395,6 +395,18 @@ export async function fetchPayRecords(
   const existingMaxId = getMaxId(existingRecords);
   console.log(`[PayRecordClient] 已有 ${existingRecords.length} 条记录，最新id=${existingMaxId}`);
 
+  // 回溯窗口：活动退款（标记"已退回"）是在原时期的消费记录上原地修改，不是新建记录。
+  // 因此增量更新时，首先按原方案确定"上次更新点"（本地最大 id 对应记录），
+  // 再在更新点基础上额外向前回溯 1 周：重新拉取更新点往前 1 周窗口内的记录，
+  // 用可能被修改（退款）的最新版本覆盖本地旧记录。
+  const RETROSPECT_SECONDS = 7 * 24 * 3600; // 1 周
+  // 上次更新点 = 本地最大 id 记录的时间戳（B站记录 id 单调递减，最大 id 即本地最新记录）
+  const updatePointTimestamp = (existingMaxId > 0
+    ? existingRecords.find((r) => r.id === existingMaxId)?.timestamp
+    : undefined) ?? 0;
+  // 回溯截止 = 更新点往前 1 周；无本地记录时为 0，等同全量拉取
+  const cutoffTimestamp = updatePointTimestamp > 0 ? updatePointTimestamp - RETROSPECT_SECONDS : 0;
+
   // 纯服务器收集账号（source=server）无 B站 Cookie，无法从 B站 拉取增量，直接读本地缓存
   if (session.source === "server") {
     const cachedSnapshot = buildSnapshot(existingRecords, new Date().toISOString().slice(0, 7).replace("-", ""));
@@ -433,11 +445,12 @@ export async function fetchPayRecords(
       }
 
       let hasNewRecord = false;
-      let reachedExisting = false;
+      let reachedCutoff = false;
       for (const item of list) {
-        // 已命中本地已有记录（id 单调递减，遇到 <= existingMaxId 即后续均为旧数据），停止翻页
-        if (existingMaxId > 0 && item.id <= existingMaxId) {
-          reachedExisting = true;
+        // 记录按时间倒序返回（新在前）。已回溯超过 1 周窗口（timestamp 早于截止时间），
+        // 后续只会更旧，无需再拉取，停止翻页。
+        if (cutoffTimestamp > 0 && item.timestamp < cutoffTimestamp) {
+          reachedCutoff = true;
           break;
         }
         if (seenIds.has(item.id)) continue;
@@ -446,8 +459,8 @@ export async function fetchPayRecords(
         hasNewRecord = true;
       }
 
-      if (reachedExisting) {
-        console.log(`[PayRecordClient] 第 ${pageCount} 页已命中已有记录，停止翻页（增量完成）`);
+      if (reachedCutoff) {
+        console.log(`[PayRecordClient] 第 ${pageCount} 页已回溯超过 1 周窗口，停止翻页（增量+回溯完成）`);
         break;
       }
 

@@ -36,7 +36,7 @@ const BILIBILI_LIVE_HEADERS: Record<string, string> = {
 };
 
 /** 服务器地址（配置中心 + 数据收集） */
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.31.100:3000";
 
 /** 稳定内容哈希：用于增量上传判断文件是否有变化 */
 function contentHash(s: string): string {

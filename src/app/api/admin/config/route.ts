@@ -47,6 +47,7 @@ export async function GET(request: Request) {
       blind_boxes: adminConfig.blind_boxes,
       synthesis_activities: adminConfig.synthesis_activities,
       valid_activity_types: defaults.valid_activity_types,
+      recommended_anchors: adminConfig.recommended_anchors ?? [],
     },
   });
 }
@@ -90,6 +91,16 @@ export async function POST(request: Request) {
       record_url: String(a.record_url),
       active: a.active !== false,
     })),
+    recommended_anchors: Array.isArray(body.recommended_anchors)
+      ? body.recommended_anchors.map((r: any) => ({
+          uid: Number(r.uid),
+          uname: String(r.uname || ""),
+          face: r.face ? String(r.face) : undefined,
+          room_id: Number(r.room_id) || 0,
+          visible: r.visible !== false,
+          order: Number(r.order) || 0,
+        }))
+      : [],
   };
 
   await writeAdminConfig(config);

@@ -225,17 +225,6 @@ jobs:
       - name: Install Tauri CLI (Rust)
         run: cargo install tauri-cli --locked
 
-      - name: Dump tauri info (for issue report)
-        shell: bash
-        run: |
-          echo "===== cargo tauri info ====="
-          cargo tauri info 2>&1 || true
-          echo "===== rustc / cargo versions ====="
-          rustc --version
-          cargo --version
-          echo "===== resolved iOS deps (Cargo.lock) ====="
-          grep -E '^name = "(tauri|tauri-runtime-wry|tauri-runtime|wry|tao)"$' Cargo.lock -A1 | grep -E 'name|version' | head -40 || true
-
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
@@ -249,35 +238,6 @@ jobs:
 
       - name: Init iOS project
         run: cargo tauri ios init
-
-      # 诊断：导出 Tauri 生成的 iOS 原生工程，用于排查 WKWebView 布局/触摸问题
-      # Tauri 2.x 部分版本把 iOS 工程放在 gen/apple/ios，部分放在 gen/ios，这里两个都查
-      - name: Dump iOS native project (diagnose touch/layout)
-        shell: bash
-        run: |
-          echo "===== iOS gen 目录结构 ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -maxdepth 4 -type d 2>/dev/null || true
-          echo ""
-          echo "===== 关键文件列表 (mm/swift/project.yml/Info.plist) ====="
-          find src-tauri/gen/ios src-tauri/gen/apple \( -name "*.mm" -o -name "*.swift" -o -name "project.yml" -o -name "Info.plist" \) 2>/dev/null || true
-          echo ""
-          echo "===== main.mm ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "main.mm" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null || true
-          echo ""
-          echo "===== project.yml ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "project.yml" -exec echo "----- {} -----" \; -exec cat {} \; 2>/dev/null || true
-          echo ""
-          echo "===== Info.plist 列表 ====="
-          find src-tauri/gen/ios src-tauri/gen/apple -name "Info.plist" 2>/dev/null || true
-
-      - name: Upload iOS native sources (diagnose)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-native-sources
-          path: |
-            src-tauri/gen/ios
-            src-tauri/gen/apple
-          if-no-files-found: warn
 
       - name: Generate app icons for iOS
         run: cargo tauri icon public/orig_icon.png

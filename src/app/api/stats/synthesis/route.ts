@@ -73,13 +73,13 @@ export async function GET(request: Request) {
     let tianxuanGiftList: { id: number; name: string }[] = [];
     if (offline) {
       // 离线模式：仅用本地累积的天选礼物 ID
-      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds([]);
+      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(validSession.mid, []);
     } else {
       try {
         const tianxuanGifts = await fetchTianxuanGiftList(biliCookie);
         const currentIds = tianxuanGifts.map(g => g.id);
         tianxuanGiftList = tianxuanGifts.map(g => ({ id: g.id, name: g.name }));
-        tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(currentIds);
+        tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(validSession.mid, currentIds);
       } catch (err) {
         console.error("[SynthesisStats] 获取天选礼物列表失败:", err);
       }
@@ -89,13 +89,13 @@ export async function GET(request: Request) {
     let redPocketGiftList: { id: number; name: string }[] = [];
     if (offline) {
       // 离线模式：仅用本地累积的红包礼物 ID
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds([]);
+      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(validSession.mid, []);
     } else {
       try {
         const redPocketGifts = await fetchRedPocketGiftList(biliCookie);
         const currentRedPocketIds = redPocketGifts.map(g => g.id);
         redPocketGiftList = redPocketGifts.map(g => ({ id: g.id, name: g.name }));
-        redPocketGiftIds = await getAccumulatedRedPocketGiftIds(currentRedPocketIds);
+        redPocketGiftIds = await getAccumulatedRedPocketGiftIds(validSession.mid, currentRedPocketIds);
       } catch (err) {
         console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
       }

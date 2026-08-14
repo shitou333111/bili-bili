@@ -1,0 +1,3151 @@
+{
+    "code": 0,
+    "message": "OK",
+    "ttl": 1,
+    "data": {
+        "gift_data": {
+            "room_gift_list": {
+                "gold_list": [
+                    {
+                        "position": 1,
+                        "gift_id": 31164,
+                        "id": 31164,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 3,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": [
+                            1201
+                        ],
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 1,
+                        "origin_position": 5
+                    },
+                    {
+                        "position": 2,
+                        "gift_id": 35725,
+                        "id": 35725,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 1
+                    },
+                    {
+                        "position": 3,
+                        "gift_id": 33988,
+                        "id": 33988,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": [
+                            1101
+                        ],
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 2
+                    },
+                    {
+                        "position": 4,
+                        "gift_id": 35727,
+                        "id": 35727,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 3
+                    },
+                    {
+                        "position": 5,
+                        "gift_id": 32251,
+                        "id": 32251,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 4
+                    },
+                    {
+                        "position": 6,
+                        "gift_id": 31036,
+                        "id": 31036,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 6
+                    },
+                    {
+                        "position": 7,
+                        "gift_id": 31039,
+                        "id": 31039,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 7
+                    },
+                    {
+                        "position": 8,
+                        "gift_id": 34500,
+                        "id": 34500,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 8
+                    },
+                    {
+                        "position": 9,
+                        "gift_id": 35545,
+                        "id": 35545,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 9
+                    },
+                    {
+                        "position": 10,
+                        "gift_id": 35520,
+                        "id": 35520,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 10
+                    },
+                    {
+                        "position": 11,
+                        "gift_id": 35534,
+                        "id": 35534,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 11
+                    },
+                    {
+                        "position": 12,
+                        "gift_id": 35638,
+                        "id": 35638,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 35641,
+                                "alias": "真好听",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 35640,
+                                "alias": "贴贴",
+                                "desc": "+5电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 35639,
+                                "alias": "摸摸头",
+                                "desc": "+5电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "1",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 12
+                    },
+                    {
+                        "position": 13,
+                        "gift_id": 35726,
+                        "id": 35726,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 13
+                    },
+                    {
+                        "position": 14,
+                        "gift_id": 35567,
+                        "id": 35567,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 14
+                    },
+                    {
+                        "position": 15,
+                        "gift_id": 13000,
+                        "id": 13000,
+                        "plan_id": 0,
+                        "special": {
+                            "special_type": 4,
+                            "is_use": 1,
+                            "tips": "等主播开播时再赠送吧",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 1,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 2,
+                        "is_top": 2,
+                        "origin_position": 15
+                    },
+                    {
+                        "position": 16,
+                        "gift_id": 35566,
+                        "id": 35566,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 15
+                    },
+                    {
+                        "position": 17,
+                        "gift_id": 35502,
+                        "id": 35502,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 16
+                    },
+                    {
+                        "position": 18,
+                        "gift_id": 35206,
+                        "id": 35206,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 17
+                    },
+                    {
+                        "position": 19,
+                        "gift_id": 35542,
+                        "id": 35542,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 18
+                    },
+                    {
+                        "position": 20,
+                        "gift_id": 35541,
+                        "id": 35541,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 19
+                    },
+                    {
+                        "position": 21,
+                        "gift_id": 31122,
+                        "id": 31122,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33067,
+                                "alias": "荣耀水晶",
+                                "desc": "",
+                                "locked": false,
+                                "lock_tip": ""
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 20
+                    },
+                    {
+                        "position": 22,
+                        "gift_id": 35577,
+                        "id": 35577,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 21
+                    },
+                    {
+                        "position": 23,
+                        "gift_id": 35683,
+                        "id": 35683,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 0,
+                            "tips": "荣耀等级50级以上可解锁礼物哦～",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": [
+                            1103
+                        ],
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "traffic_gift",
+                            "pay_type": "interactive_pay",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 22
+                    },
+                    {
+                        "position": 24,
+                        "gift_id": 35535,
+                        "id": 35535,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 23
+                    },
+                    {
+                        "position": 25,
+                        "gift_id": 35521,
+                        "id": 35521,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 24
+                    },
+                    {
+                        "position": 26,
+                        "gift_id": 34636,
+                        "id": 34636,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": [
+                            1004
+                        ],
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "guard_gift",
+                            "pay_type": "interactive_pay",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 25
+                    },
+                    {
+                        "position": 27,
+                        "gift_id": 33647,
+                        "id": 33647,
+                        "plan_id": 7250,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 26
+                    },
+                    {
+                        "position": 28,
+                        "gift_id": 34315,
+                        "id": 34315,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 34316,
+                                "alias": "钟意你",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 27
+                    },
+                    {
+                        "position": 29,
+                        "gift_id": 35099,
+                        "id": 35099,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 28
+                    },
+                    {
+                        "position": 30,
+                        "gift_id": 35626,
+                        "id": 35626,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 29
+                    },
+                    {
+                        "position": 31,
+                        "gift_id": 35628,
+                        "id": 35628,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 30
+                    },
+                    {
+                        "position": 32,
+                        "gift_id": 35625,
+                        "id": 35625,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 31
+                    },
+                    {
+                        "position": 33,
+                        "gift_id": 34296,
+                        "id": 34296,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 32
+                    },
+                    {
+                        "position": 34,
+                        "gift_id": 30873,
+                        "id": 30873,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 31877,
+                                "alias": "疯狂点赞",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 31878,
+                                "alias": "闪光应援",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 31882,
+                                "alias": "震撼声浪",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 33
+                    },
+                    {
+                        "position": 35,
+                        "gift_id": 35627,
+                        "id": 35627,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 34
+                    },
+                    {
+                        "position": 36,
+                        "gift_id": 33012,
+                        "id": 33012,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 35
+                    },
+                    {
+                        "position": 37,
+                        "gift_id": 34381,
+                        "id": 34381,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 36
+                    },
+                    {
+                        "position": 38,
+                        "gift_id": 35516,
+                        "id": 35516,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 37
+                    },
+                    {
+                        "position": 39,
+                        "gift_id": 34998,
+                        "id": 34998,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33070,
+                                "alias": "荣耀飞船",
+                                "desc": "80级解锁",
+                                "locked": true,
+                                "lock_tip": "荣耀等级达到80级解锁"
+                            }
+                        ],
+                        "gift_tag": [
+                            1501
+                        ],
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 38
+                    },
+                    {
+                        "position": 40,
+                        "gift_id": 35525,
+                        "id": 35525,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 39
+                    },
+                    {
+                        "position": 41,
+                        "gift_id": 35533,
+                        "id": 35533,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 40
+                    },
+                    {
+                        "position": 42,
+                        "gift_id": 31088,
+                        "id": 31088,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 41
+                    },
+                    {
+                        "position": 43,
+                        "gift_id": 31087,
+                        "id": 31087,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33065,
+                                "alias": "荣耀之城",
+                                "desc": "60级解锁",
+                                "locked": true,
+                                "lock_tip": "荣耀等级达到60级解锁"
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 42
+                    },
+                    {
+                        "position": 44,
+                        "gift_id": 35432,
+                        "id": 35432,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 43
+                    },
+                    {
+                        "position": 45,
+                        "gift_id": 31053,
+                        "id": 31053,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 44
+                    },
+                    {
+                        "position": 46,
+                        "gift_id": 31932,
+                        "id": 31932,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33066,
+                                "alias": "荣耀仙境",
+                                "desc": "40级解锁",
+                                "locked": true,
+                                "lock_tip": "荣耀等级达到40级解锁"
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 45
+                    },
+                    {
+                        "position": 47,
+                        "gift_id": 31933,
+                        "id": 31933,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 46
+                    },
+                    {
+                        "position": 48,
+                        "gift_id": 34999,
+                        "id": 34999,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 47
+                    },
+                    {
+                        "position": 49,
+                        "gift_id": 32089,
+                        "id": 32089,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 32091,
+                                "alias": "火力全开",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 32093,
+                                "alias": "流光飞电",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            },
+                            {
+                                "gift_id": 32092,
+                                "alias": "闪烁疾驰",
+                                "desc": "+0电池",
+                                "locked": false,
+                                "lock_tip": ""
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 48
+                    },
+                    {
+                        "position": 50,
+                        "gift_id": 32228,
+                        "id": 32228,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 49
+                    },
+                    {
+                        "position": 51,
+                        "gift_id": 32613,
+                        "id": 32613,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 50
+                    },
+                    {
+                        "position": 52,
+                        "gift_id": 34294,
+                        "id": 34294,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 51
+                    },
+                    {
+                        "position": 53,
+                        "gift_id": 35261,
+                        "id": 35261,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 52
+                    },
+                    {
+                        "position": 54,
+                        "gift_id": 31591,
+                        "id": 31591,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33068,
+                                "alias": "荣耀列车",
+                                "desc": "50级解锁",
+                                "locked": true,
+                                "lock_tip": "荣耀等级达到50级解锁"
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 53
+                    },
+                    {
+                        "position": 55,
+                        "gift_id": 31028,
+                        "id": 31028,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": [
+                            {
+                                "gift_id": 33069,
+                                "alias": "荣耀启航",
+                                "desc": "70级解锁",
+                                "locked": true,
+                                "lock_tip": "荣耀等级达到70级解锁"
+                            }
+                        ],
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": null,
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 54
+                    },
+                    {
+                        "position": 56,
+                        "gift_id": 34383,
+                        "id": 34383,
+                        "plan_id": 9596,
+                        "special": {
+                            "special_type": 0,
+                            "is_use": 1,
+                            "tips": "",
+                            "url": ""
+                        },
+                        "upgrade_gift": null,
+                        "gift_tag": null,
+                        "extra_info": {
+                            "is_fixed": 0,
+                            "icon_bottom_tips": "",
+                            "alg": "",
+                            "gift_sort_strategy": 0
+                        },
+                        "gift_scene": {
+                            "scene": "default_gift",
+                            "pay_type": "send_gift",
+                            "hide_price": false
+                        },
+                        "can_top": 1,
+                        "is_top": 2,
+                        "origin_position": 55
+                    }
+                ],
+                "silver_list": [],
+                "need_odds_offline": false,
+                "ab_result": null,
+                "panel_extra": {
+                    "banner": {
+                        "banner_image": "",
+                        "jump_url": ""
+                    },
+                    "rights_entrance": null
+                }
+            },
+            "discount_gift_list": [
+                {
+                    "gift_id": 39,
+                    "price": 100000,
+                    "discount_price": 80000,
+                    "corner_mark": "-20%",
+                    "corner_position": 2,
+                    "corner_color": "#699553",
+                    "id": 5
+                },
+                {
+                    "gift_id": 34595,
+                    "price": 500000,
+                    "discount_price": 99900,
+                    "corner_mark": "",
+                    "corner_position": 2,
+                    "corner_color": "#699553",
+                    "id": 609
+                },
+                {
+                    "gift_id": 20003,
+                    "price": 450000,
+                    "discount_price": 360000,
+                    "corner_mark": "-20%",
+                    "corner_position": 2,
+                    "corner_color": "#699553",
+                    "id": 8
+                },
+                {
+                    "gift_id": 20008,
+                    "price": 1000,
+                    "discount_price": 800,
+                    "corner_mark": "-20%",
+                    "corner_position": 2,
+                    "corner_color": "#699553",
+                    "id": 194
+                }
+            ],
+            "tab_list": [
+                {
+                    "tab_id": 9,
+                    "tab_name": "粉丝团",
+                    "position": 4,
+                    "list": [
+                        {
+                            "position": 1,
+                            "gift_id": 34001,
+                            "id": 34001,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 0,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                1201
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "default_gift",
+                                "pay_type": "send_gift",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 2,
+                            "gift_id": 34102,
+                            "id": 34102,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 0,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                1101
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 3,
+                            "gift_id": 30869,
+                            "id": 30869,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 4,
+                            "gift_id": 35561,
+                            "id": 35561,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                2001
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "default_gift",
+                                "pay_type": "send_gift",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 5,
+                            "gift_id": 30606,
+                            "id": 30606,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 6,
+                            "gift_id": 30733,
+                            "id": 30733,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 0,
+                                "tips": "该礼物需要粉丝勋章达到25级才可送哦~",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 7,
+                            "gift_id": 30628,
+                            "id": 30628,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 0,
+                                "tips": "该礼物需要粉丝勋章达到35级才可送哦~",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                2001
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 8,
+                            "gift_id": 30732,
+                            "id": 30732,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 0,
+                                "tips": "该礼物需要粉丝勋章达到45级才可送哦~",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 9,
+                            "gift_id": 32313,
+                            "id": 32313,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 0,
+                                "tips": "该礼物需要粉丝勋章达到65级才可送哦~",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 10,
+                            "gift_id": 30847,
+                            "id": 30847,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 2,
+                                "is_use": 0,
+                                "tips": "该礼物需要粉丝勋章达到55级才可送哦~",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        }
+                    ],
+                    "tab_type": 2
+                },
+                {
+                    "tab_id": 2,
+                    "tab_name": "航海",
+                    "position": 5,
+                    "list": [
+                        {
+                            "position": 1,
+                            "gift_id": 34527,
+                            "id": 34527,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 15,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "guard_attire",
+                                "pay_type": "interactive_pay",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 2,
+                            "gift_id": 34526,
+                            "id": 34526,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 15,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                2000
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "guard_attire",
+                                "pay_type": "interactive_pay",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 3,
+                            "gift_id": 34637,
+                            "id": 34637,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 0,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                1004
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "guard_gift",
+                                "pay_type": "interactive_pay",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 4,
+                            "gift_id": 34638,
+                            "id": 34638,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 0,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                1004
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "guard_gift",
+                                "pay_type": "interactive_pay",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 5,
+                            "gift_id": 34639,
+                            "id": 34639,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 0,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                1004
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "guard_gift",
+                                "pay_type": "interactive_pay",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 6,
+                            "gift_id": 34931,
+                            "id": 34931,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 1,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": [
+                                2000
+                            ],
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": {
+                                "scene": "default_gift",
+                                "pay_type": "send_gift",
+                                "hide_price": false
+                            },
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 7,
+                            "gift_id": 30688,
+                            "id": 30688,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 1,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 8,
+                            "gift_id": 31243,
+                            "id": 31243,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 1,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        },
+                        {
+                            "position": 9,
+                            "gift_id": 31115,
+                            "id": 31115,
+                            "plan_id": 9596,
+                            "special": {
+                                "special_type": 1,
+                                "is_use": 1,
+                                "tips": "",
+                                "url": ""
+                            },
+                            "upgrade_gift": null,
+                            "gift_tag": null,
+                            "extra_info": {
+                                "is_fixed": 0,
+                                "icon_bottom_tips": "",
+                                "alg": "",
+                                "gift_sort_strategy": 0
+                            },
+                            "gift_scene": null,
+                            "can_top": 0,
+                            "is_top": 0,
+                            "origin_position": 0
+                        }
+                    ],
+                    "tab_type": 3
+                }
+            ],
+            "max_send_gift": 5000,
+            "combo_interval_time": 200,
+            "lottery_gift_config": null,
+            "privilege": {
+                "buy_guard_btn": "舰长权益",
+                "is_expired": 0,
+                "privilege_type": 3
+            },
+            "red_dot": [
+                {
+                    "tab_id": 2,
+                    "has_red_dot": 0,
+                    "red_dot_id": 0,
+                    "room_id": 23915535,
+                    "uid": 110934547,
+                    "module": "panel_privilege"
+                },
+                {
+                    "tab_id": -1,
+                    "has_red_dot": 0,
+                    "red_dot_id": 0,
+                    "room_id": 23915535,
+                    "uid": 110934547,
+                    "module": "panel_bag"
+                }
+            ],
+            "pay_limit_icon": "https://i0.hdslb.com/bfs/activity-plat/static/10613/11157/11906/20260714/844d54a5ebb9071d6522563d4d107c8c/PDlU7T5uj3.png",
+            "naming_gift": null,
+            "special_show_gift": [],
+            "bag_tab_disable": 0,
+            "special_tag": [],
+            "pay_limit_url": "https://live.bilibili.com/p/html/bilili-page-consume-manage/index.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,100p,0,0,0,0,0,0;2,2,375,100p,0,0,0,0,0,0;3,3,100p,100p,0,0,0,0,0,0;4,2,375,100p,0,0,0,0,0,0;5,3,100p,100p,0,0,0,0,0,0;6,3,100p,100p,0,0,0,0,0,0;7,3,100p,100p,0,0,0,0,0,0;8,3,100p,100p,0,0,0,0,0,0\u0026app_common=open\u0026pc_ui=375,626,17181a,2"
+        },
+        "gift_config": {
+            "base_config": {
+                "hited": true,
+                "list": null,
+                "version": 0,
+                "ttl": 0
+            },
+            "room_config": [
+                {
+                    "id": 34636,
+                    "name": "舰长一号",
+                    "price": 198000,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 2,
+                    "corner_mark": "舰长",
+                    "corner_background": "",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "投喂后可开通1个月舰长",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/a97726f370a5aa6d5e6100b042bee848efc560f6.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/a97726f370a5aa6d5e6100b042bee848efc560f6.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/59e40fab772acd69a273b764cd5d5b1dbab9839c.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/0efea19bfa51a885060ffb27117cb599603a317d.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 1010,
+                    "weight": 1,
+                    "goods_id": 7,
+                    "has_imaged_gift": 1,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": {
+                        "app_pic": "http://i0.hdslb.com/bfs/live/237fc4c6528ecde7fa945485b6d85d4ffb84571a.png",
+                        "web_pic": "",
+                        "left_text": "",
+                        "left_color": "",
+                        "button_text": "",
+                        "button_color": "",
+                        "button_pic_color": "",
+                        "jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                        "jump_to": 0,
+                        "web_pic_url": "http://i0.hdslb.com/bfs/live/0dc70a2b8fcf43651fa7a0b76a3de97103b504cc.png",
+                        "web_jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?level=3",
+                        "app_banner_v2": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c977ff480be68c0e46c3443d247dc7418b05eaeb.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "#2A45A433",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": {
+                                "text": "查看详情",
+                                "background_color": "#2A45A433"
+                            },
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        },
+                        "web_banner": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c977ff480be68c0e46c3443d247dc7418b05eaeb.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": null,
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        }
+                    },
+                    "diy_count_map": 0,
+                    "effect_id": 1842,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "#FFFFFF",
+                    "corner_color_bg": "#D16584",
+                    "web_light": {
+                        "corner_mark": "舰长",
+                        "corner_background": "",
+                        "corner_mark_color": "#FFFFFF",
+                        "corner_color_bg": "#FD94B2"
+                    },
+                    "web_dark": {
+                        "corner_mark": "舰长",
+                        "corner_background": "",
+                        "corner_mark_color": "#FFFFFF",
+                        "corner_color_bg": "#B7687F"
+                    }
+                },
+                {
+                    "id": 33647,
+                    "name": "奇迹城堡",
+                    "price": 1314000,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 2,
+                    "corner_mark": "",
+                    "corner_background": "",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/06bd2fff7fda37c1e6810ccc420c7c4cd08b9495.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/72cd6e5f9f949443db980e5d396697308a99e7f9.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/3da740a4fc1db7c30ffa51105536ed7e7da4b243.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/b9ed25a0a1c0d02544c4637b7a72d3f4abda28aa.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 152,
+                    "weight": 1,
+                    "goods_id": 15,
+                    "has_imaged_gift": 1,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": null,
+                    "diy_count_map": 0,
+                    "effect_id": 1361,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "",
+                    "corner_color_bg": "#D16584",
+                    "web_light": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    },
+                    "web_dark": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    }
+                },
+                {
+                    "id": 33988,
+                    "name": "人气票",
+                    "price": 100,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 0,
+                    "corner_mark": "",
+                    "corner_background": "",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "投喂可为主播增加人气榜助力值哦～",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        },
+                        {
+                            "num": 10,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        },
+                        {
+                            "num": 100,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        },
+                        {
+                            "num": 520,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/7d78646ee4ecc900cebbe46cb963f421079548f0.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/7d78646ee4ecc900cebbe46cb963f421079548f0.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/70d92af0a837ae66e25f23493a56e1690f76ebba.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/4d5215da47d25b3db787d2ba5449016ee142dc80.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 5000,
+                    "weight": 1,
+                    "goods_id": 15,
+                    "has_imaged_gift": 0,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": null,
+                    "diy_count_map": 1,
+                    "effect_id": 0,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "",
+                    "corner_color_bg": "#D16584",
+                    "web_light": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    },
+                    "web_dark": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    }
+                },
+                {
+                    "id": 13000,
+                    "name": "发红包",
+                    "price": 0,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 0,
+                    "corner_mark": "",
+                    "corner_background": "",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 20,
+                    "desc": "发送红包可以为主播增加曝光和粉丝",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/2b3de8fa9eddebfab4d62b3a953a90da2a4ab81c.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/2b3de8fa9eddebfab4d62b3a953a90da2a4ab81c.png",
+                    "frame_animation": "https://i0.hdslb.com/bfs/live/c2e9453ac9dc0b1f83675052ce975b0cdade26d5.png",
+                    "gif": "https://i0.hdslb.com/bfs/live/83a98ba519e8fc422cd8e490b17a2b17f09c5646.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/95d10e699a6368d638b00b10ec4362c19ae32bd7.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 0,
+                    "weight": 1,
+                    "goods_id": 15,
+                    "has_imaged_gift": 0,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": null,
+                    "diy_count_map": 0,
+                    "effect_id": 0,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "",
+                    "corner_color_bg": "#D16584",
+                    "web_light": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    },
+                    "web_dark": {
+                        "corner_mark": "",
+                        "corner_background": "",
+                        "corner_mark_color": "",
+                        "corner_color_bg": "#D16584"
+                    }
+                },
+                {
+                    "id": 34639,
+                    "name": "总督一号",
+                    "price": 19998000,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 2,
+                    "corner_mark": "总督",
+                    "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "投喂后可开通1个月总督",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/52e00ca134a8a41f08b203eb5886875507e4b44e.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/52e00ca134a8a41f08b203eb5886875507e4b44e.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/fdd8c37dc08b4a640db4895675552bc8f1550f17.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/5b0770eb182c34a39a0f44e59fec7761fb3f0f34.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 10,
+                    "weight": 1,
+                    "goods_id": 5,
+                    "has_imaged_gift": 1,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": {
+                        "app_pic": "http://i0.hdslb.com/bfs/live/6664cddfa38fb6f68e610d4ec6cbf845cceed49b.png",
+                        "web_pic": "",
+                        "left_text": "",
+                        "left_color": "",
+                        "button_text": "",
+                        "button_color": "",
+                        "button_pic_color": "",
+                        "jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=1",
+                        "jump_to": 0,
+                        "web_pic_url": "http://i0.hdslb.com/bfs/live/a30085d749b5765cb4038d48b9694567e93783ee.png",
+                        "web_jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?level=1",
+                        "app_banner_v2": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=1",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c1076114ba17f42682fb10e45df05e3c122e6f2d.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": {
+                                "text": "查看详情",
+                                "background_color": "#2A45A433"
+                            },
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        },
+                        "web_banner": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=1",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c1076114ba17f42682fb10e45df05e3c122e6f2d.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": null,
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        }
+                    },
+                    "diy_count_map": 0,
+                    "effect_id": 1846,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "#D95985",
+                    "corner_color_bg": "",
+                    "web_light": {
+                        "corner_mark": "总督",
+                        "corner_background": "",
+                        "corner_mark_color": "#FF6699",
+                        "corner_color_bg": "#FFE4EC"
+                    },
+                    "web_dark": {
+                        "corner_mark": "总督",
+                        "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                        "corner_mark_color": "#D95985",
+                        "corner_color_bg": ""
+                    }
+                },
+                {
+                    "id": 34637,
+                    "name": "舰长一号",
+                    "price": 198000,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 2,
+                    "corner_mark": "舰长",
+                    "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "投喂后可开通1个月舰长",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/a97726f370a5aa6d5e6100b042bee848efc560f6.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/a97726f370a5aa6d5e6100b042bee848efc560f6.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/59e40fab772acd69a273b764cd5d5b1dbab9839c.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/0efea19bfa51a885060ffb27117cb599603a317d.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 1010,
+                    "weight": 1,
+                    "goods_id": 7,
+                    "has_imaged_gift": 1,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": {
+                        "app_pic": "http://i0.hdslb.com/bfs/live/237fc4c6528ecde7fa945485b6d85d4ffb84571a.png",
+                        "web_pic": "",
+                        "left_text": "",
+                        "left_color": "",
+                        "button_text": "",
+                        "button_color": "",
+                        "button_pic_color": "",
+                        "jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                        "jump_to": 0,
+                        "web_pic_url": "http://i0.hdslb.com/bfs/live/0dc70a2b8fcf43651fa7a0b76a3de97103b504cc.png",
+                        "web_jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?level=3",
+                        "app_banner_v2": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c977ff480be68c0e46c3443d247dc7418b05eaeb.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "#2A45A433",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": {
+                                "text": "查看详情",
+                                "background_color": "#2A45A433"
+                            },
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        },
+                        "web_banner": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=3",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c977ff480be68c0e46c3443d247dc7418b05eaeb.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": null,
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        }
+                    },
+                    "diy_count_map": 0,
+                    "effect_id": 1843,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "#D95985",
+                    "corner_color_bg": "",
+                    "web_light": {
+                        "corner_mark": "舰长",
+                        "corner_background": "",
+                        "corner_mark_color": "#FF6699",
+                        "corner_color_bg": "#FFE4EC"
+                    },
+                    "web_dark": {
+                        "corner_mark": "舰长",
+                        "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                        "corner_mark_color": "#D95985",
+                        "corner_color_bg": ""
+                    }
+                },
+                {
+                    "id": 34638,
+                    "name": "提督一号",
+                    "price": 1998000,
+                    "type": 0,
+                    "coin_type": "gold",
+                    "bag_gift": 0,
+                    "effect": 2,
+                    "corner_mark": "提督",
+                    "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                    "broadcast": 0,
+                    "draw": 0,
+                    "stay_time": 3,
+                    "animation_frame_num": 0,
+                    "desc": "投喂后可开通1个月提督",
+                    "rule": "",
+                    "rights": "",
+                    "privilege_required": 0,
+                    "count_map": [
+                        {
+                            "num": 1,
+                            "text": "",
+                            "desc": "",
+                            "web_svga": "",
+                            "vertical_svga": "",
+                            "horizontal_svga": "",
+                            "special_color": "",
+                            "effect_id": 0
+                        }
+                    ],
+                    "img_basic": "https://s1.hdslb.com/bfs/live/af5b620387a20a8b65b9bd6fc47cf9058a8bbd85.png",
+                    "img_dynamic": "https://i0.hdslb.com/bfs/live/af5b620387a20a8b65b9bd6fc47cf9058a8bbd85.png",
+                    "frame_animation": "",
+                    "gif": "https://i0.hdslb.com/bfs/live/9661cb7dee9a6cb09d6041745242974c01cde5df.gif",
+                    "webp": "https://i0.hdslb.com/bfs/live/ed1772572541f5a92dda4223fe7d607b38f7ea96.webp",
+                    "full_sc_web": "",
+                    "full_sc_horizontal": "",
+                    "full_sc_vertical": "",
+                    "full_sc_horizontal_svga": "",
+                    "full_sc_vertical_svga": "",
+                    "bullet_head": "",
+                    "bullet_tail": "",
+                    "limit_interval": 0,
+                    "bind_ruid": 0,
+                    "bind_roomid": 0,
+                    "gift_type": 0,
+                    "combo_resources_id": 0,
+                    "max_send_limit": 100,
+                    "weight": 1,
+                    "goods_id": 6,
+                    "has_imaged_gift": 1,
+                    "left_corner_text": "",
+                    "left_corner_background": "",
+                    "gift_banner": {
+                        "app_pic": "http://i0.hdslb.com/bfs/live/6a648cd8ea2d813c22f911251268beeaef4b7cce.png",
+                        "web_pic": "",
+                        "left_text": "",
+                        "left_color": "",
+                        "button_text": "",
+                        "button_color": "",
+                        "button_pic_color": "",
+                        "jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=2",
+                        "jump_to": 0,
+                        "web_pic_url": "http://i0.hdslb.com/bfs/live/8194f33edb9078589cf02561a01dd164e4c7183e.png",
+                        "web_jump_url": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?level=2",
+                        "app_banner_v2": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=2",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c6aa0890dff8defa45e3c6575d49190b23c1d681.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": {
+                                "text": "查看详情",
+                                "background_color": "#2A45A433"
+                            },
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        },
+                        "web_banner": {
+                            "banner_type": 1001,
+                            "schema": "https://live.bilibili.com/p/html/live-app-guard-pilot/gift.html?is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,73p,0,0,30,0,12,0;2,2,375,100p,0,0,30,0,0,0;3,3,100p,73p,0,0,30,0,12,0;4,2,375,100p,0,0,30,0,0,0;5,3,100p,73p,0,0,30,0,12,0;6,3,100p,73p,0,0,30,0,12,0;7,3,100p,73p,0,0,30,0,12,0;8,2,320,480,0,0,30,0,0,0\u0026level=2",
+                            "icon": {
+                                "img_url": "http://i0.hdslb.com/bfs/live/c6aa0890dff8defa45e3c6575d49190b23c1d681.png",
+                                "icon_shape": 0
+                            },
+                            "double_icon": null,
+                            "main_title": {
+                                "text": "",
+                                "color": "",
+                                "highlight_font_color": ""
+                            },
+                            "sub_title": null,
+                            "button": null,
+                            "background": {
+                                "color": "#2A45A433"
+                            },
+                            "ext_gifts_1004": null
+                        }
+                    },
+                    "diy_count_map": 0,
+                    "effect_id": 1844,
+                    "first_tips": "",
+                    "gift_attrs": [
+                        0
+                    ],
+                    "corner_mark_color": "#D95985",
+                    "corner_color_bg": "",
+                    "web_light": {
+                        "corner_mark": "提督",
+                        "corner_background": "",
+                        "corner_mark_color": "#FF6699",
+                        "corner_color_bg": "#FFE4EC"
+                    },
+                    "web_dark": {
+                        "corner_mark": "提督",
+                        "corner_background": "http://i0.hdslb.com/bfs/live/361fd34c6d46f6d9d2ba030fd70f0322e316f7a2.png",
+                        "corner_mark_color": "#D95985",
+                        "corner_color_bg": ""
+                    }
+                }
+            ]
+        },
+        "global_config": {
+            "combo_resources": [
+                {
+                    "combo_resources_id": 10,
+                    "img_one": "",
+                    "img_two": "",
+                    "img_three": "",
+                    "img_four": "",
+                    "color_one": "#62A6FF66",
+                    "color_two": "#6FADFE33"
+                },
+                {
+                    "combo_resources_id": 11,
+                    "img_one": "",
+                    "img_two": "",
+                    "img_three": "",
+                    "img_four": "",
+                    "color_one": "#9F66FFCC",
+                    "color_two": "#6FACFE4D"
+                },
+                {
+                    "combo_resources_id": 12,
+                    "img_one": "",
+                    "img_two": "",
+                    "img_three": "",
+                    "img_four": "",
+                    "color_one": "#FF49A1CC",
+                    "color_two": "#FF66994D"
+                },
+                {
+                    "combo_resources_id": 13,
+                    "img_one": "",
+                    "img_two": "",
+                    "img_three": "",
+                    "img_four": "",
+                    "color_one": "#FF9D00CC",
+                    "color_two": "#FFD4004D"
+                }
+            ],
+            "guard_resources": [
+                {
+                    "level": 1,
+                    "img": "https://i0.hdslb.com/bfs/live/39164ebfdd39db3d284b1221765e7e57f5a49958.png",
+                    "name": "总督"
+                },
+                {
+                    "level": 2,
+                    "img": "https://i0.hdslb.com/bfs/live/09937c3beb0608e267a50ac3c7125c3f2d709098.png",
+                    "name": "提督"
+                },
+                {
+                    "level": 3,
+                    "img": "https://i0.hdslb.com/bfs/live/80f732943cc3367029df65e267960d56736a82ee.png",
+                    "name": "舰长"
+                }
+            ],
+            "naming_gift": {
+                "text": {
+                    "app_user": "冠名",
+                    "app_user_selected": "冠名",
+                    "web_user": "冠名",
+                    "web_user_selected": "冠名",
+                    "combo_user": "冠名",
+                    "combo_anchor": "冠名",
+                    "vtr": "TA冠名的礼物"
+                }
+            },
+            "send_disable_msg": {
+                "gift_for_owner": "只能给房主投喂～",
+                "no_send_obj": "请选择投喂对象～",
+                "no_fans_incr": "投喂给房主和麦上用户均可增加房主亲密度",
+                "jump_fans_url": "https://live.bilibili.com/p/html/live-app-fanspanel/rules.html?isMultiVoiceRoom=1\u0026nav=1\u0026is_live_half_webview=1\u0026hybrid_half_ui=1,3,100p,70p,0,0,30,100,12,0;2,2,375,100p,0,0,30,100,0,0;3,3,100p,70p,0,0,30,100,12,0;4,2,375,100p,0,0,30,100,0,0;5,3,100p,70p,0,0,30,100,12,0;6,3,100p,70p,0,0,30,100,12,0;7,3,100p,70p,0,0,30,100,12,0",
+                "web_no_fans_incr": "投喂给房主的礼物才可增加亲密度哦"
+            },
+            "gift_protocols": [
+                {
+                    "gift_ids": [
+                        33972,
+                        33909,
+                        33908,
+                        33978,
+                        33925,
+                        34635,
+                        34636,
+                        34637,
+                        34638,
+                        34639
+                    ],
+                    "protocols": [
+                        {
+                            "text": "《哔哩哔哩直播服务协议》",
+                            "url": "https://live.bilibili.com/p/html/live-app-help/index.html#/live-protocol"
+                        },
+                        {
+                            "text": "《电池用户协议》",
+                            "url": "https://live.bilibili.com/p/html/live-app-help/index.html#/lp-protocol"
+                        },
+                        {
+                            "text": "《大航海服务协议》",
+                            "url": "https://live.bilibili.com/p/html/live-app-help/index.html#/service-agreement"
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

@@ -11,6 +11,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import { BLIND_BOX_CONFIG } from "./config";
+import { ensureGiftCatalogLoaded, getGiftImg } from "./gift-catalog-client";
 import {
   resolveSession,
   buildCookie,
@@ -18,9 +19,6 @@ import {
   getAllBlindBoxInfo,
   saveBlindBoxInfo,
   checkBlindBox,
-  readGiftDb,
-  saveGiftsToDb,
-  getGiftImg,
   type BlindBoxInfo,
   type BlindBoxGift,
   type EffectiveBlindBoxConfig,
@@ -415,6 +413,7 @@ export async function fetchAnchorGifts(
   const csrf = cookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
 
   try {
+    await ensureGiftCatalogLoaded(platform);
     const { records: existingRecords, meta } = await readRecordsWithMeta(platform, session.mid);
     let allRecords = existingRecords;
     let fetchedNewPages = 0;
@@ -758,31 +757,13 @@ export async function fetchAnchorGifts(
       }
     }
 
-    // 保存盲盒内礼物信息到 gift-db
-    for (const info of Object.values(allBlindBoxInfo)) {
-      if (info.gifts) {
-        await saveGiftsToDb(platform, info.gifts.map((g) => ({ gift_id: g.gift_id, name: g.gift_name, img: g.gift_img })));
-      }
-    }
-
-    // 保存礼物名称到 gift-db
-    const giftDb = await readGiftDb(platform);
-    await saveGiftsToDb(
-      platform,
-      Array.from(giftMap.entries()).map(([gift_id, v]) => ({
-        gift_id,
-        name: v.name,
-        img: giftDb.gifts?.[gift_id]?.img ?? "",
-      })),
-    );
-
     // 构建盲盒盈亏
     const blindBoxProfits: BlindBoxProfit[] = [];
     for (const blindBoxId of blindBoxIds) {
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
-      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? (await getGiftImg(platform, blindBoxId)) ?? "";
+      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? getGiftImg(blindBoxId) ?? "";
       const drawCount = count?.num ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;
       const blindPrice = (info?.blind_price ?? 0) * 50;
@@ -798,7 +779,7 @@ export async function fetchAnchorGifts(
             name: g.gift_name,
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
-            img: giftDb.gifts?.[g.gift_id]?.img ?? g.gift_img ?? "",
+            img: getGiftImg(g.gift_id) ?? g.gift_img ?? "",
           });
         }
       }
@@ -835,7 +816,7 @@ export async function fetchAnchorGifts(
     const blindBoxProfit = blindBoxProfits.length > 0 ? blindBoxProfits[0] : null;
 
     const giftSummary = Array.from(giftMap.entries())
-      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: giftDb.gifts?.[gift_id]?.img ?? "" }))
+      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: getGiftImg(gift_id) }))
       .sort((a, b) => b.hamster - a.hamster);
 
     const fanDistribution = Array.from(fanMap.entries())

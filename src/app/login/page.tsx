@@ -216,7 +216,7 @@ export default function LoginPage() {
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-10 text-[#1f1c17]">
       <section className="mx-auto w-full max-w-md">
         <article className="rounded-[2rem] border border-black/10 bg-white/82 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-          <h1 className="font-[family-name:var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-center">
+          <h1 className="font-[family-name:var(--font-inter)] text-3xl font-semibold tracking-tight text-center">
             扫码登录 B 站账号
           </h1>
           <p className="mt-4 text-sm leading-6 text-justify text-black/65">

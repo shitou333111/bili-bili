@@ -6,7 +6,7 @@ import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
-import { serverApiUrl } from "@/lib/server-api";
+import { serverApiUrl, serverPost } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
 import { useOnlineStatus } from "@/lib/use-online";
@@ -23,6 +23,12 @@ import { saveMobileOrDownload } from "@/lib/save-image";
 import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
 import { RevenueModuleContent } from "@/components/RevenueModuleContent";
+import MedicalFeeSettlement from "@/components/MedicalFeeSettlement";
+import ScreenshotViewer from "@/components/ScreenshotViewer";
+import BiliSimulator from "@/components/bili-simulator/BiliSimulator";
+import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type StreamerInfo, type HistoryEntry } from "@/components/bili-simulator/liveStream";
+import RealActivityModal from "@/components/RealActivityModal";
+import RecommendedAnchors from "@/components/RecommendedAnchors";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
 async function closeApp() {
@@ -795,7 +801,16 @@ export default function HomePage() {
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
-  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot">("home");
+  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical">("home");
+  const [screenshotOpen, setScreenshotOpen] = useState(false);
+  const [screenshotUrl, setScreenshotUrl] = useState<string>("");
+  const [simulatorOpen, setSimulatorOpen] = useState(false);
+  const [simHistory, setSimHistory] = useState<HistoryEntry[]>([]);
+  const [simUidInput, setSimUidInput] = useState("");
+  const [simLoading, setSimLoading] = useState(false);
+  const [simError, setSimError] = useState("");
+  const [currentStreamer, setCurrentStreamer] = useState<StreamerInfo | null>(null);
+  const [realActivityModalOpen, setRealActivityModalOpen] = useState(false);
   // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框
   const [pieActive, setPieActive] = useState<{ chart: "all" | "period"; index: number } | null>(null);
   const [pieTipPos, setPieTipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -804,6 +819,43 @@ export default function HomePage() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const pieIsMobile = mounted && isMobileDevice();
+
+  // 加载模拟器历史记录
+  useEffect(() => { setSimHistory(getHistory()); }, []);
+
+  // 进入模拟器（通过 UID 查询主播信息；uid=0 时不选主播，使用默认背景）
+  const enterSimulator = useCallback(async (uid: number) => {
+    if (!uid) {
+      setCurrentStreamer(null);
+      setSimulatorOpen(true);
+      return;
+    }
+    setSimLoading(true);
+    setSimError("");
+    try {
+      const info = await getStreamerInfoByUid(uid);
+      setCurrentStreamer(info);
+      setSimHistory(addHistory({ uid: info.uid, roomId: info.roomId, uname: info.uname, face: info.face }));
+      setSimulatorOpen(true);
+    } catch (e: any) {
+      setSimError(e?.message || "获取主播信息失败");
+    } finally {
+      setSimLoading(false);
+    }
+  }, []);
+
+  // 通过历史记录直接进入模拟器
+  const enterSimulatorByHistory = useCallback((entry: HistoryEntry) => {
+    setCurrentStreamer({
+      uid: entry.uid,
+      roomId: entry.roomId,
+      uname: entry.uname,
+      face: entry.face,
+      liveStatus: 0,
+      title: "",
+    });
+    setSimulatorOpen(true);
+  }, []);
 
   // ===== 应用内返回栈（History API）：解决 系统返回键 不起效 =====
   // 本应用是"标签页式"SPA，模块切换只改 React 状态、不产生真实浏览器历史。
@@ -884,21 +936,18 @@ export default function HomePage() {
     if (offlineToastTimer.current) window.clearTimeout(offlineToastTimer.current);
     offlineToastTimer.current = window.setTimeout(() => setOfflineToast(""), 2000);
   }
-  // 复活曲截图页内容托管在网站服务器上（会变动），打包时不再内置，改为打开服务器页面
-  async function openScreenshotPage() {
-    const url = serverApiUrl("/screenshot");
-    try {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
-    } catch {
-      window.open(url, "_blank");
-    }
+  // 复活曲截图页内容托管在网站服务器上（会变动），在 APP 内以 iframe 打开，
+  // 保留应用外壳与返回按钮，服务器不可达时显示自绘错误面板（而非浏览器报错页）。
+  function openScreenshotPage() {
+    // serverApiUrl：Tauri 返回服务器完整地址，Web 返回相对路径，自动适配
+    setScreenshotUrl(serverApiUrl("/screenshot"));
+    setScreenshotOpen(true);
   }
   // 版本号卡片连续点击 → admin 入口（点击3次），已使用过 admin 后再其他工具页显示入口卡片
   const [versionClickCount, setVersionClickCount] = useState(0);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
   const [adminPwd, setAdminPwd] = useState("");
-  const [adminPwdError, setAdminPwdError] = useState(false);
+  const [adminPwdError, setAdminPwdError] = useState<string>("");
   const [adminUsed, setAdminUsed] = useState(false);
 
   // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
@@ -936,15 +985,12 @@ export default function HomePage() {
           return "";
         }
       })();
-      fetch(serverApiUrl("/api/admin/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-        // Tauri 下前端与服务器跨源，必须携带凭证，admin 会话 cookie 才能被持久化供 /admin 复用
-        credentials: "include",
-      })
-        .then(async (res) => {
-          if (res.ok) {
+      serverPost<{ code: number; sid?: string }>("/api/admin/login", { password })
+        .then((data) => {
+          if (data?.code === 0) {
+            if (data.sid) {
+              try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
+            }
             // 静默登录成功，直接进入 admin，不显示登录框
             // 用本地路径 /admin（而非 serverApiUrl("/admin")）加载同源的 admin 页面，
             // 保证与首页共享 localStorage（跨源会导致密码/设备令牌/sid 读取失败，引发二次弹窗等连锁问题）。
@@ -953,38 +999,43 @@ export default function HomePage() {
             // 密码已变更等原因导致自动登录失败，弹出模态框重新输入
             localStorage.removeItem("bili_live_admin_cred");
             setShowAdminPwd(true);
-            setAdminPwdError(true);
+            setAdminPwdError("密码错误");
           }
         })
         .catch(() => {
           setShowAdminPwd(true);
-          setAdminPwdError(true);
+          setAdminPwdError("无法连接服务器，请检查网络");
         });
     } else {
       // 首次使用，无已保存密码，弹出模态框输入
       setShowAdminPwd(true);
-      setAdminPwdError(false);
+      setAdminPwdError("");
     }
   }
 
   async function handleAdminLogin() {
-    const res = await fetch(serverApiUrl("/api/admin/login"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: adminPwd }),
-      credentials: "include",
-    });
-    if (res.ok) {
-      // 记住密码，下次自动静默登录
-      localStorage.setItem("bili_live_admin_cred", btoa(adminPwd));
-      localStorage.setItem("bili_live_admin_used", "1");
-      setAdminUsed(true);
-      setShowAdminPwd(false);
-      setAdminPwd("");
-      // 进入同源本地 /admin（与首页共享 localStorage），避免跨源导致二次登录/无法识别当前账号
-      window.location.href = "/admin";
-    } else {
-      setAdminPwdError(true);
+    try {
+      const data = (await serverPost<{ code: number; message?: string; sid?: string }>(
+        "/api/admin/login",
+        { password: adminPwd },
+      )) as any;
+      if (data?.code === 0) {
+        if (data.sid) {
+          try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
+        }
+        // 记住密码，下次自动静默登录
+        localStorage.setItem("bili_live_admin_cred", btoa(adminPwd));
+        localStorage.setItem("bili_live_admin_used", "1");
+        setAdminUsed(true);
+        setShowAdminPwd(false);
+        setAdminPwd("");
+        // 进入同源本地 /admin（与首页共享 localStorage），避免跨源导致二次登录/无法识别当前账号
+        window.location.href = "/admin";
+      } else {
+        setAdminPwdError(data?.message || "密码错误");
+      }
+    } catch {
+      setAdminPwdError("无法连接服务器，请检查网络");
     }
   }
 
@@ -2163,6 +2214,7 @@ export default function HomePage() {
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
+                  { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false },
                 ].map((tool) => {
                   // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
                   const serverAccount = currentAccount?.source === "server";
@@ -2178,6 +2230,7 @@ export default function HomePage() {
                       }
                       if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
                       else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
+                      else if (tool.title === "多人接力PK医药费") { pushView("screenshot", "medical"); }
                       else { openScreenshotPage(); }
                     }}
                     className={`rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
@@ -2201,6 +2254,22 @@ export default function HomePage() {
                   </button>
                   );
                 })}
+                {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟 */}
+                <button
+                  onClick={() => setRealActivityModalOpen(true)}
+                  className="rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">⚡</span>
+                    <div>
+                      <h3 className="text-base font-bold text-red-700">合成活动"黑抽"</h3>
+                      <p className="mt-0.5 text-xs text-red-600/60">主播未开播时直接进入真实合成活动页面，真实消费</p>
+                    </div>
+                    <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                  </div>
+                </button>
+                {/* 主播推荐卡片 */}
+                <RecommendedAnchors />
                 {/* 已使用过 admin 后，显示管理后台入口卡片 */}
                 {adminUsed && (
                   <button
@@ -2311,14 +2380,14 @@ export default function HomePage() {
 
             {/* Admin 密码弹窗 */}
             {showAdminPwd && createPortal(
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(false); }}>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(""); }}>
                 <div className="rounded-xl border border-black/10 bg-white p-6 shadow-xl w-72" onClick={(e) => e.stopPropagation()}>
                   <h3 className="text-sm font-semibold text-center mb-4">管理员验证</h3>
                   <input
                     type="password"
                     placeholder="请输入密码"
                     value={adminPwd}
-                    onChange={(e) => { setAdminPwd(e.target.value); setAdminPwdError(false); }}
+                    onChange={(e) => { setAdminPwd(e.target.value); setAdminPwdError(""); }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         handleAdminLogin();
@@ -2327,7 +2396,7 @@ export default function HomePage() {
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${adminPwdError ? "border-[#e74c3c]" : "border-black/10 focus:border-black/30"}`}
                     autoFocus
                   />
-                  {adminPwdError && <p className="text-xs text-[#e74c3c] mt-1">密码错误</p>}
+                  {adminPwdError && <p className="text-xs text-[#e74c3c] mt-1">{adminPwdError}</p>}
                   <div className="flex gap-2 mt-3">
                     <button
                       onClick={handleAdminLogin}
@@ -2336,7 +2405,7 @@ export default function HomePage() {
                       确认
                     </button>
                     <button
-                      onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(false); }}
+                      onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(""); }}
                       className="flex-1 rounded-lg border border-black/10 py-2 text-sm text-black/60 hover:bg-gray-50 transition"
                     >
                       取消
@@ -2575,6 +2644,15 @@ export default function HomePage() {
               </div>
             )}
 
+            {/* 多人接力PK医药费 */}
+            {activeModule === "screenshot" && toolsPage === "medical" && (
+              <MedicalFeeSettlement
+                currentUid={currentAccount?.mid ?? 0}
+                currentUname={currentAccount?.uname ?? ""}
+                onBack={() => pushView("screenshot", "home")}
+              />
+            )}
+
         </div>
       </div>
 
@@ -2587,36 +2665,80 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Loading Overlay - only covers content area, header above is still clickable */}
-      {loading && (
-        <div className="absolute inset-0 z-[9999] bg-white/70 backdrop-blur-sm flex items-center justify-center">
-          <div className="flex flex-col items-center gap-4 w-full max-w-[300px] px-6">
-            <div className="w-12 h-12 border-4 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-base font-medium text-[#1f1c17]">正在加载数据...</p>
-            <p className="text-sm text-black/45">切换账号需要重新获取数据，请耐心等待</p>
-            {fetchProgress ? (
-              <div className="w-full">
-                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
-                  <div
-                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
-                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
-                  ></div>
-                </div>
-                <p className="mt-2 text-xs text-black/55 text-center">{fetchProgress.text}</p>
-              </div>
-            ) : (
-              <p className="text-xs text-black/30">首次加载可能需要几分钟</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 待定页（占位，等待后续功能）- 保持挂载 */}
+      {/* 模拟页 - B站直播送礼模拟器入口 */}
       <div style={{ display: activeModule === "pending" ? "block" : "none" }}>
         <div className="content-wrapper px-2 min-w-0 py-3">
-          <div className="rounded-xl border border-black/10 bg-white/85 p-10 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
-            <div className="text-4xl mb-3">🚧</div>
-            <div className="text-sm text-black/60">新功能筹备中，敬请期待</div>
+          <div className="rounded-xl border border-black/10 bg-white/85 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+            <div className="text-center mb-6">
+              <h2 className="text-lg font-semibold text-black/80 mb-2">B站直播模拟器</h2>
+              <p className="text-xs text-black/50 leading-relaxed whitespace-pre-line">
+                {"开启神豪模式，所有礼物随便送，合成活动随便玩😄\n输入主播UID，可以加载真实直播画面作为背景"}
+              </p>
+            </div>
+
+            {/* UID 输入 */}
+            <div className="mb-4">
+              <input
+                type="number"
+                value={simUidInput}
+                onChange={(e) => setSimUidInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !simLoading) {
+                    enterSimulator(simUidInput.trim() ? Number(simUidInput.trim()) : 0);
+                  }
+                }}
+                placeholder="输入主播UID（可选）"
+                className="w-full px-4 py-3 rounded-xl border border-black/10 bg-white text-sm text-black/80 focus:outline-none focus:border-[#FF6699] focus:ring-2 focus:ring-pink-100 transition-all"
+              />
+              {simError && (
+                <p className="mt-2 text-xs text-red-500">{simError}</p>
+              )}
+              <button
+                onClick={() => {
+                  if (!simLoading) {
+                    enterSimulator(simUidInput.trim() ? Number(simUidInput.trim()) : 0);
+                  }
+                }}
+                disabled={simLoading}
+                className="w-full mt-3 bg-gradient-to-r from-[#555] to-[#333] text-white text-sm font-medium py-2.5 px-6 rounded-lg shadow-md active:scale-98 transition-all disabled:opacity-50"
+              >
+                {simLoading ? "加载中..." : "进入模拟器"}
+              </button>
+            </div>
+
+            {/* 历史记录 */}
+            {simHistory.length > 0 && (
+              <div className="mb-6">
+                <p className="text-xs text-black/40 mb-2 font-medium">历史记录</p>
+                <div className="flex flex-wrap gap-2">
+                  {simHistory.map((entry) => (
+                    <button
+                      key={entry.uid}
+                      onClick={() => enterSimulatorByHistory(entry)}
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium text-white shadow-sm active:scale-95 transition-all"
+                      style={{ backgroundColor: getBadgeColor(entry.uid) }}
+                    >
+                      {entry.face && (
+                        <img src={entry.face} alt="" className="w-6 h-6 rounded-full object-cover" />
+                      )}
+                      <span className="pr-1">{entry.uname}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 免责声明 */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+              <div className="text-xs text-yellow-800/80 leading-relaxed">
+                <p className="font-medium mb-1 text-center">免责声明</p>
+                <ul className="list-disc list-inside space-y-0.5 text-yellow-700/80 px-1">
+                  <li>仅为UI/动画演示，无任何实际送礼功能</li>
+                  <li>不会扣除真实电池，花费均为本地模拟</li>
+                  <li>礼物图标、动画特效版权归B站所有</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2628,7 +2750,7 @@ export default function HomePage() {
         tabs={[
           { key: "fans", label: "粉丝" },
           { key: "anchor", label: "主播" },
-          { key: "pending", label: "待定" },
+          { key: "pending", label: "模拟" },
           { key: "help", label: "帮助" },
         ]}
         activeKey={dockTab}
@@ -2681,6 +2803,29 @@ export default function HomePage() {
           onClose={() => setShowCastleModal(false)}
         />
       )}
+
+      {/* 复活曲截图查看器（APP 内 iframe 打开，服务器不可达时自绘错误面板） */}
+      {screenshotOpen && (
+        <ScreenshotViewer
+          url={screenshotUrl}
+          onBack={() => setScreenshotOpen(false)}
+        />
+      )}
+
+      {/* B站直播送礼模拟器 */}
+      {simulatorOpen && (
+        <BiliSimulator
+          onBack={() => setSimulatorOpen(false)}
+          userName={currentAccount?.uname ?? currentAccount?.mid?.toString() ?? "我"}
+          streamerInfo={currentStreamer}
+        />
+      )}
+
+      {/* 合成活动"黑抽" - 真实活动页面的 UID 输入+风险确认模态框 */}
+      <RealActivityModal
+        isOpen={realActivityModalOpen}
+        onClose={() => setRealActivityModalOpen(false)}
+      />
     </main>
   );
 }

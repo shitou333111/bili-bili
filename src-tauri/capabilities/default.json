@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "windows": ["main"],
+  "windows": ["main", "activity", "activity-panel", "real-activity", "real-activity-panel"],
   "remote": {
     "urls": ["http://*:*", "https://*:*"]
   },
@@ -8,6 +8,10 @@
     "core:default",
     "allow-fetch-json",
     "allow-debug-acl",
+    "allow-open-activity-panel",
+    "allow-close-activity-panel",
+    "allow-open-real-activity-panel",
+    "allow-close-real-activity-panel",
     {
       "identifier": "http:default",
       "allow": [

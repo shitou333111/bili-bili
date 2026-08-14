@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="21px" height="24px" viewBox="0 0 21 24" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Generator: Sketch 48.1 (47250) - http://www.bohemiancoding.com/sketch -->
+    <title>7</title>
+    <desc>Created with Sketch.</desc>
+    <defs>
+        <linearGradient x1="50%" y1="0%" x2="50%" y2="100%" id="linearGradient-1">
+            <stop stop-color="#FFF700" offset="0%"></stop>
+            <stop stop-color="#FFCE5B" offset="100%"></stop>
+        </linearGradient>
+    </defs>
+    <g id="Symbols" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="7">
+            <g id="Group" transform="translate(0.000000, 1.000000)">
+                <path d="M2.1,21 L7.84570815,21 L19.95,1.4704023 L19.95,1.05 L4.09184549,1.05 L3.24914163,5.48333333 L11.7527897,5.48333333 L2.1,21 Z M9.86299913,6.53333333 L1.98075302,6.53333333 L3.22263239,0 L21,0 L21,1.76940668 L8.43024695,22.05 L0.21020943,22.05 L9.86299913,6.53333333 Z" id="Path" fill="#BC6E2D" fill-rule="nonzero"></path>
+                <polygon id="Path" fill="url(#linearGradient-1)" points="2.1 21 11.7527897 5.48333333 3.24914163 5.48333333 4.09184549 1.05 19.95 1.05 19.95 1.4704023 7.84570815 21"></polygon>
+            </g>
+        </g>
+    </g>
+</svg>

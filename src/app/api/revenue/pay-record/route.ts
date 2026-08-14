@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchRealPayRecordSnapshot } from "@/lib/bilibili/app";
-import { saveGiftsToDb } from "@/lib/gift-db";
 import { readPayRecords, savePayRecords, getMaxId, type RawGiftRecord } from "@/lib/user-data";
 import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
@@ -105,8 +104,18 @@ export async function GET(request: Request) {
     const existingMaxId = getMaxId(existingRecords);
     console.log(`[PayRecord] 已有 ${existingRecords.length} 条记录，最新id=${existingMaxId}`);
 
-    // 从B站获取新数据（增量，只获取id > existingMaxId）
-    const snapshot = await fetchRealPayRecordSnapshot(validSession, undefined, existingMaxId);
+    // 回溯窗口：活动退款（标记"已退回"）在原时期记录上原地修改，不是新增。
+    // 因此增量时先按原方案确定"上次更新点"（本地最大 id 记录），再在更新点基础上额外向前回溯 1 周，
+    // 重新拉取该窗口内记录并覆盖旧记录。
+    const RETROSPECT_SECONDS = 7 * 24 * 3600; // 1 周
+    // 上次更新点 = 本地最大 id 记录的时间戳（B站记录 id 单调递减，最大 id 即本地最新记录）
+    const updatePointTimestamp = (existingMaxId > 0
+      ? existingRecords.find((r) => r.id === existingMaxId)?.timestamp
+      : undefined) ?? 0;
+    const cutoffTimestamp = updatePointTimestamp > 0 ? updatePointTimestamp - RETROSPECT_SECONDS : 0;
+
+    // 从B站获取新数据（增量 + 回溯窗口，按时间窗口停止翻页）
+    const snapshot = await fetchRealPayRecordSnapshot(validSession, undefined, cutoffTimestamp);
 
     // 合并：新记录在前，已有记录在后
     const newRecords = snapshot.records as unknown as RawGiftRecord[];
@@ -149,10 +158,7 @@ export async function GET(request: Request) {
       }, new Map<string, { giftName: string; giftImg: string; giftId: number; latestTimestamp: number }>()).values(),
     );
 
-    // 保存礼物信息到 gift-db.json
-    if (giftCatalog.length > 0) {
-      await saveGiftsToDb(giftCatalog.map(g => ({ gift_id: g.giftId, name: g.giftName, img: g.giftImg })));
-    }
+    // 礼物图标由 gift-catalog 从 B站 giftConfig API 获取，无需再保存到 gift-db
 
     const totalCoins = allRecords.reduce((sum, r) => sum + r.totalCoins, 0);
 

@@ -8,6 +8,8 @@ export default function ScreenshotPage() {
   return (
     <main className="page-main">
       <div className="content-wrapper px-4 min-w-0 py-4">
+        {/* 返回由 APP 内的 ScreenshotViewer 顶栏提供（避免 iframe 内整页跳转不丝滑） */}
+
         <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur space-y-5">
           <div className="text-center">
             <div className="text-5xl mb-3">📸</div>
@@ -67,7 +69,7 @@ export default function ScreenshotPage() {
             <h4 className="text-base font-semibold">软件界面预览</h4>
             <div className="flex justify-center">
               <img
-                src="/复活曲截图软件.png"
+                src="/screenshot-software.png"
                 alt="复活曲截图软件界面"
                 className="rounded-lg border border-black/10 max-w-full"
               />

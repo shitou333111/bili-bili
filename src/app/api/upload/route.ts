@@ -12,9 +12,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { loadGiftDb, saveGiftDb, mergeGiftDbUnion } from "@/lib/gift-db";
 import { saveBlindBoxInfoIfMissing } from "@/lib/blind-box-db";
 import { upsertUserInList } from "@/lib/user-data";
+import { mergeGlobalRecords, type MedicalRecord } from "@/lib/medical-fee";
 
 export const dynamic = "force-dynamic";
 
@@ -65,13 +65,28 @@ export async function POST(request: NextRequest) {
 
     // 增量上传：只写本次携带的文件（客户端只会带"相比上次有更新"的文件），覆盖旧文件。
     // 例外（全局共享文件，不走用户文件夹）：
-    //   - gift-db.json：客户端整包回传，服务端做并集合并；
     //   - blindbox_info/<id>.json：公开数据，仅当全局文件不存在时写入，已存在则丢弃。
+    // 注：礼物图标目录已改由各客户端直连 B站 giftConfig API 获取，不再上传 gift-db.json。
     for (const [filename, content] of Object.entries(files)) {
-      if (filename === "gift-db.json") continue;
       const bbMatch = filename.match(/^blindbox_info\/(\d+)\.json$/);
       if (bbMatch) {
         await saveBlindBoxInfoIfMissing(Number(bbMatch[1]), content);
+        continue;
+      }
+      // 医药费归档记录：合并进全局去重文件（不做跨用户目录写入，避免操作者篡改他人数据；
+      // 去重保证同一局在全球范围内只有一条统一记录）。不写入本用户文件夹。
+      if (filename === "medical-fee-records.json") {
+        try {
+          const parsed = JSON.parse(content);
+          const incoming: MedicalRecord[] = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.records)
+              ? parsed.records
+              : [];
+          await mergeGlobalRecords(incoming);
+        } catch (err) {
+          console.error("[Upload] 合并医药费记录失败:", err);
+        }
         continue;
       }
       const filePath = path.join(userDir, filename);
@@ -84,27 +99,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 全局 gift-db.json：客户端整包回传，服务端做并集合并（只增不删、幂等），
-    // 避免不同用户各自读到旧版回传导致覆盖丢失其他用户的贡献。
-    if (files["gift-db.json"]) {
-      try {
-        const incoming = JSON.parse(files["gift-db.json"] || "{}");
-        const existing = loadGiftDb();
-        const merged = mergeGiftDbUnion(existing, incoming);
-        saveGiftDb(merged);
-        console.log(`[Upload] 合并 gift-db: 现有 ${Object.keys(existing.gifts).length} 种 -> ${Object.keys(merged.gifts).length} 种`);
-      } catch (err) {
-        console.error("[Upload] 合并 gift-db 失败:", err);
-      }
-    }
-
     // 更新上传时间记录
     const metaPath = path.join(userDir, "_upload_meta.json");
     const meta = {
       mid,
       uname,
       last_upload: new Date().toISOString(),
-      files: Object.keys(files).filter((f) => f !== "gift-db.json" && !f.startsWith("blindbox_info/")),
+      files: Object.keys(files).filter((f) => !f.startsWith("blindbox_info/")),
     };
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
 
@@ -112,37 +113,6 @@ export async function POST(request: NextRequest) {
     await upsertUserInList(mid, uname);
 
     console.log(`[Upload] 收到 ${uname}(uid:${mid}) 的数据: ${Object.keys(files).join(", ")}`);
-
-    // 更新全局 gift-db.json：从上传的 pay-records.json 中提取礼物信息
-    if (files["pay-records.json"]) {
-      try {
-        const payRecords = JSON.parse(files["pay-records.json"]);
-        const records = payRecords.records || [];
-        const giftMap = new Map<number, { gift_id: number; name: string; img: string }>();
-        for (const r of records) {
-          if (r.gift_id && r.gift_name && !giftMap.has(r.gift_id)) {
-            giftMap.set(r.gift_id, { gift_id: r.gift_id, name: r.gift_name, img: r.gift_img || "" });
-          }
-        }
-        if (giftMap.size > 0) {
-          const db = loadGiftDb();
-          if (!db.gifts) db.gifts = {};
-          let changed = false;
-          for (const g of giftMap.values()) {
-            if (!db.gifts[g.gift_id] || !db.gifts[g.gift_id].img) {
-              db.gifts[g.gift_id] = { name: g.name, img: g.img };
-              changed = true;
-            }
-          }
-          if (changed) {
-            saveGiftDb(db);
-            console.log(`[Upload] 更新 gift-db: 新增 ${giftMap.size} 个礼物信息`);
-          }
-        }
-      } catch (err) {
-        console.error("[Upload] 更新 gift-db 失败:", err);
-      }
-    }
 
     return NextResponse.json({ code: 0, message: "上传成功" });
   } catch (err) {

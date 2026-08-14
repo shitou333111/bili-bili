@@ -5,7 +5,7 @@
  * - Web 模式：转发到 Next.js 服务器路由（/api/...）
  * - Tauri 模式：解析 path 分发到对应的本地客户端模块（直连 B站 API + 本地文件）
  *
- * 未处理的路径（admin、图片代理、gift-db 等辅助接口）在 Tauri 下回退到服务器。
+ * 未处理的路径（admin、图片代理等辅助接口）在 Tauri 下回退到服务器。
  * 返回对象与原生 fetch 的 Response 兼容（支持 .json()），调用方无需改动。
  */
 

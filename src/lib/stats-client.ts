@@ -14,6 +14,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
+import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg } from "./gift-catalog-client";
 import {
   BLIND_BOX_CONFIG,
   BLIND_BOX_API,
@@ -188,34 +189,34 @@ async function saveSynthesisActivityInfo(platform: Platform, activityId: string,
   await platform.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
-// ==================== 天选/红包礼物 ID 累积（共享 gift-db.json） ====================
+// ==================== 天选/红包礼物 ID 累积（按用户本地存储，不再共享） ====================
 
-type GiftDb = {
-  gifts?: Record<number, { name: string; img: string }>;
+type SpecialGiftDb = {
   tianxuan_gift_ids?: number[];
   red_pocket_gift_ids?: number[];
 };
 
-async function giftDbPath(platform: Platform): Promise<string> {
-  return `${await platform.getDataDir()}/gift-db.json`;
+async function specialGiftDbPath(platform: Platform, mid: number): Promise<string> {
+  return `${await platform.getDataDir()}/uid_${mid}/special-gift-ids.json`;
 }
 
-async function readGiftDb(platform: Platform): Promise<GiftDb> {
-  return (await readJson<GiftDb>(platform, await giftDbPath(platform))) ?? { gifts: {} };
+async function readSpecialGiftDb(platform: Platform, mid: number): Promise<SpecialGiftDb> {
+  return (await readJson<SpecialGiftDb>(platform, await specialGiftDbPath(platform, mid))) ?? {};
 }
 
-async function writeGiftDb(platform: Platform, db: GiftDb): Promise<void> {
-  const path = await giftDbPath(platform);
-  await platform.mkdir(`${await platform.getDataDir()}`);
-  await platform.writeFile(path, JSON.stringify(db, null, 2));
+async function writeSpecialGiftDb(platform: Platform, mid: number, db: SpecialGiftDb): Promise<void> {
+  const filePath = await specialGiftDbPath(platform, mid);
+  await platform.mkdir(`${await platform.getDataDir()}/uid_${mid}`);
+  await platform.writeFile(filePath, JSON.stringify(db, null, 2));
 }
 
 /**
  * 统一上传：收集当前账号本地的所有数据文件（用户私有 uid_<mid>/ 下全部文件 +
- * 全局盲盒信息 blindbox_info/* + gift-db），打包成一次 uploadUserData 上传。
+ * 全局盲盒信息 blindbox_info/*），打包成一次 uploadUserData 上传。
  * uploadUserData 按文件内容哈希判断：仅发送内容与上次上传不同的文件；
  * 若全部未变则直接跳过（不发请求），从而避免频繁刷新时重复上传旧数据。
  * 仅本机登录账号（source !== "server"）上传；服务器账号无 B站 凭证仅查看，不上传。
+ * 说明：礼物图标/目录改由各客户端直连 B站 giftConfig API 获取，不再上传共享 gift-db。
  */
 export async function uploadAllUserData(platform: Platform): Promise<void> {
   try {
@@ -234,62 +235,36 @@ export async function uploadAllUserData(platform: Platform): Promise<void> {
     } catch { /* 目录不存在 */ }
     // 2) 全局盲盒信息
     Object.assign(files, await collectBlindBoxInfoUploads(platform));
-    // 3) 全局 gift-db
-    files["gift-db.json"] = JSON.stringify(await readGiftDb(platform));
     await platform.uploadUserData(session.mid, session.uname, files);
   } catch (e) {
     console.warn("[Upload] 统一上传失败:", e instanceof Error ? e.message : String(e));
   }
 }
 
-async function getAccumulatedTianxuanGiftIds(platform: Platform, currentIds: number[]): Promise<number[]> {
-  const db = await readGiftDb(platform);
+async function getAccumulatedTianxuanGiftIds(platform: Platform, mid: number, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDb(platform, mid);
   const historicalIds = db.tianxuan_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
   if (currentIds.length > 0) {
     db.tianxuan_gift_ids = merged;
-    await writeGiftDb(platform, db);
+    await writeSpecialGiftDb(platform, mid, db);
   }
   return merged;
 }
 
-async function getAccumulatedRedPocketGiftIds(platform: Platform, currentIds: number[]): Promise<number[]> {
-  const db = await readGiftDb(platform);
+async function getAccumulatedRedPocketGiftIds(platform: Platform, mid: number, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDb(platform, mid);
   const historicalIds = db.red_pocket_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
   if (currentIds.length > 0) {
     db.red_pocket_gift_ids = merged;
-    await writeGiftDb(platform, db);
+    await writeSpecialGiftDb(platform, mid, db);
   }
   return merged;
 }
 
-/** 批量保存礼物信息到 gift-db.json（供消费记录显示礼物图片） */
-async function saveGiftsToDb(
-  platform: Platform,
-  giftInfos: Array<{ gift_id: number; name: string; img: string }>,
-): Promise<void> {
-  const db = await readGiftDb(platform);
-  if (!db.gifts) db.gifts = {};
-  let changed = false;
-  for (const g of giftInfos) {
-    if (!db.gifts[g.gift_id] || !db.gifts[g.gift_id].img) {
-      db.gifts[g.gift_id] = { name: g.name, img: g.img };
-      changed = true;
-    }
-  }
-  if (changed) {
-    await writeGiftDb(platform, db);
-  }
-}
-
-/** 根据 gift_id 获取礼物图片，没找到返回空字符串 */
-async function getGiftImg(platform: Platform, giftId: number): Promise<string> {
-  const db = await readGiftDb(platform);
-  return db.gifts?.[giftId]?.img ?? "";
-}
-
-export { readGiftDb, saveGiftsToDb, getGiftImg };
+// 礼物图标统一由 gift-catalog-client 从 B站 giftConfig API 获取（无需登录、12h 缓存），
+// 不再维护本地 gift-db.json。此处不再导出 readGiftDb/saveGiftsToDb/getGiftImg。
 
 // ==================== 翻牌礼物图片缓存（activity_info/activity-3-*.json 的 gift_image_cache） ====================
 
@@ -1847,13 +1822,14 @@ export async function fetchSynthesisStats(
   const cookie = buildCookie(session);
 
   try {
+    await ensureGiftCatalogLoaded(platform);
     let tianxuanGiftIds: number[] = [];
     let tianxuanGiftList: { id: number; name: string }[] = [];
     try {
       const tianxuanGifts = await fetchTianxuanGiftList(platform, cookie);
       const currentIds = tianxuanGifts.map((g) => g.id);
       tianxuanGiftList = tianxuanGifts.map((g) => ({ id: g.id, name: g.name }));
-      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, currentIds);
+      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, session.mid, currentIds);
     } catch (err) {
       console.error("[SynthesisStats] 获取天选礼物列表失败:", err);
     }
@@ -1864,7 +1840,7 @@ export async function fetchSynthesisStats(
       const redPocketGifts = await fetchRedPocketGiftList(platform, cookie);
       const currentRedPocketIds = redPocketGifts.map((g) => g.id);
       redPocketGiftList = redPocketGifts.map((g) => ({ id: g.id, name: g.name }));
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, currentRedPocketIds);
+      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, session.mid, currentRedPocketIds);
     } catch (err) {
       console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
     }
@@ -2104,6 +2080,7 @@ export async function fetchCertificationStats(
   }
 
   try {
+    await ensureGiftCatalogLoaded(platform);
     const blindBoxInfo = await getBlindBoxInfo(platform, session.mid, session.uname, XINDONG_ID);
     const records = await readBlindBoxRecords(platform, session.mid, session.uname, XINDONG_ID);
 
@@ -2327,13 +2304,14 @@ export async function fetchOtherStats(
   const cookie = buildCookie(session);
 
   try {
+    await ensureGiftCatalogLoaded(platform);
     let tianxuanGiftIds: number[] = [];
     const tianxuanGifts = await fetchTianxuanGiftList(platform, cookie).catch(() => []);
-    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, tianxuanGifts.map((g) => g.id));
+    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, session.mid, tianxuanGifts.map((g) => g.id));
 
     let redPocketGiftIds: number[] = [];
     const redPocketGifts = await fetchRedPocketGiftList(platform, cookie).catch(() => []);
-    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, redPocketGifts.map((g) => g.id));
+    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, session.mid, redPocketGifts.map((g) => g.id));
 
     const records = await readPayRecords(platform, session.mid, session.uname || "");
 
@@ -2623,7 +2601,7 @@ async function calculateProfit(
 ): Promise<BlindBoxProfitResult> {
   const blindPrice = blindBoxEntry?.price ?? 0;
   const blindBoxName = blindBoxEntry?.gift_name ?? `盲盒_${blindBoxId}`;
-  const blindBoxImg = blindBoxEntry?.gift_img ?? (await getGiftImg(platform, blindBoxId)) ?? "";
+  const blindBoxImg = blindBoxEntry?.gift_img ?? getCatalogGiftImg(blindBoxId) ?? "";
 
   const giftInfoMap = new Map<number, { price: number; img: string }>();
   if (blindBoxEntry?.blind_box_gifts) {
@@ -2696,6 +2674,7 @@ export async function fetchBlindBoxStats(
   const cookie = buildCookie(session);
 
   try {
+    await ensureGiftCatalogLoaded(platform);
     const effectiveBlindBoxConfig = await getEffectiveBlindBoxConfig(platform);
     const currentIds = effectiveBlindBoxConfig.current_activity_blind_box_ids ?? [];
 
@@ -2776,17 +2755,6 @@ export async function fetchBlindBoxStats(
               };
             }
           }
-        }
-
-        if (blindBoxInfo?.gifts) {
-          await saveGiftsToDb(
-            platform,
-            blindBoxInfo.gifts.map((g) => ({
-              gift_id: g.gift_id,
-              name: g.gift_name,
-              img: g.gift_img,
-            })),
-          );
         }
 
         const dateRange = getDateRange(mergedRecords);

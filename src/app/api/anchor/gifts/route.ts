@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential, buildCookieHeader } from "@/lib/bilibili/cookie-refresh";
-import { loadGiftDb, saveGiftsToDb, getGiftImg } from "@/lib/gift-db";
+import { ensureGiftCatalogLoaded, getGiftImg } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
@@ -969,28 +969,8 @@ export async function GET(request: Request) {
       }
     }
 
-    // 将盲盒内礼物信息保存到 gift-db，供消费记录显示礼物图片
-    for (const info of Object.values(allBlindBoxInfo)) {
-      if (info.gifts) {
-        await saveGiftsToDb(info.gifts.map(g => ({
-          gift_id: g.gift_id,
-          name: g.gift_name,
-          img: g.gift_img,
-        })));
-      }
-    }
-
-    // 提前加载 giftDb，供下方使用
-    const giftDb = loadGiftDb();
-
-    // 同时将所有礼物记录中的礼物名称保存到 gift-db（img 可能为空，后续由 pay-records 填充）
-    await saveGiftsToDb(
-      Array.from(giftMap.entries()).map(([gift_id, v]) => ({
-        gift_id,
-        name: v.name,
-        img: giftDb.gifts?.[gift_id]?.img ?? "",
-      })),
-    );
+    // 加载礼物图标目录（来自 B站 giftConfig API，无需登录；仅用于展示图标）
+    await ensureGiftCatalogLoaded();
 
     // 注意：盲盒统计已在上面主循环中通过 giftIdToBlindBoxId 反向映射完成
 
@@ -1031,7 +1011,7 @@ export async function GET(request: Request) {
             name: g.gift_name,
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
-            img: giftDb.gifts?.[g.gift_id]?.img ?? g.gift_img ?? "",
+            img: getGiftImg(g.gift_id) || g.gift_img || "",
           });
         }
       }
@@ -1079,7 +1059,7 @@ export async function GET(request: Request) {
     };
 
     const giftSummary = Array.from(giftMap.entries())
-      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: giftDb.gifts?.[gift_id]?.img ?? "" }))
+      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: getGiftImg(gift_id) }))
       .sort((a, b) => b.hamster - a.hamster);
 
     const fanDistribution = Array.from(fanMap.entries())

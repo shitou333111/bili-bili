@@ -1,0 +1,21 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-real-activity-panel"
+description = "Enables the open_real_activity_panel command without any pre-configured scope."
+commands.allow = ["open_real_activity_panel"]
+
+[[permission]]
+identifier = "deny-open-real-activity-panel"
+description = "Denies the open_real_activity_panel command without any pre-configured scope."
+commands.deny = ["open_real_activity_panel"]
+
+[[permission]]
+identifier = "allow-close-real-activity-panel"
+description = "Enables the close_real_activity_panel command without any pre-configured scope."
+commands.allow = ["close_real_activity_panel"]
+
+[[permission]]
+identifier = "deny-close-real-activity-panel"
+description = "Denies the close_real_activity_panel command without any pre-configured scope."
+commands.deny = ["close_real_activity_panel"]

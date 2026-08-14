@@ -1,14 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import ToastHost from "@/components/ToastHost";
-// TEMP 诊断：定位 iOS 竖屏左侧死区，触摸网格页。定位完成后删除以下 import 与渲染。
-import TouchTestPage from "./touch-test/page";
 
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-space-grotesk",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -39,15 +37,14 @@ export default function RootLayout({
   return (
     <html
         lang="zh-CN"
-        className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} h-full antialiased`}
+        className={`${inter.variable} ${jetBrainsMono.variable} h-full antialiased`}
         suppressHydrationWarning
       >
       <body className="min-h-full flex flex-col">
         <ExternalLinkHandler />
         <SafeAreaStyler />
         <ToastHost />
-        {/* TEMP 诊断：启动即进入触摸网格页 */}
-        <TouchTestPage />
+        {children}
       </body>
     </html>
   );

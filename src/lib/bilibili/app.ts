@@ -94,7 +94,7 @@ function buildPayRecordUrl(session: AuthSession, nextId?: number) {
 export async function fetchRealPayRecordSnapshot(
   session: AuthSession,
   _nextId?: number,
-  existingMaxId?: number,
+  cutoffTimestamp?: number,
 ): Promise<PayRecordSnapshot> {
   if (!session.biliSessdata) {
     throw new Error("SESSDATA 不能为空");
@@ -136,13 +136,14 @@ export async function fetchRealPayRecordSnapshot(
       break;
     }
 
-    // 检查是否有新记录（去重），并检查与已有数据的重叠
+    // 检查是否有新记录（去重），并按回溯时间窗口停止翻页
     let newCount = 0;
-    let hasOverlap = false;
+    let reachedCutoff = false;
     for (const item of list) {
-      if (existingMaxId && item.id <= existingMaxId) {
-        hasOverlap = true;
-        continue; // Skip this record (already exists)
+      // 记录按时间倒序返回（新在前）。已回溯超过窗口（timestamp 早于截止时间），后续只会更旧，停止。
+      if (cutoffTimestamp && item.timestamp < cutoffTimestamp) {
+        reachedCutoff = true;
+        break;
       }
       if (!seenIds.has(item.id)) {
         seenIds.add(item.id);
@@ -150,9 +151,9 @@ export async function fetchRealPayRecordSnapshot(
         newCount++;
       }
     }
-    // Stop if we found overlap
-    if (hasOverlap) {
-      console.log(`[PayRecord] 与已有数据重叠，停止翻页（已有最大id=${existingMaxId}）`);
+    // Stop if we reached the retrospective cutoff
+    if (reachedCutoff) {
+      console.log(`[PayRecord] 已回溯超过回溯窗口，停止翻页（增量+回溯完成）`);
       break;
     }
 

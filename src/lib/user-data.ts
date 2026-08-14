@@ -396,37 +396,39 @@ export async function loadAccountInfo(userMid: number, uname: string): Promise<A
   }
 }
 
-// ====== 天选礼物 ID 持久化存储 ======
+// ====== 天选礼物 ID 持久化存储（按用户隔离，不再全局共享） ======
 
-const GIFT_DB_FILE = path.join(DATA_DIR, "gift-db.json");
-
-interface GiftDB {
+interface SpecialGiftDB {
   tianxuan_gift_ids?: number[];
   last_tianxuan_update?: string;
   red_pocket_gift_ids?: number[];
   last_red_pocket_update?: string;
 }
 
-async function readGiftDB(): Promise<GiftDB> {
+function specialGiftDbFile(mid: number): string {
+  return path.join(getUserDataDir(mid), "special-gift-ids.json");
+}
+
+async function readSpecialGiftDB(mid: number): Promise<SpecialGiftDB> {
   try {
-    const raw = await fs.readFile(GIFT_DB_FILE, "utf8");
+    const raw = await fs.readFile(specialGiftDbFile(mid), "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
   }
 }
 
-async function writeGiftDB(db: GiftDB): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(GIFT_DB_FILE, JSON.stringify(db, null, 2), "utf8");
+async function writeSpecialGiftDB(mid: number, db: SpecialGiftDB): Promise<void> {
+  await fs.mkdir(getUserDataDir(mid), { recursive: true });
+  await fs.writeFile(specialGiftDbFile(mid), JSON.stringify(db, null, 2), "utf8");
 }
 
 /**
- * 获取所有天选礼物 ID（持久化累积 + 当前 API 返回的合并）
+ * 获取所有天选礼物 ID（该用户持久化累积 + 当前 API 返回的合并）
  * 这样可以确保历史天选礼物不会被遗漏
  */
-export async function getAccumulatedTianxuanGiftIds(currentIds: number[]): Promise<number[]> {
-  const db = await readGiftDB();
+export async function getAccumulatedTianxuanGiftIds(mid: number, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDB(mid);
   const historicalIds = db.tianxuan_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
   
@@ -434,7 +436,7 @@ export async function getAccumulatedTianxuanGiftIds(currentIds: number[]): Promi
   if (currentIds.length > 0) {
     db.tianxuan_gift_ids = merged;
     db.last_tianxuan_update = new Date().toISOString();
-    await writeGiftDB(db);
+    await writeSpecialGiftDB(mid, db);
   }
   
   console.log(`[getAccumulatedTianxuanGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
@@ -442,17 +444,17 @@ export async function getAccumulatedTianxuanGiftIds(currentIds: number[]): Promi
 }
 
 /**
- * 获取所有红包礼物 ID（持久化累积 + 当前 API 返回的合并）
+ * 获取所有红包礼物 ID（该用户持久化累积 + 当前 API 返回的合并）
  */
-export async function getAccumulatedRedPocketGiftIds(currentIds: number[]): Promise<number[]> {
-  const db = await readGiftDB();
+export async function getAccumulatedRedPocketGiftIds(mid: number, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDB(mid);
   const historicalIds = db.red_pocket_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
 
   if (currentIds.length > 0) {
     db.red_pocket_gift_ids = merged;
     db.last_red_pocket_update = new Date().toISOString();
-    await writeGiftDB(db);
+    await writeSpecialGiftDB(mid, db);
   }
 
   console.log(`[getAccumulatedRedPocketGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);

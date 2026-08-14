@@ -265,9 +265,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
     }
   });
 
-  // 加载礼物数据库
+  // 加载礼物图标目录（来自 B站 giftConfig API，无需登录）
   useEffect(() => {
-    fetch(serverApiUrl("/api/gift-db"))
+    fetch(serverApiUrl("/api/gift-catalog"))
       .then(r => r.json())
       .then(data => {
         if (data.code === 0 && data.data) {

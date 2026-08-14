@@ -10,10 +10,27 @@ export type BlindBoxItem = {
   icon: string;
 };
 
+export type RecommendedAnchor = {
+  /** 主播 UID */
+  uid: number;
+  /** 主播昵称（冗余存一份，避免每次渲染都查） */
+  uname: string;
+  /** 主播头像 URL */
+  face?: string;
+  /** 主播直播间号 */
+  room_id: number;
+  /** 是否在帮助页显示 */
+  visible: boolean;
+  /** 排序（升序，越小越靠前） */
+  order: number;
+};
+
 export type AdminConfig = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
   synthesis_activities: SynthesisActivityConfig[];
+  /** 推荐主播列表（管理员配置） */
+  recommended_anchors?: RecommendedAnchor[];
 };
 
 async function ensureConfigFile() {

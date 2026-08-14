@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { serverApiUrl } from "@/lib/server-api";
+import { serverApiUrl, serverPost } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import Dropdown from "@/components/Dropdown";
@@ -30,11 +30,21 @@ type User = {
 type BlindBoxItem = { id: number; name: string; icon: string };
 type ActivityItem = { id: string; type: string; info_url: string; record_url: string; active?: boolean };
 
+type RecommendedAnchorItem = {
+  uid: number;
+  uname: string;
+  face?: string;
+  room_id: number;
+  visible: boolean;
+  order: number;
+};
+
 type AdminConfigData = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
   synthesis_activities: ActivityItem[];
   valid_activity_types: string[];
+  recommended_anchors: RecommendedAnchorItem[];
 };
 
 /** 读取本地保存的管理员会话 sid */
@@ -66,6 +76,9 @@ export default function AdminPage() {
   const [config, setConfig] = useState<AdminConfigData | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
   const [fetchingName, setFetchingName] = useState<number | null>(null);
+  // 推荐主播管理
+  const [newAnchorUid, setNewAnchorUid] = useState("");
+  const [addingAnchor, setAddingAnchor] = useState(false);
   // 用户搜索
   const [userSearch, setUserSearch] = useState("");
   // 活动名称映射（从本地活动信息 JSON 读取，只读展示）
@@ -96,14 +109,11 @@ export default function AdminPage() {
       try { password = atob(cred); } catch { password = ""; }
       if (password) {
         try {
-          const res = await fetch(serverApiUrl("/api/admin/login"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ password }),
-            credentials: "include",
-          });
-          if (res.ok) {
-            const data = await res.json();
+          const data = (await serverPost<{ code: number; sid?: string }>(
+            "/api/admin/login",
+            { password },
+          )) as any;
+          if (data?.code === 0) {
             if (data.sid) {
               try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
             }
@@ -254,21 +264,17 @@ export default function AdminPage() {
     setLoginLoading(true);
     setLoginError("");
     try {
-      const res = await fetch(serverApiUrl("/api/admin/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: loginForm.password }),
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const data = (await serverPost<{ code: number; message?: string; sid?: string }>(
+        "/api/admin/login",
+        { password: loginForm.password },
+      )) as any;
+      if (data?.code === 0) {
         if (data.sid) {
           try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
         }
         setAdminLoggedIn(true);
       } else {
-        const data = await res.json();
-        setLoginError(data.message || "登录失败");
+        setLoginError(data?.message || "登录失败");
       }
     } catch {
       setLoginError("网络错误");
@@ -475,6 +481,73 @@ export default function AdminPage() {
     const acts = [...config.synthesis_activities];
     [acts[index], acts[target]] = [acts[target], acts[index]];
     setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  // ========== 推荐主播管理 ==========
+  const addRecommendedAnchor = async () => {
+    if (!config || !newAnchorUid.trim()) return;
+    const uid = Number(newAnchorUid.trim());
+    if (!uid || uid <= 0) { alert("请输入正确的UID"); return; }
+    if (config.recommended_anchors.some((a) => a.uid === uid)) { alert("该主播已存在"); return; }
+    setAddingAnchor(true);
+    try {
+      // 使用 B站 get_status_info_by_uids API 一次性获取昵称、头像、房间号
+      const res = await dataFetch(`/api/tools/streamer-info?uid=${uid}`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.code !== 0 || !data.data) {
+        alert(data.message || "未查询到主播信息");
+        return;
+      }
+      const info = data.data as { uid: number; uname: string; face: string; room_id: number };
+      if (!info.uname) {
+        alert("未查询到主播昵称，请检查UID是否正确");
+        return;
+      }
+      const list = [...config.recommended_anchors];
+      const nextOrder = list.reduce((m, a) => Math.max(m, a.order), 0) + 1;
+      list.push({
+        uid,
+        uname: info.uname,
+        face: info.face ? fixImageUrl(info.face) : undefined,
+        room_id: info.room_id || 0,
+        visible: true,
+        order: nextOrder,
+      });
+      setConfig({ ...config, recommended_anchors: list });
+      setNewAnchorUid("");
+    } catch {
+      alert("查询主播信息失败");
+    }
+    setAddingAnchor(false);
+  };
+
+  const toggleAnchorVisible = (uid: number) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      recommended_anchors: config.recommended_anchors.map((a) =>
+        a.uid === uid ? { ...a, visible: !a.visible } : a,
+      ),
+    });
+  };
+
+  const removeRecommendedAnchor = (uid: number) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      recommended_anchors: config.recommended_anchors.filter((a) => a.uid !== uid),
+    });
+  };
+
+  const moveRecommendedAnchor = (index: number, dir: -1 | 1) => {
+    if (!config) return;
+    const list = [...config.recommended_anchors].sort((a, b) => a.order - b.order);
+    const target = index + dir;
+    if (target < 0 || target >= list.length) return;
+    [list[index], list[target]] = [list[target], list[index]];
+    // 重新编号 order
+    list.forEach((a, i) => { a.order = i + 1; });
+    setConfig({ ...config, recommended_anchors: list });
   };
 
   const fetchBlindBoxName = async (index: number) => {
@@ -813,6 +886,91 @@ export default function AdminPage() {
                     />
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <hr className="border-black/5" />
+
+            {/* 推荐主播管理 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold">推荐主播配置</h3>
+              </div>
+              <p className="text-[10px] text-black/40">勾选 = 在帮助页「主播推荐」卡片中显示；顺序决定页面展示顺序</p>
+              {/* 添加主播 */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={newAnchorUid}
+                  onChange={(e) => setNewAnchorUid(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && newAnchorUid.trim() && !addingAnchor) addRecommendedAnchor(); }}
+                  placeholder="输入主播UID"
+                  className="flex-1 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                />
+                <button
+                  onClick={addRecommendedAnchor}
+                  disabled={addingAnchor || !newAnchorUid.trim()}
+                  className="rounded-lg bg-[#00a1d6] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50"
+                >
+                  {addingAnchor ? "查询中..." : "+ 添加主播"}
+                </button>
+              </div>
+              {/* 主播列表 */}
+              <div className="space-y-2">
+                {config.recommended_anchors.length === 0 ? (
+                  <p className="text-[10px] text-black/30 py-3 text-center">暂无推荐主播，在上方输入UID添加</p>
+                ) : (
+                  [...config.recommended_anchors]
+                    .sort((a, b) => a.order - b.order)
+                    .map((anchor, index) => (
+                      <div
+                        key={anchor.uid}
+                        className={`rounded-lg border border-black/10 p-2.5 ${!anchor.visible ? "opacity-50" : ""}`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* 上下移动按钮 */}
+                          <div className="flex flex-col shrink-0">
+                            <button
+                              onClick={() => moveRecommendedAnchor(index, -1)}
+                              disabled={index === 0}
+                              className="admin-move-btn"
+                              title="上移"
+                            >▲</button>
+                            <button
+                              onClick={() => moveRecommendedAnchor(index, 1)}
+                              disabled={index === config.recommended_anchors.length - 1}
+                              className="admin-move-btn"
+                              title="下移"
+                            >▼</button>
+                          </div>
+                          {/* 复选框 */}
+                          <input
+                            type="checkbox"
+                            checked={anchor.visible}
+                            onChange={() => toggleAnchorVisible(anchor.uid)}
+                            className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
+                            title="勾选后在帮助页显示"
+                          />
+                          {/* 头像 */}
+                          {anchor.face ? (
+                            <img src={fixImageUrl(anchor.face)} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5 flex items-center justify-center text-xs text-black/30">👤</div>
+                          )}
+                          {/* 昵称+UID+房间号 */}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium truncate">{anchor.uname}</div>
+                            <div className="text-[10px] text-black/35">UID {anchor.uid} · 房间 {anchor.room_id || "未知"}</div>
+                          </div>
+                          {/* 删除按钮 */}
+                          <button
+                            onClick={() => removeRecommendedAnchor(anchor.uid)}
+                            className="text-xs text-[#e74c3c] hover:underline shrink-0"
+                          >删除</button>
+                        </div>
+                      </div>
+                    ))
+                )}
               </div>
             </div>
           </div>

@@ -2307,6 +2307,18 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the close_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-activity-panel",
+          "markdownDescription": "Enables the close_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the close_real_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-real-activity-panel",
+          "markdownDescription": "Enables the close_real_activity_panel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the debug_acl command without any pre-configured scope.",
           "type": "string",
           "const": "allow-debug-acl",
@@ -2319,6 +2331,30 @@
           "markdownDescription": "Enables the fetch_json command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-activity-panel",
+          "markdownDescription": "Enables the open_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_real_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-real-activity-panel",
+          "markdownDescription": "Enables the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-activity-panel",
+          "markdownDescription": "Denies the close_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_real_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-real-activity-panel",
+          "markdownDescription": "Denies the close_real_activity_panel command without any pre-configured scope."
+        },
+        {
           "description": "Denies the debug_acl command without any pre-configured scope.",
           "type": "string",
           "const": "deny-debug-acl",
@@ -2329,6 +2365,18 @@
           "type": "string",
           "const": "deny-fetch-json",
           "markdownDescription": "Denies the fetch_json command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-activity-panel",
+          "markdownDescription": "Denies the open_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_real_activity_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-real-activity-panel",
+          "markdownDescription": "Denies the open_real_activity_panel command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

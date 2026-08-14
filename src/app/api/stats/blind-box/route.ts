@@ -4,7 +4,7 @@ import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchBlindBoxDrawStream, checkBlindBox } from "@/lib/bilibili/gift-api";
 import { getBlindBoxInfo, saveBlindBoxInfo, type BlindBoxGift } from "@/lib/blind-box-db";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
-import { saveGiftsToDb, getGiftImg } from "@/lib/gift-db";
+import { ensureGiftCatalogLoaded, getGiftImg } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
@@ -436,6 +436,7 @@ export async function GET(request: Request) {
   // 解析筛选参数（支持按盲盒ID分别筛选：ruid_32251=xxx, dateRange_32251=thisMonth）
 
   try {
+    await ensureGiftCatalogLoaded();
     const biliCookie = "";
 
     const effectiveBlindBoxConfig = await getEffectiveBlindBoxConfig();
@@ -502,14 +503,7 @@ export async function GET(request: Request) {
           }
         }
 
-        // 将盲盒内礼物信息保存到 gift-db，供消费记录显示礼物图片
-        if (blindBoxInfo?.gifts) {
-          await saveGiftsToDb(blindBoxInfo.gifts.map(g => ({
-            gift_id: g.gift_id,
-            name: g.gift_name,
-            img: g.gift_img,
-          })));
-        }
+        // 礼物图标由 gift-catalog 从 B站 giftConfig API 获取，无需再累积保存
 
         // 从全部记录构建元数据
         const dateRange = getDateRange(mergedRecords);

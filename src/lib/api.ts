@@ -172,49 +172,6 @@ export const toolsApi = {
   },
 };
 
-// ==================== 礼物数据库 API ====================
-
-export const giftDbApi = {
-  async getGiftDb(): Promise<unknown> {
-    const platform = await p();
-    if (platform.isNative) {
-      const giftDbPath = `${await platform.getDataDir()}/gift-db.json`;
-      // 先尝试读取本地缓存
-      let localDb: unknown = null;
-      if (await platform.exists(giftDbPath)) {
-        try {
-          const raw = await platform.readFile(giftDbPath);
-          localDb = JSON.parse(raw);
-        } catch {}
-      }
-      // 后台从服务器同步最新版本（不阻塞返回）
-      this.syncFromServer(platform, giftDbPath).catch(() => {});
-      return localDb || { gifts: {} };
-    }
-    return webFetch("/api/gift-db");
-  },
-
-  /** 从服务器拉取 gift-db.json 并保存到本地 */
-  async syncFromServer(platform: Platform, localPath: string): Promise<void> {
-    try {
-      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-      const resp = await tauriFetch(`${serverApiUrl("/api/gift-db")}`, {
-        method: "GET",
-        headers: { "Accept": "application/json" },
-      });
-      if (!resp.ok) return;
-      const data = await resp.json() as { code: number; data?: Record<number, { name: string; img: string }> };
-      if (data.code === 0 && data.data) {
-        const db = { gifts: data.data, exportedAt: new Date().toISOString() };
-        await platform.writeFile(localPath, JSON.stringify(db, null, 2));
-        console.log(`[GiftDb] 已从服务器同步 ${Object.keys(data.data).length} 条礼物数据`);
-      }
-    } catch (e) {
-      console.warn("[GiftDb] 从服务器同步失败:", e instanceof Error ? e.message : String(e));
-    }
-  },
-};
-
 // ==================== 配置 API ====================
 
 export const configApi = {
