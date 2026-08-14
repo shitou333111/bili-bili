@@ -121,12 +121,12 @@ export default function RecommendedAnchors() {
             暂无推荐主播
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-2.5">
             {anchors.map((anchor) => (
               <button
                 key={anchor.uid}
                 onClick={() => openBiliLiveRoom(anchor.room_id)}
-                className="group flex flex-col items-center gap-2 p-3 rounded-xl border border-black/5 bg-black/[0.02] hover:bg-[#fafafa] hover:border-black/10 transition active:scale-95"
+                className="group flex flex-col items-center gap-1.5 p-2 rounded-xl border border-black/5 bg-black/[0.02] hover:bg-[#fafafa] hover:border-black/10 transition active:scale-95"
               >
                 {/* 头像 */}
                 <div className="relative">
@@ -134,10 +134,10 @@ export default function RecommendedAnchors() {
                     <img
                       src={fixImageUrl(anchor.face)}
                       alt=""
-                      className="w-14 h-14 rounded-full object-cover ring-2 ring-white shadow-sm group-hover:ring-black/5 transition"
+                      className="w-12 h-12 rounded-full object-cover ring-2 ring-white shadow-sm group-hover:ring-black/5 transition"
                     />
                   ) : (
-                    <div className="w-14 h-14 rounded-full bg-black/5 flex items-center justify-center text-2xl ring-2 ring-white shadow-sm">
+                    <div className="w-12 h-12 rounded-full bg-black/5 flex items-center justify-center text-xl ring-2 ring-white shadow-sm">
                       👤
                     </div>
                   )}
@@ -145,7 +145,7 @@ export default function RecommendedAnchors() {
                 </div>
                 {/* 昵称 */}
                 <div className="w-full text-center">
-                  <span className="text-xs font-medium text-black/75 truncate max-w-full block leading-tight group-hover:text-black/90 transition">
+                  <span className="text-[11px] font-medium text-black/75 truncate max-w-full block leading-tight group-hover:text-black/90 transition">
                     {anchor.uname}
                   </span>
                 </div>
@@ -167,8 +167,7 @@ export default function RecommendedAnchors() {
           >
             {/* 标题 */}
             <div className="bg-gradient-to-r from-[#ff9a9e] via-[#fecfef] to-[#a18cd1] px-5 py-3 flex items-center justify-center gap-2">
-              <span className="text-white text-lg">💗</span>
-              <span className="text-white font-bold text-sm">关于主播推荐</span>
+              <span className="text-white font-bold text-sm">主播推荐</span>
             </div>
 
             <div className="p-5">

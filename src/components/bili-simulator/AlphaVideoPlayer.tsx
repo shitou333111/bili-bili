@@ -128,8 +128,8 @@ export default function AlphaVideoPlayer({ src, config, onEnded }: AlphaVideoPla
     >
       <canvas
         ref={canvasRef}
-        className="max-w-full max-h-full object-contain"
-        style={{ imageRendering: "auto" }}
+        className="w-full h-auto"
+        style={{ imageRendering: "auto", maxHeight: "100%" }}
       />
     </div>
   );

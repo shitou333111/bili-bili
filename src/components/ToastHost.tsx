@@ -18,7 +18,7 @@ export default function ToastHost() {
       setMsg(message);
       setVisible(true);
       if (timerRef.current) window.clearTimeout(timerRef.current);
-      timerRef.current = window.setTimeout(() => setVisible(false), 1800);
+      timerRef.current = window.setTimeout(() => setVisible(false), 5000);
     });
     return () => {
       unsub();

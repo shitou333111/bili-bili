@@ -43,7 +43,7 @@ export async function GET(request: Request) {
   const deviceToken = queryDeviceToken || cookieDeviceToken || null;
 
   const state = await readState();
-  // 本机会话（bili-live-state.json 只存本机登录账号）。
+  // 本机会话（web-login-state.json 只存本机登录账号）。
   const localSessions = deviceToken
     ? state.sessions.filter((s) => s.userToken === deviceToken)
     : [];

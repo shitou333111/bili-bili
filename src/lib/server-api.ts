@@ -5,7 +5,7 @@
  * - Tauri 模式：前端是静态文件，需将 /api/... 转发到服务器（NEXT_PUBLIC_SERVER_URL）
  */
 
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.31.100:3000";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
 
 /** 检测是否在 Tauri 环境 */
 export function isTauri(): boolean {

@@ -166,8 +166,17 @@ async function dispatchNative(
       return jsonResponse({ code: 0 });
     }
     default:
-      // 未客户端化的辅助路径回退到服务器
-      return fetch(serverApiUrl(path), { cache: "no-store", ...init });
+      // 未客户端化的辅助路径回退到服务器（带超时，避免服务器不可达时长时间挂起）
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      try {
+        const res = await fetch(serverApiUrl(path), { cache: "no-store", signal: ctrl.signal, ...init });
+        return res;
+      } catch {
+        return jsonResponse({ code: -1, message: "服务器不可达，请检查网络或服务器状态" });
+      } finally {
+        clearTimeout(timer);
+      }
   }
 }
 
@@ -179,7 +188,15 @@ export async function dataFetch(
 ): Promise<Response> {
   const platform = await getPlatform();
   if (!platform.isNative) {
-    return fetch(serverApiUrl(path), { cache: "no-store", ...init });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    try {
+      return await fetch(serverApiUrl(path), { cache: "no-store", signal: ctrl.signal, ...init });
+    } catch {
+      return jsonResponse({ code: -1, message: "服务器不可达，请检查网络或服务器状态" });
+    } finally {
+      clearTimeout(timer);
+    }
   }
   return dispatchNative(platform, path, init, onProgress);
 }

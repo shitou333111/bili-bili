@@ -1055,7 +1055,7 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
               className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl max-h-[80vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="text-sm font-semibold text-black/80 mb-3">使用说明</div>
+              <div className="text-sm font-semibold text-black/80 mb-3 text-center">使用说明</div>
               <ol className="space-y-3 text-xs text-black/70 leading-relaxed list-none">
                 <li className="flex gap-2">
                   <span className="text-black/30 flex-shrink-0">1.</span>

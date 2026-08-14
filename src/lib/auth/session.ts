@@ -4,7 +4,7 @@ import path from "path";
 import { saveAccountInfo } from "@/lib/user-data";
 
 const STATE_DIR = path.join(process.cwd(), ".data");
-const STATE_FILE = path.join(STATE_DIR, "bili-live-state.json");
+const STATE_FILE = path.join(STATE_DIR, "web-login-state.json");
 const SESSION_COOKIE_NAME = "bili_live_sid";
 const USER_TOKEN_COOKIE_NAME = "bili_live_user_token";
 

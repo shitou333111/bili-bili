@@ -302,6 +302,17 @@ fn real_activity_title_bar_script(title: &str) -> String {
   if (window.__BILI_REAL_ACTIVITY_TITLEBAR__) return;
   window.__BILI_REAL_ACTIVITY_TITLEBAR__ = true;
   var TITLE = '{escaped}';
+  var _st = 0;
+  try {{ _st = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0; }} catch(e) {{}}
+  if (!_st) {{
+    try {{
+      var st = env(safe-area-inset-top, 0px);
+      _st = parseInt(st) || 0;
+    }} catch(e) {{}}
+  }}
+  var SAFE_TOP = _st || 0;
+  var BAR_H = 44;
+  var TOTAL_H = BAR_H + SAFE_TOP;
   function mount() {{
     try {{
       if (!document.body) return false;
@@ -311,20 +322,20 @@ fn real_activity_title_bar_script(title: &str) -> String {
       mask = document.createElement("div");
       mask.id = "__bili_real_titlebar_mask__";
       mask.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:44px;z-index:2147483645;" +
+        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;z-index:2147483645;" +
         "background:#000;pointer-events:none;";
       var bar = document.createElement("div");
       bar.id = "__bili_real_titlebar__";
       bar.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:44px;z-index:2147483646;" +
-        "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:44px;" +
+        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;padding-top:" + SAFE_TOP + "px;z-index:2147483646;" +
+        "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;" +
         "display:flex;align-items:center;justify-content:center;";
       // 返回按钮
       var backBtn = document.createElement("div");
       backBtn.style.cssText =
-        "position:absolute;left:12px;top:0;bottom:0;width:44px;display:flex;" +
+        "position:absolute;left:12px;top:" + SAFE_TOP + "px;bottom:0;width:44px;display:flex;" +
         "align-items:center;justify-content:center;cursor:pointer;";
       backBtn.innerHTML =
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
@@ -341,7 +352,7 @@ fn real_activity_title_bar_script(title: &str) -> String {
       document.body.style.backgroundColor = "#000";
       document.body.appendChild(mask);
       document.body.appendChild(bar);
-      document.body.style.paddingTop = "44px";
+      document.body.style.paddingTop = TOTAL_H + "px";
       return true;
     }} catch (e) {{ return false; }}
   }}
@@ -351,8 +362,8 @@ fn real_activity_title_bar_script(title: &str) -> String {
       var bar = document.getElementById("__bili_real_titlebar__");
       var mask = document.getElementById("__bili_real_titlebar_mask__");
       if (!bar || !mask) mount();
-      if (document.body.style.paddingTop !== "44px") {{
-        document.body.style.paddingTop = "44px";
+      if (document.body.style.paddingTop !== TOTAL_H + "px") {{
+        document.body.style.paddingTop = TOTAL_H + "px";
       }}
     }} catch (e) {{}}
   }}

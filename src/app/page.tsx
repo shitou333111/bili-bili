@@ -879,9 +879,23 @@ export default function HomePage() {
 
   // 栈空时拦截一次并提示"再按一次退出"（防止误触直接退出）
   const exitToastTimer = useRef<number | null>(null);
+  const simulatorOpenRef = useRef(simulatorOpen);
+  useEffect(() => { simulatorOpenRef.current = simulatorOpen; }, [simulatorOpen]);
+
+  // 当模拟器打开时 push history 记录，使安卓返回键能触发 popstate 关闭模拟器
+  useEffect(() => {
+    if (simulatorOpen) {
+      window.history.pushState({ __inApp: true }, "");
+    }
+  }, [simulatorOpen]);
 
   useEffect(() => {
     const onPopState = () => {
+      // 先检查模拟器是否打开
+      if (simulatorOpenRef.current) {
+        setSimulatorOpen(false);
+        return;
+      }
       if (navStackRef.current.length > 0) {
         const prev = navStackRef.current.pop()!;
         setActiveModule(prev.module as any);
@@ -2667,11 +2681,11 @@ export default function HomePage() {
 
       {/* 模拟页 - B站直播送礼模拟器入口 */}
       <div style={{ display: activeModule === "pending" ? "block" : "none" }}>
-        <div className="content-wrapper px-2 min-w-0 py-3">
-          <div className="rounded-xl border border-black/10 bg-white/85 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+        <div className="content-wrapper px-2 min-w-0 py-6">
+          <div className="rounded-xl border border-black/10 bg-white/85 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
             <div className="text-center mb-6">
-              <h2 className="text-lg font-semibold text-black/80 mb-2">B站直播模拟器</h2>
-              <p className="text-xs text-black/50 leading-relaxed whitespace-pre-line">
+              <h2 className="text-xl font-semibold text-black/80 mb-2">B站直播模拟器</h2>
+              <p className="text-sm text-black/50 leading-relaxed whitespace-pre-line">
                 {"开启神豪模式，所有礼物随便送，合成活动随便玩😄\n输入主播UID，可以加载真实直播画面作为背景"}
               </p>
             </div>
@@ -2688,10 +2702,10 @@ export default function HomePage() {
                   }
                 }}
                 placeholder="输入主播UID（可选）"
-                className="w-full px-4 py-3 rounded-xl border border-black/10 bg-white text-sm text-black/80 focus:outline-none focus:border-[#FF6699] focus:ring-2 focus:ring-pink-100 transition-all"
+                className="w-full px-4 py-3 rounded-xl border border-black/10 bg-white text-base text-black/80 focus:outline-none focus:border-[#FF6699] focus:ring-2 focus:ring-pink-100 transition-all"
               />
               {simError && (
-                <p className="mt-2 text-xs text-red-500">{simError}</p>
+                <p className="mt-2 text-sm text-red-500">{simError}</p>
               )}
               <button
                 onClick={() => {
@@ -2700,7 +2714,7 @@ export default function HomePage() {
                   }
                 }}
                 disabled={simLoading}
-                className="w-full mt-3 bg-gradient-to-r from-[#555] to-[#333] text-white text-sm font-medium py-2.5 px-6 rounded-lg shadow-md active:scale-98 transition-all disabled:opacity-50"
+                className="w-full mt-3 bg-gradient-to-r from-[#555] to-[#333] text-white text-base font-medium py-3 px-6 rounded-lg shadow-md active:scale-98 transition-all disabled:opacity-50"
               >
                 {simLoading ? "加载中..." : "进入模拟器"}
               </button>
@@ -2709,7 +2723,7 @@ export default function HomePage() {
             {/* 历史记录 */}
             {simHistory.length > 0 && (
               <div className="mb-6">
-                <p className="text-xs text-black/40 mb-2 font-medium">历史记录</p>
+                <p className="text-sm text-black/40 mb-2 font-medium">历史记录</p>
                 <div className="flex flex-wrap gap-2">
                   {simHistory.map((entry) => (
                     <button
