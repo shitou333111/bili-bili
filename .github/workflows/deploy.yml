@@ -2,7 +2,7 @@ name: Deploy & Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, native-client ]
   workflow_dispatch:
     inputs:
       server_url:
