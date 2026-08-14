@@ -1,0 +1,97 @@
+# ============================================================
+# B瓜 · nginx 站点配置（示例）
+# ============================================================
+# 适用场景：
+#   app.bili-bili.icu   -> Next.js 应用（反向代理到本机 127.0.0.1:3000）
+#   bili-bili.icu       -> landing 介绍页（内部改写到 /landing）
+#   /artifacts/         -> CI 发布的三平台安装包（静态文件直出）
+#
+# 使用前请替换以下占位符：
+#   YOUR_SSH_TARGET_DIR  -> 服务器上 CI 上传产物的目录（即 GitHub Secrets 中
+#                           SSH_TARGET_DIR 的值，例如 /opt/bili_live 或
+#                          /home/deploy/bili_live），下载链接依赖它。
+#
+# 安装/启用步骤：
+#   1. 本文件内容放入服务器 /etc/nginx/sites-available/bili-bili.icu.conf
+#   2. 创建软链启用：ln -s /etc/nginx/sites-available/bili-bili.icu.conf /etc/nginx/sites-enabled/
+#   3. 申请证书（一次性，会同时覆盖三个域名）：
+#        certbot certonly --nginx -d bili-bili.icu -d www.bili-bili.icu -d app.bili-bili.icu
+#      （若 certbot 已自动改写本配置并填好证书路径，可跳过第 4 步的证书行）
+#   4. 校验并重载：nginx -t && systemctl reload nginx
+# ============================================================
+
+# ==================== HTTP -> HTTPS 统一跳转 ====================
+server {
+    listen 80;
+    listen [::]:80;
+    server_name bili-bili.icu www.bili-bili.icu app.bili-bili.icu;
+
+    # certbot 申请证书时的临时校验入口（首次申请后再申请续期也需要它）
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    return 301 https://$host$request_uri;
+}
+
+# ==================== 主域名 bili-bili.icu（landing 介绍页） ====================
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name bili-bili.icu www.bili-bili.icu;
+
+    # ---- 证书（certbot certonly 后会生成，请确认路径）----
+    ssl_certificate     /etc/letsencrypt/live/bili-bili.icu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bili-bili.icu/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # ---- 1) 安装包下载：静态文件直出（CI 上传的 artifacts 目录）----
+    # 页面上的下载链接: https://bili-bili.icu/artifacts/current_exe|current_apk|current_ipa
+    # current_* 是 CI 维护的软链，指向 release-<时间戳>/ 里最新安装包，nginx 默认跟随软链。
+    location /artifacts/ {
+        alias YOUR_SSH_TARGET_DIR/artifacts/;
+        # 强制以附件下载，避免浏览器直接预览
+        add_header Content-Disposition "attachment";
+    }
+
+    # ---- 2) 其余全部请求（含 Next.js 静态资源 /_next/ 等）----
+    # 首页 "/" 内部改写成 /landing，URL 地址栏保持 bili-bili.icu/ 不变；
+    # 其他路径（/_next/、/favicon.ico 等）原样透传给 Next.js，保证页面资源正常加载。
+    location / {
+        rewrite ^/$ /landing break;
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+
+# ==================== 应用子域名 app.bili-bili.icu（B瓜 主应用） ====================
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name app.bili-bili.icu;
+
+    # ---- 证书（与主域名共用同一张多域名证书）----
+    ssl_certificate     /etc/letsencrypt/live/bili-bili.icu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bili-bili.icu/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # 允许较大的请求体（应用有 /api/upload 上传接口，默认 1m 会 413）
+    client_max_body_size 20m;
+
+    # ---- 反向代理到 Next.js（pm2 启动的 server.js，监听 127.0.0.1:3000）----
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        # 若后端使用 WebSocket（当前未用到，保留以备将来）
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}

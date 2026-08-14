@@ -432,3 +432,101 @@ jobs:
           path: |
             src-tauri/gen/apple/build/*/*.ipa
             src-tauri/gen/ios/build/*/*.ipa
+
+  # ==================== 发布客户端产物到服务器 ====================
+  # 将 exe/apk/ipa 三种平台产物按构建时间打包发布到服务器：
+  #   ${TARGET_DIR}/artifacts/release-<构建时间戳>/  -> 本次 run 的所有平台产物（归组）
+  #   ${TARGET_DIR}/artifacts/current_exe            -> 指向最新 exe
+  #   ${TARGET_DIR}/artifacts/current_apk            -> 指向最新 apk
+  #   ${TARGET_DIR}/artifacts/current_ipa            -> 指向最新 ipa
+  # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
+  # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 10 个。
+  publish-artifacts:
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa')) }}
+    needs: [build-exe, build-apk, build-ipa]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "bili-live-*"
+          path: artifacts-dl
+          if-no-files-found: ignore
+
+      - name: Resolve build timestamp (shared across run)
+        id: ts
+        run: |
+          TS_RAW="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            | jq -r '.created_at')"
+          # 2026-08-15T03:46:59Z -> 20260815-034659
+          BUILD_TS="$(echo "${TS_RAW}" | tr -d ':-' | tr 'T' '-' | cut -c1-15)"
+          # 兜底：API 失败时退回本机 UTC 时间
+          if [ -z "${BUILD_TS}" ]; then
+            BUILD_TS="$(date -u +%Y%m%d-%H%M%S)"
+          fi
+          echo "BUILD_TS=${BUILD_TS}"
+          echo "BUILD_TS=${BUILD_TS}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare publish files
+        id: prepare
+        run: |
+          set -e
+          mkdir -p publish
+          EXE="$(find artifacts-dl -type f -name '*.exe' | head -n1 || true)"
+          # APK 优先取 universal 变体（避免同时存在通用包/特定包时选错）
+          APK="$(find artifacts-dl -type f -name '*.apk' | grep universal | head -n1 || true)"
+          [ -n "${APK}" ] || APK="$(find artifacts-dl -type f -name '*.apk' | head -n1 || true)"
+          IPA="$(find artifacts-dl -type f -name '*.ipa' | head -n1 || true)"
+          if [ -n "${EXE}" ]; then cp "${EXE}" publish/; fi
+          if [ -n "${APK}" ]; then cp "${APK}" publish/; fi
+          if [ -n "${IPA}" ]; then cp "${IPA}" publish/; fi
+          echo "发布文件:"
+          ls -la publish/
+          echo "HAS_FILES=$([ -n "$(ls -A publish 2>/dev/null)" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts to server (staging)
+        if: steps.prepare.outputs.HAS_FILES == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: publish/*
+          target: /tmp/bili_live-artifacts
+          overwrite: true
+          strip_components: 1
+
+      - name: Atomic publish on server
+        if: steps.prepare.outputs.HAS_FILES == 'true'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 10m
+          script: |
+            set -e
+            TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
+            ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
+            RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
+            mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
+            cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            # 更新各平台 current 链接（仅当本次含该平台产物时更新，其余保持指向旧版）
+            if ls "${RELEASE_DIR}"/*.exe >/dev/null 2>&1; then
+              ln -sfn "$(ls "${RELEASE_DIR}"/*.exe | head -n1)" "${ARTIFACTS_DIR}/current_exe"
+            fi
+            if ls "${RELEASE_DIR}"/*.apk >/dev/null 2>&1; then
+              ln -sfn "$(ls "${RELEASE_DIR}"/*.apk | head -n1)" "${ARTIFACTS_DIR}/current_apk"
+            fi
+            if ls "${RELEASE_DIR}"/*.ipa >/dev/null 2>&1; then
+              ln -sfn "$(ls "${RELEASE_DIR}"/*.ipa | head -n1)" "${ARTIFACTS_DIR}/current_ipa"
+            fi
+            echo "发布完成 -> ${RELEASE_DIR}"
+            ls -la "${RELEASE_DIR}"
+            echo "artifacts 目录:"
+            ls -la "${ARTIFACTS_DIR}"
+            # 清理旧版本，保留最近 10 个
+            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | xargs -r rm -rf
