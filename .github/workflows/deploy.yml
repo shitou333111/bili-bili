@@ -79,6 +79,12 @@ jobs:
           mkdir -p deploy-dist/.next/static
           cp -r .next/static/. deploy-dist/.next/static/
 
+          # 关键：Next.js 16 + Turbopack 的 standalone 产物缺少 .next/server/chunks
+          # （SSR chunks），server.js 运行时 require 不到会全站 500（Cannot find module）。
+          # 从完整构建输出补入，修复部署后无法加载 SSR chunk 的问题。
+          mkdir -p deploy-dist/.next/server
+          cp -r .next/server/chunks deploy-dist/.next/server/chunks
+
           # 复制 public 目录
           if [ -d public ]; then
             cp -r public/. deploy-dist/public/
@@ -96,6 +102,13 @@ jobs:
           overwrite: true
           strip_components: 1
 
+      # 在 runner 上解析版本名（GITHUB_RUN_ID/ATTEMPT 只存在于 runner，
+      # 不能直接在 ssh 脚本里用 ${GITHUB_RUN_ID}，否则到服务器上被展开为空值，
+      # 导致所有版本都落到 release-- 目录，原子版本管理失效）
+      - name: Resolve release name
+        id: release-name
+        run: echo "RELEASE_NAME=release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: Atomic deploy on server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -108,7 +121,7 @@ jobs:
             set -e
             TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
             RELEASES_DIR="${TARGET_DIR}/.releases"
-            RELEASE_DIR="${RELEASES_DIR}/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            RELEASE_DIR="${RELEASES_DIR}/${{ steps.release-name.outputs.RELEASE_NAME }}"
             CURRENT_DIR="${TARGET_DIR}/current"
             PRESERVE_DIR="${TARGET_DIR}/preserved"
             LAST_RELEASE="$(ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | head -n 1 || true)"
@@ -453,16 +466,18 @@ jobs:
           path: artifacts-dl
           if-no-files-found: ignore
 
-      - name: Resolve build timestamp (shared across run)
+      - name: Resolve build timestamp
         id: ts
         run: |
           TS_RAW="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            | jq -r '.created_at')"
+            | jq -r '.created_at' 2>/dev/null || true)"
           # 2026-08-15T03:46:59Z -> 20260815-034659
           BUILD_TS="$(echo "${TS_RAW}" | tr -d ':-' | tr 'T' '-' | cut -c1-15)"
-          # 兜底：API 失败时退回本机 UTC 时间
-          if [ -z "${BUILD_TS}" ]; then
+          # 必须校验为合法时间戳（YYYYMMDD-HHMMSS）。
+          # 注意：API 失败时 jq -r '.created_at' 会输出字面字符串 "null"（非空），
+          # 之前用 [ -z ] 只判断空串拦不住它，导致 release-null。
+          if ! [[ "${BUILD_TS}" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
             BUILD_TS="$(date -u +%Y%m%d-%H%M%S)"
           fi
           echo "BUILD_TS=${BUILD_TS}"
