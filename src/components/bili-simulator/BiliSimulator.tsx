@@ -576,7 +576,7 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   }
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)" }}>
+    <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
       {/* 直播流背景（最底层） */}
       {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} />}
       {!streamerInfo && <div className="absolute inset-0 bg-[#2B1F2B]" />}

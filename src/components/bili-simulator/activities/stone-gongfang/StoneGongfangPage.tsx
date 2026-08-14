@@ -8,6 +8,26 @@ import { mockDraw, mockReplace, mockCompose, slotTotal } from "./mockApi";
 import type { SlotState } from "./mockApi";
 import type { ActivityGiftInfo } from "../mock/types";
 
+/** 强制设置安全区 CSS 变量（业务组件先于 SafeAreaStyler 挂载时兜底） */
+function ensureSafeVars() {
+  if (typeof document === "undefined") return;
+  const doc = document.documentElement;
+  if (!doc.style.getPropertyValue("--safe-top")) {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isTauri = "__TAURI_INTERNALS__" in window;
+    if (isTauri && isIOS) {
+      doc.style.setProperty("--safe-top", "calc(env(safe-area-inset-top, 47px) - 3px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 34px)");
+    } else if (isTauri) {
+      doc.style.setProperty("--safe-top", "env(safe-area-inset-top, 24px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 16px)");
+    } else if (isIOS) {
+      doc.style.setProperty("--safe-top", "env(safe-area-inset-top, 24px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 16px)");
+    }
+  }
+}
+
 /** 解析接口返回的 slot_info 字符串 -> 槽位状态 */
 function parseSlotInfo(str: string): SlotState {
   try {
@@ -30,6 +50,8 @@ function slotColor(v: number): string {
 const INIT_BALANCE = 100000; // 模拟电池余额
 
 function StoneGongfangPage({ config, onBack, userName = "我" }: ActivityPageProps) {
+  // 组件挂载时提前确保安全区变量已设置（比 SafeAreaStyler 的 useEffect 更早）
+  ensureSafeVars();
   const [slots, setSlots] = useState<SlotState>(() => {
     const s: SlotState = {};
     for (let i = 1; i <= STONE_GONGFANG.slotCount; i++) {
@@ -112,7 +134,7 @@ function StoneGongfangPage({ config, onBack, userName = "我" }: ActivityPagePro
   // ==================== iframe 模式（原生客户端：原生层拦截 mock） ====================
   if (config.mode === "iframe") {
     return (
-      <div className="fixed inset-0 z-[70] bg-black flex flex-col" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)" }}>
+      <div className="fixed inset-0 z-[70] bg-black flex flex-col" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
         <div className="relative flex items-center px-3 h-11 bg-black/80 z-10">
           <button onClick={onBack} className="text-white/90 text-xl leading-none p-1">
             ‹
@@ -136,7 +158,7 @@ function StoneGongfangPage({ config, onBack, userName = "我" }: ActivityPagePro
   const total = slotTotal(slots);
 
   return (
-    <div className="fixed inset-0 z-[70] bg-[#1c1530] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)" }}>
+    <div className="fixed inset-0 z-[70] bg-[#1c1530] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
       <style>{`
         @keyframes marquee {
           0% { transform: translateX(100%); }

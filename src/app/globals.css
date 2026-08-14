@@ -15,6 +15,9 @@
 
 * {
   box-sizing: border-box;
+  /* 禁用长按系统菜单（iOS 长按图片/链接弹出"拷贝/共享"等） */
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 
 /* 隐藏滚动条（保留滚动功能） */

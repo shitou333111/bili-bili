@@ -30,13 +30,14 @@ concurrency:
 # 关键词 "debug" 使所有客户端构建使用 Debug 包（对 server 部署无影响）。
 #
 # 服务器地址优先级（仅客户端构建用）：
-#   1. workflow_dispatch 时手动输入的 server_url
-#   2. GitHub Secrets 中的 NEXT_PUBLIC_SERVER_URL
-#   3. 默认值 http://192.168.1.2:3000（本地测试用）
+#   1. commit 含 "local" 关键字 → 强制使用 http://192.168.1.2:3000（本地开发）
+#   2. workflow_dispatch 时手动输入的 server_url
+#   3. GitHub Secrets 中的 NEXT_PUBLIC_SERVER_URL
+#   4. 默认值 http://192.168.1.2:3000（本地测试用）
 # 请在 GitHub Settings → Secrets and variables → Actions 中配置 NEXT_PUBLIC_SERVER_URL
 
 env:
-  SERVER_URL: ${{ inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL || 'http://192.168.1.2:3000' }}
+  SERVER_URL: ${{ (github.event_name == 'push' && contains(github.event.head_commit.message, 'local')) && 'http://192.168.1.2:3000' || inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL || 'http://192.168.1.2:3000' }}
   # commit message 含 debug 或手动勾选 debug → true（Debug 包），否则 false（Release 包）
   IS_DEBUG: ${{ (github.event_name == 'workflow_dispatch' && inputs.debug == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'debug')) }}
 
