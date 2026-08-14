@@ -26,45 +26,44 @@ export default function SafeAreaStyler() {
     let safeTop = "0px";
     let safeBottom = "0px";
     let dockBottom = "16px";
+    // 活动页/黑抽页顶部固定偏移：避免活动内容直接贴在模拟器顶部栏
+    let activityTop = "100px";
 
     if (isTauri) {
       if (isIOS) {
-        // iOS：刘海 + Home indicator，顶部安全距离（在实测值基础上减3px，避免与通知栏间空白过大）；
-        // 托盘栏上移：上一版误用了"减小 bottom"导致反而下移3px，从 9px 增大到 15px（净上移6px），
-        // 再上移 3px → 18px，满足"只调 iOS 向上移动3px"
         safeTop = "calc(env(safe-area-inset-top, 47px) - 3px)";
-        // 底部 Home Indicator 安全距离
-        safeBottom = "env(safe-area-inset-bottom, 34px)";
-        // 再上移 2px：15→18→20→22
+        safeBottom = "env(safe-area-inset-bottom, 20px)";
         dockBottom = "24px";
+        activityTop = "80px";
       } else if (isAndroid) {
-        // Android：状态栏，留少量安全距离，托盘栏上移（增大 bottom），避免偏低
         safeTop = "env(safe-area-inset-top, 24px)";
-        // Android 底部导航栏安全距离
-        safeBottom = "env(safe-area-inset-bottom, 16px)";
+        safeBottom = "env(safe-area-inset-bottom, 8px)";
         dockBottom = "26px";
+        activityTop = "80px";
       } else {
-        // 桌面 Tauri：无通知栏
         safeTop = "0px";
         safeBottom = "0px";
         dockBottom = "16px";
+        activityTop = "100px";
       }
     } else {
-      // Web 浏览器：移动端走安全区，桌面无
       if (isIOS || isAndroid) {
         safeTop = "env(safe-area-inset-top, 24px)";
-        safeBottom = "env(safe-area-inset-bottom, 16px)";
+        safeBottom = "env(safe-area-inset-bottom, 8px)";
         dockBottom = "16px";
+        activityTop = "80px";
       } else {
         safeTop = "0px";
         safeBottom = "0px";
         dockBottom = "16px";
+        activityTop = "100px";
       }
     }
 
     doc.style.setProperty("--safe-top", safeTop);
     doc.style.setProperty("--safe-bottom", safeBottom);
     doc.style.setProperty("--dock-bottom", dockBottom);
+    doc.style.setProperty("--activity-top", activityTop);
   }, []);
 
   return null;

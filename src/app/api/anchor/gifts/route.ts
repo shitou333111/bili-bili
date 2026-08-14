@@ -369,14 +369,14 @@ function recordKey(r: GiftRecord): string {
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 /** 并发获取月度数据的并发数 */
-const MONTH_CONCURRENCY = 1;
+const MONTH_CONCURRENCY = 2;
 
 /** 页面请求失败时的重试次数（page=0用5次，翻页用3次） */
 const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 
 /** 连续请求间隔（ms），避免触发B站限流 */
-const REQUEST_INTERVAL_MS = 1500;
+const REQUEST_INTERVAL_MS = 500;
 
 /** 412限流后的冷却间隔（ms） */
 const RATE_LIMIT_COOLDOWN_MS = 30_000;

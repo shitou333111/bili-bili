@@ -12,18 +12,23 @@ import type { ActivityGiftInfo } from "../mock/types";
 function ensureSafeVars() {
   if (typeof document === "undefined") return;
   const doc = document.documentElement;
-  if (!doc.style.getPropertyValue("--safe-top")) {
+  if (!doc.style.getPropertyValue("--activity-top")) {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     const isTauri = "__TAURI_INTERNALS__" in window;
     if (isTauri && isIOS) {
       doc.style.setProperty("--safe-top", "calc(env(safe-area-inset-top, 47px) - 3px)");
-      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 34px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 20px)");
+      doc.style.setProperty("--activity-top", "80px");
     } else if (isTauri) {
       doc.style.setProperty("--safe-top", "env(safe-area-inset-top, 24px)");
-      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 16px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 8px)");
+      doc.style.setProperty("--activity-top", "80px");
     } else if (isIOS) {
       doc.style.setProperty("--safe-top", "env(safe-area-inset-top, 24px)");
-      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 16px)");
+      doc.style.setProperty("--safe-bottom", "env(safe-area-inset-bottom, 8px)");
+      doc.style.setProperty("--activity-top", "80px");
+    } else {
+      doc.style.setProperty("--activity-top", "100px");
     }
   }
 }
@@ -134,7 +139,7 @@ function StoneGongfangPage({ config, onBack, userName = "我" }: ActivityPagePro
   // ==================== iframe 模式（原生客户端：原生层拦截 mock） ====================
   if (config.mode === "iframe") {
     return (
-      <div className="fixed inset-0 z-[70] bg-black flex flex-col" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
+      <div className="fixed inset-0 z-[70] bg-black flex flex-col" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--activity-top, 100px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
         <div className="relative flex items-center px-3 h-11 bg-black/80 z-10">
           <button onClick={onBack} className="text-white/90 text-xl leading-none p-1">
             ‹
@@ -158,7 +163,7 @@ function StoneGongfangPage({ config, onBack, userName = "我" }: ActivityPagePro
   const total = slotTotal(slots);
 
   return (
-    <div className="fixed inset-0 z-[70] bg-[#1c1530] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
+    <div className="fixed inset-0 z-[70] bg-[#1c1530] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--activity-top, 100px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
       <style>{`
         @keyframes marquee {
           0% { transform: translateX(100%); }

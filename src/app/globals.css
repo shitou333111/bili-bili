@@ -17,7 +17,19 @@
   box-sizing: border-box;
   /* 禁用长按系统菜单（iOS 长按图片/链接弹出"拷贝/共享"等） */
   -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
   touch-action: manipulation;
+}
+/* 允许输入框内的文本选择 */
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+/* 禁用上下文菜单（桌面浏览器右键、长按弹出菜单） */
+body {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* 隐藏滚动条（保留滚动功能） */

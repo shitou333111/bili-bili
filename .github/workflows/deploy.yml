@@ -398,6 +398,14 @@ jobs:
           # 允许通过"文件"App 访问应用文档（便于导出 JSON 等）
           add_key "UIFileSharingEnabled" "bool" "true"
           add_key "LSSupportsOpeningDocumentsInPlace" "bool" "true"
+          # 设置应用语言为中文（确保系统对话框、长按菜单等显示中文）
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleDevelopmentRegion" "$APP_PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string zh_CN" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleLocalizations" "$APP_PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations array" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:0 string zh_CN" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:1 string en" "$APP_PLIST"
+          echo "Set locale: CFBundleDevelopmentRegion=zh_CN, CFBundleLocalizations=[zh_CN, en]"
 
       - name: Build iOS IPA
         run: |
