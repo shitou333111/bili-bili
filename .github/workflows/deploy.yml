@@ -183,9 +183,6 @@ jobs:
   build-exe:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'exe')) }}
     runs-on: windows-latest
-    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
-    env:
-      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -206,7 +203,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
+      # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在步骤级提供
       - name: Build Windows EXE
+        env:
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         shell: bash
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
@@ -233,9 +233,6 @@ jobs:
   build-apk:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'apk')) }}
     runs-on: ubuntu-latest
-    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
-    env:
-      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -283,11 +280,13 @@ jobs:
       - name: Generate app icons for Android
         run: npx tauri icon public/orig_icon.png
 
+      # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在步骤级提供
       - name: Build Android APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           JAVA_HOME: ${{ env.JAVA_HOME }}
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
             npx tauri android build --target aarch64 --debug
@@ -341,9 +340,6 @@ jobs:
   build-ipa:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'ipa')) }}
     runs-on: macos-latest
-    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
-    env:
-      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -418,7 +414,10 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:1 string en" "$APP_PLIST"
           echo "Set locale: CFBundleDevelopmentRegion=zh_CN, CFBundleLocalizations=[zh_CN, en]"
 
+      # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在步骤级提供
       - name: Build iOS IPA
+        env:
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
             npx tauri ios build --target aarch64 --no-sign --debug
