@@ -183,6 +183,9 @@ jobs:
   build-exe:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'exe')) }}
     runs-on: windows-latest
+    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
+    env:
+      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -196,24 +199,20 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Tauri CLI (Rust)
-        run: cargo install tauri-cli --locked
+      # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
-
-      - name: Build frontend
-        env:
-          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
-        run: npm run build:tauri
 
       - name: Build Windows EXE
         shell: bash
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
-            cargo tauri build --no-bundle --debug
+            npx tauri build --no-bundle --debug
           else
-            cargo tauri build --no-bundle
+            npx tauri build --no-bundle
           fi
 
       - name: Upload EXE (debug)
@@ -234,6 +233,9 @@ jobs:
   build-apk:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'apk')) }}
     runs-on: ubuntu-latest
+    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
+    env:
+      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -260,8 +262,9 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      - name: Install Tauri CLI (Rust)
-        run: cargo install tauri-cli --locked
+      # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Linux dependencies
         run: |
@@ -271,19 +274,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
-      - name: Build frontend
-        env:
-          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
-        run: npm run build:tauri
-
       - name: Replace default icon with custom icon
         run: cp public/orig_icon.png app-icon.png
 
       - name: Init Android project
-        run: cargo tauri android init
+        run: npx tauri android init
 
       - name: Generate app icons for Android
-        run: cargo tauri icon public/orig_icon.png
+        run: npx tauri icon public/orig_icon.png
 
       - name: Build Android APK
         env:
@@ -292,9 +290,9 @@ jobs:
           JAVA_HOME: ${{ env.JAVA_HOME }}
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
-            cargo tauri android build --target aarch64 --debug
+            npx tauri android build --target aarch64 --debug
           else
-            cargo tauri android build --target aarch64
+            npx tauri android build --target aarch64
           fi
 
       # Debug 包已用 debug keystore 自动签名；仅 Release 包需要手动签名
@@ -343,6 +341,9 @@ jobs:
   build-ipa:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, 'ipa')) }}
     runs-on: macos-latest
+    # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在 job 级提供
+    env:
+      NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -358,25 +359,21 @@ jobs:
         with:
           targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
 
-      - name: Install Tauri CLI (Rust)
-        run: cargo install tauri-cli --locked
+      # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
-
-      - name: Build frontend
-        env:
-          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
-        run: npm run build:tauri
 
       - name: Replace default icon with custom icon
         run: cp public/orig_icon.png app-icon.png
 
       - name: Init iOS project
-        run: cargo tauri ios init
+        run: npx tauri ios init
 
       - name: Generate app icons for iOS
-        run: cargo tauri icon public/orig_icon.png
+        run: npx tauri icon public/orig_icon.png
 
       - name: Configure iOS Info.plist permissions
         shell: bash
@@ -424,9 +421,9 @@ jobs:
       - name: Build iOS IPA
         run: |
           if [ "$IS_DEBUG" = "true" ]; then
-            cargo tauri ios build --target aarch64 --no-sign --debug
+            npx tauri ios build --target aarch64 --no-sign --debug
           else
-            cargo tauri ios build --target aarch64 --no-sign
+            npx tauri ios build --target aarch64 --no-sign
           fi
 
       - name: Upload IPA (debug)
