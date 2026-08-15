@@ -29,6 +29,7 @@ import BiliSimulator from "@/components/bili-simulator/BiliSimulator";
 import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type StreamerInfo, type HistoryEntry } from "@/components/bili-simulator/liveStream";
 import RealActivityModal from "@/components/RealActivityModal";
 import RecommendedAnchors from "@/components/RecommendedAnchors";
+import WindowTitleBar from "@/components/WindowTitleBar";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
 async function closeApp() {
@@ -2082,6 +2083,8 @@ export default function HomePage() {
 
   return (
     <main className="page-main flex flex-col min-h-0 bg-[#f5f5f5] text-[#1f1c17]">
+      {/* PC 端自定义窗口标题栏（仅 Tauri 桌面环境显示）：含置顶 / 最小化 / 最大化 / 关闭 */}
+      <WindowTitleBar />
       {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden relative pb-24 page-scroll-area" style={{ overscrollBehavior: "none" }}>
 

@@ -6,6 +6,10 @@
   },
   "permissions": [
     "core:default",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
     "allow-fetch-json",
     "allow-debug-acl",
     "allow-open-activity-panel",

@@ -41,7 +41,8 @@ export default function SafeAreaStyler() {
         dockBottom = "26px";
         activityTop = "80px";
       } else {
-        safeTop = "0px";
+        // 桌面 Tauri：启用自定义标题栏（decorations:false），顶部预留标题栏高度 36px
+        safeTop = "36px";
         safeBottom = "0px";
         dockBottom = "16px";
         activityTop = "100px";

@@ -19,6 +19,10 @@ export const metadata: Metadata = {
   title: "Bili Live Revenue Viewer",
   description: "Browser-first Bilibili live consumption dashboard with QR fallback login.",
   referrer: "no-referrer",
+  icons: {
+    icon: "/orig_icon.png",
+    apple: "/orig_icon.png",
+  },
 };
 
 export const viewport: Viewport = {

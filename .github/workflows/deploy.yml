@@ -452,6 +452,7 @@ jobs:
   #   ${TARGET_DIR}/artifacts/current_exe            -> 指向最新 exe
   #   ${TARGET_DIR}/artifacts/current_apk            -> 指向最新 apk
   #   ${TARGET_DIR}/artifacts/current_ipa            -> 指向最新 ipa
+  #   ${TARGET_DIR}/artifacts/versions.json          -> 各平台当前版本构建日期（供 landing 页角标显示）
   # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
   # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 10 个。
   publish-artifacts:
@@ -539,6 +540,44 @@ jobs:
             if ls "${RELEASE_DIR}"/*.ipa >/dev/null 2>&1; then
               ln -sfn "$(ls "${RELEASE_DIR}"/*.ipa | head -n1)" "${ARTIFACTS_DIR}/current_ipa"
             fi
+
+            # ---- 生成各平台当前版本日期 versions.json（供 landing 页显示构建日期）----
+            # 日期从 current_* 链接指向的实际安装包所在 release-<日期>-<时间> 目录名中提取，
+            # 只取日期部分（YYYY-MM-DD，不含时间）。每次发布都从 current 链接实时解析，
+            # 因此本次未更新的平台仍会保留旧版本日期。
+            extract_date() {
+              local link="$1"
+              local target rel
+              target="$(readlink -f "${link}" 2>/dev/null || true)"
+              [ -z "${target}" ] && return 1
+              rel="${target#*release-}"
+              case "${rel}" in
+                [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*)
+                  echo "${rel:0:4}-${rel:4:2}-${rel:6:2}"
+                  return 0
+                  ;;
+              esac
+              return 1
+            }
+            W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
+            A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
+            I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
+            VJSON="{\n"
+            VSEP=""
+            add_ver() {
+              local key="$1" val="$2"
+              [ -z "${val}" ] && return 0
+              VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
+              VSEP=",\n"
+            }
+            add_ver "windows" "${W_DATE}"
+            add_ver "android" "${A_DATE}"
+            add_ver "ios" "${I_DATE}"
+            VJSON="${VJSON}\n}"
+            printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
+            echo "versions.json:"
+            cat "${ARTIFACTS_DIR}/versions.json"
+
             echo "发布完成 -> ${RELEASE_DIR}"
             ls -la "${RELEASE_DIR}"
             echo "artifacts 目录:"

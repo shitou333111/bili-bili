@@ -15,7 +15,15 @@ const nextConfig: NextConfig = {
   outputFileTracingExcludes: {
     "/*": ["./src-tauri/**", "./.data/**", "./.next/**"],
   },
-  allowedDevOrigins: ["http://192.168.1.2:3000", "http://192.168.1.2", "192.168.1.2"],
+  // 允许局域网/设备通过开发服务器 IP 访问（否则客户端 JS 不加载，页面交互失效）
+  allowedDevOrigins: [
+    "http://192.168.1.2:3000",
+    "http://192.168.1.2",
+    "192.168.1.2",
+    "http://192.168.31.100:3000",
+    "http://192.168.31.100",
+    "192.168.31.100",
+  ],
   // 静态导出需要禁用图片优化
   images: isTauri ? { unoptimized: true } : undefined,
   // 开发模式下需要配置 assetPrefix 以支持 Tauri 加载资源
