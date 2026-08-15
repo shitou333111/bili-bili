@@ -19,11 +19,26 @@ const CACHE_FILE = path.join(process.cwd(), ".data", "gift-catalog.json");
 type GiftConfigItem = {
   id: number;
   name: string;
+  price?: number;
+  coin_type?: string;
+  bag_gift?: number;
+  corner_mark?: string;
+  corner_background?: string;
+  effect_id?: number;
   img_basic?: string;
+  img_dynamic?: string;
+  webp?: string;
+  gif?: string;
 };
 
+/**
+ * 礼物目录数据：
+ * - `gifts`：gift_id -> { name, img }（仅图标，历史消费者使用）
+ * - `list`：完整礼物列表（含价格、角标、分类等全部字段），供模拟器等需要完整数据的场景使用
+ */
 export type GiftCatalogData = {
   gifts: Record<number, { name: string; img: string }>;
+  list: GiftConfigItem[];
 };
 
 // 进程内内存缓存
@@ -37,12 +52,12 @@ function buildCatalog(list: GiftConfigItem[]): GiftCatalogData {
   const gifts: Record<number, { name: string; img: string }> = {};
   for (const item of list) {
     if (!item.id) continue;
-    // 仅取图标，忽略价格等字段
+    // 兼容旧的"仅取图标"约定；完整字段整体保留在 list 中供模拟器使用
     if (item.img_basic) {
       gifts[item.id] = { name: item.name, img: item.img_basic };
     }
   }
-  return { gifts };
+  return { gifts, list };
 }
 
 async function fetchFromBili(): Promise<GiftCatalogData | null> {
@@ -114,4 +129,19 @@ export function getGiftCatalog(): Record<number, { name: string; img: string }> 
     }
   } catch {}
   return {};
+}
+
+/**
+ * 返回完整礼物列表（含价格、角标、分类等全部字段）。
+ * 优先内存缓存；若为空则回退到 .data 落盘文件；旧缓存无 list 时返回空数组。
+ */
+export function getGiftList(): GiftConfigItem[] {
+  if (memCache?.data.list) return memCache.data.list;
+  try {
+    if (existsSync(CACHE_FILE)) {
+      const parsed = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
+      if (parsed?.list) return parsed.list;
+    }
+  } catch {}
+  return [];
 }

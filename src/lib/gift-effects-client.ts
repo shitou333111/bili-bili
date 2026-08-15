@@ -1,33 +1,12 @@
 /**
  * 礼物特效客户端模块
- * - Tauri 模式：直连 B站 API，12小时 localStorage 缓存
+ * - Tauri 模式：读取统一本地礼物数据仓（gift-local-store，12h 自动刷新），直连 B站 配置 JSON
  * - Web 模式：通过服务器 /api/gift-effects 代理
  */
 
 import { serverApiUrl } from "./server-api";
-
-const BILI_EFFECTS_API =
-  "https://api.live.bilibili.com/xlive/general-interface/v1/fullScSpecialEffect/GetEffectConfListV2?platform=pc";
-const CACHE_KEY = "bili_gift_effects_cache";
-const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12小时
-
-type EffectConfItem = {
-  type: number;
-  web_mp4: string;
-  web_mp4_json: string;
-  id: number;
-  bind_gift_ids: number[];
-};
-
-type GiftEffectsList = {
-  code: number;
-  message: string;
-  data?: {
-    full_sc_resource: {
-      conf_list: EffectConfItem[];
-    };
-  };
-};
+import { getPlatform } from "@/lib/platform";
+import { ensureGiftDataLoaded, getGiftEffectsMap } from "./gift-local-store";
 
 type EffectJsonConfig = {
   info: {
@@ -58,38 +37,7 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI__" in window;
 }
 
-// ====== Tauri 模式：直连 B站 API ======
-
-function getCachedList(): GiftEffectsList | null {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const { data, timestamp } = JSON.parse(raw);
-    if (Date.now() - timestamp > CACHE_TTL_MS) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function setCachedList(data: GiftEffectsList): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ data, timestamp: Date.now() }));
-  } catch {}
-}
-
-async function fetchEffectsListFromBili(): Promise<GiftEffectsList | null> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const data = await invoke<GiftEffectsList>("fetch_json", { url: BILI_EFFECTS_API });
-    return data.code === 0 ? data : null;
-  } catch (e) {
-    console.error("[GiftEffects] B站API请求失败:", e);
-    return null;
-  }
-}
+// ====== Tauri 模式：读取本地礼物数据仓 ======
 
 async function fetchEffectJson(webMp4Json: string): Promise<EffectJsonConfig | null> {
   // 首次冷连接（App 刚启动/DNS/TLS 未就绪 + 并发建连）可能瞬时失败，重试一次即可命中热路径
@@ -109,32 +57,19 @@ async function fetchEffectJson(webMp4Json: string): Promise<EffectJsonConfig | n
 }
 
 async function fetchFromBili(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {
-  // 1. 获取特效列表（缓存优先）
-  let list = getCachedList();
-  if (!list) {
-    list = await fetchEffectsListFromBili();
-    if (list) setCachedList(list);
-  }
+  // 1. 确保本地数据仓已加载（TTL 12h；缺失或过期自动重新下载）
+  const platform = await getPlatform();
+  await ensureGiftDataLoaded(platform);
 
-  // 2. 构建 gift_id → effect 映射
-  const effectMap = new Map<number, { web_mp4: string; web_mp4_json: string }>();
-  const confList = list?.data?.full_sc_resource?.conf_list;
-  if (confList) {
-    for (const item of confList) {
-      if (!item.web_mp4 || !item.web_mp4_json) continue;
-      for (const gid of item.bind_gift_ids) {
-        if (gid === 0) continue;
-        effectMap.set(gid, { web_mp4: item.web_mp4, web_mp4_json: item.web_mp4_json });
-      }
-    }
-  }
+  // 2. 从本地完整特效绑定表构建 gift_id -> effect 映射
+  const effectMap = getGiftEffectsMap();
 
   // 3. 为每个 gift_id 获取 web_mp4_json 配置
   const results: Record<number, GiftEffectResult> = {};
   const jsonFetches: Promise<void>[] = [];
 
   for (const giftId of giftIds) {
-    const effect = effectMap.get(giftId);
+    const effect = effectMap[giftId];
     if (effect) {
       results[giftId] = {
         found: true,
@@ -155,6 +90,22 @@ async function fetchFromBili(giftIds: number[]): Promise<Record<number, GiftEffe
   return results;
 }
 
+/**
+ * 返回全量特效绑定表：gift_id -> { web_mp4, web_mp4_json }。
+ * Tauri：读本地礼物数据仓（12h 自动刷新）；Web：服务器 /api/gift-effects?list=1。
+ * 供模拟器等需要完整特效映射的场景使用（配置 JSON 由调用方自行按 URL 去重拉取）。
+ */
+export async function getEffectsMap(): Promise<Record<number, { web_mp4: string; web_mp4_json: string }>> {
+  if (isTauri()) {
+    const platform = await getPlatform();
+    await ensureGiftDataLoaded(platform);
+    return getGiftEffectsMap();
+  }
+  const resp = await fetch(serverApiUrl("/api/gift-effects?list=1"));
+  const data = await resp.json();
+  return data?.data?.effects || {};
+}
+
 // ====== Web 模式：通过服务器代理 ======
 
 async function fetchFromServer(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {
@@ -167,7 +118,7 @@ async function fetchFromServer(giftIds: number[]): Promise<Record<number, GiftEf
 
 /**
  * 获取礼物特效配置
- * - Tauri 环境：直连 B站 API，12小时 localStorage 缓存
+ * - Tauri 环境：读本地礼物数据仓（12h 自动刷新）
  * - Web 环境：通过服务器代理
  */
 export async function fetchGiftEffects(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {

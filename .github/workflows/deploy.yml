@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       server_url:
-        description: "服务器地址（push 触发时使用 Secrets 中的 NEXT_PUBLIC_SERVER_URL）"
+        description: "服务器地址（留空则使用 Secrets 中的 NEXT_PUBLIC_SERVER_URL；可手动填入本地地址用于本地测试）"
         required: false
         type: string
-        default: "http://192.168.1.2:3000"
+        default: ""
       debug:
         description: "打包 Debug 版本（不勾选则默认 Release）"
         required: false
@@ -153,12 +153,13 @@ jobs:
 
             # 启动/重启服务
             if command -v pm2 >/dev/null 2>&1; then
-              if pm2 describe bili-live >/dev/null 2>&1; then
-                pm2 restart bili-live --update-env
-              else
-                cd "${TARGET_DIR}/current"
-                HOST=127.0.0.1 PORT=3000 pm2 start server.js --name bili-live
-              fi
+              # 关键：必须 delete 后重新 start，不能直接 restart！
+              # pm2 会把启动时 server.js 的符号链接解析成真实路径并缓存（pm_exec_path），
+              # restart 沿用缓存的旧路径执行，即使 current 已切换到新版本仍跑旧代码，导致页面不更新。
+              # delete 后以当前 current 目录重新 start，让 pm2 重新解析到最新版本路径。
+              pm2 delete bili-live >/dev/null 2>&1 || true
+              cd "${TARGET_DIR}/current"
+              HOST=127.0.0.1 PORT=3000 pm2 start server.js --name bili-live
               pm2 save || true
             else
               PID_FILE="${TARGET_DIR}/server.pid"

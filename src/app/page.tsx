@@ -13,6 +13,7 @@ import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
 import { getPlatform } from "@/lib/platform";
+import { refreshGiftData } from "@/lib/gift-local-store";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
@@ -1658,6 +1659,12 @@ export default function HomePage() {
         ]);
         // 收益随页面一起拉取 + 统一上传本账号所有变化的数据
         await finishRefresh();
+        // ④ 全局"刷新数据"按钮联动：后台强制刷新本地礼物/特效数据（Tauri 本地化数据仓，跳过 TTL）
+        getPlatform()
+          .then((p) => {
+            if (p.isNative) return refreshGiftData(p);
+          })
+          .catch(() => {});
       }
     } catch (error) {
       console.error("Failed to refresh data:", error);
@@ -2287,6 +2294,13 @@ export default function HomePage() {
                 </button>
                 {/* 主播推荐卡片 */}
                 <RecommendedAnchors />
+                {/* 反馈卡片 */}
+                <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
+                  <p className="text-base text-black/75 leading-relaxed">
+                    欢迎点击<a href="https://wj.qq.com/s2/27596805/8vr6/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline decoration-2 underline-offset-2 hover:text-blue-700 active:text-blue-800 transition">链接</a>或者扫码反馈使用中的问题
+                  </p>
+                  <img src="/feedback.jpg" alt="反馈二维码" className="w-24 h-24 object-contain shrink-0" />
+                </div>
                 {/* 已使用过 admin 后，显示管理后台入口卡片 */}
                 {adminUsed && (
                   <button

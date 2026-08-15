@@ -12,7 +12,7 @@ const SLOGANS = [
   "被粉丝骚扰，列清单不惯臭毛病？",
   "主播想统计收了什么，赚了多少？",
   "大礼物忘了录屏，想补礼物截图？",
-  "陪伴最久的爱播，最常来的粉丝？",
+  "陪伴最久的爱播？最常来的粉丝？",
   "抢到的最香，想看中了多少天选？",
   "想看氪了多少，更好的防止剁手？",
   "想看盲盒盈亏，合成活动练练手？",
@@ -25,13 +25,13 @@ const SLOGANS = [
   "爱播没开播，新活动找不到入口？",
 ];
 
-// 霓虹色板：与句子循环取色，营造霓虹光晕氛围
+// 霓虹色板：与句子循环取色，营造霓虹光晕氛围（无绿色，绿色在浅色背景上易看不清）
 const NEON = [
   "#ff2d78", // 霓虹粉
   "#00d9ff", // 霓虹青
   "#b967ff", // 霓虹紫
-  "#00ff9d", // 霓虹绿
-  "#ffb300", // 霓虹橙
+  "#ff5722", // 橙红
+  "#ff9800", // 橙
   "#ff3d81", // 荧光红
   "#7c4dff", // 蓝紫
 ];
@@ -61,12 +61,12 @@ export default function SloganRotator() {
   const color = NEON[index % NEON.length];
 
   return (
-    <div className="relative mt-5 flex h-10 items-center justify-center sm:h-12">
-      {/* 背景霓虹光晕：横向横幅（椭圆）光晕，范围配合文字行宽，整体氛围光 */}
+    <div className="relative mt-8 flex h-10 items-center justify-center sm:mt-12 sm:h-12">
+      {/* 背景霓虹光晕：恒定亮度横幅光晕，整句范围亮度一致（无中心/周边区别），外缘快速淡出 */}
       <div
-        className="pointer-events-none absolute left-1/2 top-1/2 h-9 w-[34rem] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
+        className="pointer-events-none absolute left-1/2 top-1/2 h-9 w-[42rem] max-w-[96vw] -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
         style={{
-          background: `radial-gradient(ellipse 50% 50% at center, ${color}59 0%, ${color}4a 45%, ${color}38 68%, transparent 95%)`,
+          background: `radial-gradient(ellipse 50% 50% at center, ${color}59 0%, ${color}59 88%, transparent 100%)`,
           opacity: visible ? 1 : 0,
           transition: `opacity ${FADE_MS}ms ease`,
         }}

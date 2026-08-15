@@ -227,7 +227,7 @@ export default function GiftPanel({
           )}
 
           {/* 礼物列表区域 */}
-          <div className="flex-1 overflow-y-auto px-3 py-3 scrollbar-hide gift-scroll relative">
+          <div className="flex-1 overflow-y-auto px-1.5 py-3 scrollbar-hide gift-scroll relative">
             {currentGifts.length > 0 ? (
               <div className="grid grid-cols-4 gap-x-2 gap-y-1.5 justify-items-center pb-8">
                 {currentGifts.map((gift) => {
@@ -241,7 +241,9 @@ export default function GiftPanel({
                         onMouseUp={handlePressEnd}
                         onMouseLeave={handlePressEnd}
                         onTouchStart={() => handlePressStart(gift)}
+                        onTouchMove={handlePressEnd}
                         onTouchEnd={handlePressEnd}
+                        onTouchCancel={handlePressEnd}
                         className={`relative w-[92%] cursor-pointer transition-colors duration-200 rounded-lg overflow-hidden flex flex-col items-center pt-2 ${
                           isCombo
                             ? ""
@@ -302,7 +304,7 @@ export default function GiftPanel({
 
                             {/* 礼物图片 */}
                             <div className="flex justify-center">
-                              <div className="w-[46px] h-[46px]">
+                              <div className="w-[56px] h-[56px]">
                                 <img
                                   src={gift.img}
                                   alt={gift.name}
@@ -312,9 +314,13 @@ export default function GiftPanel({
                               </div>
                             </div>
 
-                            {/* 礼物名称行 - 固定高度，选中时隐藏但保留空间 */}
+                            {/* 礼物名称行 - 固定高度；选中时该位置改为显示礼物价值电池数 */}
                             <div className="w-full px-1 h-[16px] flex items-center justify-center">
-                              {!isSelected && (
+                              {isSelected ? (
+                                <span className="text-[10px] text-[#FFD700] leading-none whitespace-nowrap">
+                                  {formatPrice(gift.price)}
+                                </span>
+                              ) : (
                                 <span className="text-[10px] text-white/80 truncate leading-none">
                                   {gift.name}
                                   {activeTab === "bag" && (gift as BagGift).count !== undefined && (gift as BagGift).count > 0 && (

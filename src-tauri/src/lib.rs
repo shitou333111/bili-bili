@@ -75,7 +75,12 @@ fn debug_acl(webview: tauri::Webview) -> String {
 /// 页面框架可能在渲染后清空 body（SPA 重新挂载），因此用定时器周期性检查，
 /// 若标题栏或遮罩被页面清掉则重新挂载，保证始终存在。
 /// 生成时把活动标题内联进脚本，因此返回 String（标题需转义）。
-fn activity_title_bar_script(title: &str) -> String {
+///
+/// `top_offset`：标题栏距离窗口顶部的逻辑像素偏移。
+///  - 桌面端 = 0（标题栏贴顶，子 WebView 面板本身已占下方 3/4）
+///  - 移动端 = 100（iOS/Android 窗口天然全屏，无法用原生尺寸裁剪；通过把标题栏整体下移、
+///    页面内容 paddingTop 下移 100px，视觉上活动页顶部与模拟器顶部之间留出 100px 空隙）
+fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
     let escaped = title
         .replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -86,26 +91,30 @@ fn activity_title_bar_script(title: &str) -> String {
   if (window.__BILI_ACTIVITY_TITLEBAR__) return;
   window.__BILI_ACTIVITY_TITLEBAR__ = true;
   var TITLE = '{escaped}';
+  var TOP_OFFSET = {top_offset};
+  var BAR_H = 44;
+  var TOTAL_H = BAR_H + TOP_OFFSET;
   function mount() {{
     try {{
       if (!document.body) return false;
       var existing = document.getElementById("__bili_activity_titlebar__");
       if (existing) existing.remove();
-      // 1. 黑色遮罩层：覆盖标题栏区域（44px高），封住圆角缝隙，防止页面内容透过
+      // 1. 黑色遮罩层：覆盖标题栏上方偏移区域 + 标题栏区域（TOP_OFFSET+BAR_H 高），
+      //    封住圆角缝隙，防止页面内容透过；同时把偏移区铺黑，露出黑色空隙。
       var mask = document.getElementById("__bili_activity_titlebar_mask__");
       if (mask) mask.remove();
       mask = document.createElement("div");
       mask.id = "__bili_activity_titlebar_mask__";
       mask.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:44px;z-index:2147483645;" +
+        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;z-index:2147483645;" +
         "background:#000;pointer-events:none;";
       // 2. 标题栏本体（黑色、顶部两角圆角、居中显示标题、固定不随页面滚动）
       var bar = document.createElement("div");
       bar.id = "__bili_activity_titlebar__";
       bar.textContent = TITLE;
       bar.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:44px;z-index:2147483646;" +
-        "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:44px;" +
+        "position:fixed;top:" + TOP_OFFSET + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483646;" +
+        "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;";
       document.documentElement.style.backgroundColor = "#000";
@@ -113,7 +122,7 @@ fn activity_title_bar_script(title: &str) -> String {
       document.body.appendChild(mask);
       document.body.appendChild(bar);
       // 把页面内容推到标题栏下方，避免被固定标题栏遮挡
-      document.body.style.paddingTop = "44px";
+      document.body.style.paddingTop = TOTAL_H + "px";
       return true;
     }} catch (e) {{ return false; }}
   }}
@@ -124,8 +133,8 @@ fn activity_title_bar_script(title: &str) -> String {
       var mask = document.getElementById("__bili_activity_titlebar_mask__");
       if (!bar || !mask) mount();
       // SPA 可能重置 body 样式，持续保证 paddingTop
-      if (document.body.style.paddingTop !== "44px") {{
-        document.body.style.paddingTop = "44px";
+      if (document.body.style.paddingTop !== TOTAL_H + "px") {{
+        document.body.style.paddingTop = TOTAL_H + "px";
       }}
     }} catch (e) {{}}
   }}
@@ -198,7 +207,18 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
     let mock_shim = include_str!("../../public/native-inject/mock-shim.js");
     // 按序注入：①mock 配置 → ②mock-shim → ③返回按钮 → ④标题栏
     let inject_config = format!("window.__BILI_ACTIVITY_MOCK_CONFIG__ = {};", mock_cfg_js);
-    let title_bar_script = activity_title_bar_script(title);
+    // 标题栏顶部偏移：桌面端子 WebView 面板占下方 3/4，标题栏贴顶（0）；
+    // 移动端窗口天然全屏，通过注入把标题栏/内容整体下移 100px，留出顶部空隙。
+    let title_bar_script = {
+        #[cfg(desktop)]
+        {
+            activity_title_bar_script(title, 0.0)
+        }
+        #[cfg(not(desktop))]
+        {
+            activity_title_bar_script(title, 100.0)
+        }
+    };
 
     #[cfg(desktop)]
     {
@@ -291,7 +311,11 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 真实活动页标题栏注入脚本：带左侧返回按钮，点击返回触发导航到 close-activity.local。
 /// 与模拟器的 activity_title_bar_script 完全独立，不复用任何代码。
-fn real_activity_title_bar_script(title: &str) -> String {
+///
+/// `top_offset`：标题栏额外顶部偏移。
+///  - 桌面端 = 0（标题栏贴顶，safe_top 单独处理刘海安全区）
+///  - 移动端 = 100（与模拟器活动页同理，通过注入偏移留出空隙）
+fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
     let escaped = title
         .replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -302,6 +326,7 @@ fn real_activity_title_bar_script(title: &str) -> String {
   if (window.__BILI_REAL_ACTIVITY_TITLEBAR__) return;
   window.__BILI_REAL_ACTIVITY_TITLEBAR__ = true;
   var TITLE = '{escaped}';
+  var TOP_OFFSET = {top_offset};
   var _st = 0;
   try {{ _st = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0; }} catch(e) {{}}
   if (!_st) {{
@@ -312,7 +337,8 @@ fn real_activity_title_bar_script(title: &str) -> String {
   }}
   var SAFE_TOP = _st || 0;
   var BAR_H = 44;
-  var TOTAL_H = BAR_H + SAFE_TOP;
+  var TOTAL_H = BAR_H + SAFE_TOP + TOP_OFFSET;
+  var BAR_TOP = SAFE_TOP + TOP_OFFSET;
   function mount() {{
     try {{
       if (!document.body) return false;
@@ -327,7 +353,7 @@ fn real_activity_title_bar_script(title: &str) -> String {
       var bar = document.createElement("div");
       bar.id = "__bili_real_titlebar__";
       bar.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;padding-top:" + SAFE_TOP + "px;z-index:2147483646;" +
+        "position:fixed;top:" + BAR_TOP + "px;left:0;right:0;height:" + TOTAL_H + "px;padding-top:" + SAFE_TOP + "px;z-index:2147483646;" +
         "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;" +
@@ -335,7 +361,7 @@ fn real_activity_title_bar_script(title: &str) -> String {
       // 返回按钮
       var backBtn = document.createElement("div");
       backBtn.style.cssText =
-        "position:absolute;left:12px;top:" + SAFE_TOP + "px;bottom:0;width:44px;display:flex;" +
+        "position:absolute;left:12px;top:" + BAR_TOP + "px;bottom:0;width:44px;display:flex;" +
         "align-items:center;justify-content:center;cursor:pointer;";
       backBtn.innerHTML =
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
@@ -401,7 +427,18 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
     let parsed_url: tauri::Url = url
         .parse()
         .map_err(|e| format!("活动 URL 解析失败: {}", e))?;
-    let title_bar_script = real_activity_title_bar_script(title);
+    // 标题栏顶部偏移：桌面端子 WebView 面板占满主窗口，标题栏贴顶（0）；
+    // 移动端窗口天然全屏，通过注入把标题栏/内容整体下移 100px，留出顶部空隙。
+    let title_bar_script = {
+        #[cfg(desktop)]
+        {
+            real_activity_title_bar_script(title, 0.0)
+        }
+        #[cfg(not(desktop))]
+        {
+            real_activity_title_bar_script(title, 100.0)
+        }
+    };
 
     // 构建 Cookie 注入初始化脚本（在页面任何脚本之前运行，保证首次请求就带 Cookie）
     let cookie_script = if cookies.is_empty() {

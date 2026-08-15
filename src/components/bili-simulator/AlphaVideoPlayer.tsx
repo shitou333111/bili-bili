@@ -16,6 +16,9 @@ export default function AlphaVideoPlayer({ src, config, onEnded }: AlphaVideoPla
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
+    // src 切换（队列中下一个特效）时重置可见，避免上个特效淡出后保持隐藏
+    setVisible(true);
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");

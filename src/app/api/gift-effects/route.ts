@@ -126,6 +126,26 @@ async function fetchEffectJson(url: string): Promise<EffectJsonConfig | null> {
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
+
+  // ==================== list 模式：返回全量特效绑定表（gift_id -> {web_mp4, web_mp4_json}） ====================
+  // 供模拟器等需要完整特效映射的场景使用（12h 缓存，不逐个拉取配置 JSON；配置 JSON 由前端按 URL 去重自取）
+  if (url.searchParams.get("list") === "1") {
+    let effectsData = isCacheValid() ? readEffectsCache() : await fetchEffectsFromBili();
+    if (!effectsData) effectsData = readEffectsCache();
+    const map: Record<number, GiftEffectInfo> = {};
+    const confList = effectsData?.data?.full_sc_resource?.conf_list;
+    if (confList) {
+      for (const item of confList) {
+        if (!item.web_mp4 || !item.web_mp4_json) continue;
+        for (const giftId of item.bind_gift_ids) {
+          if (giftId === 0) continue;
+          map[giftId] = { web_mp4: item.web_mp4, web_mp4_json: item.web_mp4_json };
+        }
+      }
+    }
+    return NextResponse.json({ code: 0, message: "ok", data: { effects: map } }, { status: 200 });
+  }
+
   const giftIdsParam = url.searchParams.get("gift_ids") ?? "";
   const forceRefresh = url.searchParams.get("force_refresh") === "1";
   const giftIds = giftIdsParam

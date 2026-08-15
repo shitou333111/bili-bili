@@ -7,6 +7,11 @@ import ComboNotification from "./ComboNotification";
 import type { Gift, EffectConfig, GiftEffectInfo } from "./types";
 import { useActivities } from "./activities/registry";
 import { openActivityNative, closeActivityNative, isTauriRuntime } from "./activities/native";
+import { ensureGiftCatalogLoaded, getGiftList } from "@/lib/gift-catalog-client";
+import { getEffectsMap } from "@/lib/gift-effects-client";
+import { refreshGiftData, getGiftEffectsMap } from "@/lib/gift-local-store";
+import { getPlatform } from "@/lib/platform";
+import { serverApiUrl } from "@/lib/server-api";
 import { readActivityState, writeActivityState, type BagGift } from "./activityState";
 import LiveStreamBackground from "./LiveStreamBackground";
 import type { StreamerInfo } from "./liveStream";
@@ -38,7 +43,12 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   const comboTimerRef = useRef<number | null>(null);
   const progressTimerRef = useRef<number | null>(null);
   const comboStartTimeRef = useRef<number>(0);
-  const isPlayingEffectRef = useRef(false);
+  // 礼物特效播放队列：1 个正在播放 + 最多 3 个等待（共 4 个名额），队列满则丢弃不记录；
+  // 同类礼物在整个播放链路（播放 + 等待）中只占一次（同时送出/爆出多个相同礼物按一次动画计算）
+  const effectQueueRef = useRef<{ giftId: number; info: GiftEffectInfo }[]>([]);
+  const currentEffectRef = useRef<{ giftId: number; info: GiftEffectInfo } | null>(null);
+  // 特效按需回源进行中标记（防止并发触发整表重拉）
+  const effectsRefreshingRef = useRef(false);
   // 活动（山海工坊）本地状态：槽位抽取状态 + 包裹合成礼物（用于持久化与还原）
   const slotStateRef = useRef<Record<string, number>>({});
   const bagGiftsRef = useRef<BagGift[]>([]);
@@ -50,20 +60,36 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   useEffect(() => {
     async function loadData() {
       try {
-        const [giftListRes, effectsRes] = await Promise.all([
-          fetch("/gift-list.json"),
-          fetch("/gift-effects.json"),
-        ]);
-        const giftListData = await giftListRes.json();
-        const effectsData = await effectsRes.json();
+        // 礼物列表 + 特效绑定表：与全 APP 共用同一自动更新数据源
+        // （gift-catalog / gift-effects，12h 缓存），不再读取 public/ 下手动维护的静态快照。
+        let list: any[] = [];
+        let effectsMap: Record<number, { web_mp4: string; web_mp4_json: string }> = {};
+        if (isTauriRuntime()) {
+          const platform = await getPlatform();
+          await ensureGiftCatalogLoaded(platform);
+          const [catalogList, effectMap] = await Promise.all([
+            Promise.resolve(getGiftList()),
+            getEffectsMap(),
+          ]);
+          list = catalogList;
+          effectsMap = effectMap;
+        } else {
+          const [giftRes, effRes] = await Promise.all([
+            fetch(serverApiUrl("/api/gift-catalog")),
+            fetch(serverApiUrl("/api/gift-effects?list=1")),
+          ]);
+          const giftData = await giftRes.json();
+          const effData = await effRes.json();
+          list = giftData?.data?.list || [];
+          effectsMap = effData?.data?.effects || {};
+        }
 
         // 解析礼物列表
-        const list = giftListData?.data?.list || [];
         const parsedGifts: Gift[] = list.map((g: any) => ({
           id: g.id,
           name: g.name,
-          price: g.price / 100,
-          img: g.img_basic || g.webp || g.gif,
+          price: (g.price ?? 0) / 100,
+          img: g.img_basic || g.webp || g.gif || "",
           effect_id: g.effect_id,
           corner_mark: g.corner_mark,
           corner_background: g.corner_background,
@@ -131,21 +157,15 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
 
         // 构建礼物ID到特效信息的映射（包含web_mp4_json）
         const eMap = new Map<number, GiftEffectInfo>();
-        if (effectsData?.data?.full_sc_resource?.conf_list) {
-          for (const conf of effectsData.data.full_sc_resource.conf_list) {
-            if (conf.bind_gift_ids && conf.web_mp4) {
-              for (const giftId of conf.bind_gift_ids) {
-                eMap.set(giftId, {
-                  web_mp4: conf.web_mp4,
-                  web_mp4_json: conf.web_mp4_json,
-                  effect_config: null,
-                });
-              }
-            }
-          }
+        for (const [giftIdStr, eff] of Object.entries(effectsMap)) {
+          eMap.set(Number(giftIdStr), {
+            web_mp4: eff.web_mp4,
+            web_mp4_json: eff.web_mp4_json,
+            effect_config: null,
+          });
         }
 
-        // 批量获取特效JSON配置
+        // 批量获取特效JSON配置（按 URL 去重）
         const jsonUrls = new Set<string>();
         eMap.forEach((info) => {
           if (info.web_mp4_json) jsonUrls.add(info.web_mp4_json);
@@ -384,6 +404,34 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
     }, COMBO_TIMEOUT);
   }, [resetCombo]);
 
+  // 立即开始播放一个特效
+  const playNow = useCallback((item: { giftId: number; info: GiftEffectInfo }) => {
+    currentEffectRef.current = item;
+    setPlayingEffect({
+      src: item.info.web_mp4,
+      config: item.info.effect_config || null,
+    });
+    // 大礼物自动关闭礼物面板，显示悬浮连击按钮
+    setGiftPanelOpen(false);
+    setShowFloatingCombo(true);
+  }, []);
+
+  // 特效入队：当前无播放则立即播放；有播放则排队（最多 3 个等待名额，含当前播放共 4 个）。
+  // 同类礼物在播放+等待中已存在时不重复入队；队列已满则丢弃不记录不排队。
+  const enqueueEffect = useCallback(
+    (giftId: number, info: GiftEffectInfo) => {
+      if (currentEffectRef.current?.giftId === giftId) return;
+      if (effectQueueRef.current.some((q) => q.giftId === giftId)) return;
+      if (!currentEffectRef.current) {
+        playNow({ giftId, info });
+        return;
+      }
+      if (effectQueueRef.current.length >= 3) return;
+      effectQueueRef.current.push({ giftId, info });
+    },
+    [playNow],
+  );
+
   // 触发送礼（count: 单次数量）
   const triggerGift = useCallback((gift: Gift, count: number = 1) => {
     // 包裹礼物：送出后扣减库存，库存归零则从包裹移除
@@ -401,7 +449,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
     const comboIdentity = gift;
     const isBlindbox = !!blindboxConfig[gift.id];
 
-    let effectGift: Gift | null = null;
+    // 本次送礼可能触发特效的礼物集合：非盲盒为礼物本身；盲盒为爆出的各礼物类型（每类只记一次）
+    const pendingEffectGifts: Gift[] = [];
 
     if (isBlindbox && count > 1) {
       // 批量盲盒：送出的每一个礼物都独立按概率抽取，按爆出结果聚合，逐类生成横幅
@@ -410,8 +459,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         const popped = rollBlindbox(gift.id);
         if (popped) {
           popCounts.set(popped.id, (popCounts.get(popped.id) || 0) + 1);
-          // 记录第一个带专属动画的爆出礼物（用于播放特效/自动收起礼物栏）
-          if (!effectGift && effectInfoMap.has(popped.id)) effectGift = popped;
+          // 盲盒按爆出的礼物排队：每种爆出礼物只记录一次
+          if (!pendingEffectGifts.some((g) => g.id === popped.id)) pendingEffectGifts.push(popped);
         }
       }
       popCounts.forEach((n, pid) => {
@@ -425,11 +474,10 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         const popped = rollBlindbox(gift.id);
         if (popped) noticeGift = popped;
       }
-      effectGift = noticeGift;
+      pendingEffectGifts.push(noticeGift);
       addNotice(noticeGift, count);
     }
 
-    const hasEffect = effectGift ? effectInfoMap.has(effectGift.id) : false;
     const isNewCombo = !comboGift || comboGift.id !== comboIdentity.id;
 
     startComboProgress(comboIdentity, count, isNewCombo);
@@ -437,24 +485,61 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
     // 清除选中状态
     setCurrentGift(null);
 
-    // 大礼物特效逻辑：只播放一次，播放中不触发新的
-    if (hasEffect && !isPlayingEffectRef.current) {
-      isPlayingEffectRef.current = true;
-      const effectInfo = effectInfoMap.get(effectGift!.id);
-      setPlayingEffect({
-        src: effectInfo!.web_mp4,
-        config: effectInfo!.effect_config || null,
-      });
-      // 大礼物自动关闭礼物面板，显示悬浮连击按钮
-      setGiftPanelOpen(false);
-      setShowFloatingCombo(true);
+    // 已在特效表内的礼物 → 入队播放（当前无播放则立即播，有则排队，最多 1 播放 + 3 等待）
+    const readyEffects = pendingEffectGifts.filter((g) => effectInfoMap.has(g.id));
+    readyEffects.forEach((g) => {
+      enqueueEffect(g.id, effectInfoMap.get(g.id)!);
+    });
+
+    // 特效按需回源（③）：有 effect_id 但本地特效表缺失（如 B站 新礼物尚未同步）的礼物，
+    // 强制整表重拉并回填，随后入队重试播放（仅 Tauri 本地化数据仓场景）。
+    const missingEffects = pendingEffectGifts.filter((g) => (g.effect_id ?? 0) > 0 && !effectInfoMap.has(g.id));
+    if (missingEffects.length > 0 && isTauriRuntime() && !effectsRefreshingRef.current) {
+      effectsRefreshingRef.current = true;
+      (async () => {
+        try {
+          const platform = await getPlatform();
+          await refreshGiftData(platform); // 整表重拉（跳过 TTL），覆盖本地文件
+          for (const g of missingEffects) {
+            const bind = getGiftEffectsMap()[g.id];
+            if (!bind) continue;
+            let config: EffectConfig | null = null;
+            try {
+              const res = await fetch(bind.web_mp4_json);
+              if (res.ok) config = await res.json();
+            } catch {
+              config = null;
+            }
+            const info: GiftEffectInfo = {
+              web_mp4: bind.web_mp4,
+              web_mp4_json: bind.web_mp4_json,
+              effect_config: config,
+            };
+            setEffectInfoMap((prev) => {
+              const next = new Map(prev);
+              next.set(g.id, info);
+              return next;
+            });
+            enqueueEffect(g.id, info);
+          }
+        } catch (err) {
+          console.error("[BiliSimulator] 特效按需回源失败:", err);
+        } finally {
+          effectsRefreshingRef.current = false;
+        }
+      })();
     }
-  }, [comboGift, effectInfoMap, startComboProgress, blindboxConfig, rollBlindbox, addNotice, gifts]);
+  }, [comboGift, effectInfoMap, startComboProgress, blindboxConfig, rollBlindbox, addNotice, gifts, enqueueEffect]);
 
   const handleEffectEnded = useCallback(() => {
-    isPlayingEffectRef.current = false;
-    setPlayingEffect(null);
-  }, []);
+    const next = effectQueueRef.current.shift();
+    if (next) {
+      playNow(next);
+    } else {
+      currentEffectRef.current = null;
+      setPlayingEffect(null);
+    }
+  }, [playNow]);
 
   const selectGift = useCallback((gift: Gift) => {
     setCurrentGift(gift);
@@ -679,7 +764,7 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
       )}
 
       {/* 活动入口卡片 - 单活动不滑动，仅显示图片；高度按图片宽高比自适应 */}
-      <div className="absolute right-3 bottom-20 z-20" style={{ display: showFloatingCombo && comboGift ? "none" : "block" }}>
+      <div className="absolute right-3 bottom-28 z-20" style={{ display: showFloatingCombo && comboGift ? "none" : "block" }}>
         {activeActivity && (
           <button
             className="relative block rounded-lg overflow-hidden shadow-lg bg-black/40"
@@ -695,10 +780,10 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
       </div>
 
       {/* 底部栏 - 更扁 */}
-      <div className="relative z-30 px-3 pb-2.5 pt-1.5">
+      <div className="relative z-30 px-3 pb-4 pt-1.5">
         <div className="flex items-center gap-2">
           {/* 聊天输入框 */}
-          <div className="flex-1 h-8 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">
+          <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">
             <span className="text-white/50 text-xs">弹幕支持下～</span>
             <button className="ml-auto">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="#FFD700">
@@ -714,13 +799,13 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
           {quickGift && !(showFloatingCombo && comboGift?.id === quickGift.id) && (
             <button
               onClick={handleQuickGiftClick}
-              className="w-9 h-9 shrink-0 relative flex items-center justify-center"
+              className="w-10 h-10 shrink-0 relative flex items-center justify-center"
             >
               <div className="absolute inset-0 rounded-full bg-white/15" />
               <img
                 src={quickGift.img}
                 alt={quickGift.name}
-                className="w-6 h-6 object-contain relative z-10"
+                className="w-7 h-7 object-contain relative z-10"
                 style={{ filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.3))" }}
               />
             </button>
@@ -729,13 +814,13 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
           {/* 礼物按钮 */}
           <button
             onClick={toggleGiftPanel}
-            className="w-9 h-9 shrink-0 flex items-center justify-center relative"
+            className="w-10 h-10 shrink-0 flex items-center justify-center relative"
           >
             <div className="absolute inset-0 rounded-full bg-white/15" />
             <img
               src="/gift-icon.webp"
               alt="礼物"
-              className="w-7 h-7 object-contain relative z-10"
+              className="w-full h-full object-contain relative z-10"
             />
           </button>
         </div>
