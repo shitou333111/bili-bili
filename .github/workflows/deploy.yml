@@ -197,8 +197,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      # workspace 在 src-tauri/ 子目录，必须用 workspaces 显式指定；
+      # 否则 rust-cache 只在仓库根找 Cargo.lock（找不到 → 空哈希 da39a3ee → 只存 1KB 空缓存，缓存形同虚设）
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
@@ -260,8 +264,12 @@ jobs:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
       # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      # workspace 在 src-tauri/ 子目录，必须用 workspaces 显式指定；
+      # 否则 rust-cache 只在仓库根找 Cargo.lock（找不到 → 空哈希 da39a3ee → 只存 1KB 空缓存，缓存形同虚设）
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
 
       - name: Install Linux dependencies
         run: |
@@ -356,8 +364,12 @@ jobs:
           targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
 
       # 缓存 ~/.cargo registry 与 target，避免每次 run 重新下载全部 crate 并全量编译依赖
+      # workspace 在 src-tauri/ 子目录，必须用 workspaces 显式指定；
+      # 否则 rust-cache 只在仓库根找 Cargo.lock（找不到 → 空哈希 da39a3ee → 只存 1KB 空缓存，缓存形同虚设）
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
