@@ -245,16 +245,6 @@ a {
   animation: dot-blink 1s infinite ease-in-out;
 }
 
-/* 打字机光标闪烁动画 */
-@keyframes caret-blink {
-  0%, 45% { opacity: 1; }
-  50%, 95% { opacity: 0; }
-  100% { opacity: 1; }
-}
-.caret-blink {
-  animation: caret-blink 1s step-end infinite;
-}
-
 /* 不定进度条（总月份未知时来回滑动） */
 @keyframes progress-slide {
   0% { transform: translateX(-100%); }

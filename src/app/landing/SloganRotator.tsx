@@ -2,60 +2,90 @@
 
 import { useEffect, useState } from "react";
 
-// ==================== 宣传语轮播（打字机效果） ====================
-// 七句话在同一位置依次"打字输入 → 停留 → 删除 → 下一句"，只占一行。
-// 采用最流行的打字机实现（Typed.js 同款思路），无需引入额外依赖。
+// ==================== 宣传语轮播（霓虹光晕·淡入淡出） ====================
+// 七句话在同一位置依次"淡入 → 停留 → 淡出 → 下一句"，只占一行。
+// 每句循环使用霓虹色，文字带多层光晕（text-shadow）、背景为柔和径向光晕，
+// 简洁优雅、无需引入额外依赖。
 const SLOGANS = [
   "想回顾你和爱播的甜蜜送礼瞬间？",
   "与爱播闹崩，看花了多少冤枉钱？",
+  "被粉丝骚扰，列清单不惯臭毛病？",
   "主播想统计收了什么，赚了多少？",
+  "大礼物忘了录屏，想补礼物截图？",
+  "陪伴最久的爱播，最常来的粉丝？",
+  "抢到的最香，想看中了多少天选？",
   "想看氪了多少，更好的防止剁手？",
   "想看盲盒盈亏，合成活动练练手？",
   "想解锁所有礼物，体验神豪视角？",
   "大哥大姐们想批量清理无关粉丝？",
+  "清理粉丝牌，被迫单个强制等待？",
+  "守医药费，想知道有没有掉地上？",
+  "计算医药费，不想再掏出计算器？",
+  "发医药费，不想再统计在哪个群？",
+  "爱播没开播，新活动找不到入口？",
 ];
 
-const TYPE_SPEED = 90; // 打字速度（ms/字）
-const DELETE_SPEED = 35; // 删除速度（ms/字）
-const HOLD_TIME = 1800; // 打完一句后停留时间（ms）
+// 霓虹色板：与句子循环取色，营造霓虹光晕氛围
+const NEON = [
+  "#ff2d78", // 霓虹粉
+  "#00d9ff", // 霓虹青
+  "#b967ff", // 霓虹紫
+  "#00ff9d", // 霓虹绿
+  "#ffb300", // 霓虹橙
+  "#ff3d81", // 荧光红
+  "#7c4dff", // 蓝紫
+];
+
+const FADE_MS = 1100; // 淡入 / 淡出时长
+const HOLD_MS = 2600; // 停留时长
+const PAUSE_MS = 400; // 两句之间的间隔
 
 export default function SloganRotator() {
   const [index, setIndex] = useState(0);
-  const [text, setText] = useState("");
-  const [deleting, setDeleting] = useState(false);
+  const [visible, setVisible] = useState(true); // 控制淡入淡出
 
   useEffect(() => {
-    const current = SLOGANS[index];
+    const inTimer = setTimeout(() => setVisible(true), 40);
+    const outTimer = setTimeout(() => setVisible(false), FADE_MS + HOLD_MS);
+    const nextTimer = setTimeout(
+      () => setIndex((i) => (i + 1) % SLOGANS.length),
+      FADE_MS + HOLD_MS + FADE_MS + PAUSE_MS,
+    );
+    return () => {
+      clearTimeout(inTimer);
+      clearTimeout(outTimer);
+      clearTimeout(nextTimer);
+    };
+  }, [index]);
 
-    let delay: number;
-    if (!deleting) {
-      delay = text.length < current.length ? TYPE_SPEED : HOLD_TIME;
-    } else {
-      delay = text.length > 0 ? DELETE_SPEED : 0;
-    }
-
-    const timer = setTimeout(() => {
-      if (!deleting) {
-        if (text.length < current.length) {
-          setText(current.slice(0, text.length + 1));
-        } else {
-          setDeleting(true); // 打满后开始删除
-        }
-      } else if (text.length > 0) {
-        setText(current.slice(0, text.length - 1));
-      } else {
-        setDeleting(false); // 删空后换下一句
-        setIndex((i) => (i + 1) % SLOGANS.length);
-      }
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [text, deleting, index]);
+  const color = NEON[index % NEON.length];
 
   return (
-    <div className="mt-5 flex h-8 items-center justify-center text-[17px] font-medium text-[#4a4a4a] sm:h-9 sm:text-xl">
-      <span>{text}</span>
-      <span className="caret-blink ml-0.5 inline-block h-5 w-[2px] rounded-full bg-[#4a4a4a] sm:h-6" />
+    <div className="relative mt-5 flex h-10 items-center justify-center sm:h-12">
+      {/* 背景霓虹光晕：横向横幅（椭圆）光晕，范围配合文字行宽，整体氛围光 */}
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 h-9 w-[34rem] max-w-[94vw] -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
+        style={{
+          background: `radial-gradient(ellipse 50% 50% at center, ${color}59 0%, ${color}4a 45%, ${color}38 68%, transparent 95%)`,
+          opacity: visible ? 1 : 0,
+          transition: `opacity ${FADE_MS}ms ease`,
+        }}
+        aria-hidden="true"
+      />
+      {/* 宣传语文字：霓虹色纯色，光晕轻微，保证清晰易读 */}
+      <span
+        className="relative text-xl font-semibold sm:text-2xl"
+        style={{
+          color,
+          textShadow: "0 0 2px rgba(0,0,0,0.05)",
+          opacity: visible ? 1 : 0,
+          transform: visible ? "translateY(0)" : "translateY(6px)",
+          filter: visible ? "blur(0)" : "blur(2px)",
+          transition: `opacity ${FADE_MS}ms ease, transform ${FADE_MS}ms ease, filter ${FADE_MS}ms ease`,
+        }}
+      >
+        {SLOGANS[index]}
+      </span>
     </div>
   );
 }

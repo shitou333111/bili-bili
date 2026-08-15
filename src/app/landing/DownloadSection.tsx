@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // ==================== 站点配置（单一来源） ====================
 // 安装包下载根路径：nginx 将 /artifacts/ 映射到服务器 ${SSH_TARGET_DIR}/artifacts/ 目录。
 // 三个 current_* 符号链接由 CI 自动指向各平台最新安装包。
 // 下载文件名由 <a download="B瓜.xxx"> 指定，与 URL 上的 current_* 符号链接名无关。
 const DOWNLOAD_BASE = "https://bili-bili.icu/artifacts";
+// 版本日期清单：CI 发布时写入服务器 artifacts 目录，浏览器实时拉取
+const VERSIONS_URL = `${DOWNLOAD_BASE}/versions.json`;
 
 // ==================== 下载平台配置 ====================
 const platforms = [
@@ -54,16 +56,25 @@ const platforms = [
   },
 ];
 
-export default function DownloadSection({
-  dates,
-  counts: initialCounts,
-}: {
-  dates: Record<string, string>;
-  counts: Record<string, number> | null;
-}) {
+export default function DownloadSection() {
   const [showIosGuide, setShowIosGuide] = useState(false);
-  // 下载次数用本地 state 承载：点击下载时乐观自增，无需刷新即可看到变化
-  const [counts, setCounts] = useState<Record<string, number> | null>(initialCounts);
+  // 下载次数用本地 state 承载：初始化从 /api/downloads 拉取，点击下载时乐观自增
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
+  // 版本日期：从 versions.json 拉取
+  const [dates, setDates] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    // 拉取版本日期
+    fetch(VERSIONS_URL)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((data) => setDates(data as Record<string, string>))
+      .catch(() => {});
+    // 拉取下载计数
+    fetch("/api/downloads")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setCounts(data as Record<string, number> | null))
+      .catch(() => {});
+  }, []);
 
   return (
     <>
