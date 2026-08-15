@@ -1,11 +1,15 @@
 use serde_json::Value;
-use tauri::{Emitter, Manager, WebviewBuilder, WebviewUrl};
+use tauri::{Emitter, Manager, WebviewUrl};
+#[cfg(desktop)]
+use tauri::WebviewBuilder;
 #[cfg(not(desktop))]
 use tauri::WebviewWindowBuilder;
 
 /// 活动面板（桌面子 WebView）label
+#[cfg(desktop)]
 const ACTIVITY_PANEL_LABEL: &str = "activity-panel";
 /// 真实活动面板（无 mock，真实交易）label
+#[cfg(desktop)]
 const REAL_ACTIVITY_PANEL_LABEL: &str = "real-activity-panel";
 /// 活动窗口（移动端回退用）label，与 capabilities/default.json 的 windows 保持一致
 #[cfg(not(desktop))]
@@ -145,6 +149,7 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
 }
 
 /// 读取页面最大宽度（单一源头：src/lib/page-config.json，TypeScript 也读同一文件）。
+#[cfg(desktop)]
 fn page_max_width() -> f64 {
     let raw = include_str!("../../src/lib/page-config.json");
     let v: serde_json::Value = serde_json::from_str(raw)
@@ -156,6 +161,7 @@ fn page_max_width() -> f64 {
 /// 宽度与"模拟器页面"（固定 inset-0 + max-width:page_max_width 水平居中）保持一致：
 /// 宽 = min(窗口宽, 页面最大宽度) 并水平居中；高 = 窗口高 * 3/4，贴底（顶部留 1/4）。
 /// 这样无论软件窗口放大缩小，活动页都只落在模拟器页面范围内，与模拟器对齐。
+#[cfg(desktop)]
 fn activity_panel_rect_of(
     w: f64,
     h: f64,
@@ -167,6 +173,7 @@ fn activity_panel_rect_of(
     (pos, size)
 }
 
+#[cfg(desktop)]
 fn activity_panel_rect(
     window: &tauri::Window,
 ) -> Result<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>), String> {

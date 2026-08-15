@@ -470,13 +470,14 @@ jobs:
           TS_RAW="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             | jq -r '.created_at' 2>/dev/null || true)"
-          # 2026-08-15T03:46:59Z -> 20260815-034659
-          BUILD_TS="$(echo "${TS_RAW}" | tr -d ':-' | tr 'T' '-' | cut -c1-15)"
+          # created_at 为 UTC（如 2026-08-15T03:46:59Z），转成东八区（Asia/Shanghai）：
+          # 本地 0-8 点构建时 UTC 日期仍是前一天，若不转换，目录名/landing 日期会落后一天。
+          BUILD_TS="$(TZ=Asia/Shanghai date -d "${TS_RAW}" +%Y%m%d-%H%M%S 2>/dev/null || true)"
           # 必须校验为合法时间戳（YYYYMMDD-HHMMSS）。
           # 注意：API 失败时 jq -r '.created_at' 会输出字面字符串 "null"（非空），
-          # 之前用 [ -z ] 只判断空串拦不住它，导致 release-null。
+          # 此时 date -d 解析失败、BUILD_TS 为空，落到下面的东八区当前时间兜底。
           if ! [[ "${BUILD_TS}" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
-            BUILD_TS="$(date -u +%Y%m%d-%H%M%S)"
+            BUILD_TS="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
           fi
           echo "BUILD_TS=${BUILD_TS}"
           echo "BUILD_TS=${BUILD_TS}" >> "$GITHUB_OUTPUT"
