@@ -2389,7 +2389,7 @@ export default function HomePage() {
               </>
             )}
 
-            {/* 版本号卡片 - 连续点击3次进入管理员页面 */}
+            {/* 版本号卡片 - 显示构建日期，连续点击3次进入管理员页面 */}
             {toolsPage === "home" && (
               <div className="mt-3 flex justify-center">
                 <button
@@ -2405,9 +2405,9 @@ export default function HomePage() {
                     }
                   }}
                   className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"
-                  title="v0.1.0"
+                  title={`版本：${process.env.NEXT_PUBLIC_BUILD_DATE || "开发版"}`}
                 >
-                  v0.1.0
+                  版本：{process.env.NEXT_PUBLIC_BUILD_DATE || "开发版"}
                 </button>
               </div>
             )}

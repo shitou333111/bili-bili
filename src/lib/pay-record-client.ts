@@ -70,7 +70,7 @@ const DEFAULT_APP_SECRET = "560c52ccd288fed045859ed18bffd973";
 const PAGE_SIZE = 20;
 const MAX_PAGES = 1000;
 const REQUEST_RETRY_COUNT = 3;
-const REQUEST_BACKOFF_MS = 1000;
+const REQUEST_BACKOFF_MS = 500;
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 
 // ==================== MD5 实现（纯 JS，用于客户端签名） ====================

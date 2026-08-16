@@ -47,10 +47,25 @@ function getServerUrl() {
 
 const serverUrl = getServerUrl();
 console.log(`[build-tauri] 服务器地址: ${serverUrl}`);
+
+// 构建日期：CI 环境由 workflow 传入；本地开发取当前日期（东八区）
+const buildDate = process.env.NEXT_PUBLIC_BUILD_DATE
+  || (() => {
+    const now = new Date();
+    // 东八区 (Asia/Shanghai) 日期：避免 CI 服务器 UTC 时区导致日期偏移一天
+    const shanghai = new Date(now.getTime() + 8 * 3600 * 1000);
+    return shanghai.toISOString().slice(0, 10);
+  })();
+console.log(`[build-tauri] 构建日期: ${buildDate}`);
+
+// 确保 FoamTree 补丁已应用（CI 环境 npm ci 可能不执行 postinstall）
+console.log("[build-tauri] 应用 FoamTree 补丁...");
+execSync("node scripts/patch-foamtree.mjs", { stdio: "inherit", cwd: root });
+
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 
 execSync(
-  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} next build`,
+  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} NEXT_PUBLIC_BUILD_DATE=${buildDate} next build`,
   {
     stdio: "inherit",
     cwd: root,
@@ -59,6 +74,7 @@ execSync(
       ...process.env,
       TAURI_BUILD: "1",
       NEXT_PUBLIC_SERVER_URL: serverUrl,
+      NEXT_PUBLIC_BUILD_DATE: buildDate,
       NEXT_TELEMETRY_DISABLED: "1",
     },
   },

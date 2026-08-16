@@ -5,6 +5,8 @@ use tauri::WebviewBuilder;
 #[cfg(not(desktop))]
 use tauri::WebviewWindowBuilder;
 
+mod pay_record;
+
 /// 活动面板（桌面子 WebView）label
 #[cfg(desktop)]
 const ACTIVITY_PANEL_LABEL: &str = "activity-panel";
@@ -816,7 +818,8 @@ pub fn run() {
             open_activity_panel,
             close_activity_panel,
             open_real_activity_panel,
-            close_real_activity_panel
+            close_real_activity_panel,
+            pay_record::fetch_pay_records_background
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
