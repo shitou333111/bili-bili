@@ -122,9 +122,10 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       var oldScrim = document.getElementById("__bili_activity_scrim__");
       if (oldScrim) oldScrim.remove();
       // 1. 可点击收起区（仅移动端 TOP_OFFSET>0）：覆盖标题栏上方偏移区，
-      //    暗紫色遮罩 + 居中"收起"胶囊，点击整页向下收起（同礼物栏交互）。
+      //    暗紫色遮罩，点击整页向下收起（同礼物栏交互）。
       //    背景改为完全不透明：否则页面内容滚动时会从半透明处"透到标题栏上方"，
       //    造成"内容可以滑动超出标题栏"的错觉。不再用纯黑铺满偏移区（避免黑屏观感）。
+      //    曾在此区居中显示"↑ 收起"胶囊作视觉提示，已按需求删除，仅保留可点击暗紫遮罩。
       if (TOP_OFFSET > 0) {{
         var scrim = document.createElement("div");
         scrim.id = "__bili_activity_scrim__";
@@ -132,14 +133,6 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
           "position:fixed;top:0;left:0;right:0;height:" + TOP_OFFSET + "px;z-index:2147483644;" +
           "background:linear-gradient(to bottom, #2b1f2b 0%, #241a2e 60%, #1c1426 100%);" +
           "display:flex;align-items:center;justify-content:center;cursor:pointer;";
-        var cap = document.createElement("div");
-        cap.style.cssText =
-          "display:flex;align-items:center;gap:5px;padding:7px 16px;border-radius:999px;" +
-          "background:rgba(255,255,255,0.16);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);" +
-          "color:#fff;font-size:12px;font-weight:500;letter-spacing:.5px;";
-        cap.innerHTML =
-          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" style="opacity:.9"><path stroke-linecap="round" stroke-linejoin="round" d="M19 15l-7-7-7 7"/></svg>收起';
-        scrim.appendChild(cap);
         scrim.onclick = dismiss;
         document.body.appendChild(scrim);
       }}
@@ -285,7 +278,7 @@ fn android_finish_activity(app: &tauri::AppHandle, webview_label: &str) {
             }
         });
     }) {
-        eprintln!("[BILI-ANDROID] android_finish_activity: with_webview 派发失败 label={label}: {e}");
+        eprintln!("[BILI-ANDROID] android_finish_activity: with_webview 派发失败 label={webview_label}: {e}");
     }
 }
 
