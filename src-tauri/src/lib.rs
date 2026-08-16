@@ -2,18 +2,10 @@ use serde_json::Value;
 use tauri::{Emitter, Manager, WebviewUrl};
 use tauri::WebviewBuilder;
 
-/// 活动面板（桌面子 WebView）label
-#[cfg(desktop)]
+/// 活动面板子 WebView label（桌面端 + 移动端统一使用）
 const ACTIVITY_PANEL_LABEL: &str = "activity-panel";
-/// 真实活动面板（无 mock，真实交易）label
-#[cfg(desktop)]
+/// 真实活动面板子 WebView label（桌面端 + 移动端统一使用）
 const REAL_ACTIVITY_PANEL_LABEL: &str = "real-activity-panel";
-/// 活动窗口（移动端回退用）label，与 capabilities/default.json 的 windows 保持一致
-#[cfg(not(desktop))]
-const ACTIVITY_WINDOW_LABEL: &str = "activity";
-/// 真实活动窗口（移动端回退用）label
-#[cfg(not(desktop))]
-const REAL_ACTIVITY_WINDOW_LABEL: &str = "real-activity";
 
 /// 判断是否 B站 登录相关地址（用于在导航层拦截，跳过登录跳转）
 fn is_login_url(url: &str) -> bool {
