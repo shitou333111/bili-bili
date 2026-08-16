@@ -1,6 +1,4 @@
 use serde_json::Value;
-#[cfg(not(desktop))]
-use std::time::Duration;
 use tauri::{Emitter, Manager, WebviewUrl};
 #[cfg(desktop)]
 use tauri::WebviewBuilder;
@@ -349,19 +347,16 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                 if is_login_url(url) {
                     return false;
                 }
-                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
+                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭。
+                // 移动端在 on_navigation 回调中 destroy() 会导致窗口生命周期异常
+                // （Android 窗口残留可滑动拽回、iOS 无法重建）。
+                // 改为 close() 隐藏窗口 + emit 通知前端，真正的 destroy() 在
+                // open_activity_panel 中执行（不在导航回调内，避免了回调 -> 销毁 -> 回调的递归问题）。
                 if url.contains("close-activity.local") || url.contains("close-activity://") {
-                    // 先 emit 事件通知前端复位状态，再异步销毁窗口。
-                    // 在 on_navigation 回调中同步 destroy() 会导致移动端窗口生命周期异常：
-                    // Android 窗口残留（被隐藏而不是销毁，滑动可拽回），iOS 无法重建窗口。
                     let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                    let app_clone = nav_app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        if let Some(w) = app_clone.get_webview_window(ACTIVITY_WINDOW_LABEL) {
-                            let _ = w.destroy();
-                        }
-                    });
+                    if let Some(w) = nav_app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
+                        let _ = w.close();
+                    }
                     return false;
                 }
                 true
@@ -693,16 +688,13 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             .title(title)
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
-                // 返回按钮触发导航到 close-activity.local：先 emit 再异步销毁（同 activity_panel 逻辑）
+                // 返回按钮触发导航到 close-activity.local：
+                // close() 隐藏窗口 + emit 通知前端，destroy() 在 open_real_activity_panel 中执行
                 if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
                     let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                    let app_clone = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        if let Some(w) = app_clone.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
-                            let _ = w.destroy();
-                        }
-                    });
+                    if let Some(w) = app_handle.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
+                        let _ = w.close();
+                    }
                     return false;
                 }
                 true
