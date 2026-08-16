@@ -46,7 +46,7 @@ try {
 
   // 补丁 2：阻止 attribution 组的标题栏背景矩形绘制（否则文字清空后仍留下色块）
   const OLD_TITLEBAR = 'if(b.attribution)var y=yd.Zf("")';
-  const NEW_TITLEBAR = 'if(b.attribution)var y=yd.Zf(""),w.titleBarShown=false';
+  const NEW_TITLEBAR = 'if(b.attribution){var y=yd.Zf("");w.titleBarShown=false}';
   if (src.includes(OLD_TITLEBAR) && !src.includes(NEW_TITLEBAR)) {
     src = src.replace(OLD_TITLEBAR, NEW_TITLEBAR);
     changed = true;
