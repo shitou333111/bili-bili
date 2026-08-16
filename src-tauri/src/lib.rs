@@ -304,6 +304,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                 }
                 // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
                 if url.contains("close-activity.local") {
+                    // 先 emit 事件通知前端，再关闭 WebView（避免 destroy/close 打断事件投递）
+                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     if let Some(main_window) = nav_app.get_window("main") {
                         if let Some(wv) = main_window
                             .webviews()
@@ -313,7 +315,6 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                             let _ = wv.close();
                         }
                     }
-                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -348,11 +349,14 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                 }
                 // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
                 if url.contains("close-activity.local") {
+                    // 先 emit 事件通知前端复位状态，再 destroy 窗口。
+                    // 若先 destroy 再 emit，destroy 可能打断事件投递 → 前端
+                    // nativePanelOpen 卡在 true → 遮罩常驻 → 第二次打开无反应。
+                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     if let Some(w) = nav_app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
                         // 移动端用 destroy() 强制销毁，确保窗口从注册表移除、可再次打开
                         let _ = w.destroy();
                     }
-                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -367,6 +371,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
 /// 关闭活动面板（供前端顶部遮罩点击时调用）
 #[tauri::command]
 async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
+    // 先 emit 再 close/destroy：确保前端收到事件复位 nativePanelOpen
+    let _ = app.emit_to("main", "activity-panel-closed", ());
     #[cfg(desktop)]
     {
         if let Some(main_window) = app.get_window("main") {
@@ -381,12 +387,10 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(not(desktop))]
     {
-        // 移动端窗口用 destroy() 强制销毁，确保从注册表移除、可再次打开
         if let Some(w) = app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
             let _ = w.destroy();
         }
     }
-    let _ = app.emit_to("main", "activity-panel-closed", ());
     Ok(())
 }
 
@@ -646,9 +650,9 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         let builder = WebviewBuilder::new(REAL_ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
-                // 返回按钮触发导航到 close-activity.local：在原生层直接关闭面板（同步可靠），
-                // 再通知前端状态复位。不再依赖前端异步监听回调，保证面板可反复开关。
+                // 先 emit 再 close：避免 close 打断事件投递（与 activity_panel 一致）
                 if nav_url.as_str().contains("close-activity.local") {
+                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     if let Some(main_window) = app_handle.get_window("main") {
                         if let Some(wv) = main_window
                             .webviews()
@@ -658,7 +662,6 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
                             let _ = wv.close();
                         }
                     }
-                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -683,12 +686,12 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             .title(title)
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
-                // 返回按钮触发导航到 close-activity.local：原生层直接关闭，并通知前端复位
+                // 返回按钮触发导航到 close-activity.local：先 emit 再 destroy（同 activity_panel 逻辑）
                 if nav_url.as_str().contains("close-activity.local") {
+                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     if let Some(w) = app_handle.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
                         let _ = w.destroy();
                     }
-                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -703,6 +706,8 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
 /// 关闭真实活动面板
 #[tauri::command]
 async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
+    // 先 emit 再 close/destroy：确保前端收到事件
+    let _ = app.emit_to("main", "real-activity-panel-closed", ());
     #[cfg(desktop)]
     {
         if let Some(main_window) = app.get_window("main") {
@@ -717,12 +722,10 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
     }
     #[cfg(not(desktop))]
     {
-        // 移动端窗口用 destroy() 强制销毁，确保从注册表移除、可再次打开
         if let Some(w) = app.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
             let _ = w.destroy();
         }
     }
-    let _ = app.emit_to("main", "real-activity-panel-closed", ());
     Ok(())
 }
 

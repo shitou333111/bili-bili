@@ -691,13 +691,13 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   }
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto", paddingTop: "var(--safe-top, 0px)", paddingBottom: "var(--safe-bottom, 0px)" }}>
+    <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto" }}>
       {/* 直播流背景（最底层） */}
       {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} />}
       {!streamerInfo && <div className="absolute inset-0 bg-[#2B1F2B]" />}
 
-      {/* 顶部栏 */}
-      <div className="relative z-30 flex items-center px-3 pt-3 pb-2">
+      {/* 顶部栏（安全区 padding-top 移到此处，让视频可铺满全屏） */}
+      <div className="relative z-30 flex items-center px-3 pb-2" style={{ paddingTop: "calc(var(--safe-top, 0px) + 12px)" }}>
         <button
           onClick={onBack}
           className="w-8 h-8 flex items-center justify-center rounded-full bg-black/20 backdrop-blur-sm z-10"
@@ -727,7 +727,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         </div>
       </div>
 
-      <div className="flex-1 relative z-10" />
+      {/* 底部栏改为绝对定位，不再需要 flex-1 占位 */}
+      <div className="relative z-10" />
 
       {/* 大礼物特效 - 在活动卡片/横幅之上，礼物面板之下，可遮住横幅 */}
       {playingEffect && (
@@ -794,7 +795,7 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
       )}
 
       {/* 活动入口卡片 - 单活动不滑动，仅显示图片；高度按图片宽高比自适应 */}
-      <div className="absolute right-3 bottom-28 z-20" style={{ display: showFloatingCombo && comboGift ? "none" : "block" }}>
+      <div className="absolute right-3 bottom-24 z-20" style={{ display: showFloatingCombo && comboGift ? "none" : "block" }}>
         {activeActivity && (
           <button
             className="relative block rounded-lg overflow-hidden shadow-lg bg-black/40"
@@ -809,8 +810,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         )}
       </div>
 
-      {/* 底部栏 - 更扁（mt-2 使输入框/人气票/礼物按钮行整体下移一点，与上方空出更多间距） */}
-      <div className="relative z-30 px-3 pb-1.5 pt-1.5 mt-2">
+      {/* 底部栏 - 绝对定位，使输入框/人气票/礼物按钮行可精确控制距底距离 */}
+      <div className="absolute bottom-0 inset-x-0 z-30 px-3 pb-1.5 pt-1.5" style={{ paddingBottom: "var(--safe-bottom, 0px)" }}>
         <div className="flex items-center gap-2">
           {/* 聊天输入框 */}
           <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">
