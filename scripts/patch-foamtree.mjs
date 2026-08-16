@@ -63,6 +63,19 @@ try {
     console.log("[patch-foamtree] 修复: 已移除残留分号（;else → else）");
   }
 
+  // 补丁 3：attribution 组权重强制为 0。
+  // Demo 版在 l() 函数中无条件给 attribution 组分配至少 2.5% 的权重
+  // （Math.max(.025, attributionWeight)），即使 API 设置 attributionWeight:0 也无效。
+  // 结果是右下角始终有一个色块（attribution 组的多边形），之前补丁只清空了文字和标题栏。
+  // 这里把权重计算改为 0，使 attribution 组的面积为零、视觉上不可见。
+  const OLD_WEIGHT = "y.attribution&&(y.weight=Math.max(.025,a.Gg)*m)";
+  const NEW_WEIGHT = "y.attribution&&(y.weight=0)";
+  if (src.includes(OLD_WEIGHT) && !src.includes(NEW_WEIGHT)) {
+    src = src.replace(OLD_WEIGHT, NEW_WEIGHT);
+    changed = true;
+    console.log("[patch-foamtree] 补丁3: 已强制 attribution 组权重为 0");
+  }
+
   if (changed) {
     writeFileSync(file, src, "utf8");
     console.log("[patch-foamtree] 补丁完成");

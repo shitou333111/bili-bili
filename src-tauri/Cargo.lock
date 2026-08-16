@@ -239,6 +239,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-pldownloader",
  "tauri-plugin-store",
+ "tokio",
 ]
 
 [[package]]
