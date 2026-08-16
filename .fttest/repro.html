@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree 渐进加载（慢速模拟首次加载）</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  #wrap { width: 360px; height: 620px; margin: 12px auto; position: relative; overflow: hidden; background: #f6f1e9; }
+  #container { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.33333); }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 200px; }
+  button { margin: 4px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="container"></div></div>
+<div>
+  <button id="btnSlow">慢速加载(模拟首次, 每30ms加载1张+redraw)</button>
+  <button id="btnFast">立即加载(模拟二次)</button>
+  <button id="btnSnap">快照</button>
+</div>
+<div id="out">loading...（点击按钮开始）</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const container = document.getElementById("container");
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; console.log(m); };
+
+const DOWNLOAD_W = 1080, DOWNLOAD_H = 1920;
+const AVATAR_COLORS = [
+  [230,40,60],[30,120,230],[40,180,80],[240,180,30],[150,60,220],
+  [0,170,200],[230,120,40],[80,180,120],[200,80,150],[120,120,40],
+];
+function makeColorImg(r,g,b){
+  const c=document.createElement("canvas"); c.width=2; c.height=2;
+  const x=c.getContext("2d"); x.fillStyle=`rgb(${r},${g},${b})`; x.fillRect(0,0,2,2);
+  return c.toDataURL();
+}
+const AVATAR_IMGS = AVATAR_COLORS.map(c=>makeColorImg(c[0],c[1],c[2]));
+const N = 300;
+const groups = [];
+for (let i=0;i<N;i++){
+  groups.push({
+    id: i+1, label: "G"+i, weight: Math.sqrt(10000 - i*30),
+    color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+    face: AVATAR_IMGS[i % AVATAR_IMGS.length], name: "G"+i, value: 10000 - i*30,
+  });
+}
+function polygonBBox(poly){
+  let a=1e9,b=1e9,c=-1e9,d=-1e9;
+  for(const p of poly){ a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y); }
+  return {a,b,c,d};
+}
+const imageMap = new Map();
+
+const ft = new FoamTree({
+  element: container, pixelRatio: 1, layout: "relaxed", stacking: "flattened",
+  layoutByWeightOrder: true, relaxationInitializer: "fisheye",
+  descriptionGroup: false, descriptionGroupSize: 0, descriptionGroupMinHeight: 0,
+  groupLabelDecorator: (o,p,v)=>{ v.labelText=""; },
+  groupLabelFontSize: 0, groupLabelMinFontSize: 0,
+  groupBorderWidth: 0, groupBorderWidthScaling: 1, groupInsetWidth: 0,
+  groupStrokeType: "none", groupStrokeWidth: 0, groupFillType: "plain", groupBorderRadius: 0,
+  groupSelectionOutlineWidth: 2.5, groupSelectionOutlineColor: "#000000", groupSelectionOutlineShadowSize: 0,
+  groupHoverStrokeWidth: 0, groupExposureScale: 1,
+  rolloutDuration: 800, pullbackDuration: 600,
+  wireframeDrawingTimeout: 0, wireframeLabelDrawingTimeout: 0,
+  wireframeContentDecorationDrawing: "always",
+  finalCompleteDrawMaxDuration: 0, finalIncrementalDrawMaxDuration: 0,
+  fadeDuration: 300, zoomMouseWheelDuration: 300,
+  groupContentDecoratorTriggering: "onSurfaceDirty",
+  attributionLogo: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+  attributionWeight: 0, attributionText: "",
+  descriptionGroupPolygonDrawn: false, backgroundColor: "#f6f1e9",
+  groupColorDecorator: (o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+  groupContentDecorator: (o,p,v)=>{
+    const ctx = p.context, poly = p.polygon, node = p.group;
+    if(!poly || poly.length<3) return;
+    const bb = polygonBBox(poly);
+    ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+    for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+    ctx.closePath(); ctx.clip();
+    const img = imageMap.get(node.id);
+    if(img && img.complete && img.naturalWidth>0){
+      const iw=img.naturalWidth, ih=img.naturalHeight;
+      const sc=Math.max((bb.c-bb.a)/iw, (bb.d-bb.b)/ih);
+      const dw=iw*sc, dh=ih*sc;
+      ctx.drawImage(img, bb.a+(bb.c-bb.a-dw)/2, bb.b+(bb.d-bb.b-dh)/2, dw, dh);
+    } else {
+      ctx.fillStyle = node.color || "#d8c9b4";
+      ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  },
+  dataObject: { groups },
+});
+
+const allCanvases = container.querySelectorAll("canvas");
+log("=== canvas结构 ===");
+allCanvases.forEach((c,i)=>{ log(`canvas[${i}]: ${c.width}x${c.height} opacity=${getComputedStyle(c).opacity} z=${getComputedStyle(c).zIndex}`); });
+
+function countOnCanvas(c){
+  const ctx = c.getContext("2d");
+  const data = ctx.getImageData(0,0,c.width,c.height).data;
+  let total=0, distinct=0, alphaPix=0, bgPix=0, logo=0;
+  const cc = new Array(AVATAR_COLORS.length).fill(0);
+  for(let y=0;y<c.height;y+=3){
+    for(let x=0;x<c.width;x+=3){
+      const o=(y*c.width+x)*4;
+      const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+      if(a>0) alphaPix++;
+      if(a>200 && Math.abs(r-0x1d)<45 && Math.abs(g-0x35)<45 && Math.abs(b-0x57)<45) logo++;
+      for(let k=0;k<AVATAR_COLORS.length;k++){
+        const ac=AVATAR_COLORS[k];
+        if(a>200 && Math.abs(r-ac[0])<25 && Math.abs(g-ac[1])<25 && Math.abs(b-ac[2])<25){ cc[k]++; total++; }
+      }
+      if(a>200 && Math.abs(r-246)<8 && Math.abs(g-241)<8 && Math.abs(b-233)<8) bgPix++;
+    }
+  }
+  for(let k=0;k<cc.length;k++) if(cc[k]>0) distinct++;
+  return { total, distinct, alphaPix, bgPix, logo };
+}
+
+function snapshot(tag){
+  log(`===== ${tag} =====`);
+  allCanvases.forEach((c,i)=>{
+    const r = countOnCanvas(c);
+    log(`canvas[${i}] op=${getComputedStyle(c).opacity} 头像采样=${r.total} 种类=${r.distinct}/10 alpha采样=${r.alphaPix} 背景采样=${r.bgPix} logo=${r.logo}`);
+  });
+}
+window.__snapshot = snapshot;
+document.getElementById("btnSnap").onclick = () => snapshot("手动快照");
+
+let loading = false;
+function startLoad(perMs){
+  if (loading) return; loading = true;
+  log(`开始加载: 每${perMs}ms一张`);
+  let idx = 0;
+  const timer = setInterval(()=>{
+    if (idx >= groups.length) { clearInterval(timer); log(`全部加载完成 loaded=${imageMap.size}`); loading=false; return; }
+    const g = groups[idx]; idx++;
+    const img = new Image(); img.crossOrigin = "anonymous";
+    img.onload = ()=>{ imageMap.set(g.id,img); ft.redraw(); };
+    img.onerror = ()=>{ imageMap.set(g.id,img); };
+    img.src = g.face;
+  }, perMs);
+}
+document.getElementById("btnSlow").onclick = () => startLoad(30);
+document.getElementById("btnFast").onclick = () => startLoad(0);
+
+// 自动：3秒后开始慢速加载，观察 canvas 更新情况
+setTimeout(()=>{ log("--- 自动触发慢速加载 ---"); startLoad(30); }, 500);
+setTimeout(()=>snapshot("t=1s(加载中)"), 1500);
+setTimeout(()=>snapshot("t=3s(加载中)"), 3500);
+setTimeout(()=>snapshot("t=6s(加载完成)"), 6500);
+setTimeout(()=>snapshot("t=10s"), 10500);
+</script>
+</body>
+</html>

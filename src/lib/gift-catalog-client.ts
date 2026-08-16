@@ -11,10 +11,12 @@ import {
   ensureGiftDataLoaded,
   getGiftImg as storeGetGiftImg,
   getGiftList as storeGetGiftList,
+  getRoomGiftData as storeGetRoomGiftData,
   type GiftConfigItem,
+  type RoomGiftListData,
 } from "./gift-local-store";
 
-export type { GiftConfigItem };
+export type { GiftConfigItem, RoomGiftListData };
 
 /** 确保本地礼物数据已加载（TTL 12h；缺失或过期自动重新下载） */
 export async function ensureGiftCatalogLoaded(platform: Platform): Promise<void> {
@@ -29,4 +31,9 @@ export function getGiftImg(giftId: number): string {
 /** 返回完整礼物列表（含价格、角标等全部字段） */
 export function getGiftList(): GiftConfigItem[] {
   return storeGetGiftList();
+}
+
+/** 直播间礼物面板数据（roomGiftList API，gold_list 原始顺序 + tab_list） */
+export function getRoomGiftData(): RoomGiftListData {
+  return storeGetRoomGiftData();
 }

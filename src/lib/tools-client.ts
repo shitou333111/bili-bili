@@ -266,12 +266,27 @@ export type UserInfoResult = {
   data: Record<number, { name: string; face: string }>;
 };
 
-const REQUEST_DELAY_MS = 200;
+// 有界并发：同时最多向 B站 API 发起 CONCURRENCY 个请求。
+// 原先逐个 uid 串行 + 200ms 固定延迟，首屏头像获取需数分钟；并行后大幅缩短。
+const CONCURRENCY = 10;
+
+/** 以固定并发数处理一批 uid，全部完成后 resolve */
+async function runPool<T>(items: number[], worker: (uid: number) => Promise<T>): Promise<void> {
+  let index = 0;
+  async function next() {
+    while (index < items.length) {
+      const i = index++;
+      await worker(items[i]);
+    }
+  }
+  const count = Math.min(CONCURRENCY, items.length);
+  await Promise.all(Array.from({ length: count }, next));
+}
 
 /**
  * 批量获取用户信息
  * 对应 GET /api/tools/user-info?uids=a,b[&refresh=1]
- * 逐个 uid 依次请求（带 200ms 间隔），返回 { uid: { name, face } }
+ * 以有界并发并行请求，返回 { uid: { name, face } }
  */
 export async function fetchUserInfo(
   platform: Platform,
@@ -284,35 +299,30 @@ export async function fetchUserInfo(
 
   const results: Record<number, { name: string; face: string }> = {};
 
-  for (let i = 0; i < uids.length; i++) {
-    const uid = uids[i];
-
+  await runPool(uids, async (uid) => {
     // 非强制刷新时命中缓存
     if (!refresh && userInfoCache.has(uid)) {
       results[uid] = userInfoCache.get(uid)!;
+      return;
+    }
+
+    let info: { name: string; face: string } = { name: `用户${uid}`, face: "" };
+
+    // 先尝试 live card_up
+    const result = await fetchUserInfoWithRetry(platform, uid);
+    if (result && result.face) {
+      info = result;
     } else {
-      let info: { name: string; face: string } = { name: `用户${uid}`, face: "" };
-
-      // 先尝试 live card_up
-      const result = await fetchUserInfoWithRetry(platform, uid);
-      if (result && result.face) {
-        info = result;
-      } else {
-        // 备选：web-interface/card
-        const card = await fetchUserInfoByCard(platform, uid);
-        if (card && card.face) {
-          info = card;
-        }
+      // 备选：web-interface/card
+      const card = await fetchUserInfoByCard(platform, uid);
+      if (card && card.face) {
+        info = card;
       }
-
-      userInfoCache.set(uid, info);
-      results[uid] = info;
     }
 
-    if (i < uids.length - 1) {
-      await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
-    }
-  }
+    userInfoCache.set(uid, info);
+    results[uid] = info;
+  });
 
   return { code: 0, data: results };
 }

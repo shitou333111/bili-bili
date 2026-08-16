@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree 自动分析</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  #wrap { width: 360px; height: 620px; margin: 12px auto; position: relative; overflow: hidden; background: #f6f1e9; }
+  #container { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.33333); }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 300px; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="container"></div></div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const container = document.getElementById("container");
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; };
+
+const DOWNLOAD_W = 1080, DOWNLOAD_H = 1920;
+
+// 纯色数据URI头像（2x2 实心色块），避免CORS污染canvas
+const AVATAR_COLORS = [
+  [230,40,60],[30,120,230],[40,180,80],[240,180,30],[150,60,220],
+  [0,170,200],[230,120,40],[80,180,120],[200,80,150],[120,120,40],
+];
+function makeColorImg(r,g,b){
+  const c=document.createElement("canvas"); c.width=2; c.height=2;
+  const x=c.getContext("2d"); x.fillStyle=`rgb(${r},${g},${b})`; x.fillRect(0,0,2,2);
+  return c.toDataURL();
+}
+const AVATAR_IMGS = AVATAR_COLORS.map(c=>makeColorImg(c[0],c[1],c[2]));
+
+const N = 300;
+const groups = [];
+for (let i=0;i<N;i++){
+  groups.push({
+    id: i+1,
+    label: "G"+i,
+    weight: Math.sqrt(10000 - i*30),
+    color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+    face: AVATAR_IMGS[i % AVATAR_IMGS.length],
+    name: "G"+i,
+    value: 10000 - i*30,
+  });
+}
+
+function polygonBBox(poly){
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  for(const p of poly){ if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; }
+  return {minX,minY,maxX,maxY,w:maxX-minX,h:maxY-minY};
+}
+const imageMap = new Map();
+
+const ft = new FoamTree({
+  element: container,
+  pixelRatio: 1,
+  layout: "relaxed",
+  stacking: "flattened",
+  layoutByWeightOrder: true,
+  relaxationInitializer: "fisheye",
+  descriptionGroup: false,
+  descriptionGroupSize: 0,
+  descriptionGroupMinHeight: 0,
+  groupLabelDecorator: (o,p,v)=>{ v.labelText=""; },
+  groupLabelFontSize: 0,
+  groupLabelMinFontSize: 0,
+  groupBorderWidth: 0,
+  groupInsetWidth: 0,
+  groupStrokeType: "none",
+  groupStrokeWidth: 0,
+  groupFillType: "plain",
+  groupBorderRadius: 0,
+  groupSelectionOutlineWidth: 2.5,
+  groupHoverStrokeWidth: 0,
+  groupExposureScale: 1,
+  rolloutDuration: 0,
+  pullbackDuration: 0,
+  wireframeDrawingTimeout: 0,
+  wireframeLabelDrawingTimeout: 0,
+  wireframeContentDecorationDrawing: "always",
+  finalCompleteDrawMaxDuration: 0,
+  finalIncrementalDrawMaxDuration: 0,
+  fadeDuration: 0,
+  groupContentDecoratorTriggering: "onSurfaceDirty",
+  attributionLogo: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+  attributionWeight: 0,
+  attributionText: "",
+  backgroundColor: "#f6f1e9",
+  groupColorDecorator: (o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+  groupContentDecorator: (o,p,v)=>{
+    const ctx = p.context, poly = p.polygon, node = p.group;
+    if(!poly || poly.length<3) return;
+    const bbox = polygonBBox(poly);
+    ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+    for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+    ctx.closePath(); ctx.clip();
+    const img = imageMap.get(node.id);
+    if(img && img.complete && img.naturalWidth>0){
+      const iw=img.naturalWidth, ih=img.naturalHeight, sc=Math.max(bbox.w/iw, bbox.h/ih);
+      const dw=iw*sc, dh=ih*sc;
+      ctx.drawImage(img, bbox.minX+(bbox.w-dw)/2, bbox.minY+(bbox.h-dh)/2, dw, dh);
+    } else {
+      ctx.fillStyle = node.color || "#d8c9b4";
+      ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  },
+  dataObject: { groups },
+});
+
+// 记录每个canvas在DOM中的创建顺序信息
+const allCanvases = container.querySelectorAll("canvas");
+log("=== canvas结构 ===");
+allCanvases.forEach((c,i)=>{
+  log(`canvas[${i}]: ${c.width}x${c.height} style=${(c.style.cssText||"").slice(0,80)}`);
+});
+const qs = container.querySelector("canvas");
+let qsIndex = -1;
+allCanvases.forEach((c,i)=>{ if(c===qs) qsIndex=i; });
+log(`querySelector('canvas') 返回 canvas[${qsIndex}]`);
+log("");
+
+// 加载全部头像（模拟组件：全部并行发请求）
+let loaded = 0;
+groups.forEach(g=>{
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = ()=>{ imageMap.set(g.id,img); loaded++; ft.redraw(); };
+  img.src = g.face;
+});
+
+// 分析函数
+function analyze(tag){
+  log(`===== ${tag} =====`);
+  const cvs = container.querySelectorAll("canvas");
+  cvs.forEach((c,i)=>{
+    const ctx = c.getContext("2d");
+    // 找深蓝 #1d3557 logo 像素
+    let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,cnt=0;
+    // 统计每个头像色的像素数
+    const colorCount = new Array(AVATAR_COLORS.length).fill(0);
+    const data = ctx.getImageData(0,0,c.width,c.height).data;
+    for(let y=0;y<c.height;y+=2){
+      for(let x=0;x<c.width;x+=2){
+        const o=(y*c.width+x)*4;
+        const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+        if(a>200 && Math.abs(r-0x1d)<45 && Math.abs(g-0x35)<45 && Math.abs(b-0x57)<45){
+          if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; cnt++;
+        }
+        for(let k=0;k<AVATAR_COLORS.length;k++){
+          const ac=AVATAR_COLORS[k];
+          if(a>200 && Math.abs(r-ac[0])<25 && Math.abs(g-ac[1])<25 && Math.abs(b-ac[2])<25) colorCount[k]++;
+        }
+      }
+    }
+    const distinct = colorCount.filter(n=>n>0).length;
+    let logoStr = cnt>0 ? `logo像素=${cnt} bbox x[${minX},${maxX}] y[${minY},${maxY}] (w=${maxX-minX} h=${maxY-minY})` : "无logo";
+    log(`canvas[${i}] ${logoStr} | 头像色出现种类=${distinct}/${AVATAR_COLORS.length} (总采样点=${colorCount.reduce((a,b)=>a+b,0)})`);
+  });
+  log("");
+}
+
+setTimeout(()=>{
+  log(`已加载头像: ${loaded}/${N}`);
+  analyze("渲染完成后");
+}, 4000);
+
+setTimeout(()=>{
+  // 模拟真实组件的 generateImageDataUrl（抓第一个canvas + 右下角覆盖）
+  const canvas = container.querySelector("canvas");
+  const copy = document.createElement("canvas");
+  copy.width = canvas.width; copy.height = canvas.height;
+  const cctx = copy.getContext("2d");
+  cctx.drawImage(canvas, 0, 0);
+  cctx.fillStyle = "#f6f1e9";
+  cctx.fillRect(copy.width-240, copy.height-60, 240, 60);
+  log(`===== 复刻 generateImageDataUrl =====`);
+  log(`抓取 canvas[${qsIndex}], 尺寸=${canvas.width}x${canvas.height}`);
+  // 分析抓取结果的右下角是否被覆盖为 #f6f1e9（即"白色长方形"）
+  const d = cctx.getImageData(copy.width-120, copy.height-30, 1, 1).data;
+  log(`下载图右下角(960,1890) 颜色=${d[0]},${d[1]},${d[2]}  (背景色应为 246,241,233)`);
+  // 检查右下角覆盖区域是否覆盖了logo
+  const before = cctx.getImageData(canvas.width-120, canvas.height-30, 1, 1).data;
+  log(`覆盖前 canvas右下角(960,1890) 颜色=${before[0]},${before[1]},${before[2]}`);
+}, 4500);
+
+// 暴露到window方便browser_use调用
+window.__analyze = analyze;
+window.__loaded = () => loaded;
+</script>
+</body>
+</html>

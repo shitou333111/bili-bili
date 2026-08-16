@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logo 隐藏方案验证</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .box { width: 320px; height: 520px; position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 300px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div><div class="box" id="c1"></div><div>A: 普通装饰(对照组,应显示logo)</div></div>
+  <div><div class="box" id="c2"></div><div>B: 装饰中覆盖attribution多边形(应隐藏logo)</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; console.log(m); };
+
+const REAL = [
+  13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1,
+];
+const groups = REAL.map((v,i)=>({
+  id: i+1, label:"G"+i, weight: Math.sqrt(v),
+  color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+  name:"G"+i, value: v,
+}));
+
+function polyArea(poly){let s=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];s+=p.x*q.y-q.x*p.y;}return Math.abs(s)/2;}
+
+const BG = "#f6f1e9";
+let attributionCalls = { A: 0, B: 0 };
+
+function common(el, mode){
+  const cfg = {
+    element: el, pixelRatio: 1, layout:"relaxed", stacking:"flattened",
+    layoutByWeightOrder:true, relaxationInitializer:"fisheye",
+    descriptionGroup:false, descriptionGroupSize:0, descriptionGroupMinHeight:0,
+    groupLabelDecorator:(o,p,v)=>{v.labelText="";}, groupLabelFontSize:0, groupLabelMinFontSize:0,
+    groupBorderWidth:0, groupInsetWidth:0, groupStrokeType:"none", groupStrokeWidth:0,
+    groupFillType:"plain", groupBorderRadius:0,
+    wireframeDrawingTimeout:0, wireframeLabelDrawingTimeout:0, wireframeContentDecorationDrawing:"always",
+    finalCompleteDrawMaxDuration:0, finalIncrementalDrawMaxDuration:0, fadeDuration:0,
+    groupContentDecoratorTriggering:"onSurfaceDirty",
+    attributionText:"",
+    backgroundColor: BG,
+    groupColorDecorator:(o,p,v)=>{ v.groupColor = p.group.color || BG; },
+    groupContentDecorator:(o,p,v)=>{
+      const ctx = p.context, poly = p.polygon, node = p.group;
+      if(!poly || poly.length < 3) return;
+      // 记录所有进入装饰的组，判断 attribution 组是否可达
+      if(!window.__decorLog) window.__decorLog = [];
+      if(window.__decorLog.length < 60){
+        window.__decorLog.push("id="+node.id+" attr="+node.attribution+" n="+(node.name||"")+" area="+Math.round(polyArea(poly)));
+      }
+      if(node && node.attribution){
+        attributionCalls[mode]++;
+        if(mode === "B"){
+          // 用背景色覆盖整个 attribution 多边形（盖住矢量logo）
+          ctx.save(); ctx.beginPath();
+          ctx.moveTo(poly[0].x,poly[0].y);
+          for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+          ctx.closePath(); ctx.fillStyle = BG; ctx.fill(); ctx.restore();
+        }
+        return;
+      }
+      // 普通格子：填充占位色
+      ctx.save(); ctx.beginPath();
+      ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath();
+      ctx.fillStyle = node.color || BG; ctx.fill(); ctx.restore();
+    },
+    dataObject:{groups},
+  };
+}
+
+// A: 默认 attributionWeight(0.025, logo 可见) + 不覆盖 → 对照
+// B: 默认 attributionWeight(0.025, logo 可见) + 装饰中覆盖 attribution 多边形 → 应隐藏 logo
+// 两个配置布局完全一致(都不改 attributionDistanceFromCenter)，仅装饰绘制不同
+const ftA = new FoamTree(common(document.getElementById("c1"),"A"));
+const ftB = new FoamTree(common(document.getElementById("c2"),"B"));
+// attributionWeight 用默认 0.025，保证 attribution 组有可见多边形(logo 显示)
+
+// 统计画布中的"深色logo像素"数量（logo 为深蓝 #1d3557，背景为浅色）
+function countDarkPixels(canvas){
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  const img = ctx.getImageData(0,0,w,h).data;
+  let dark = 0, total = 0;
+  // 只统计右下角 1/4 区域（logo 在 corner）
+  const sx = Math.floor(w*0.5), sy = Math.floor(h*0.55);
+  for(let y=sy;y<h;y+=2){
+    for(let x=sx;x<w;x+=2){
+      const i=(y*w+x)*4;
+      const r=img[i],g=img[i+1],b=img[i+2];
+      total++;
+      // 深色判定：明显比背景 #f6f1e9 (246,241,233) 暗
+      if(r<200 && g<200 && b<200) dark++;
+    }
+  }
+  return { dark, total };
+}
+
+function check(tag, ft){
+  log(`===== ${tag} =====`);
+  log(`attribution 装饰调用次数: ${attributionCalls[tag]}`);
+  const el = document.getElementById(tag==="A"?"c1":"c2");
+  const cvs = el.querySelector("canvas");
+  if(!cvs){ log("无canvas"); return; }
+  const px = countDarkPixels(cvs);
+  log(`右下角深色像素: ${px.dark}/${px.total}`);
+  // 面积正确性：取权重比例最大与最小的 cell 面积比应接近 sqrt 比例
+}
+
+setTimeout(()=>{
+  log("装饰收到的前几个组: " + (window.__decorLog ? window.__decorLog.slice(0,25).join(" | ") : "(无)"));
+  try{ check("A", ftA); }catch(e){ log("A错误: "+e.message); }
+  try{ check("B", ftB); }catch(e){ log("B错误: "+e.message); }
+}, 2500);
+</script>
+</body>
+</html>

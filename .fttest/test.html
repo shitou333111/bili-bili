@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FoamTree 复现测试</title>
+<style>
+  body { margin: 0; background: #eee; font-family: sans-serif; }
+  #wrap { width: 360px; height: 620px; margin: 12px auto; position: relative; overflow: hidden; background: #f6f1e9; }
+  #container { width: 1080px; height: 1920px; transform-origin: top left; }
+  #overlay { position: absolute; inset: 0; z-index: 5; }
+  #info { padding: 6px 12px; font-size: 12px; background: #fff; border-bottom: 1px solid #ccc; white-space: pre-wrap; }
+  button { margin: 4px; padding: 6px 10px; font-size: 12px; }
+  #dlImg { max-width: 45%; border: 1px solid #999; margin: 4px; background:#fff; }
+  #pixelInfo { font-size: 12px; margin: 4px 12px; }
+</style>
+</head>
+<body>
+<div id="info">loading...</div>
+<div id="wrap">
+  <div id="container"></div>
+  <div id="overlay"></div>
+</div>
+<div>
+  <button id="btnClick">模拟触摸点击(touchstart+mousedown only)</button>
+  <button id="btnUp">模拟touchend+mouseup</button>
+  <button id="btnFull">模拟完整触摸(mousedown+mouseup)</button>
+  <button id="btnDownload">下载(复刻generateImageDataUrl)</button>
+  <button id="btnInspect">检查右下角像素</button>
+  <button id="btnAnalyze">全面canvas分析</button>
+</div>
+<div id="pixelInfo"></div>
+<img id="dlImg">
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const container = document.getElementById("container");
+const overlay = document.getElementById("overlay");
+const info = document.getElementById("info");
+const pixelInfo = document.getElementById("pixelInfo");
+const log = (msg) => { info.textContent += "\n" + msg; };
+
+// ---- 头像URL（B站CDN，可跨域） ----
+const FACES = [
+  "https://i0.hdslb.com/bfs/face/207c9a5e72ef6c1c8faa09eef9a58e0b4b0b3b55.jpg",
+  "https://i0.hdslb.com/bfs/face/4e9f3e8e2175e62ea42c94583efef2635b2c42d3.jpg",
+];
+
+// ---- 复刻组件中的 options ----
+const DOWNLOAD_W = 1080, DOWNLOAD_H = 1920;
+container.style.transform = "scale(" + (360 / DOWNLOAD_W) + ")";
+
+const groups = [];
+for (let i = 0; i < 10; i++) {
+  groups.push({
+    id: i + 1,
+    label: "主播" + i,
+    weight: Math.sqrt(1000 - i * 80),
+    color: ["#e8ddd0", "#ddd2c5", "#e3d9cc", "#d4c9bc", "#ebe2d6", "#d9cfc2", "#e0d6ca", "#d1c7ba", "#e6ddd1", "#d6ccc0"][i % 10],
+    face: FACES[i % FACES.length],
+    name: "主播" + i,
+    value: 1000 - i * 80,
+  });
+}
+
+const imageMap = new Map();
+let clickLog = [];
+
+const ft = new FoamTree({
+  element: container,
+  pixelRatio: 1,
+  layout: "relaxed",
+  stacking: "flattened",
+  layoutByWeightOrder: true,
+  relaxationInitializer: "fisheye",
+  descriptionGroup: false,
+  descriptionGroupSize: 0,
+  descriptionGroupMinHeight: 0,
+  groupLabelDecorator: (opts, props, vars) => { vars.labelText = ""; },
+  groupLabelFontSize: 0,
+  groupLabelMinFontSize: 0,
+  groupBorderWidth: 0,
+  groupInsetWidth: 0,
+  groupStrokeType: "none",
+  groupStrokeWidth: 0,
+  groupFillType: "plain",
+  groupBorderRadius: 0,
+  groupSelectionOutlineWidth: 2.5,
+  groupHoverStrokeWidth: 0,
+  groupExposureScale: 1,
+  rolloutDuration: 0,
+  pullbackDuration: 0,
+  wireframeDrawingTimeout: 0,
+  wireframeLabelDrawingTimeout: 0,
+  wireframeContentDecorationDrawing: "always",
+  finalCompleteDrawMaxDuration: 0,
+  finalIncrementalDrawMaxDuration: 0,
+  fadeDuration: 0,
+  groupContentDecoratorTriggering: "onSurfaceDirty",
+  attributionLogo: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+  attributionWeight: 0,
+  attributionText: "",
+  backgroundColor: "#f6f1e9",
+  groupColorDecorator: (opts, props, vars) => { vars.groupColor = props.group.color || "#f6f1e9"; },
+  groupContentDecorator: (opts, props, vars) => {
+    const ctx = props.context;
+    const polygon = props.polygon;
+    const node = props.group;
+    if (!polygon || polygon.length < 3) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of polygon) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+    const bbox = { minX, minY, w: maxX - minX, h: maxY - minY };
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(polygon[0].x, polygon[0].y);
+    for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i].x, polygon[i].y);
+    ctx.closePath();
+    ctx.clip();
+    const img = imageMap.get(node.id);
+    if (img && img.complete && img.naturalWidth > 0) {
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const sc = Math.max(bbox.w / iw, bbox.h / ih);
+      const dw = iw * sc, dh = ih * sc;
+      ctx.drawImage(img, bbox.minX + (bbox.w - dw) / 2, bbox.minY + (bbox.h - dh) / 2, dw, dh);
+    } else {
+      ctx.fillStyle = node.color || "#d8c9b4";
+      ctx.beginPath();
+      ctx.moveTo(polygon[0].x, polygon[0].y);
+      for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i].x, polygon[i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  },
+  onGroupClick: (e) => {
+    const msg = "onGroupClick FIRED: " + (e.group ? e.group.label : "null");
+    clickLog.push(msg);
+    log(">>> " + msg);
+  },
+  dataObject: { groups },
+});
+
+log("容器画布数量: " + container.querySelectorAll("canvas").length);
+container.querySelectorAll("canvas").forEach((c, i) => {
+  log("canvas[" + i + "]: " + c.width + "x" + c.height + " style=" + (c.style.cssText || "(inline)").slice(0, 120));
+});
+
+// 预加载头像
+for (const g of groups) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => { imageMap.set(g.id, img); ft.redraw(); };
+  img.src = g.face;
+}
+
+// ---- 坐标转换(复刻 overlay dispatch) ----
+function getCanvas() { return container.querySelector("canvas"); }
+const scaleX = DOWNLOAD_W / 360, scaleY = DOWNLOAD_H / 620;
+function dispatchAt(clientX, clientY, type, target) {
+  const canvas = getCanvas();
+  if (!canvas) { log("no canvas!"); return; }
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left + (clientX - rect.left) * scaleX;
+  const cy = rect.top + (clientY - rect.top) * scaleY;
+  const ev = new MouseEvent(type, { clientX: cx, clientY: cy, bubbles: true, cancelable: true, button: 0, buttons: type === "mouseup" ? 0 : 1 });
+  target.dispatchEvent(ev);
+}
+
+// 复刻 overlay 的 onTouchStart / onTouchEnd（含BUG版与修复版）
+function bugTouchStart(clientX, clientY) {
+  const t = { clientX, clientY };
+  dispatchAt(t.clientX, t.clientY, "mousedown", getCanvas());
+}
+function bugTouchEnd() {
+  // 复刻BUG：touchend 时 e.touches.length === 0，直接 return，mouseup 丢失
+  const e = { touches: [] };
+  if (!getCanvas() || e.touches.length === 0) { log(">>> BUG: touchend 中 e.touches.length===0, mouseup 未转发"); return; }
+  const t = e.touches[0];
+  dispatchAt(t.clientX, t.clientY, "mouseup", getCanvas());
+}
+function fixedTouchEnd(clientX, clientY) {
+  const t = { clientX, clientY };
+  dispatchAt(t.clientX, t.clientY, "mouseup", getCanvas());
+}
+
+const wrap = document.getElementById("wrap");
+const wrapRect = () => wrap.getBoundingClientRect();
+
+document.getElementById("btnClick").onclick = () => {
+  clickLog = [];
+  const r = wrapRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  log("--- 模拟触摸按下(touchstart->mousedown)，不松手 ---");
+  bugTouchStart(x, y);
+  log("当前 onGroupClick 触发次数: " + clickLog.length);
+};
+document.getElementById("btnUp").onclick = () => {
+  const r = wrapRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  log("--- 复刻BUG的touchend(不带坐标) ---");
+  bugTouchEnd();
+  log("当前 onGroupClick 触发次数: " + clickLog.length);
+};
+document.getElementById("btnFull").onclick = () => {
+  clickLog = [];
+  const r = wrapRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  log("--- 修复版: mousedown + mouseup ---");
+  bugTouchStart(x, y);
+  fixedTouchEnd(x, y);
+  log("当前 onGroupClick 触发次数: " + clickLog.length);
+};
+
+// ---- 下载复刻 ----
+document.getElementById("btnDownload").onclick = () => {
+  const canvas = getCanvas();
+  log("--- 下载复刻 ---");
+  log("querySelector('canvas') 返回: " + canvas.width + "x" + canvas.height);
+  const copy = document.createElement("canvas");
+  copy.width = canvas.width; copy.height = canvas.height;
+  const cctx = copy.getContext("2d");
+  cctx.drawImage(canvas, 0, 0);
+  cctx.fillStyle = "#f6f1e9";
+  cctx.fillRect(copy.width - 240, copy.height - 60, 240, 60);
+  const dataUrl = copy.toDataURL("image/png");
+  document.getElementById("dlImg").src = dataUrl;
+  // 采样下载图右下角
+  sampleCorner(copy, "下载图");
+};
+
+function sampleCorner(cv, tag) {
+  const ctx = cv.getContext("2d");
+  const w = cv.width, h = cv.height;
+  const pts = [
+    [w - 10, h - 10], [w - 100, h - 10], [w - 10, h - 30], [w - 200, h - 30],
+    [w - 120, h - 20], [w - 20, h - 5], [w - 250, h - 10],
+  ];
+  let s = tag + " 右下角采样: ";
+  for (const [px, py] of pts) {
+    const d = ctx.getImageData(px, py, 1, 1).data;
+    s += "(" + px + "," + py + ")=" + d[0] + "," + d[1] + "," + d[2] + "  ";
+  }
+  pixelInfo.textContent = s;
+}
+document.getElementById("btnInspect").onclick = () => {
+  const canvas = getCanvas();
+  log("--- 检查画布右下角像素 ---");
+  sampleCorner(canvas, "屏幕画布");
+};
+
+// ---- 全面分析：逐canvas采样 + 定位logo包围盒 ----
+document.getElementById("btnAnalyze").onclick = () => {
+  const cvs = container.querySelectorAll("canvas");
+  log("=== 逐canvas分析 (" + cvs.length + "个) ===");
+  const pts = {
+    "左上(150,150)": [150, 150],
+    "中心(540,960)": [540, 960],
+    "右上(930,200)": [930, 200],
+    "左下(200,1720)": [200, 1720],
+    "右下角(1050,1880)": [1050, 1880],
+    "右下logo区(1010,1800)": [1010, 1800],
+    "右下logo区2(900,1750)": [900, 1750],
+  };
+  cvs.forEach((c, i) => {
+    const ctx = c.getContext("2d");
+    let line = "canvas[" + i + "] ";
+    for (const [name, [px, py]] of Object.entries(pts)) {
+      const d = ctx.getImageData(px, py, 1, 1).data;
+      line += name + "=" + d[0] + "," + d[1] + "," + d[2] + " ";
+    }
+    log(line);
+    // 扫描整个canvas找深蓝色 #1d3557 (logo) 包围盒
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, cnt = 0;
+    const imgData = ctx.getImageData(0, 0, c.width, c.height).data;
+    for (let y = 0; y < c.height; y += 2) {
+      for (let x = 0; x < c.width; x += 2) {
+        const o = (y * c.width + x) * 4;
+        const r = imgData[o], g = imgData[o + 1], b = imgData[o + 2], a = imgData[o + 3];
+        // 深蓝 #1d3557 匹配（容差）
+        if (a > 200 && Math.abs(r - 0x1d) < 40 && Math.abs(g - 0x35) < 40 && Math.abs(b - 0x57) < 40) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+          cnt++;
+        }
+      }
+    }
+    if (cnt > 0) {
+      log("canvas[" + i + "] 深蓝logo像素数=" + cnt + " 包围盒 x:[" + minX + "," + maxX + "] y:[" + minY + "," + maxY + "] (w=" + (maxX - minX) + " h=" + (maxY - minY) + ")");
+    } else {
+      log("canvas[" + i + "] 未发现深蓝logo像素");
+    }
+    // 统计非透明像素数量（评估该canvas内容量）
+    let opaque = 0;
+    for (let o = 3; o < imgData.length; o += 8) { if (imgData[o] > 200) opaque++; }
+    log("canvas[" + i + "] 非透明采样点数=" + opaque);
+  });
+  // 采样每个canvas的白色像素检测（纯白 250+）
+  cvs.forEach((c, i) => {
+    const ctx = c.getContext("2d");
+    const imgData = ctx.getImageData(0, 0, c.width, c.height).data;
+    let white = 0;
+    for (let o = 0; o < imgData.length; o += 4) {
+      if (imgData[o] > 250 && imgData[o + 1] > 250 && imgData[o + 2] > 250 && imgData[o + 3] > 200) white++;
+    }
+    log("canvas[" + i + "] 纯白像素数=" + white);
+  });
+  // 扫描 canvas[1] 中"浅灰/白 logo 底盒"(225-235 全通道) 的包围盒
+  const c1 = cvs[1];
+  if (c1) {
+    const ctx = c1.getContext("2d");
+    const imgData = ctx.getImageData(0, 0, c1.width, c1.height).data;
+    let lx1 = Infinity, ly1 = Infinity, lx2 = -Infinity, ly2 = -Infinity, lcnt = 0;
+    for (let y = 0; y < c1.height; y += 1) {
+      for (let x = 0; x < c1.width; x += 1) {
+        const o = (y * c1.width + x) * 4;
+        const r = imgData[o], g = imgData[o + 1], b = imgData[o + 2], a = imgData[o + 3];
+        if (a > 200 && Math.abs(r - 230) < 6 && Math.abs(g - 230) < 6 && Math.abs(b - 230) < 6) {
+          if (x < lx1) lx1 = x; if (x > lx2) lx2 = x;
+          if (y < ly1) ly1 = y; if (y > ly2) ly2 = y;
+          lcnt++;
+        }
+      }
+    }
+    if (lcnt > 0) {
+      log("canvas[1] 浅灰logo底盒像素数=" + lcnt + " 包围盒 x:[" + lx1 + "," + lx2 + "] y:[" + ly1 + "," + ly2 + "] (w=" + (lx2 - lx1) + " h=" + (ly2 - ly1) + ")");
+    } else {
+      log("canvas[1] 未发现浅灰底盒");
+    }
+  }
+  // 采样 canvas[1] 底部一行的颜色分布（确认底部整行是否都是logo底盒/背景，而非头像）
+  const cctx = c1.getContext("2d");
+  let bottomRow = "canvas[1] 底部 y=1915: ";
+  for (let x = 300; x <= 1080; x += 60) {
+    const d = cctx.getImageData(x, 1915, 1, 1).data;
+    bottomRow += "(" + x + ")=" + d[0] + "," + d[1] + "," + d[2] + " ";
+  }
+  log(bottomRow);
+};
+
+</script>
+</body>
+</html>

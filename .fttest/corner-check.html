@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree 右下角最终验证</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; }
+  .col { width: 260px; }
+  .box { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.24); position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 120px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="col"><div class="box" id="c1"></div><div>生产配置(透明gif)</div></div>
+  <div class="col"><div class="box" id="c2"></div><div>生产配置(透明gif)+onRedraw遮盖</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; };
+
+const REAL = [13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1];
+const groups = REAL.map((v,i)=>({ id:i+1, label:"G"+i, weight:Math.sqrt(v),
+  color:["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+  name:"G"+i, value:v }));
+
+const TRANSPARENT_GIF="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+function prodCfg(el, extra){
+  return Object.assign({
+    element: el, pixelRatio: 1, layout:"relaxed", stacking:"flattened",
+    layoutByWeightOrder:true, relaxationInitializer:"fisheye",
+    descriptionGroup:false, descriptionGroupSize:0, descriptionGroupMinHeight:0,
+    groupLabelDecorator:(o,p,v)=>{v.labelText="";}, groupLabelFontSize:0, groupLabelMinFontSize:0,
+    groupBorderWidth:0, groupInsetWidth:0, groupStrokeType:"none", groupStrokeWidth:0,
+    groupFillType:"plain", groupBorderRadius:0,
+    groupSelectionOutlineWidth:2.5, groupSelectionOutlineColor:"#000000", groupSelectionOutlineShadowSize:0,
+    groupHoverStrokeWidth:0, groupHoverFillHueShift:0, groupHoverFillSaturationShift:0,
+    groupHoverFillLightnessShift:0, groupHoverStrokeHueShift:0, groupHoverStrokeSaturationShift:0,
+    groupHoverStrokeLightnessShift:0,
+    groupExposureScale:1, groupExposureShadowSize:0, groupExposureZoomMargin:0,
+    groupUnexposureLightnessShift:0, groupUnexposureSaturationShift:0,
+    rolloutDuration:0, pullbackDuration:0,
+    wireframeDrawingTimeout:0, wireframeLabelDrawingTimeout:0, wireframeContentDecorationDrawing:"always",
+    finalCompleteDrawMaxDuration:0, finalIncrementalDrawMaxDuration:0, fadeDuration:0,
+    zoomMouseWheelDuration:0,
+    groupContentDecoratorTriggering:"onSurfaceDirty",
+    attributionLogo: TRANSPARENT_GIF, attributionWeight:0, attributionText:"",
+    descriptionGroupPolygonDrawn:false,
+    backgroundColor:"#f6f1e9",
+    groupColorDecorator:(o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+    groupContentDecorator:(o,p,v)=>{
+      const ctx=p.context, poly=p.polygon, node=p.group;
+      if(!poly||poly.length<3)return;
+      let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const pt of poly){a=Math.min(a,pt.x);b=Math.min(b,pt.y);c=Math.max(c,pt.x);d=Math.max(d,pt.y);}
+      ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath(); ctx.clip();
+      ctx.fillStyle = node.color || "#d8c9b4";
+      ctx.fillRect(a,b,c-a,d-b);
+      ctx.restore();
+      ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath();
+      ctx.strokeStyle="#ffffff"; ctx.lineWidth=1.5; ctx.lineJoin="miter"; ctx.stroke();
+      ctx.restore();
+    },
+    dataObject:{groups},
+  }, extra);
+}
+
+const ft1 = new FoamTree(prodCfg(document.getElementById("c1")));
+const ft2 = new FoamTree(prodCfg(document.getElementById("c2"), {
+  onRedraw: () => {
+    const cvs = document.getElementById("c2").querySelector("canvas");
+    if(!cvs) return;
+    const ctx = cvs.getContext("2d");
+    ctx.save(); ctx.fillStyle="#f6f1e9";
+    ctx.fillRect(cvs.width-200, cvs.height-80, 200, 80);
+    ctx.restore();
+  }
+}));
+
+// 分析右下角区域：x∈[70%,100%], y∈[85%,100%] — 扫描所有 canvas
+function analyzeCorner(id, tag){
+  const box = document.getElementById(id);
+  const cvsAll = box.querySelectorAll("canvas");
+  const W=1080, H=1920;
+  const x0=Math.round(W*0.70), x1=W, y0=Math.round(H*0.85), y1=H;
+  cvsAll.forEach((cvs,i)=>{
+    const ctx = cvs.getContext("2d");
+    const data = ctx.getImageData(x0,y0,x1-x0,y1-y0).data;
+    let navy=0, white=0, beige=0, other=0, transparent=0;
+    for(let y=0;y<y1-y0;y+=1) for(let x=0;x<x1-x0;x+=1){
+      const o=(y*(x1-x0)+x)*4;
+      const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+      if(a<200){ transparent++; continue; }
+      if(Math.abs(r-0x1d)<40 && Math.abs(g-0x35)<40 && Math.abs(b-0x57)<40) navy++;
+      else if(r>240 && g>240 && b>240) white++;
+      else if(Math.abs(r-246)<10 && Math.abs(g-241)<10 && Math.abs(b-233)<10) beige++;
+      else other++;
+    }
+    log(`[${tag}] canvas[${i}] 右下角(${x1-x0}x${y1-y0}): 透明=${transparent} navy(logo)=${navy} white(白块)=${white} beige(背景)=${beige} 中间色=${other}`);
+  });
+}
+
+setTimeout(()=>{
+  analyzeCorner("c1","生产透明gif");
+  analyzeCorner("c2","+onRedraw遮盖");
+}, 3000);
+</script>
+</body>
+</html>

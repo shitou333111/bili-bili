@@ -344,9 +344,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
         const batchSize = 50;
         let successCount = 0;
         let failCount = 0;
-        // 串行处理批次，避免并发限流
+        // 按批次并行请求（服务器端每个批次内部也有界并发），避免串行等待
+        const batches: number[][] = [];
         for (let i = 0; i < missingUids.length; i += batchSize) {
-          const batch = missingUids.slice(i, i + batchSize);
+          batches.push(missingUids.slice(i, i + batchSize));
+        }
+        await Promise.all(batches.map(async (batch) => {
           try {
             const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}&mid=${mid}&uname=${encodeURIComponent(uname)}`, { cache: "no-store" });
             const data = await res.json();
@@ -362,7 +365,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
           } catch {
             failCount += batch.length;
           }
-        }
+        }));
         console.log("[FanBubble] 头像获取完成: 成功=" + successCount, "失败=" + failCount, "总计=" + missingUids.length);
         setFanFaces(faces);
       } catch (err) {

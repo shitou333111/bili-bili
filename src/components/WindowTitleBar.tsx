@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { DESKTOP_TITLEBAR_H } from "@/lib/layout";
 
 /**
  * PC 端自定义窗口标题栏（仅 Tauri 桌面环境显示，移动端/浏览器不显示）。
@@ -63,7 +64,8 @@ export default function WindowTitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="fixed inset-x-0 top-0 z-[99999] flex h-9 select-none items-center border-b border-black/10 bg-[#1f1c17] text-white"
+      className="fixed inset-x-0 top-0 z-[99999] flex select-none items-center border-b border-black/10 bg-[#1f1c17] text-white"
+      style={{ height: DESKTOP_TITLEBAR_H }}
     >
       {/* 左侧：应用图标 + 标题（可拖拽区域） */}
       <div data-tauri-drag-region className="flex items-center gap-1.5 pl-2.5">

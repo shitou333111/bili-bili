@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree 布局精确复刻测试（与真实组件一致）</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .box { width: 360px; height: 640px; position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 300px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div><div class="box" id="c1"></div><div>A: attributionWeight=0 + attributionText=""（当前）</div></div>
+  <div><div class="box" id="c2"></div><div>B: 透明gif logo（之前正常版本 HEAD）</div></div>
+  <div><div class="box" id="c3"></div><div>C: attributionDistanceFromCenter=2（曾出错版本）</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; console.log(m); };
+
+// 真实主播数据（41个，coins 从 13560 到 1）——与真实组件同一份
+const REAL = [
+  13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1,
+];
+const GROUPS = REAL.map((v,i)=>({
+  id: i+1, label:"G"+i, weight: Math.sqrt(v),
+  color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+  name:"G"+i, value: v, face: "",
+}));
+
+function polyArea(poly){let s=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];s+=p.x*q.y-q.x*p.y;}return Math.abs(s)/2;}
+function polyCentroid(poly){let a=0,cx=0,cy=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];const c=p.x*q.y-q.x*p.y;a+=c;cx+=(p.x+q.x)*c;cy+=(p.y+q.y)*c;}a/=2;return {x:cx/(6*a),y:cy/(6*a)};}
+
+// 与真实组件 ftOptions 完全一致（仅 element/pixelRatio/backgroundColor 除外）
+function build(el, cfg){
+  const ftOptions = {
+    element: el,
+    pixelRatio: 1,
+    layout: "relaxed",
+    stacking: "flattened",
+    layoutByWeightOrder: true,
+    relaxationInitializer: "fisheye",
+    descriptionGroup: false,
+    descriptionGroupSize: 0,
+    descriptionGroupMinHeight: 0,
+    groupLabelDecorator: (opts, props, vars) => { vars.labelText = ""; },
+    groupLabelFontSize: 0,
+    groupLabelMinFontSize: 0,
+    groupBorderWidth: 0,
+    groupBorderWidthScaling: 1,
+    groupInsetWidth: 0,
+    groupStrokeType: "none",
+    groupStrokeWidth: 0,
+    groupFillType: "plain",
+    groupBorderRadius: 0,
+    groupSelectionOutlineWidth: 2.5,
+    groupSelectionOutlineColor: "#000000",
+    groupSelectionOutlineShadowSize: 0,
+    groupHoverFillHueShift: 0,
+    groupHoverFillSaturationShift: 0,
+    groupHoverFillLightnessShift: 0,
+    groupHoverStrokeHueShift: 0,
+    groupHoverStrokeSaturationShift: 0,
+    groupHoverStrokeLightnessShift: 0,
+    groupExposureScale: 1,
+    groupExposureShadowSize: 0,
+    groupExposureZoomMargin: 0,
+    groupUnexposureLightnessShift: 0,
+    groupUnexposureSaturationShift: 0,
+    rolloutDuration: 800,
+    pullbackDuration: 600,
+    wireframeDrawingTimeout: 0,
+    wireframeLabelDrawingTimeout: 0,
+    wireframeContentDecorationDrawing: "always",
+    finalCompleteDrawMaxDuration: 0,
+    finalIncrementalDrawMaxDuration: 0,
+    fadeDuration: 300,
+    zoomMouseWheelDuration: 300,
+    groupContentDecoratorTriggering: "onSurfaceDirty",
+    descriptionGroupPolygonDrawn: false,
+    backgroundColor: "#f6f1e9",
+    groupColorDecorator: (opts, props, vars) => { vars.groupColor = props.group.color || "#f6f1e9"; },
+    dataObject: { groups: GROUPS.map(g => ({ ...g })) },
+  };
+  // 捕获器（与绘制并存，确保被调用）：记录每个 group 的 polygon 面积与中心
+  const tagName = cfg;
+  ftOptions.groupContentDecorator = (opts, props, vars) => {
+    const node = props.group, poly = props.polygon;
+    if (!node || !poly || poly.length < 3) return;
+    if (!window.__caps) window.__caps = {};
+    if (!window.__caps[tagName]) window.__caps[tagName] = [];
+    if (window.__caps[tagName].length < 200) {
+      window.__caps[tagName].push({
+        id: node.id,
+        attr: !!node.attribution,
+        area: polyArea(poly),
+        cx: poly.reduce((s,p)=>s+p.x,0)/poly.length,
+        cy: poly.reduce((s,p)=>s+p.y,0)/poly.length,
+      });
+    }
+  };
+  if (cfg === "current") {
+    ftOptions.attributionWeight = 0;
+    ftOptions.attributionText = "";
+  } else if (cfg === "head") {
+    ftOptions.attributionLogo = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+  } else if (cfg === "dist2") {
+    ftOptions.attributionWeight = 0;
+    ftOptions.attributionText = "";
+    ftOptions.attributionDistanceFromCenter = 2;
+  }
+  return new FoamTree(ftOptions);
+}
+
+const ft1 = build(document.getElementById("c1"), "current");
+const ft2 = build(document.getElementById("c2"), "head");
+const ft3 = build(document.getElementById("c3"), "dist2");
+
+// 通过构造时注入的 groupContentDecorator 捕获每个 group 的多边形面积与中心
+function measure(tag){
+  const caps = window.__caps && window.__caps[tag];
+  if (!caps || !caps.length) { log(`[${tag}] 无捕获数据`); return; }
+  // 按 id 去重（装饰器可能多次调用同一 group，取最后一次）
+  const byId = {};
+  caps.forEach(c => { byId[c.id] = c; });
+  const rows = Object.keys(byId).map(id => byId[id]).filter(r => !r.attr);
+  rows.sort((a,b)=>b.area-a.area);
+  const cvs = document.getElementById(tag==="current"?"c1":tag==="head"?"c2":"c3").querySelector("canvas");
+  const W = cvs?cvs.width:0, H = cvs?cvs.height:0;
+  log(`===== ${tag} 画布 ${W}x${H} 捕获${rows.length}个cell =====`);
+  const ratios = [];
+  rows.slice(0,6).forEach(r => {
+    const val = REAL[r.id-1], expect = Math.sqrt(val);
+    ratios.push(`id=${r.id}(v=${val}) area=${Math.round(r.area)} sqrt=${expect.toFixed(1)} ratio=${(r.area/expect).toFixed(2)}`);
+  });
+  log(`前6大: ` + ratios.join(" ; "));
+  const largest = rows[0];
+  log(`最大cell id=${largest.id} 中心=(${largest.cx.toFixed(0)},${largest.cy.toFixed(0)}) 画布中心=(${W/2},${H/2}) 距离=${Math.round(Math.hypot(largest.cx-W/2, largest.cy-H/2))}`);
+  const allRatio = rows.map(r => r.area / Math.sqrt(REAL[r.id-1] || 1));
+  const mean = allRatio.reduce((a,b)=>a+b,0)/allRatio.length;
+  const sd = Math.sqrt(allRatio.reduce((a,b)=>a+(b-mean)*(b-mean),0)/allRatio.length);
+  log(`全部 ${rows.length} 个 cell: ratio 均值=${mean.toFixed(1)} 标准差=${sd.toFixed(2)} 变异系数=${(sd/mean*100).toFixed(1)}%（<25% 表示面积与 sqrt(value) 严格成比例）`);
+  log(`面积最大/最小 = ${(rows[0].area / rows[rows.length-1].area).toFixed(0)}x`);
+}
+
+setTimeout(() => {
+  measure("current");
+  measure("head");
+  measure("dist2");
+}, 2500);
+</script>
+</body>
+</html>

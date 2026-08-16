@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree logo 修复验证 v2 (生产尺寸)</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; }
+  .col { width: 250px; }
+  .box { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.22); position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 120px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="col"><div class="box" id="c1"></div><div>A: 透明gif (HEAD)</div></div>
+  <div class="col"><div class="box" id="c2"></div><div>B: distance=2</div></div>
+  <div class="col"><div class="box" id="c3"></div><div>C: distance=1.2</div></div>
+  <div class="col"><div class="box" id="c4"></div><div>D: distance=1.5</div></div>
+</div>
+<div class="row">
+  <div class="col"><div class="box" id="c5"></div><div>E: 透明gif+onRedraw遮盖</div></div>
+  <div class="col"><div class="box" id="c6"></div><div>F: 透明gif+右下cell填背景色</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; };
+
+// 与生产 AvatarBubbleChart.tsx 完全一致的真实数据(41主播)
+const REAL = [
+  13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1,
+];
+const groups = REAL.map((v,i)=>({
+  id: i+1, label:"G"+i, weight: Math.sqrt(v),
+  color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+  name:"G"+i, value: v,
+}));
+
+function polyArea(poly){let s=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];s+=p.x*q.y-q.x*p.y;}return Math.abs(s)/2;}
+const TRANSPARENT_GIF="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+function makeBase(el){
+  return {
+    element: el, pixelRatio: 1, layout:"relaxed", stacking:"flattened",
+    layoutByWeightOrder:true, relaxationInitializer:"fisheye",
+    descriptionGroup:false, descriptionGroupSize:0, descriptionGroupMinHeight:0,
+    groupLabelDecorator:(o,p,v)=>{v.labelText="";}, groupLabelFontSize:0, groupLabelMinFontSize:0,
+    groupBorderWidth:0, groupInsetWidth:0, groupStrokeType:"none", groupStrokeWidth:0,
+    groupFillType:"plain", groupBorderRadius:0,
+    groupSelectionOutlineWidth:2.5, groupSelectionOutlineColor:"#000000", groupSelectionOutlineShadowSize:0,
+    groupHoverStrokeWidth:0, groupHoverFillHueShift:0, groupHoverFillSaturationShift:0,
+    groupHoverFillLightnessShift:0, groupHoverStrokeHueShift:0, groupHoverStrokeSaturationShift:0,
+    groupHoverStrokeLightnessShift:0,
+    groupExposureScale:1, groupExposureShadowSize:0, groupExposureZoomMargin:0,
+    groupUnexposureLightnessShift:0, groupUnexposureSaturationShift:0,
+    rolloutDuration:0, pullbackDuration:0,
+    wireframeDrawingTimeout:0, wireframeLabelDrawingTimeout:0, wireframeContentDecorationDrawing:"always",
+    finalCompleteDrawMaxDuration:0, finalIncrementalDrawMaxDuration:0, fadeDuration:0,
+    zoomMouseWheelDuration:0,
+    groupContentDecoratorTriggering:"onSurfaceDirty",
+    attributionWeight:0, attributionText:"",
+    descriptionGroupPolygonDrawn:false,
+    backgroundColor:"#f6f1e9",
+    groupColorDecorator:(o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+    groupContentDecorator:(o,p,v)=>{
+      const ctx=p.context, poly=p.polygon, node=p.group;
+      if(!poly||poly.length<3)return;
+      let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const pt of poly){a=Math.min(a,pt.x);b=Math.min(b,pt.y);c=Math.max(c,pt.x);d=Math.max(d,pt.y);}
+      ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath(); ctx.clip();
+      ctx.fillStyle = node.color || "#d8c9b4";
+      ctx.fillRect(a,b,c-a,d-b);
+      ctx.restore();
+      ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath();
+      ctx.strokeStyle="#ffffff"; ctx.lineWidth=1.5; ctx.lineJoin="miter"; ctx.stroke();
+      ctx.restore();
+    },
+    dataObject:{groups},
+  };
+}
+
+function makeCfg(id, extra){
+  return Object.assign(makeBase(document.getElementById(id)), extra);
+}
+
+const ft1 = new FoamTree(makeCfg("c1",{attributionLogo: TRANSPARENT_GIF}));                       // A HEAD
+const ft2 = new FoamTree(makeCfg("c2",{attributionDistanceFromCenter: 2}));                       // B distance=2
+const ft3 = new FoamTree(makeCfg("c3",{attributionDistanceFromCenter: 1.2, attributionLogo: TRANSPARENT_GIF})); // C
+const ft4 = new FoamTree(makeCfg("c4",{attributionDistanceFromCenter: 1.5, attributionLogo: TRANSPARENT_GIF})); // D
+const ft5 = new FoamTree(makeCfg("c5",{attributionLogo: TRANSPARENT_GIF, onRedraw: () => {
+    const cvs = document.getElementById("c5").querySelector("canvas");
+    if(!cvs) return;
+    const ctx = cvs.getContext("2d");
+    ctx.save(); ctx.fillStyle = "#f6f1e9";
+    const W=cvs.width, H=cvs.height;
+    ctx.fillRect(W - 180, H - 70, 180, 70);
+    ctx.restore();
+}})); // E onRedraw 遮盖
+const ft6 = new FoamTree(makeCfg("c6",{attributionLogo: TRANSPARENT_GIF})); // F: 用 groupColorDecorator 处理 attribution 的 cell 填色
+
+// F: 让 attribution cell 的填充颜色=背景色（通过拦截渲染层不可行，改为 onRedraw 前无法；这里直接用 onRedraw 全量背景重绘一次右下角）
+ft6.set("onRedraw", () => {
+  const cvs = document.getElementById("c6").querySelector("canvas");
+  if(!cvs) return;
+  const ctx = cvs.getContext("2d");
+  ctx.save(); ctx.fillStyle = "#f6f1e9";
+  const W=cvs.width, H=cvs.height;
+  ctx.fillRect(W - 260, H - 90, 260, 90);
+  ctx.restore();
+});
+
+// 捕获 value 前5 的面积(成比例性)
+const results = {A:[],B:[],C:[],D:[],E:[],F:[]};
+function captureFor(ft, key){
+  ft.set("groupContentDecorator",(o,p,v)=>{
+    const node=p.group, poly=p.polygon;
+    if(node && poly && poly.length>2 && node.id<=5){
+      results[key][node.id-1]=polyArea(poly);
+    }
+  });
+  ft.redraw();
+}
+captureFor(ft1,"A"); captureFor(ft2,"B"); captureFor(ft3,"C");
+captureFor(ft4,"D"); captureFor(ft5,"E"); captureFor(ft6,"F");
+
+// 检测 logo：全画布扫描 #1d3557 像素 bbox
+function scanLogo(canvas){
+  const ctx = canvas.getContext("2d");
+  const data = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,cnt=0;
+  for(let y=0;y<canvas.height;y+=2){
+    for(let x=0;x<canvas.width;x+=2){
+      const o=(y*canvas.width+x)*4;
+      const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+      if(a>200 && Math.abs(r-0x1d)<45 && Math.abs(g-0x35)<45 && Math.abs(b-0x57)<45){
+        if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; cnt++;
+      }
+    }
+  }
+  return cnt>0 ? {cnt, minX,minY,maxX,maxY,w:maxX-minX,h:maxY-minY} : null;
+}
+
+setTimeout(()=>{
+  ["A","B","C","D","E","F"].forEach(k=>{
+    const areas=results[k];
+    if(!areas.every(a=>a>0)){ log(`[${k}] 面积捕获不完整: ${areas}`); return; }
+    const ratios=areas.map((a,i)=>a/Math.sqrt(REAL[i]));
+    const maxR=Math.max(...ratios), minR=Math.min(...ratios);
+    const cv=maxR/minR;
+    log(`[${k}] value前5面积=${areas.map(a=>Math.round(a)).join(",")} | area/sqrt比例=${ratios.map(r=>r.toFixed(1)).join(",")} | max/min=${cv.toFixed(2)} ${cv<1.15?"成比例✓":"不成比例✗"}`);
+  });
+  ["c1","c2","c3","c4","c5","c6"].forEach((id,idx)=>{
+    const cvs=document.getElementById(id).querySelector("canvas");
+    const tag=["A","B","C","D","E","F"][idx];
+    const logo=cvs?scanLogo(cvs):null;
+    log(`[${tag}] logo检测: ${logo?`有 logo ${logo.cnt}px bbox x[${logo.minX},${logo.maxX}] y[${logo.minY},${logo.maxY}] w=${logo.w} h=${logo.h}`:"无 logo"}`);
+  });
+}, 3000);
+</script>
+</body>
+</html>

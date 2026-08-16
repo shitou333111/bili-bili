@@ -9,24 +9,32 @@
  *  - forceRefresh：手动强制重拉（全局"刷新数据"按钮、特效按需回源），跳过 TTL
  *
  * 文件（位于 getDataDir()，即 {appDataDir}/data）：
- *  - gift-list.json    完整礼物列表（含价格、角标等全部字段）
- *  - gift-effects.json 特效绑定表 gift_id -> { web_mp4, web_mp4_json }
- *  - gift-data-meta.json { updatedAt }（两个文件共用一份时间戳，同时更新）
+ *  - gift-list.json       完整礼物列表（含价格、角标等全部字段）
+ *  - gift-effects.json    特效绑定表 gift_id -> { web_mp4, web_mp4_json }
+ *  - roomGiftList.json    直播间礼物面板（roomGiftList API，gold_list 原始顺序 + tab_list）
+ *  - gift-extra-ids.json  额外礼物 ID 配置（从服务器拉取的本地缓存）
+ *  - gift-data-meta.json  { updatedAt }（所有文件共用一份时间戳，同时更新）
  *
  * 注意：本模块仅 Tauri 使用；Web 模式浏览器无法可靠落盘大文件，继续走服务器代理。
  */
 
 import type { Platform } from "./platform/types";
+import { serverFetch } from "./server-api";
 
 const TTL_MS = 12 * 60 * 60 * 1000; // 12 小时
 const LIST_FILE = "gift-list.json";
 const EFFECTS_FILE = "gift-effects.json";
+const ROOM_LIST_FILE = "roomGiftList.json";
+const EXTRA_IDS_FILE = "gift-extra-ids.json";
 const META_FILE = "gift-data-meta.json";
 
 const GIFT_CONFIG_API =
   "https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/giftConfig?platform=pc&room_id=1844040969";
 const EFFECTS_API =
   "https://api.live.bilibili.com/xlive/general-interface/v1/fullScSpecialEffect/GetEffectConfListV2?platform=pc";
+// 直播间礼物面板（无需登录；所有直播间的该列表一致，故固定使用该直播间）
+const ROOM_GIFT_LIST_API =
+  "https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/roomGiftList?platform=pc&room_id=23915535";
 
 export type GiftConfigItem = {
   id: number;
@@ -45,10 +53,24 @@ export type GiftConfigItem = {
 
 export type GiftEffectBinding = { web_mp4: string; web_mp4_json: string };
 
+/** 直播间礼物面板条目（roomGiftList 接口返回） */
+export type RoomGiftListItem = {
+  gift_id: number;
+  position?: number;
+  [key: string]: unknown;
+};
+
+/** 直播间礼物面板数据（data.gift_data） */
+export type RoomGiftListData = {
+  room_gift_list?: { gold_list?: RoomGiftListItem[] };
+  tab_list?: { tab_id: number; list?: RoomGiftListItem[] }[];
+};
+
 // 内存解析缓存（避免每次读取都重新解析几 MB JSON）
 let memList: GiftConfigItem[] | null = null;
 let memImgMap: Map<number, string> | null = null;
 let memEffects: Record<number, GiftEffectBinding> | null = null;
+let memRoomGiftList: RoomGiftListData | null = null;
 
 function filePath(dir: string, file: string): string {
   return `${dir}/${file}`;
@@ -70,16 +92,18 @@ function setMemList(list: GiftConfigItem[]): void {
   }
 }
 
-/** 尝试从本地文件加载到内存；两个文件都成功加载返回 true */
+/** 尝试从本地文件加载到内存；三个文件都成功加载返回 true */
 async function loadFromDisk(platform: Platform): Promise<boolean> {
   const dir = await platform.getDataDir();
-  const [list, effects] = await Promise.all([
+  const [list, effects, roomList] = await Promise.all([
     readJson<GiftConfigItem[]>(platform, filePath(dir, LIST_FILE)),
     readJson<Record<number, GiftEffectBinding>>(platform, filePath(dir, EFFECTS_FILE)),
+    readJson<RoomGiftListData>(platform, filePath(dir, ROOM_LIST_FILE)),
   ]);
-  if (list && effects) {
+  if (list && effects && roomList) {
     setMemList(list);
     memEffects = effects;
+    memRoomGiftList = roomList;
     return true;
   }
   return false;
@@ -134,16 +158,32 @@ async function fetchEffects(platform: Platform): Promise<Record<number, GiftEffe
   }
 }
 
+async function fetchRoomList(platform: Platform): Promise<RoomGiftListData | null> {
+  try {
+    const resp = await platform.fetchBilibiliJson<{
+      code: number;
+      data?: { gift_data?: RoomGiftListData } | null;
+    }>({ url: ROOM_GIFT_LIST_API, cookie: "" }); // 无需登录
+    if (resp.code !== 0 || !resp.data?.gift_data?.room_gift_list) return null;
+    return resp.data.gift_data;
+  } catch (err) {
+    console.error("[GiftLocalStore] 从B站获取直播间礼物面板失败:", err);
+    return null;
+  }
+}
+
 async function persist(
   platform: Platform,
   list: GiftConfigItem[],
   effects: Record<number, GiftEffectBinding>,
+  roomList: RoomGiftListData,
 ): Promise<void> {
   try {
     const dir = await platform.getDataDir();
     await Promise.all([
       platform.writeFile(filePath(dir, LIST_FILE), JSON.stringify(list)),
       platform.writeFile(filePath(dir, EFFECTS_FILE), JSON.stringify(effects)),
+      platform.writeFile(filePath(dir, ROOM_LIST_FILE), JSON.stringify(roomList)),
       platform.writeFile(filePath(dir, META_FILE), JSON.stringify({ updatedAt: Date.now() })),
     ]);
   } catch (err) {
@@ -159,15 +199,20 @@ async function persist(
  * 下载失败时回退本地旧文件（有则用）。
  */
 export async function ensureGiftDataLoaded(platform: Platform, forceRefresh = false): Promise<void> {
-  if (!forceRefresh && memList && memEffects) return;
+  if (!forceRefresh && memList && memEffects && memRoomGiftList) return;
   if (!forceRefresh) {
     if ((await loadFromDisk(platform)) && (await isMetaFresh(platform))) return;
   }
-  const [list, effects] = await Promise.all([fetchList(platform), fetchEffects(platform)]);
-  if (list && effects) {
+  const [list, effects, roomList] = await Promise.all([
+    fetchList(platform),
+    fetchEffects(platform),
+    fetchRoomList(platform),
+  ]);
+  if (list && effects && roomList) {
     setMemList(list);
     memEffects = effects;
-    await persist(platform, list, effects);
+    memRoomGiftList = roomList;
+    await persist(platform, list, effects, roomList);
   } else {
     // 下载失败：回退本地旧文件（有则用）
     await loadFromDisk(platform);
@@ -193,4 +238,42 @@ export function getGiftImg(giftId: number): string {
 /** 特效绑定表 gift_id -> { web_mp4, web_mp4_json } */
 export function getGiftEffectsMap(): Record<number, GiftEffectBinding> {
   return memEffects ?? {};
+}
+
+/** 直播间礼物面板数据（data.gift_data，含 room_gift_list.gold_list 原始顺序 + tab_list） */
+export function getRoomGiftData(): RoomGiftListData {
+  return memRoomGiftList ?? {};
+}
+
+/** 直播间"礼物"选项卡的礼物 id 列表（gold_list 原始顺序） */
+export function getRoomGiftIds(): number[] {
+  return (memRoomGiftList?.room_gift_list?.gold_list || []).map((g) => g.gift_id);
+}
+
+/**
+ * 加载额外礼物 ID 配置（public/gift-extra-ids.json，追加到"礼物"选项卡）。
+ * 优先从服务器拉取最新配置（服务器可独立更新，无需重新发版）；失败回退本地缓存；
+ * 仍无本地缓存则回退打包进 APP 的静态文件。
+ */
+export async function loadGiftExtraIds(platform: Platform): Promise<number[]> {
+  try {
+    const ids = await serverFetch<number[]>("/gift-extra-ids.json");
+    if (Array.isArray(ids)) {
+      const dir = await platform.getDataDir();
+      await platform.writeFile(filePath(dir, EXTRA_IDS_FILE), JSON.stringify(ids));
+      return ids;
+    }
+  } catch (err) {
+    console.warn("[GiftLocalStore] 拉取额外礼物配置失败，使用本地缓存:", err);
+  }
+  // 回退1：本地缓存（上次更新保存的）
+  const dir = await platform.getDataDir();
+  const cached = await readJson<number[]>(platform, filePath(dir, EXTRA_IDS_FILE));
+  if (cached) return cached;
+  // 回退2：打包进 APP 的静态文件
+  try {
+    const res = await fetch("/gift-extra-ids.json");
+    if (res.ok) return (await res.json()) as number[];
+  } catch {}
+  return [];
 }

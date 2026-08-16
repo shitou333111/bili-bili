@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree logo 扫描 sanity check</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; }
+  .col { width: 260px; }
+  .box { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.24); position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 120px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="col"><div class="box" id="c1"></div><div>G: 纯默认(应显示logo)</div></div>
+  <div class="col"><div class="box" id="c2"></div><div>A: 透明gif (HEAD)</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; };
+
+const REAL = [13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1];
+const groups = REAL.map((v,i)=>({ id:i+1, label:"G"+i, weight:Math.sqrt(v), name:"G"+i, value:v }));
+
+// G: 纯默认 (不设置任何 attribution 相关，且不设置其他会影响布局的选项，尽量接近库默认)
+const ftG = new FoamTree({
+  element: document.getElementById("c1"),
+  dataObject: { groups },
+});
+
+// A: 透明gif HEAD 精简版 (只保留布局选项 + attributionLogo 透明gif + weight0 + text"")
+const ftA = new FoamTree({
+  element: document.getElementById("c2"),
+  layout: "relaxed", stacking: "flattened", layoutByWeightOrder: true, relaxationInitializer: "fisheye",
+  descriptionGroup: false, groupLabelFontSize: 0,
+  attributionLogo: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+  attributionWeight: 0, attributionText: "",
+  backgroundColor: "#f6f1e9",
+  dataObject: { groups },
+});
+
+function scanLogo(canvas){
+  try {
+    const ctx = canvas.getContext("2d");
+    const data = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,cnt=0;
+    for(let y=0;y<canvas.height;y+=2){
+      for(let x=0;x<canvas.width;x+=2){
+        const o=(y*canvas.width+x)*4;
+        const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+        if(a>200 && Math.abs(r-0x1d)<45 && Math.abs(g-0x35)<45 && Math.abs(b-0x57)<45){
+          if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; cnt++;
+        }
+      }
+    }
+    return cnt>0 ? {cnt,minX,minY,maxX,maxY,w:maxX-minX,h:maxY-minY} : null;
+  } catch(e){ return {error:String(e)}; }
+}
+
+setTimeout(()=>{
+  ["c1","c2"].forEach((id,idx)=>{
+    const box=document.getElementById(id);
+    const all=box.querySelectorAll("canvas");
+    const tag=["G(默认)","A(透明gif)"][idx];
+    log(`===== ${tag}: canvas数量=${all.length} =====`);
+    all.forEach((c,i)=>{
+      const logo=scanLogo(c);
+      log(`  canvas[${i}] ${c.width}x${c.height} logo=${logo?`有 ${logo.cnt}px bbox x[${logo.minX},${logo.maxX}] y[${logo.minY},${logo.maxY}] w=${logo.w} h=${logo.h}`:(logo&&logo.error)?`错误:${logo.error}`:"无"}`);
+    });
+    // 也检查第一个canvas的整体非背景像素比例（判断是否真的画了东西）
+    const c=all[0];
+    if(c){
+      const d=c.getContext("2d").getImageData(0,0,c.width,c.height).data;
+      let nonBg=0, total=0;
+      for(let y=0;y<c.height;y+=8) for(let x=0;x<c.width;x+=8){
+        const o=(y*c.width+x)*4; total++;
+        if(!(Math.abs(d[o]-246)<8 && Math.abs(d[o+1]-241)<8 && Math.abs(d[o+2]-233)<8)) nonBg++;
+      }
+      log(`  canvas[0] 非背景像素占比=${(100*nonBg/total).toFixed(1)}%`);
+    }
+  });
+}, 3000);
+</script>
+</body>
+</html>

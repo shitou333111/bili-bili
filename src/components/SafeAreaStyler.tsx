@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { DESKTOP_TITLEBAR_H } from "@/lib/layout";
 
 /**
  * 平台安全区适配器
@@ -41,9 +42,11 @@ export default function SafeAreaStyler() {
         dockBottom = "26px";
         activityTop = "80px";
       } else {
-        // 桌面 Tauri：启用自定义标题栏（decorations:false），顶部预留标题栏高度 36px
-        safeTop = "36px";
-        safeBottom = "0px";
+        // 桌面 Tauri：启用自定义标题栏（decorations:false），顶部预留标题栏高度（单一源头 page-config.json）
+        safeTop = DESKTOP_TITLEBAR_H + "px";
+        // 桌面无物理 Home Indicator，但模拟器底部一行（输入框/礼物按钮）若贴 0 会太靠下，
+        // 给一个固定底部留白，与移动端（safe-area-inset-bottom + 内边距）的视觉效果接近。
+        safeBottom = "20px";
         dockBottom = "16px";
         activityTop = "100px";
       }
@@ -54,8 +57,9 @@ export default function SafeAreaStyler() {
         dockBottom = "16px";
         activityTop = "80px";
       } else {
+        // 桌面浏览器：与桌面 Tauri 保持一致，避免模拟器底部一行贴边
         safeTop = "0px";
-        safeBottom = "0px";
+        safeBottom = "20px";
         dockBottom = "16px";
         activityTop = "100px";
       }

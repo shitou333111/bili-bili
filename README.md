@@ -18,6 +18,7 @@
   - [A. 直连 B站 · 需要登录凭证](#a-直连-b站--需要登录凭证)
   - [B. 直连 B站 · 无需登录](#b-直连-b站--无需登录)
   - [C. 从自己的服务器获取](#c-从自己的服务器获取)
+- [主要 API 地址](#主要-api-地址)
 - [数据存储位置](#数据存储位置)
 - [账号体系与本机/服务器账号的区别](#账号体系与本机服务器账号的区别)
 - [功能模块详解](#功能模块详解)
@@ -38,6 +39,7 @@
 - **主播数据模块**：查看主播维度的收入统计，以及"消费主播分布图"（把每个主播按消费金额大小呈现为气泡/泡泡图）。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需要登录凭证才能使用）。
 - **复活区截图工具**：托管在网站服务器上的工具页面，帮助直播多人局投屏复活曲倒计时、解决医药费争议。
+- **B站 直播送礼模拟器**：内置"神豪模式"模拟器——输入主播UID可加载**真实直播流**作为背景（竖屏流自动填满全屏），所有礼物随便送（含大礼物特效、连击、横幅通知），还有"山海工坊"合成活动可玩。礼物面板的"礼物"选项卡数据来自直播间礼物面板 API（roomGiftList，12h 缓存自动更新）。
 - **管理后台（admin）**：网站管理员可管理用户、配置盲盒/活动、模拟登录等。
 - **跨平台**：Web、Windows、macOS、Android、iOS 一套代码。
 
@@ -118,6 +120,7 @@ bili_live/
 │   │       ├── admin/*               # 管理后台
 │   │       └── ...（upload/config/faces 等）
 │   ├── components/               # UI 组件（BottomDock、图表、模块组件等）
+│   │   └── bili-simulator/       # ★ B站直播送礼模拟器（BiliSimulator / GiftPanel / 特效 / 活动 / 直播流）
 │   ├── lib/                      # 核心逻辑
 │   │   ├── platform/             # ★ 平台抽象层（types/web/tauri）
 │   │   ├── bilibili/             # B站 API 封装（app.ts / client.ts / gift-api.ts）
@@ -180,6 +183,7 @@ bili_live/
 | 主播信息 / 头像 | `anchor-info` / `faces` | 根据 uid 查昵称、头像 |
 | 礼物特效配置 | `fullScSpecialEffect/GetEffectConfListV2` | 礼物特效列表 |
 | **礼物图标目录** | `xlive/web-room/v1/giftPanel/giftConfig` | 全量礼物的图标（`img_basic`），无需登录，**12h 缓存**（见「难点与特殊点 8」） |
+| **直播间礼物面板** | `xlive/web-room/v1/giftPanel/roomGiftList` | 固定直播间（room_id=23915535）的 gold_list 原始顺序 + tab_list，无需登录，**12h 缓存**（模拟器"礼物"选项卡数据源） |
 
 ### C. 从自己的服务器获取
 
@@ -192,6 +196,58 @@ bili_live/
 | 用户数据中转 | `api/upload` / `api/server-data` | 服务器账号的数据上传/下载（详见账号体系） |
 | 复活区截图 | `screenshot` 页面 | 内容变动频繁，托管在服务器上，不打包进安装包 |
 | 图片代理 | `api/proxy/image` | 代理图片请求（解决部分图片来源问题） |
+
+---
+
+## 主要 API 地址
+
+以下是本项目用到的**主要 B站 接口**（完整地址），按是否需要登录凭证分类。
+
+> 注：`api.live.bilibili.com` 的接口请求通常需带 `Referer: https://live.bilibili.com/`；Tauri 客户端通过 `plugin-http` 直连，浏览器端由服务器代连。
+
+### 无需登录（公开接口）
+
+| 用途 | API 地址 |
+|------|---------|
+| **全量礼物目录**（图标/价格/分类，礼物详情联表数据源） | `https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/giftConfig?platform=pc&room_id=1844040969` |
+| **直播间礼物面板**（gold_list 原始顺序 + tab_list，模拟器"礼物"选项卡数据源） | `https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/roomGiftList?platform=pc&room_id=23915535` |
+| **礼物特效配置**（动画资源绑定表） | `https://api.live.bilibili.com/xlive/general-interface/v1/fullScSpecialEffect/GetEffectConfListV2?platform=pc` |
+| **主播信息**（UID → 房间/昵称/头像，模拟器进入） | `https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids?uids[]={uid}` |
+| **直播流地址**（HLS，模拟器背景） | `https://api.live.bilibili.com/room/v1/Room/playUrl?cid={roomId}&platform=h5&qn=0` |
+| 用户卡片（uid → 昵称/头像） | `https://api.bilibili.com/x/web-interface/card?mid={mid}` |
+| 主播卡片 | `https://api.live.bilibili.com/live_user/v1/card/card_up?uid={mid}&browser=0` |
+| 天选礼物列表 | `https://api.live.bilibili.com/xlive/general-interface/v1/guardBenefit/GiftPanel` |
+| 红包礼物列表 | `https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDetail` |
+| 盲盒信息（内含礼物列表） | `https://api.live.bilibili.com/xlive/general-interface/v1/blindFirstWin/getInfo` |
+| 登录态校验 / 用户信息 | `https://api.bilibili.com/x/web-interface/nav` |
+| 风控指纹（spi） | `https://api.bilibili.com/x/frontend/finger/spi` |
+
+### 需要登录凭证（携带 SESSDATA / Cookie）
+
+| 用途 | API 地址 |
+|------|---------|
+| **消费记录**（送礼明细，增量拉取） | `https://api.live.bilibili.com/xlive/revenue/v2/giftStream/payRecord` |
+| **主播收到的礼物** | `https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream` |
+| **盲盒抽取记录** | `https://api.live.bilibili.com/xlive/general-interface/v1/blind-box/drawStream` |
+| 粉丝列表 | `https://api.bilibili.com/x/relation/fans?vmid={mid}&pn={pn}&ps={ps}` |
+| 粉丝牌列表 | `https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/panel?page={page}&page_size=10` |
+| 取关 / 移除粉丝牌 | `https://api.bilibili.com/x/relation/modify`、`https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/web_room/del_medal` |
+
+### 合成活动（custom-activity-interface）
+
+| 用途 | API 地址 |
+|------|---------|
+| 合成包初始化 / 记录 | `https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/HalfInit?config_id={id}` / `.../PlayRecord?config_id={id}` |
+| 星石抽奖信息 / 记录 | `https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id={id}` / `.../StarStoneRecord?conf_id={id}` |
+| 翻牌记录 | `https://api.live.bilibili.com/xlive/custom-activity-interface/general/cardplay/PlayRecord?config_id={id}` |
+
+### 登录相关（passport）
+
+| 用途 | API 地址 |
+|------|---------|
+| 生成扫码登录二维码 | `https://passport.bilibili.com/x/passport-login/web/qrcode/generate` |
+| 扫码轮询 | `https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={key}` |
+| Cookie 刷新 / 确认 | `https://passport.bilibili.com/x/passport-login/web/cookie/refresh`、`.../confirm/refresh` |
 
 ---
 
@@ -271,8 +327,15 @@ bili_live/
 - **复活区截图**：跳转到服务器托管的截图工具页。
 - **账号管理**：查看当前账号、切换本机账号、退出登录。
 
-### 4. 待定
-占位页（预留后续功能）。
+### 4. 模拟（B站直播送礼模拟器）
+核心组件 [BiliSimulator.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/BiliSimulator.tsx)。纯 UI/动画演示，**无真实送礼、不扣电池**：
+
+- **入口**：底部托盘"模拟"页签，输入主播 UID（或从历史记录选择）进入。
+- **真实直播流背景**：UID → 房间信息 → HLS 流（[liveStream.ts](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/liveStream.ts)），用 hls.js 播放；**竖屏流自动填满全屏**（含通知栏与底部安全区），未开播显示渐变占位。
+- **礼物面板**（[GiftPanel.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/GiftPanel.tsx)）：礼物 / 粉丝团 / 航海 / 包裹 / 全部 5 个选项卡；长按原地弹出数量选择（10/100/520/1314）、连击、价格/次数排序切换。
+- **送礼动画**：大礼物特效（B站官方动画资源，通过 `AlphaVideoPlayer` 播放）、连击长条横幅通知（最多 3 条）、右下角悬浮连击按钮（倒计时环形）。
+- **合成活动**：山海工坊（槽位抽取 + 合成礼物），抽到的礼物进入"包裹"选项卡；活动状态持久化到本地 `activity-state.json`。
+- **"礼物"选项卡数据源**：固定直播间（room_id=23915535）的**直播间礼物面板 API**（`xlive/web-room/v1/giftPanel/roomGiftList`，无需登录，所有直播间一致）。"礼物"选项卡 = `roomGiftList.gold_list`（原始顺序，保留既有展示顺序）+ `public/gift-extra-ids.json` 额外礼物（去重）；礼物详情（图标/价格）从**全量礼物目录**（giftConfig）联表获取。
 
 ### 其他页面
 - **登录页**（`/login`）：扫码登录（QR 轮询）、开发者登录。
@@ -344,6 +407,8 @@ Tauri 的图标由 `cargo tauri icon <源图>` 生成。CI 打包时若**不指�
 - **天选/红包 ID 单独处理**：giftConfig 无法可靠识别"天选/红包"这类特殊礼物。这些 ID 的历史累积从全局 `gift-db.json` 迁移到**每个用户本地**的 `special-gift-ids.json`（按 `uid_<mid>/` 隔离），参与合成盈亏等礼物计算。
 - **`gift-db.json` 已废弃**：所有上传/下载/合并逻辑已移除，`/api/gift-db` 路由已删除，服务器上的 `gift-db.json` 可删除，不再需要维护。
 
+> **模拟器"礼物"选项卡复用这份目录**：它以**直播间礼物面板 API**（`roomGiftList`，无需登录，12h 缓存）返回的 `gold_list` 顺序为基准，补上 `public/gift-extra-ids.json` 的额外礼物并去重；礼物详情从目录联表获取，因此随目录 12h 自动更新（见 [BiliSimulator.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/BiliSimulator.tsx)）。
+
 ---
 
 ## 本地开发与运行
@@ -412,4 +477,6 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 - **消费记录有 1 周回溯**：这是为了覆盖退款（"已退回"）的原地修改，改增量逻辑时不要丢掉这个回溯。
 - **图标**：改图标要同步 `public/orig_icon.png`，并在 CI 里 `cargo tauri icon public/orig_icon.png`。
 - **礼物图标已改用 giftConfig API**：礼物图标不再走上传/共享 `gift-db.json`，改由每个客户端直连 B站 giftConfig（无需登录、12h 缓存）。`gift-db.json` 及其 API 已废弃，别再为它加回上传/下载逻辑。
+- **模拟器"礼物"选项卡数据源**：Tauri 客户端直连**直播间礼物面板 API**（`xlive/web-room/v1/giftPanel/roomGiftList?platform=pc&room_id=23915535`，无需登录）→ 本地 `roomGiftList.json`（与 gift-list/effects 同 TTL 12h 一起更新）；Web 走服务器代理 `/api/room-gift-list`。"礼物"选项卡 = `roomGiftList.gold_list`（原始顺序）+ `public/gift-extra-ids.json` 额外礼物（去重，详情从 giftConfig 联表）。**不要再依赖 `public/room-gift-list.json`**（旧接口 getRoomGiftList 已 404，该静态文件已删除）。
+- **竖屏直播流填满全屏**：模拟器背景对竖屏（高>宽）流用 `object-cover` 铺满整屏（含通知栏/底部安全区），横屏才用 `object-contain` + `top:100px` 按比例显示。改直播布局时注意区分两种情况。
 - **`.data/` 是核心数据**：Web 服务器升级时 `.data/` 必须保留（deploy.yml 已处理），丢了用户数据无法找回。

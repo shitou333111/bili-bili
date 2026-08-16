@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>attribution 组位置探针</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  #wrap { width: 340px; height: 600px; margin: 12px auto; position: relative; overflow: hidden; background: #f6f1e9; }
+  #container { width: 1080px; height: 1920px; transform-origin: top left; transform: scale(0.31481); }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 300px; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="container"></div></div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; console.log(m); };
+
+const REAL = [
+  13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1,
+];
+const groups = REAL.map((v,i)=>({
+  id: i+1, label:"G"+i, weight: Math.sqrt(v),
+  color: "#e8ddd0", name:"G"+i, value: v,
+}));
+
+const ft = new FoamTree({
+  element: document.getElementById("container"),
+  pixelRatio: 1, layout:"relaxed", stacking:"flattened",
+  layoutByWeightOrder:true, relaxationInitializer:"fisheye",
+  descriptionGroup:false, descriptionGroupSize:0, descriptionGroupMinHeight:0,
+  groupLabelDecorator:(o,p,v)=>{v.labelText="";}, groupLabelFontSize:0, groupLabelMinFontSize:0,
+  groupBorderWidth:0, groupInsetWidth:0, groupStrokeType:"none", groupStrokeWidth:0,
+  groupFillType:"plain", groupBorderRadius:0,
+  wireframeDrawingTimeout:0, wireframeLabelDrawingTimeout:0, wireframeContentDecorationDrawing:"always",
+  finalCompleteDrawMaxDuration:0, finalIncrementalDrawMaxDuration:0, fadeDuration:0,
+  groupContentDecoratorTriggering:"onSurfaceDirty",
+  attributionWeight:0, attributionText:"",
+  backgroundColor:"#f6f1e9",
+  groupColorDecorator:(o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+  groupContentDecorator:(o,p,v)=>{
+    const ctx=p.context, poly=p.polygon, node=p.group;
+    if(!poly||poly.length<3)return;
+    ctx.save(); ctx.beginPath();
+    ctx.moveTo(poly[0].x,poly[0].y);
+    for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+    ctx.closePath();
+    ctx.fillStyle = node.color || "#f6f1e9"; ctx.fill();
+    ctx.restore();
+  },
+  dataObject:{groups},
+});
+
+function bbox(poly){
+  let a=1e9,b=1e9,c=-1e9,d=-1e9;
+  for(const p of poly){a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y);}
+  return {x:a,y:b,w:c-a,h:d-b};
+}
+
+setTimeout(()=>{
+  try{
+    const st = ft.get("state");
+    const vis = st.visible;
+    log("总组数(可见): " + vis.length);
+    // 找 attribution 组
+    const attr = vis.filter(s=>s.attribution);
+    log("attribution 组数: " + attr.length);
+    attr.forEach(a=>{
+      const bb = a.polygon ? bbox(a.polygon) : null;
+      log("attribution: polygon="+(bb?JSON.stringify(bb):"无")+" cx="+(a.polygonCenterX||"-")+" cy="+(a.polygonCenterY||"-"));
+    });
+    // 找最小面积的数据格子位置(通常最大的在中心,小的在角)
+    const cells = vis.filter(s=>!s.attribution);
+    cells.sort((a,b)=>(a.polygonArea||0)-(b.polygonArea||0));
+    const W = 1080, H = 1920;
+    log("画布 1080x1920 中心=("+(W/2)+","+(H/2)+")");
+    log("最小格子: " + cells.slice(0,3).map(s=>`${s.group.name} area=${Math.round(s.polygonArea)} 中心=(${Math.round(s.polygonCenterX)},${Math.round(s.polygonCenterY)})`).join(" | "));
+    log("最大格子: " + cells.slice(-3).map(s=>`${s.group.name} area=${Math.round(s.polygonArea)} 中心=(${Math.round(s.polygonCenterX)},${Math.round(s.polygonCenterY)})`).join(" | "));
+    // 面积比例检查: area / weight 是否恒定
+    const r0 = cells[0].polygonArea / Math.sqrt(REAL[0]);
+    const ok = cells.every(s=>{
+      const r = s.polygonArea / Math.sqrt(s.group.value);
+      return Math.abs(r/r0 - 1) < 0.15;
+    });
+    log("面积比例恒定(area∝sqrt(value)): " + ok);
+  }catch(e){
+    log("错误: "+e.message+"\n"+ (e.stack||"").split("\n").slice(0,3).join("\n"));
+  }
+}, 2500);
+</script>
+</body>
+</html>

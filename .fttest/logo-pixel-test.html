@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logo 像素级验证（当前组件配置）</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .box { width: 300px; height: 533px; position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; min-height: 300px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div><div class="box" id="c1"></div><div>A: 当前配置 attributionWeight=0 + attributionText=""</div></div>
+  <div><div class="box" id="c2"></div><div>B: attributionWeight=0.025(默认) + attributionText=""</div></div>
+  <div><div class="box" id="c3"></div><div>C: attributionWeight=0 + attributionText="FoamTree"(对照,应见logo)</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; console.log(m); };
+
+const REAL = [
+  13560,6804,5316,5111,4039,1831,1430,1390,1380,1380,
+  1200,1100,1000,900,880,800,700,650,600,550,
+  500,450,400,380,350,300,280,250,220,200,
+  180,150,120,100,80,60,40,20,10,5,1,
+];
+const GROUPS = REAL.map((v,i)=>({
+  id: i+1, label:"G"+i, weight: Math.sqrt(v),
+  color: ["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+  name:"G"+i, value: v, face: "",
+}));
+
+function polyArea(poly){let s=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];s+=p.x*q.y-q.x*p.y;}return Math.abs(s)/2;}
+
+// 与真实组件 ftOptions 完全一致（渲染层也一致：placeholder 填充 + 白描边）
+function build(el, tag, cfg){
+  const ftOptions = {
+    element: el, pixelRatio: 1, layout: "relaxed", stacking: "flattened",
+    layoutByWeightOrder: true, relaxationInitializer: "fisheye",
+    descriptionGroup: false, descriptionGroupSize: 0, descriptionGroupMinHeight: 0,
+    groupLabelDecorator: (o,p,v)=>{v.labelText="";}, groupLabelFontSize: 0, groupLabelMinFontSize: 0,
+    groupBorderWidth: 0, groupBorderWidthScaling: 1, groupInsetWidth: 0,
+    groupStrokeType: "none", groupStrokeWidth: 0, groupFillType: "plain", groupBorderRadius: 0,
+    groupSelectionOutlineWidth: 2.5, groupSelectionOutlineColor: "#000000", groupSelectionOutlineShadowSize: 0,
+    groupHoverFillHueShift: 0, groupHoverFillSaturationShift: 0, groupHoverFillLightnessShift: 0,
+    groupHoverStrokeHueShift: 0, groupHoverStrokeSaturationShift: 0, groupHoverStrokeLightnessShift: 0,
+    groupExposureScale: 1, groupExposureShadowSize: 0, groupExposureZoomMargin: 0,
+    groupUnexposureLightnessShift: 0, groupUnexposureSaturationShift: 0,
+    rolloutDuration: 800, pullbackDuration: 600,
+    wireframeDrawingTimeout: 0, wireframeLabelDrawingTimeout: 0, wireframeContentDecorationDrawing: "always",
+    finalCompleteDrawMaxDuration: 0, finalIncrementalDrawMaxDuration: 0, fadeDuration: 300, zoomMouseWheelDuration: 300,
+    groupContentDecoratorTriggering: "onSurfaceDirty", descriptionGroupPolygonDrawn: false,
+    backgroundColor: "#f6f1e9",
+    groupColorDecorator: (o,p,v)=>{ v.groupColor = p.group.color || "#f6f1e9"; },
+    dataObject: { groups: GROUPS.map(g=>({...g})) },
+  };
+  if (cfg === "A" || cfg === "C") { ftOptions.attributionWeight = 0; }
+  if (cfg === "C") { ftOptions.attributionText = "FoamTree"; }
+  if (cfg === "B") { ftOptions.attributionWeight = 0.025; }
+  // 渲染装饰器（与真实组件相同：占位色填充 + 白色细描边），并记录 attribution 多边形
+  window.__caps = window.__caps || {};
+  ftOptions.groupContentDecorator = (o,p,v)=>{
+    const node = p.group, poly = p.polygon;
+    if (!poly || poly.length < 3) return;
+    if (node && node.attribution) {
+      if (!window.__caps[tag]) window.__caps[tag] = { area: 0, attr: true };
+      window.__caps[tag].area = polyArea(poly);
+      window.__caps[tag].cx = poly.reduce((s,q)=>s+q.x,0)/poly.length;
+      window.__caps[tag].cy = poly.reduce((s,q)=>s+q.y,0)/poly.length;
+    }
+    const ctx = p.context;
+    ctx.save(); ctx.beginPath();
+    ctx.moveTo(poly[0].x,poly[0].y);
+    for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+    ctx.closePath();
+    ctx.fillStyle = node.color || "#f6f1e9"; ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.lineJoin = "miter"; ctx.stroke();
+    ctx.restore();
+  };
+  return new FoamTree(ftOptions);
+}
+
+const ftA = build(document.getElementById("c1"), "A", "A");
+const ftB = build(document.getElementById("c2"), "B", "B");
+const ftC = build(document.getElementById("c3"), "C", "C");
+
+// 统计右下角区域：深色像素(logo 文字/矢量) 与 异常亮块
+function analyze(tag){
+  log(`===== ${tag} =====`);
+  const el = document.getElementById(tag==="A"?"c1":tag==="B"?"c2":"c3");
+  const canvases = el.querySelectorAll("canvas");
+  log(`canvas 层数: ${canvases.length}`);
+  canvases.forEach((cvs,idx)=>{
+    const W=cvs.width, H=cvs.height;
+    const d = cvs.getContext("2d").getImageData(0,0,W,H).data;
+    let dark=0, whiteBlock=0, total=0;
+    const sx=Math.floor(W*0.45), sy=Math.floor(H*0.5);
+    for(let y=sy;y<H;y+=2){
+      for(let x=sx;x<W;x+=2){
+        const i=(y*W+x)*4, r=d[i],g=d[i+1],b=d[i+2];
+        total++;
+        if(r<180&&g<180&&b<180) dark++;                       // 深色=logo
+        if(r>245&&g>245&&b>245) whiteBlock++;                 // 亮白=attribution白块
+      }
+    }
+    log(`canvas[${idx}] ${W}x${H}: 右下角深色像素=${dark}/${total} 白块像素=${whiteBlock}/${total}`);
+  });
+  const cap = window.__caps[tag];
+  log(`attribution 多边形: ${cap ? "area="+Math.round(cap.area)+" 中心=("+Math.round(cap.cx)+","+Math.round(cap.cy)+")" : "(未捕获)"}`);
+}
+
+setTimeout(() => {
+  analyze("A");
+  analyze("B");
+  analyze("C");
+}, 3000);
+</script>
+</body>
+</html>

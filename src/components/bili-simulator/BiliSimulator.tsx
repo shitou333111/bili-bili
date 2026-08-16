@@ -7,9 +7,9 @@ import ComboNotification from "./ComboNotification";
 import type { Gift, EffectConfig, GiftEffectInfo } from "./types";
 import { useActivities } from "./activities/registry";
 import { openActivityNative, closeActivityNative, isTauriRuntime } from "./activities/native";
-import { ensureGiftCatalogLoaded, getGiftList } from "@/lib/gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftList, getRoomGiftData } from "@/lib/gift-catalog-client";
 import { getEffectsMap } from "@/lib/gift-effects-client";
-import { refreshGiftData, getGiftEffectsMap } from "@/lib/gift-local-store";
+import { refreshGiftData, getGiftEffectsMap, loadGiftExtraIds } from "@/lib/gift-local-store";
 import { getPlatform } from "@/lib/platform";
 import { serverApiUrl } from "@/lib/server-api";
 import { readActivityState, writeActivityState, type BagGift } from "./activityState";
@@ -64,8 +64,9 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         // （gift-catalog / gift-effects，12h 缓存），不再读取 public/ 下手动维护的静态快照。
         let list: any[] = [];
         let effectsMap: Record<number, { web_mp4: string; web_mp4_json: string }> = {};
+        let platform: Awaited<ReturnType<typeof getPlatform>> | null = null;
         if (isTauriRuntime()) {
-          const platform = await getPlatform();
+          platform = await getPlatform();
           await ensureGiftCatalogLoaded(platform);
           const [catalogList, effectMap] = await Promise.all([
             Promise.resolve(getGiftList()),
@@ -102,30 +103,30 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         const giftById = new Map<number, Gift>();
         parsedGifts.forEach((g) => giftById.set(g.id, g));
 
-        // 加载固定直播间的礼物面板数据
-        let roomData: any = null;
-        try {
-          const roomRes = await fetch("/room-gift-list.json");
-          if (roomRes.ok) roomData = await roomRes.json();
-        } catch (e) {
-          console.warn("加载直播间礼物列表失败:", e);
+        // 加载固定直播间的礼物面板数据（roomGiftList API，无需登录；所有直播间一致）
+        // - Tauri：本地缓存 roomGiftList.json（与 gift-list/effects 同 TTL 12h 更新）
+        // - Web：服务器代理 /api/room-gift-list（服务端 12h 缓存）
+        let roomGiftData: any = null;
+        if (isTauriRuntime()) {
+          roomGiftData = getRoomGiftData();
+        } else {
+          try {
+            const roomRes = await fetch(serverApiUrl("/api/room-gift-list"));
+            if (roomRes.ok) {
+              const roomJson = await roomRes.json();
+              roomGiftData = roomJson?.data?.gift_data || null;
+            }
+          } catch (e) {
+            console.warn("加载直播间礼物列表失败:", e);
+          }
         }
 
-        // 加载额外礼物ID配置（追加到"礼物"选项卡）
-        let extraGiftIds: number[] = [];
-        try {
-          const extraRes = await fetch("/gift-extra-ids.json");
-          if (extraRes.ok) extraGiftIds = await extraRes.json();
-        } catch (e) {
-          console.warn("加载额外礼物配置失败:", e);
-        }
-
-        const roomList = roomData?.data?.gift_data?.room_gift_list;
+        const roomList = roomGiftData?.room_gift_list;
         const goldIds: number[] = (roomList?.gold_list || []).map((g: any) => g.gift_id);
         const fansIds: number[] = [];
         const voyageIds: number[] = [];
-        // tab_list 在 data.gift_data.tab_list（不在 room_gift_list 下）
-        (roomData?.data?.gift_data?.tab_list || []).forEach((tab: any) => {
+        // tab_list 在 gift_data.tab_list（不在 room_gift_list 下）
+        (roomGiftData?.tab_list || []).forEach((tab: any) => {
           const ids = (tab.list || []).map((g: any) => g.gift_id);
           if (tab.tab_id === 9) fansIds.push(...ids);
           else if (tab.tab_id === 2) voyageIds.push(...ids);
@@ -135,10 +136,12 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
           ids.map((id) => giftById.get(id)).filter((g): g is Gift => !!g);
         const allGifts = parsedGifts.filter((g) => g.bag_gift === 1 && g.coin_type === "gold");
 
-        // "礼物"选项卡 = gold_list 礼物 + 配置的额外礼物（去重）
-        const giftTabGifts = pickByIds([...goldIds, ...extraGiftIds]);
+        // "礼物"选项卡 = 直播间 roomGiftList.gold_list（原始顺序，保留既有展示顺序）+ 配置的额外礼物（去重）。
+        // 礼物详情（图标/价格）从全量礼物目录（giftConfig，12h 自动更新）联表获取。
+        // roomGiftList 数据（Tauri 本地缓存 / Web 服务器代理）与额外礼物配置的服务器拉取互不影响：
+        // 基础礼物立即显示，额外礼物稍后异步合并进来。
+        const giftTabGifts = pickByIds(goldIds);
         const giftTabIds = new Set(giftTabGifts.map((g) => g.id));
-
         setTabGifts({
           gift: giftTabGifts,
           fans: pickByIds(fansIds).filter((g) => !giftTabIds.has(g.id)),
@@ -146,6 +149,33 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
           bag: [],
           all: allGifts,
         });
+
+        // 额外礼物 ID（gift-extra-ids）异步合并到"礼物"选项卡：
+        // - Tauri：优先从服务器拉取并落盘缓存；服务器不可达时最多等 8s 后回退本地缓存/打包静态文件
+        // - Web：直接读取打包的静态文件（本地资源，无延迟）
+        const mergeExtraGiftIds = (extraGiftIds: number[]) => {
+          if (!Array.isArray(extraGiftIds) || !extraGiftIds.length) return;
+          const extraGifts = pickByIds(extraGiftIds).filter((g) => !giftTabIds.has(g.id));
+          if (!extraGifts.length) return;
+          const extraIdSet = new Set(extraGifts.map((g) => g.id));
+          setTabGifts((prev) => ({
+            ...prev,
+            gift: [...(prev.gift as Gift[]), ...extraGifts],
+            fans: (prev.fans as Gift[]).filter((g) => !extraIdSet.has(g.id)),
+          }));
+        };
+        if (isTauriRuntime() && platform) {
+          loadGiftExtraIds(platform)
+            .then(mergeExtraGiftIds)
+            .catch((err) => console.warn("加载额外礼物配置失败:", err));
+        } else {
+          try {
+            const extraRes = await fetch("/gift-extra-ids.json");
+            if (extraRes.ok) mergeExtraGiftIds(await extraRes.json());
+          } catch (e) {
+            console.warn("加载额外礼物配置失败:", e);
+          }
+        }
 
         // 加载盲盒配置
         try {
@@ -780,13 +810,13 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
       </div>
 
       {/* 底部栏 - 更扁 */}
-      <div className="relative z-30 px-3 pb-4 pt-1.5">
+      <div className="relative z-30 px-3 pb-1.5 pt-1.5">
         <div className="flex items-center gap-2">
           {/* 聊天输入框 */}
           <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">
             <span className="text-white/50 text-xs">弹幕支持下～</span>
             <button className="ml-auto">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="#FFD700">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="#FFD700">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M8 14s1.5 2 4 2 4-2 4-2" stroke="black" strokeWidth="1.5" fill="none" strokeLinecap="round" />
                 <circle cx="9" cy="10" r="1" fill="black" />

@@ -73,14 +73,31 @@ function cleanBilibiliFaceUrl(url: string): string {
   return cleaned;
 }
 
+/** 统一使用 400x400 缩略图。
+ *  原始 face 是全尺寸大图（约 200~300KB），400w 缩略图约 7KB（全图 1/38）：
+ *  - 大幅加快首屏加载（300 张从 ~90MB 降到 ~2MB）
+ *  - 避免并发下载被 8s 超时误判为"加载失败"，从而消除"失败→刷新"的无谓往返
+ *  - 400px 在 1080x1920 导出图上放大到最大格子(~800px)也仅 2 倍，清晰度可接受
+ */
+function displayFaceUrl(url: string): string {
+  return cleanBilibiliFaceUrl(url) + "@400w_400h_1c_1s.webp";
+}
+
 function proxyUrl(url: string): string {
-  const cleaned = cleanBilibiliFaceUrl(url);
-  // Tauri: 直接访问 B站 CDN（客户端直连，不经过服务器）
+  // Tauri: 直连 B站 CDN 缩略图（WebView 请求不带被拒绝的 Referer 时最快）
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return cleaned;
+    return displayFaceUrl(url);
   }
-  // Web: 通过服务器代理添加 CORS 头
-  return `/api/proxy/image?url=${encodeURIComponent(cleaned)}`;
+  // Web: 通过服务器代理（服务器带 bilibili Referer 抓取，规避 CDN 403）
+  return `/api/proxy/image?url=${encodeURIComponent(displayFaceUrl(url))}`;
+}
+
+/** 服务器代理回退地址：始终走服务器（服务器带 bilibili Referer 抓取）。
+ *  hdslb.com CDN 会对"非 bilibili 来源的 Referer"返回 403（实测验证），
+ *  浏览器/WebView 的 <img> 会带应用自身 origin 作为 Referer，直连会被拒；
+ *  服务器代理用 bilibili Referer 请求，规避该 403。 */
+function proxyFallbackUrl(url: string): string {
+  return serverApiUrl(`/api/proxy/image?url=${encodeURIComponent(displayFaceUrl(url))}`);
 }
 
 function formatValue(v: number): string {
@@ -125,14 +142,19 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
   const ftRef = useRef<FTInstance | null>(null);
   const imageMapRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const imageFailedRef = useRef<Set<number>>(new Set());
-  const refreshAttemptedRef = useRef<Set<number>>(new Set());
-  const refreshingRef = useRef<Set<number>>(new Set());
-  const proxyAttemptedRef = useRef<Set<number>>(new Set());
   const loadingDoneRef = useRef(false);
   const progressRef = useRef({ loaded: 0, total: 0 });
   const groupsRef = useRef<FTGroup[]>([]);
   const mousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const overlayRef = useRef<HTMLDivElement>(null);
+  // 图片并发池与合并重绘状态
+  const loadQueueRef = useRef<Array<() => void>>([]);
+  const activeLoadsRef = useRef(0);
+  const redrawScheduledRef = useRef(false);
+  // 已结算(成功或失败)的头像 id，保证每个 id 只结算一次
+  const settledRef = useRef<Set<number>>(new Set());
+  // 同时进行中的头像图片下载数。太小则慢，太大在移动端会因连接数受限而排队超时。
+  const MAX_CONCURRENT_LOADS = 12;
 
   const [internalLoading, setInternalLoading] = useState(true);
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
@@ -142,9 +164,26 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
   const isLoading = externalLoading || internalLoading;
   const percent = progress.total > 0 ? Math.round((progress.loaded / progress.total) * 100) : 0;
 
+  // 合并重绘：多次图片完成/进度更新只调度一次真正重绘（下一帧执行）。
+  // 避免移动端慢CPU上每张图片完成都触发一次 1080x1920 全量重绘造成卡顿/渐进感。
   const triggerRedraw = useCallback(() => {
-    if (!ftRef.current) return;
-    try { ftRef.current.redraw(); } catch (e) { /* ignore */ }
+    if (redrawScheduledRef.current) return;
+    redrawScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      redrawScheduledRef.current = false;
+      if (ftRef.current) {
+        try { ftRef.current.redraw(); } catch (e) { /* ignore */ }
+      }
+    });
+  }, []);
+
+  /** 从并发池中弹出下一个待加载任务（只用稳定 ref，定义一次即可） */
+  const pumpQueue = useCallback(() => {
+    while (activeLoadsRef.current < MAX_CONCURRENT_LOADS && loadQueueRef.current.length > 0) {
+      const start = loadQueueRef.current.shift()!;
+      activeLoadsRef.current++;
+      start();
+    }
   }, []);
 
   const loadImageForGroup = useCallback((g: FTGroup) => {
@@ -155,11 +194,14 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     if (imageMap.has(g.id)) return;
     if (failedSet.has(g.id)) return;
 
-    const img = new Image();
-    img.crossOrigin = "anonymous";
     const id = g.id;
 
     function done() {
+      // 每个 id 只结算一次：成功/失败/刷新/代理等路径可能重复触发同一 id 的 done()，
+      // 必须去重，否则 loaded 会超过 total、并发池槽位被重复释放、loadingDone 提前置位，
+      // 进而导致下载时头像尚未画全。
+      if (settledRef.current.has(id)) return;
+      settledRef.current.add(id);
       progressRef.current.loaded++;
       setProgress({ ...progressRef.current });
       triggerRedraw();
@@ -167,75 +209,98 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
         loadingDoneRef.current = true;
         setTimeout(() => setInternalLoading(false), 300);
       }
+      // 释放并发池槽位，继续加载下一张
+      activeLoadsRef.current--;
+      pumpQueue();
     }
 
-    img.onload = () => {
-      clearTimeout(loadTimer);
-      imageMap.set(id, img);
-      done();
-    };
-
-    // 头像加载失败/超时后的降级路径：先刷 URL，再回退服务器代理
-    let loadTimer: ReturnType<typeof setTimeout>;
-    function handleFail() {
-      if (!refreshAttemptedRef.current.has(id) && !refreshingRef.current.has(id)) {
-        refreshingRef.current.add(id);
-        refreshAttemptedRef.current.add(id);
-        console.log(`[AvatarChart] 头像加载失败，尝试刷新URL: uid=${id}`);
-        dataFetch(`/api/tools/user-info?uids=${id}&refresh=1`, { cache: "no-store" })
-          .then(r => r.json())
-          .then(data => {
-            refreshingRef.current.delete(id);
-            if (data.code === 0 && data.data?.[id]?.face) {
-              const newFace = data.data[id].face;
-              const newName = data.data[id].name;
-              console.log(`[AvatarChart] 刷新URL成功: uid=${id}`);
-              const group = groupsRef.current.find(gr => gr.id === id);
-              if (group) {
-                group.face = newFace;
-                if (newName) group.name = newName;
-              }
-              failedSet.delete(id);
-              imageMap.delete(id);
-              const newImg = new Image();
-              newImg.crossOrigin = "anonymous";
-              newImg.onload = () => { imageMap.set(id, newImg); triggerRedraw(); done(); };
-              newImg.onerror = () => { failedSet.add(id); triggerRedraw(); done(); };
-              newImg.src = proxyUrl(newFace);
-            } else {
-              failedSet.add(id);
-              triggerRedraw();
-              done();
-            }
-          })
-          .catch(() => {
-            refreshingRef.current.delete(id);
-            failedSet.add(id);
-            triggerRedraw();
-            done();
-          });
-      } else {
-        // 直连失败且已尝试刷新 URL，回退到服务器代理加载一次（兼容 Tauri 直连 B站 CDN 失败的情况）
-        if (!proxyAttemptedRef.current.has(id)) {
-          proxyAttemptedRef.current.add(id);
-          const proxied = serverApiUrl(`/api/proxy/image?url=${encodeURIComponent(cleanBilibiliFaceUrl(g.face))}`);
-          const pimg = new Image();
-          pimg.crossOrigin = "anonymous";
-          pimg.onload = () => { imageMap.set(id, pimg); triggerRedraw(); done(); };
-          pimg.onerror = () => { failedSet.add(id); triggerRedraw(); done(); };
-          pimg.src = proxied;
+    function start() {
+      // 头像解码完成后再视为加载完成，确保本次重绘能真正画出头像
+      // （否则 onload 后立即重绘可能因尚未解码而没画出来，造成"加载了但没显示"的渐进感）
+      const commitImage = (target: HTMLImageElement) => {
+        const commit = () => { imageMap.set(id, target); done(); };
+        if (typeof target.decode === "function") {
+          target.decode().then(commit).catch(commit);
         } else {
+          commit();
+        }
+      };
+
+      // 失败降级链：
+      //   0 直连(Web 即服务器代理) → 1 服务器代理(带 bilibili Referer，解决直连 403/挂起)
+      //   → 2 刷新URL(解决缓存 face 过期) → 3 占位
+      let stage = 0;
+
+      // 单次尝试：onload 成功提交；onerror / 超时 只触发一次，进入下一层
+      function attempt(src: string, tag: string, timeoutMs: number, onFail?: () => void) {
+        const a = new Image();
+        a.crossOrigin = "anonymous";
+        let fired = false;
+        const settle = (fn: () => void) => {
+          if (fired) return;
+          fired = true;
+          clearTimeout(t);
+          fn();
+        };
+        const t = setTimeout(() => {
+          console.warn(`[AvatarChart] ${tag} 超时(uid=${id})`);
+          settle(onFail || (() => nextStage()));
+        }, timeoutMs);
+        a.onload = () => settle(() => commitImage(a));
+        a.onerror = () => {
+          console.warn(`[AvatarChart] ${tag} 失败(uid=${id})`);
+          settle(onFail || (() => nextStage()));
+        };
+        a.src = src;
+      }
+
+      function nextStage() {
+        if (stage === 0) {
+          stage = 1;
+          console.log(`[AvatarChart] 直连失败(uid=${id})，回退服务器代理`);
+          attempt(proxyFallbackUrl(g.face), "服务器代理", 10000);
+        } else if (stage === 1) {
+          stage = 2;
+          console.log(`[AvatarChart] 代理失败(uid=${id})，刷新URL`);
+          refreshThenLoad();
+        } else {
+          console.warn(`[AvatarChart] 头像最终加载失败(uid=${id})，显示占位`);
           failedSet.add(id);
           done();
         }
       }
+
+      // 第 2 层：从 B站 API 重新拉一次 face（可能拿到新头像 URL）再加载
+      function refreshThenLoad() {
+        dataFetch(`/api/tools/user-info?uids=${id}&refresh=1`, { cache: "no-store" })
+          .then(r => r.json())
+          .then(data => {
+            if (data.code === 0 && data.data?.[id]?.face) {
+              const newFace = data.data[id].face;
+              const group = groupsRef.current.find(gr => gr.id === id);
+              if (group) group.face = newFace;
+              attempt(proxyUrl(newFace), "刷新加载", 8000, () => {
+                failedSet.add(id);
+                done();
+              });
+            } else {
+              failedSet.add(id);
+              done();
+            }
+          })
+          .catch(() => {
+            failedSet.add(id);
+            done();
+          });
+      }
+
+      // 首层：直连（Web 下就是服务器代理；Tauri 下直连 CDN 缩略图）
+      attempt(proxyUrl(g.face), "直连", 8000);
     }
 
-    img.onerror = handleFail;
-    // 直连若长时间无响应（安卓上 B站 CDN 可能挂起而非报错），超时后同样走降级路径
-    loadTimer = setTimeout(handleFail, 8000);
-    img.src = proxyUrl(g.face);
-  }, [triggerRedraw]);
+    loadQueueRef.current.push(start);
+    pumpQueue();
+  }, [triggerRedraw, pumpQueue]);
 
   // 核心FoamTree初始化 - canvas固定1080×1920，CSS transform缩放显示，overlay拦截事件修正坐标
   useEffect(() => {
@@ -274,8 +339,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     const newIds = new Set(groups.map(g => g.id));
     for (const [gid] of imageMap) { if (!newIds.has(gid)) imageMap.delete(gid); }
     for (const gid of failedSet) { if (!newIds.has(gid)) failedSet.delete(gid); }
-    refreshAttemptedRef.current.clear();
-    refreshingRef.current.clear();
+    for (const gid of settledRef.current) { if (!newIds.has(gid)) settledRef.current.delete(gid); }
 
     let loadedCount = 0;
     let totalToLoad = 0;
@@ -362,9 +426,13 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       fadeDuration: 300,
       zoomMouseWheelDuration: 300,
       groupContentDecoratorTriggering: "onSurfaceDirty",
-      // 用透明 1x1 GIF 强制不绘制 attribution 徽标
-      attributionLogo:
-        "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+      // 移除右下角"Carrot Search FoamTree"公司 logo。
+      // attributionWeight=0 + attributionText="" 使 attribution 组多边形退化为空，
+      // logo 与白色底块没有可绘制区域，全平台（含移动端 WebView）都不会渲染。
+      // 实证(area-test.html)：attributionWeight=0 时布局面积严格正比于权重；
+      // 而 attributionDistanceFromCenter=2 会把锚点推出画布外、破坏 Voronoi 松弛，
+      // 导致各 cell 面积几乎相等、大额不再居中（曾误改导致回归，勿再引入）。
+      // 因此不需要任何右下角遮盖层（盖住真实格子会形成可见白色块），导出图也无需兜底。
       attributionWeight: 0,
       attributionText: "",
       descriptionGroupPolygonDrawn: false,
@@ -464,16 +532,12 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       ftRef.current = new FoamTreeCtor(ftOptions);
     });
 
-    const timeout = setTimeout(() => {
-      if (!loadingDoneRef.current) {
-        loadingDoneRef.current = true;
-        setInternalLoading(false);
-      }
-    }, 30000);
-
+    // 不设置"固定时长后强制解锁 loading"的超时：每张头像图片都有 8s 级超时，
+    // 成功或失败都必然调用 done() 结算，因此 loading 一定会在全部头像结算后结束。
+    // 若再加 30s 全局超时，慢速网络首次加载时会提前解锁下载按钮，
+    // 用户在头像未画全时即可导出 → 下载图缺失大量头像（曾出现的 bug）。
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
       if (ftRef.current) {
         try { ftRef.current.dispose(); } catch (_) { /* ignore */ }
         ftRef.current = null;
@@ -509,16 +573,29 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
       canvas.dispatchEvent(ev);
     }
 
+    // 从触摸事件中取坐标：touches 在 touchend 时为空，需退回 changedTouches
+    function touchPoint(e: TouchEvent): { clientX: number; clientY: number; screenX: number; screenY: number } | null {
+      if (e.touches.length > 0) {
+        const t = e.touches[0];
+        return { clientX: t.clientX, clientY: t.clientY, screenX: t.screenX, screenY: t.screenY };
+      }
+      if (e.changedTouches.length > 0) {
+        const t = e.changedTouches[0];
+        return { clientX: t.clientX, clientY: t.clientY, screenX: t.screenX, screenY: t.screenY };
+      }
+      return null;
+    }
+
     function dispatchCorrectedTouch(e: TouchEvent, type: string) {
       const canvas = getCanvas();
-      if (!canvas || e.touches.length === 0) return;
-      const t = e.touches[0];
+      const pt = touchPoint(e);
+      if (!canvas || !pt) return;
       const rect = canvas.getBoundingClientRect();
-      const cx = rect.left + (t.clientX - rect.left) * scaleX;
-      const cy = rect.top + (t.clientY - rect.top) * scaleY;
+      const cx = rect.left + (pt.clientX - rect.left) * scaleX;
+      const cy = rect.top + (pt.clientY - rect.top) * scaleY;
       const ev = new MouseEvent(type, {
         clientX: cx, clientY: cy,
-        screenX: t.screenX, screenY: t.screenY,
+        screenX: pt.screenX, screenY: pt.screenY,
         button: 0, buttons: 1,
         bubbles: true, cancelable: true,
       });
@@ -592,19 +669,9 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     try {
       const canvas = containerRef.current.querySelector("canvas") as HTMLCanvasElement | null;
       if (!canvas) return null;
-      // 拷贝一份，在拷贝上用背景色覆盖右下角可能残留的 foamtree attribution logo 区域。
-      // 即使 attributionLogo 已设为透明图，某些导出路径仍可能画出 logo，这里作确定性兜底：
-      // 背景色与图背景一致(#f6f1e9)，logo 区域本就被背景色填充，覆盖后视觉无差异，
-      // 又能确保下载的图片绝无公司 logo。
-      const copy = document.createElement("canvas");
-      copy.width = canvas.width;
-      copy.height = canvas.height;
-      const cctx = copy.getContext("2d");
-      if (!cctx) return canvas.toDataURL("image/png");
-      cctx.drawImage(canvas, 0, 0);
-      cctx.fillStyle = "#f6f1e9";
-      cctx.fillRect(copy.width - 240, copy.height - 60, 240, 60);
-      return copy.toDataURL("image/png");
+      // attribution 组在 attributionWeight=0 时多边形退化为空、logo 不会绘制，
+      // 直接导出画布即可。不需要右下角覆盖层——那会盖住真实格子（曾导致下载图出现白色块）。
+      return canvas.toDataURL("image/png");
     } catch (err) {
       console.error("生成图片失败:", err);
       return null;
@@ -642,6 +709,7 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
             ref={containerRef}
             style={{ width: DOWNLOAD_W, height: DOWNLOAD_H, transform: `scale(${canvasDims.w / DOWNLOAD_W})`, transformOrigin: "top left" }}
           />
+
           <div
             ref={overlayRef}
             className="absolute inset-0 z-[5]"

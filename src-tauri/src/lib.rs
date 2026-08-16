@@ -98,21 +98,53 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
   var TOP_OFFSET = {top_offset};
   var BAR_H = 44;
   var TOTAL_H = BAR_H + TOP_OFFSET;
+  function dismiss() {{
+    if (window.__BILI_ACTIVITY_DISMISSING__) return;
+    window.__BILI_ACTIVITY_DISMISSING__ = true;
+    try {{
+      // 整页向下收起（含固定标题栏/遮罩，body transform 会把 fixed 子元素一起带下去）
+      document.body.style.transition = "transform 0.32s ease-in";
+      document.body.style.transform = "translateY(100%)";
+    }} catch (e) {{}}
+    setTimeout(function () {{ window.location.href = "https://close-activity.local/"; }}, 320);
+  }}
   function mount() {{
     try {{
       if (!document.body) return false;
       var existing = document.getElementById("__bili_activity_titlebar__");
       if (existing) existing.remove();
-      // 1. 黑色遮罩层：覆盖标题栏上方偏移区域 + 标题栏区域（TOP_OFFSET+BAR_H 高），
-      //    封住圆角缝隙，防止页面内容透过；同时把偏移区铺黑，露出黑色空隙。
-      var mask = document.getElementById("__bili_activity_titlebar_mask__");
-      if (mask) mask.remove();
-      mask = document.createElement("div");
+      var oldMask = document.getElementById("__bili_activity_titlebar_mask__");
+      if (oldMask) oldMask.remove();
+      var oldScrim = document.getElementById("__bili_activity_scrim__");
+      if (oldScrim) oldScrim.remove();
+      // 1. 可点击收起区（仅移动端 TOP_OFFSET>0）：覆盖标题栏上方偏移区，
+      //    半透明暗紫色遮罩 + 居中"收起"胶囊，点击整页向下收起（同礼物栏交互）。
+      //    不再用纯黑铺满偏移区，避免"标题栏上方黑色背景填满屏幕"。
+      if (TOP_OFFSET > 0) {{
+        var scrim = document.createElement("div");
+        scrim.id = "__bili_activity_scrim__";
+        scrim.style.cssText =
+          "position:fixed;top:0;left:0;right:0;height:" + TOP_OFFSET + "px;z-index:2147483644;" +
+          "background:linear-gradient(to bottom, #22182b 0%, rgba(34,24,43,0.8) 55%, rgba(34,24,43,0.35) 100%);" +
+          "display:flex;align-items:center;justify-content:center;cursor:pointer;";
+        var cap = document.createElement("div");
+        cap.style.cssText =
+          "display:flex;align-items:center;gap:5px;padding:7px 16px;border-radius:999px;" +
+          "background:rgba(255,255,255,0.16);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);" +
+          "color:#fff;font-size:12px;font-weight:500;letter-spacing:.5px;";
+        cap.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" style="opacity:.9"><path stroke-linecap="round" stroke-linejoin="round" d="M19 15l-7-7-7 7"/></svg>收起';
+        scrim.appendChild(cap);
+        scrim.onclick = dismiss;
+        document.body.appendChild(scrim);
+      }}
+      // 2. 标题栏圆角缝隙遮罩：黑色，仅盖住标题栏一行（不再向上延伸铺黑）。
+      var mask = document.createElement("div");
       mask.id = "__bili_activity_titlebar_mask__";
       mask.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;z-index:2147483645;" +
+        "position:fixed;top:" + TOP_OFFSET + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483645;" +
         "background:#000;pointer-events:none;";
-      // 2. 标题栏本体（黑色、顶部两角圆角、居中显示标题、固定不随页面滚动）
+      // 3. 标题栏本体（黑色、顶部两角圆角、居中显示标题、固定不随页面滚动）
       var bar = document.createElement("div");
       bar.id = "__bili_activity_titlebar__";
       bar.textContent = TITLE;
@@ -125,7 +157,6 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       document.body.style.backgroundColor = "#000";
       document.body.appendChild(mask);
       document.body.appendChild(bar);
-      // 把页面内容推到标题栏下方，避免被固定标题栏遮挡
       document.body.style.paddingTop = TOTAL_H + "px";
       return true;
     }} catch (e) {{ return false; }}
@@ -135,7 +166,9 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       if (!document.body) {{ setTimeout(keep, 100); return; }}
       var bar = document.getElementById("__bili_activity_titlebar__");
       var mask = document.getElementById("__bili_activity_titlebar_mask__");
-      if (!bar || !mask) mount();
+      var scrim = document.getElementById("__bili_activity_scrim__");
+      var need = TOP_OFFSET > 0 ? (!bar || !mask || !scrim) : (!bar || !mask);
+      if (need) mount();
       // SPA 可能重置 body 样式，持续保证 paddingTop
       if (document.body.style.paddingTop !== TOTAL_H + "px") {{
         document.body.style.paddingTop = TOTAL_H + "px";
@@ -155,6 +188,17 @@ fn page_max_width() -> f64 {
     let v: serde_json::Value = serde_json::from_str(raw)
         .unwrap_or(serde_json::json!({"page_max_width": 1000}));
     v["page_max_width"].as_f64().unwrap_or(1000.0)
+}
+
+/// 读取桌面端自定义窗口标题栏高度（单一源头：src/lib/page-config.json，TypeScript 也读同一文件）。
+/// 主窗口 decorations:false，标题栏由 WindowTitleBar 渲染在顶部；真实活动页子 WebView 需
+/// 下移该高度，避免盖住软件窗口标题栏。
+#[cfg(desktop)]
+fn desktop_titlebar_h() -> f64 {
+    let raw = include_str!("../../src/lib/page-config.json");
+    let v: serde_json::Value = serde_json::from_str(raw)
+        .unwrap_or(serde_json::json!({"desktop_titlebar_h": 36}));
+    v["desktop_titlebar_h"].as_f64().unwrap_or(36.0)
 }
 
 /// 根据给定的逻辑窗口宽高计算活动面板矩形。
@@ -246,13 +290,29 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         // 高占主窗口下方 3/4。无论软件窗口如何缩放，活动页都只落在模拟器页面范围内。
         let (position, size) = activity_panel_rect(&main_window)?;
 
+        let nav_app = app.clone();
         let builder = WebviewBuilder::new(ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
             .initialization_script(inject_config)
             .initialization_script(mock_shim)
             .initialization_script(&title_bar_script)
             .on_navigation(move |nav_url| {
+                let url = nav_url.as_str();
                 // 阻止 B站 登录页跳转（跳过登录）
-                if is_login_url(nav_url.as_str()) {
+                if is_login_url(url) {
+                    return false;
+                }
+                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
+                if url.contains("close-activity.local") {
+                    if let Some(main_window) = nav_app.get_window("main") {
+                        if let Some(wv) = main_window
+                            .webviews()
+                            .iter()
+                            .find(|w| w.label() == ACTIVITY_PANEL_LABEL)
+                        {
+                            let _ = wv.close();
+                        }
+                    }
+                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -273,13 +333,23 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
             let _ = w.set_focus();
             return Ok(());
         }
+        let nav_app = app.clone();
         let window = WebviewWindowBuilder::new(&app, ACTIVITY_WINDOW_LABEL, WebviewUrl::External(parsed_url))
             .title(title)
             .initialization_script(inject_config)
             .initialization_script(mock_shim)
             .initialization_script(&title_bar_script)
             .on_navigation(move |nav_url| {
-                if is_login_url(nav_url.as_str()) {
+                let url = nav_url.as_str();
+                if is_login_url(url) {
+                    return false;
+                }
+                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
+                if url.contains("close-activity.local") {
+                    if let Some(w) = nav_app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
+                        let _ = w.close();
+                    }
+                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -319,9 +389,18 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
 /// 真实活动页标题栏注入脚本：带左侧返回按钮，点击返回触发导航到 close-activity.local。
 /// 与模拟器的 activity_title_bar_script 完全独立，不复用任何代码。
 ///
-/// `top_offset`：标题栏额外顶部偏移。
-///  - 桌面端 = 0（标题栏贴顶，safe_top 单独处理刘海安全区）
-///  - 移动端 = 100（与模拟器活动页同理，通过注入偏移留出空隙）
+/// `top_offset`：标题栏额外顶部偏移（桌面/移动端均为 0）。
+///  - 桌面端 = 0：子 WebView 已由 Rust 下移到自定义窗口标题栏下方，标题栏贴面板顶（安全区=0）。
+///  - 移动端 = 0：黑抽页铺满整个全屏窗口，顶部安全区由脚本自行检测（避免 React 的
+///    --safe-top CSS 变量跨文档无效的问题，详见下方可靠性说明）。
+///
+/// 移动端可靠性说明（为什么不能只靠 env() 探测）：
+///  - 黑抽页是独立 H5 文档，React 的 --safe-top 变量无法作用到这里（CSS 变量跨文档无效）。
+///  - env(safe-area-inset-top) 只有在页面 viewport-fit=cover 时才有值；且 Android 系统
+///    WebView 不支持 env()（Android 15 起强制 edge-to-edge，状态栏会盖住 WebView 顶部）。
+///  - 若探测失败时标题栏仍顶到 y=0，就会被状态栏遮住，看起来像"没有标题栏"。
+///  - 因此脚本：①尽力注入 viewport-fit=cover；②body 就绪后探测 env()；③取不到时用平台
+///    兜底值（iOS 47 / Android 24），保证标题栏始终位于状态栏之下。
 fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
     let escaped = title
         .replace('\\', "\\\\")
@@ -334,41 +413,84 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
   window.__BILI_REAL_ACTIVITY_TITLEBAR__ = true;
   var TITLE = '{escaped}';
   var TOP_OFFSET = {top_offset};
-  var _st = 0;
-  try {{ _st = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0; }} catch(e) {{}}
-  if (!_st) {{
-    try {{
-      var st = env(safe-area-inset-top, 0px);
-      _st = parseInt(st) || 0;
-    }} catch(e) {{}}
-  }}
-  var SAFE_TOP = _st || 0;
   var BAR_H = 44;
-  var TOTAL_H = BAR_H + SAFE_TOP + TOP_OFFSET;
-  var BAR_TOP = SAFE_TOP + TOP_OFFSET;
+  var __totalH = 0;
+  // 尽力确保 viewport-fit=cover：env(safe-area-inset-top) 只有在该模式下才有值。
+  // 页面 head 可能尚未解析完成，挂载循环中会反复调用直到成功。
+  function ensureViewportFit() {{
+    try {{
+      var m = document.querySelector('meta[name="viewport"]');
+      if (m) {{
+        var c = m.getAttribute('content') || '';
+        if (c.indexOf('viewport-fit') === -1) {{
+          m.setAttribute('content', c + ', viewport-fit=cover');
+        }}
+      }} else if (document.head) {{
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover';
+        document.head.appendChild(meta);
+      }}
+    }} catch (e) {{}}
+  }}
+  // 读取顶部安全区高度（三选一）：页面 --safe-top → env() 探针 → 平台兜底。
+  function readSafeTop() {{
+    try {{
+      var v = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top')) || 0;
+      if (v > 0) return v;
+    }} catch (e) {{}}
+    try {{
+      // env() 只能写进 CSS 字符串，绝不能写成 JS 表达式（0px 是非法标识符，会整段语法报错）。
+      var pr = document.createElement('div');
+      pr.style.cssText =
+        'position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none;';
+      document.documentElement.appendChild(pr);
+      var h = parseInt(getComputedStyle(pr).height) || 0;
+      pr.remove();
+      if (h > 0) return h;
+    }} catch (e) {{}}
+    try {{
+      var ua = navigator.userAgent || '';
+      if (/iPad|iPhone|iPod/.test(ua)) return 47; // iOS 刘海/状态栏
+      if (/Android/.test(ua)) return 24; // Android 状态栏（Android 15 起强制 edge-to-edge）
+    }} catch (e) {{}}
+    return 0;
+  }}
   function mount() {{
     try {{
       if (!document.body) return false;
-      if (document.getElementById("__bili_real_titlebar__")) return true;
-      var mask = document.getElementById("__bili_real_titlebar_mask__");
-      if (mask) mask.remove();
-      mask = document.createElement("div");
+      ensureViewportFit();
+      // body 就绪后再检测安全区：此时 viewport-fit 已注入，env() 可取到真实值；
+      // 若仍取不到（如 Android WebView 不支持 env）则回退到平台兜底值。
+      var SAFE_TOP = readSafeTop();
+      var BAR_TOTAL_H = SAFE_TOP + BAR_H;
+      var BAR_TOP = TOP_OFFSET;
+      var TOTAL_H = BAR_TOTAL_H + TOP_OFFSET;
+      __totalH = TOTAL_H;
+      var oldBar = document.getElementById("__bili_real_titlebar__");
+      if (oldBar) oldBar.remove();
+      var oldMask = document.getElementById("__bili_real_titlebar_mask__");
+      if (oldMask) oldMask.remove();
+      // 1. 标题栏圆角缝隙遮罩：黑色，仅盖住标题栏整行（含安全区），不向上铺黑。
+      var mask = document.createElement("div");
       mask.id = "__bili_real_titlebar_mask__";
       mask.style.cssText =
-        "position:fixed;top:0;left:0;right:0;height:" + TOTAL_H + "px;z-index:2147483645;" +
+        "position:fixed;top:" + BAR_TOP + "px;left:0;right:0;height:" + BAR_TOTAL_H + "px;z-index:2147483645;" +
         "background:#000;pointer-events:none;";
+      // 2. 标题栏本体（黑色、顶部两角圆角、居中显示标题、固定不随页面滚动）。
+      //    padding-top = SAFE_TOP：黑色覆盖状态栏/刘海区域，标题文字落在其下方 44px 行。
       var bar = document.createElement("div");
       bar.id = "__bili_real_titlebar__";
       bar.style.cssText =
-        "position:fixed;top:" + BAR_TOP + "px;left:0;right:0;height:" + TOTAL_H + "px;padding-top:" + SAFE_TOP + "px;z-index:2147483646;" +
+        "position:fixed;top:" + BAR_TOP + "px;left:0;right:0;height:" + BAR_TOTAL_H + "px;padding-top:" + SAFE_TOP + "px;z-index:2147483646;" +
         "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;" +
-        "display:flex;align-items:center;justify-content:center;";
-      // 返回按钮
+        "display:flex;align-items:center;justify-content:center;box-sizing:border-box;";
+      // 3. 返回按钮（与标题文字同处 44px 行，垂直对齐；点击导航到 close-activity.local）
       var backBtn = document.createElement("div");
       backBtn.style.cssText =
-        "position:absolute;left:12px;top:" + BAR_TOP + "px;bottom:0;width:44px;display:flex;" +
+        "position:absolute;left:12px;top:" + SAFE_TOP + "px;bottom:0;width:44px;display:flex;" +
         "align-items:center;justify-content:center;cursor:pointer;";
       backBtn.innerHTML =
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
@@ -394,12 +516,14 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
       if (!document.body) {{ setTimeout(keep, 100); return; }}
       var bar = document.getElementById("__bili_real_titlebar__");
       var mask = document.getElementById("__bili_real_titlebar_mask__");
-      if (!bar || !mask) mount();
-      if (document.body.style.paddingTop !== TOTAL_H + "px") {{
-        document.body.style.paddingTop = TOTAL_H + "px";
+      if (!bar || !mask) {{ mount(); return; }}
+      // SPA 可能重置 body 样式，持续保证 paddingTop
+      if (__totalH && document.body.style.paddingTop !== __totalH + "px") {{
+        document.body.style.paddingTop = __totalH + "px";
       }}
     }} catch (e) {{}}
   }}
+  ensureViewportFit();
   mount();
   setInterval(keep, 400);
 }})();"##
@@ -434,8 +558,9 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
     let parsed_url: tauri::Url = url
         .parse()
         .map_err(|e| format!("活动 URL 解析失败: {}", e))?;
-    // 标题栏顶部偏移：桌面端子 WebView 面板占满主窗口，标题栏贴顶（0）；
-    // 移动端窗口天然全屏，通过注入把标题栏/内容整体下移 100px，留出顶部空隙。
+    // 标题栏顶部偏移：黑抽页铺满整个页面（与模拟器"活动页"不同，无顶部留空）。
+    // 桌面端子 WebView 面板已下移到自定义窗口标题栏之下，标题栏贴子面板顶（0）；
+    // 移动端窗口天然全屏，标题栏贴在安全区顶部（0），内容铺满整个页面。
     let title_bar_script = {
         #[cfg(desktop)]
         {
@@ -443,7 +568,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         }
         #[cfg(not(desktop))]
         {
-            real_activity_title_bar_script(title, 100.0)
+            real_activity_title_bar_script(title, 0.0)
         }
     };
 
@@ -497,13 +622,17 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             return Ok(());
         }
 
-        // 真实活动页占满整个主窗口
+        // 真实活动页：宽度与"模拟器页面"（min(窗口宽, 页面最大宽度) 水平居中）保持一致，
+        // 高度铺满自定义窗口标题栏之下；下移避免盖住软件窗口标题栏。
+        // 标题栏高度来自 page-config.json（单一源头，与 WindowTitleBar / SafeAreaStyler 一致）。
         let scale = main_window.scale_factor().map_err(|e| e.to_string())?;
         let phys = main_window.inner_size().map_err(|e| e.to_string())?;
         let w = phys.width as f64 / scale;
         let h = phys.height as f64 / scale;
-        let position = tauri::LogicalPosition::new(0.0, 0.0);
-        let size = tauri::LogicalSize::new(w, h);
+        let tb = desktop_titlebar_h();
+        let panel_w = if w < page_max_width() { w } else { page_max_width() };
+        let position = tauri::LogicalPosition::new((w - panel_w) / 2.0, tb);
+        let size = tauri::LogicalSize::new(panel_w, (h - tb).max(0.0));
 
         let app_handle = app.clone();
         // 拼接所有初始化脚本：先注 Cookie，再挂标题栏
@@ -632,14 +761,20 @@ pub fn run() {
                             let Ok(scale) = win.scale_factor() else {
                                 return;
                             };
-                            let (pos, size) = activity_panel_rect_of(
-                                size.width as f64 / scale,
-                                size.height as f64 / scale,
-                            );
+                            let w = size.width as f64 / scale;
+                            let h = size.height as f64 / scale;
+                            let (pos, size) = activity_panel_rect_of(w, h);
+                            let tb = desktop_titlebar_h();
                             for wv in win.webviews() {
                                 if wv.label() == ACTIVITY_PANEL_LABEL {
                                     let _ = wv.set_position(pos);
                                     let _ = wv.set_size(size);
+                                } else if wv.label() == REAL_ACTIVITY_PANEL_LABEL {
+                                    // 黑抽页：宽度与模拟器页面一致（min(窗口宽, 页面最大宽度) 水平居中），
+                                    // 高度铺满自定义窗口标题栏下方，避免页面内容漏出模拟器列宽
+                                    let panel_w = if w < page_max_width { w } else { page_max_width };
+                                    let _ = wv.set_position(tauri::LogicalPosition::new((w - panel_w) / 2.0, tb));
+                                    let _ = wv.set_size(tauri::LogicalSize::new(panel_w, (h - tb).max(0.0)));
                                 }
                             }
                         }

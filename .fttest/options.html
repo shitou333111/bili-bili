@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoamTree logo 选项测试</title>
+<style>
+  body { margin: 0; background: #eee; font-family: monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; }
+  .box { width: 260px; height: 460px; position: relative; overflow: hidden; background: #f6f1e9; border: 1px solid #999; }
+  #out { padding: 8px 12px; white-space: pre-wrap; background: #fff; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div><div class="box" id="c1"></div><div>cfg1: distanceFromCenter=1</div></div>
+  <div><div class="box" id="c2"></div><div>cfg2: distanceFromCenter=2</div></div>
+  <div><div class="box" id="c3"></div><div>cfg3: distanceFromCenter=3</div></div>
+</div>
+<div id="out">loading...</div>
+<script src="/node_modules/@carrotsearch/foamtree/foamtree.min.js"></script>
+<script>
+const FoamTree = window.CarrotSearchFoamTree;
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += m + "\n"; };
+
+function makeColorImg(r,g,b){
+  const c=document.createElement("canvas"); c.width=2; c.height=2;
+  const x=c.getContext("2d"); x.fillStyle=`rgb(${r},${g},${b})`; x.fillRect(0,0,2,2);
+  return c.toDataURL();
+}
+const N=120;
+const groups = [];
+for(let i=0;i<N;i++){
+  groups.push({ id:i+1, label:"G"+i, weight:Math.sqrt(9000-i*50),
+    color:["#e8ddd0","#ddd2c5","#e3d9cc","#d4c9bc","#ebe2d6","#d9cfc2","#e0d6ca","#d1c7ba","#e6ddd1","#d6ccc0"][i%10],
+    face: makeColorImg((i*37)%255,(i*97)%255,(i*181)%255), name:"G"+i, value:9000-i*50 });
+}
+function polygonBBox(poly){let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const p of poly){a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y);}return {a,b,c,d};}
+
+function build(el, distanceFromCenter){
+  const imageMap=new Map();
+  const ft = new FoamTree({
+    element: el, pixelRatio: 1, layout:"relaxed", stacking:"flattened",
+    layoutByWeightOrder:true, relaxationInitializer:"fisheye",
+    descriptionGroup:false, descriptionGroupSize:0, descriptionGroupMinHeight:0,
+    groupLabelDecorator:(o,p,v)=>{v.labelText="";}, groupLabelFontSize:0, groupLabelMinFontSize:0,
+    groupBorderWidth:0, groupInsetWidth:0, groupStrokeType:"none", groupStrokeWidth:0,
+    groupFillType:"plain", groupBorderRadius:0,
+    wireframeDrawingTimeout:0, wireframeLabelDrawingTimeout:0, wireframeContentDecorationDrawing:"always",
+    finalCompleteDrawMaxDuration:0, finalIncrementalDrawMaxDuration:0, fadeDuration:0,
+    groupContentDecoratorTriggering:"onSurfaceDirty",
+    attributionLogo:"data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+    attributionWeight:0, attributionText:"",
+    attributionPosition:"bottomright", attributionDistanceFromCenter:distanceFromCenter,
+    backgroundColor:"#f6f1e9",
+    groupColorDecorator:(o,p,v)=>{v.groupColor=p.group.color||"#f6f1e9";},
+    groupContentDecorator:(o,p,v)=>{
+      const ctx=p.context, poly=p.polygon, node=p.group; if(!poly||poly.length<3)return;
+      const bb=polygonBBox(poly);
+      ctx.save(); ctx.beginPath(); ctx.moveTo(poly[0].x,poly[0].y);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);
+      ctx.closePath(); ctx.clip();
+      const img=imageMap.get(node.id);
+      if(img&&img.complete&&img.naturalWidth>0){
+        const iw=img.naturalWidth,ih=img.naturalHeight,sc=Math.max(bb.c-bb.a/iw,bb.d-bb.b/ih)*0; // placeholder
+        ctx.fillStyle=node.color; ctx.fillRect(bb.a,bb.b,bb.c-bb.a,bb.d-bb.b);
+      } else { ctx.fillStyle=node.color||"#d8c9b4"; ctx.fill(); }
+      ctx.restore();
+    },
+    dataObject:{groups},
+  });
+  return ft;
+}
+
+function analyze(tag){
+  log(`===== ${tag} =====`);
+  const cvs = document.querySelectorAll(".box");
+  cvs.forEach((box, bi)=>{
+    const canvases = box.querySelectorAll("canvas");
+    let found=false;
+    canvases.forEach((c,ci)=>{
+      const ctx=c.getContext("2d");
+      let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,cnt=0;
+      try{
+        const data=ctx.getImageData(0,0,c.width,c.height).data;
+        for(let y=0;y<c.height;y+=2)for(let x=0;x<c.width;x+=2){
+          const o=(y*c.width+x)*4;
+          const r=data[o],g=data[o+1],b=data[o+2],a=data[o+3];
+          if(a>200&&Math.abs(r-0x1d)<45&&Math.abs(g-0x35)<45&&Math.abs(b-0x57)<45){
+            if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;cnt++;
+          }
+        }
+      }catch(e){ log(`canvas[${bi}][${ci}] 读取失败: ${e.message}`); return; }
+      if(cnt>0){ found=true; log(`box${bi} canvas[${ci}]: logo像素=${cnt} bbox x[${minX},${maxX}] y[${minY},${maxY}] (w=${maxX-minX} h=${maxY-minY})`); }
+    });
+    if(!found) log(`box${bi}: 无logo`);
+  });
+  log("");
+}
+
+// drawTo 测试
+function testDrawTo(tag){
+  log(`===== ${tag}: drawTo() 导出 =====`);
+  const box=document.getElementById("c1");
+  const ft = window.__ft1;
+  try{
+    const url = ft.drawTo({ pixelRatio: 1, backgroundColor: "#f6f1e9" });
+    // 检查导出的图片里是否有 logo（把 dataURL 画到 canvas 上分析）
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement("canvas"); c.width=img.width; c.height=img.height;
+      const ctx=c.getContext("2d"); ctx.drawImage(img,0,0);
+      const data=ctx.getImageData(0,0,c.width,c.height).data;
+      let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,cnt=0;
+      for(let y=0;y<c.height;y+=2)for(let x=0;x<c.width;x+=2){
+        const o=(y*c.width+x)*4;
+        if(data[o+3]>200&&Math.abs(data[o]-0x1d)<45&&Math.abs(data[o+1]-0x35)<45&&Math.abs(data[o+2]-0x57)<45){
+          if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;cnt++;
+        }
+      }
+      if(cnt>0) log(`drawTo导出: logo像素=${cnt} bbox x[${minX},${maxX}] y[${minY},${maxY}] (w=${maxX-minX} h=${maxY-minY}) 尺寸=${c.width}x${c.height}`);
+      else log(`drawTo导出: 无logo 尺寸=${c.width}x${c.height}`);
+    };
+    img.src=url;
+  }catch(e){ log(`drawTo 失败: ${e.message}`); }
+}
+
+// 建立3个实例
+const ft1=build(document.getElementById("c1"),1);
+const ft2=build(document.getElementById("c2"),2);
+const ft3=build(document.getElementById("c3"),3);
+window.__ft1=ft1;
+
+setTimeout(()=>{ analyze("渲染完成后"); testDrawTo("drawTo"); }, 3000);
+</script>
+</body>
+</html>

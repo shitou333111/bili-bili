@@ -6,6 +6,10 @@ import pageConfig from "./page-config.json";
 
 export const PAGE_MAX_WIDTH_NUM: number = pageConfig.page_max_width;
 
+// PC 端自定义窗口标题栏高度（Tauri 桌面 decorations:false 时由 WindowTitleBar 渲染）。
+// TypeScript 与 Rust 均从 page-config.json 读取，保证子 WebView 下移量与标题栏视觉一致。
+export const DESKTOP_TITLEBAR_H: number = pageConfig.desktop_titlebar_h;
+
 // 盲盒卡片背景色板（按盲盒在列表中的展示顺序分配）
 // 固定盲盒始终排在前面：心动盲盒(32251) → 下标0 暖米色，幸运盲盒(35206) → 下标1 淡蓝色
 // 因此同一个盲盒在“粉丝消费”与“主播数据”中颜色一致。
