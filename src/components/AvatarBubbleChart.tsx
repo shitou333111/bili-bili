@@ -32,8 +32,10 @@ interface AvatarBubbleChartProps {
   onClose: () => void;
 }
 
-const DOWNLOAD_W = 1080;
-const DOWNLOAD_H = 1920;
+// 下载导出分辨率：桌面端 1080×1920 保证高清；移动端减半避免 Android GPU 纹理限制
+// 导致 canvas 下半截被硬件裁剪（点击/导出数据完整，仅视觉渲染被截断）。
+const DOWNLOAD_W = typeof window !== "undefined" && /Android|iPhone|iPad|iPod/.test(navigator.userAgent) ? 720 : 1080;
+const DOWNLOAD_H = typeof window !== "undefined" && /Android|iPhone|iPad|iPod/.test(navigator.userAgent) ? 1280 : 1920;
 const MAX_DISPLAY = 300;
 
 const PLACEHOLDER_COLORS = [

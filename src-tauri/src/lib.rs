@@ -106,7 +106,7 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       document.body.style.transition = "transform 0.32s ease-in";
       document.body.style.transform = "translateY(100%)";
     }} catch (e) {{}}
-    setTimeout(function () {{ window.location.href = "https://close-activity.local/"; }}, 320);
+    setTimeout(function () {{ window.location.href = "close-activity://local"; }}, 320);
   }}
   function mount() {{
     try {{
@@ -303,7 +303,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                     return false;
                 }
                 // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
-                if url.contains("close-activity.local") {
+                if url.contains("close-activity.local") || url.contains("close-activity://") {
                     // 先 emit 事件通知前端，再关闭 WebView（避免 destroy/close 打断事件投递）
                     let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     if let Some(main_window) = nav_app.get_window("main") {
@@ -348,7 +348,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                     return false;
                 }
                 // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
-                if url.contains("close-activity.local") {
+                if url.contains("close-activity.local") || url.contains("close-activity://") {
                     // 先 emit 事件通知前端复位状态，再 destroy 窗口。
                     // 若先 destroy 再 emit，destroy 可能打断事件投递 → 前端
                     // nativePanelOpen 卡在 true → 遮罩常驻 → 第二次打开无反应。
@@ -504,7 +504,9 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
         '<path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>';
       backBtn.onclick = function () {{
-        window.location.href = "https://close-activity.local/";
+        // Android WebView 对 https:// 导航可能先尝试 DNS 解析再触发 on_navigation，
+        // 导致回调不被调用。改用自定义 scheme 确保跨平台可靠拦截。
+        window.location.href = "close-activity://local";
       }};
       // 标题文字
       var titleEl = document.createElement("span");
@@ -651,7 +653,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
                 // 先 emit 再 close：避免 close 打断事件投递（与 activity_panel 一致）
-                if nav_url.as_str().contains("close-activity.local") {
+                if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
                     let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     if let Some(main_window) = app_handle.get_window("main") {
                         if let Some(wv) = main_window
@@ -687,7 +689,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
                 // 返回按钮触发导航到 close-activity.local：先 emit 再 destroy（同 activity_panel 逻辑）
-                if nav_url.as_str().contains("close-activity.local") {
+                if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
                     let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     if let Some(w) = app_handle.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
                         let _ = w.destroy();
