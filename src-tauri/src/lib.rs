@@ -118,14 +118,15 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       var oldScrim = document.getElementById("__bili_activity_scrim__");
       if (oldScrim) oldScrim.remove();
       // 1. 可点击收起区（仅移动端 TOP_OFFSET>0）：覆盖标题栏上方偏移区，
-      //    半透明暗紫色遮罩 + 居中"收起"胶囊，点击整页向下收起（同礼物栏交互）。
-      //    不再用纯黑铺满偏移区，避免"标题栏上方黑色背景填满屏幕"。
+      //    暗紫色遮罩 + 居中"收起"胶囊，点击整页向下收起（同礼物栏交互）。
+      //    背景改为完全不透明：否则页面内容滚动时会从半透明处"透到标题栏上方"，
+      //    造成"内容可以滑动超出标题栏"的错觉。不再用纯黑铺满偏移区（避免黑屏观感）。
       if (TOP_OFFSET > 0) {{
         var scrim = document.createElement("div");
         scrim.id = "__bili_activity_scrim__";
         scrim.style.cssText =
           "position:fixed;top:0;left:0;right:0;height:" + TOP_OFFSET + "px;z-index:2147483644;" +
-          "background:linear-gradient(to bottom, #22182b 0%, rgba(34,24,43,0.8) 55%, rgba(34,24,43,0.35) 100%);" +
+          "background:linear-gradient(to bottom, #2b1f2b 0%, #241a2e 60%, #1c1426 100%);" +
           "display:flex;align-items:center;justify-content:center;cursor:pointer;";
         var cap = document.createElement("div");
         cap.style.cssText =
@@ -327,11 +328,12 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
 
     #[cfg(not(desktop))]
     {
-        // 移动端：独立全屏窗口
+        // 移动端：独立全屏窗口。
+        // 若上次关闭不彻底导致残留窗口，直接销毁后重建，确保每次打开都是全新窗口
+        // （否则 get_webview_window 命中残留窗口只 set_focus，第二次会"打不开、无反应"）。
         let title = config.get("title").and_then(|v| v.as_str()).unwrap_or("活动");
         if let Some(w) = app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
-            let _ = w.set_focus();
-            return Ok(());
+            let _ = w.destroy();
         }
         let nav_app = app.clone();
         let window = WebviewWindowBuilder::new(&app, ACTIVITY_WINDOW_LABEL, WebviewUrl::External(parsed_url))
@@ -347,7 +349,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
                 // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
                 if url.contains("close-activity.local") {
                     if let Some(w) = nav_app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
-                        let _ = w.close();
+                        // 移动端用 destroy() 强制销毁，确保窗口从注册表移除、可再次打开
+                        let _ = w.destroy();
                     }
                     let _ = nav_app.emit_to("main", "activity-panel-closed", ());
                     return false;
@@ -378,8 +381,9 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(not(desktop))]
     {
+        // 移动端窗口用 destroy() 强制销毁，确保从注册表移除、可再次打开
         if let Some(w) = app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
-            let _ = w.close();
+            let _ = w.destroy();
         }
     }
     let _ = app.emit_to("main", "activity-panel-closed", ());
@@ -613,13 +617,15 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         let Some(main_window) = app.get_window("main") else {
             return Err("找不到主窗口".into());
         };
+        // 清理上次可能残留的面板（若上次未正常关闭，残留面板命中后只 set_focus 会导致
+        // 第二次"打不开、无反应"，且其位置/渲染异常会盖住软件窗口标题栏）。
+        // 黑抽每次打开都是全新页面，这里总是关闭旧的再新建。
         if let Some(wv) = main_window
             .webviews()
             .iter()
             .find(|w| w.label() == REAL_ACTIVITY_PANEL_LABEL)
         {
-            let _ = wv.set_focus();
-            return Ok(());
+            let _ = wv.close();
         }
 
         // 真实活动页：宽度与"模拟器页面"（min(窗口宽, 页面最大宽度) 水平居中）保持一致，
@@ -640,9 +646,19 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         let builder = WebviewBuilder::new(REAL_ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
-                // 返回按钮触发导航到 close-activity.local，拦截并通知前端关闭
+                // 返回按钮触发导航到 close-activity.local：在原生层直接关闭面板（同步可靠），
+                // 再通知前端状态复位。不再依赖前端异步监听回调，保证面板可反复开关。
                 if nav_url.as_str().contains("close-activity.local") {
-                    let _ = app_handle.emit_to("main", "real-activity-back-clicked", ());
+                    if let Some(main_window) = app_handle.get_window("main") {
+                        if let Some(wv) = main_window
+                            .webviews()
+                            .iter()
+                            .find(|w| w.label() == REAL_ACTIVITY_PANEL_LABEL)
+                        {
+                            let _ = wv.close();
+                        }
+                    }
+                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -657,9 +673,9 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
 
     #[cfg(not(desktop))]
     {
+        // 清理上次可能残留的窗口，确保每次打开都是全新窗口（避免第二次"打不开、无反应"）
         if let Some(w) = app.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
-            let _ = w.set_focus();
-            return Ok(());
+            let _ = w.destroy();
         }
         let app_handle = app.clone();
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
@@ -667,8 +683,12 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             .title(title)
             .initialization_script(&init_script)
             .on_navigation(move |nav_url| {
+                // 返回按钮触发导航到 close-activity.local：原生层直接关闭，并通知前端复位
                 if nav_url.as_str().contains("close-activity.local") {
-                    let _ = app_handle.emit_to("main", "real-activity-back-clicked", ());
+                    if let Some(w) = app_handle.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
+                        let _ = w.destroy();
+                    }
+                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
                     return false;
                 }
                 true
@@ -697,8 +717,9 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
     }
     #[cfg(not(desktop))]
     {
+        // 移动端窗口用 destroy() 强制销毁，确保从注册表移除、可再次打开
         if let Some(w) = app.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
-            let _ = w.close();
+            let _ = w.destroy();
         }
     }
     let _ = app.emit_to("main", "real-activity-panel-closed", ());

@@ -809,8 +809,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         )}
       </div>
 
-      {/* 底部栏 - 更扁 */}
-      <div className="relative z-30 px-3 pb-1.5 pt-1.5">
+      {/* 底部栏 - 更扁（mt-2 使输入框/人气票/礼物按钮行整体下移一点，与上方空出更多间距） */}
+      <div className="relative z-30 px-3 pb-1.5 pt-1.5 mt-2">
         <div className="flex items-center gap-2">
           {/* 聊天输入框 */}
           <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">

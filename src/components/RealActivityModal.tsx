@@ -42,22 +42,6 @@ export default function RealActivityModal({ isOpen, onClose }: Props) {
     }
   }, [isOpen]);
 
-  // 监听真实活动面板的返回按钮事件（从 Rust on_navigation emit）
-  useEffect(() => {
-    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen("real-activity-back-clicked", async () => {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("close_real_activity_panel");
-        } catch {}
-      });
-    })();
-    return () => { unlisten?.(); };
-  }, []);
-
   const handleQuery = useCallback(async () => {
     if (!uidInput.trim()) return;
     setLoading(true);
