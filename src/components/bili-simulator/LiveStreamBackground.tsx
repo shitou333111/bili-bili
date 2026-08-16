@@ -21,11 +21,28 @@ export default function LiveStreamBackground({ roomId }: Props) {
   const [status, setStatus] = useState<"loading" | "playing" | "error">("loading");
   // 是否为竖屏直播流（高/宽 > 1.2，严格判定，避免接近方形的流被误判）。竖屏时填满整个屏幕（含通知栏与底部安全区）
   const [portrait, setPortrait] = useState(false);
+  // 上次计算的方向值，避免轮询/多事件重复 setState
+  const portraitRef = useRef(false);
+
+  // 读取视频真实分辨率并更新竖屏判定。
+  // iOS/WKWebView 播 HLS 时 loadedmetadata 触发的瞬间 videoWidth/Height 常为 0，
+  // 要到 loadeddata/playing 甚至首帧渲染后才可用，因此除了事件回调，再用轮询兜底。
+  function updatePortrait() {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth || !v.videoHeight) return;
+    // 严格竖屏判定：高/宽 > 1.2 才算竖屏，接近方形的流不铺满全屏
+    const next = v.videoHeight / v.videoWidth > 1.2;
+    if (next !== portraitRef.current) {
+      portraitRef.current = next;
+      setPortrait(next);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     // 切换直播间时重置方向判断
     setPortrait(false);
+    portraitRef.current = false;
 
     async function init() {
       if (!roomId || !videoRef.current) return;
@@ -91,8 +108,12 @@ export default function LiveStreamBackground({ roomId }: Props) {
 
     init();
 
+    // 轮询兜底：live 流分辨率延迟可用（尤其 iOS），持续探测到有效尺寸为止
+    const pollTimer = window.setInterval(updatePortrait, 500);
+
     return () => {
       cancelled = true;
+      window.clearInterval(pollTimer);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -118,11 +139,10 @@ export default function LiveStreamBackground({ roomId }: Props) {
           width: "100%",
           height: "calc(100% + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))",
         } : { top: "100px" }}
-        onLoadedMetadata={(e) => {
-          const v = e.currentTarget;
-          // 严格竖屏判定：高/宽 > 1.2 才算竖屏，接近方形的流不铺满全屏
-          if (v.videoWidth && v.videoHeight) setPortrait(v.videoHeight / v.videoWidth > 1.2);
-        }}
+        onLoadedMetadata={updatePortrait}
+        onLoadedData={updatePortrait}
+        onCanPlay={updatePortrait}
+        onPlaying={updatePortrait}
         autoPlay
         playsInline
         loop

@@ -288,6 +288,56 @@ jobs:
       - name: Generate app icons for Android
         run: npx tauri icon public/orig_icon.png
 
+      # ==================== 多窗口 Activity（Android 官方 multi-window 方案）====================
+      # Tauri 官方多窗口（https://v2.tauri.app/learn/mobile-multiwindow/）：每个 WebviewWindow
+      # 对应一个独立 Android Activity，通过 WebviewWindowBuilder::activity_name() 指定类名。
+      # 这里在 tauri android init 生成的项目里注入两个面板 Activity（模拟活动页 / 黑抽页），
+      # 并在 AndroidManifest.xml 注册。
+      # 包名从 MainActivity.kt 动态推导（tauri 会把 identifier 中的 '-' 转成 '_'，不硬编码）。
+      - name: Inject multi-window Activities (Android)
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_KT="$(find src-tauri/gen/android/app/src/main/java -name 'MainActivity.kt' | head -n 1)"
+          [ -n "$MAIN_KT" ] || { echo "!! 找不到 MainActivity.kt"; exit 1; }
+          PKG_DIR="$(dirname "$MAIN_KT")"
+          echo "包目录: $PKG_DIR"
+          PKG_LINE="$(grep -m1 '^package ' "$MAIN_KT")"
+          [ -n "$PKG_LINE" ] || { echo "!! 无法从 MainActivity.kt 读取 package"; exit 1; }
+
+          cat > "$PKG_DIR/ActivityPanelActivity.kt" <<EOF
+          $PKG_LINE
+
+          import android.os.Bundle
+
+          class ActivityPanelActivity : TauriActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+              }
+          }
+          EOF
+
+          cat > "$PKG_DIR/RealActivityPanelActivity.kt" <<EOF
+          $PKG_LINE
+
+          import android.os.Bundle
+
+          class RealActivityPanelActivity : TauriActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+              }
+          }
+          EOF
+
+          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          if ! grep -q 'ActivityPanelActivity' "$MANIFEST"; then
+            sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
+          fi
+          echo "--- 注册的 Activity ---"
+          grep -n 'activity android:name' "$MANIFEST"
+          echo "--- 新增 Kotlin 文件 ---"
+          ls -la "$PKG_DIR"
+
       # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在步骤级提供
       - name: Build Android APK
         env:
