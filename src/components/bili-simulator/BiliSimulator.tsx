@@ -29,6 +29,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   const [showFloatingCombo, setShowFloatingCombo] = useState(false);
   // 原生活动面板（桌面子 WebView 下方 3/4 / 移动端窗口）是否打开：仅此时显示顶部遮罩
   const [nativePanelOpen, setNativePanelOpen] = useState(false);
+  // Android 平台：底部栏需要额外距离，避免虚拟导航栏遮挡
+  const [isAndroid, setIsAndroid] = useState(false);
   const { activities: activityConfigs } = useActivities();
   const [gifts, setGifts] = useState<Gift[]>([]);
   const [tabGifts, setTabGifts] = useState<Record<string, Gift[] | BagGift[]>>({ gift: [], fans: [], voyage: [], bag: [], all: [] });
@@ -55,6 +57,13 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
 
   // 最终显示的连击数 = 连击次数 * 单次倍数
   const comboCount = comboHits * comboMultiplier;
+
+  // 检测 Android 平台（底部栏需要额外高度避开虚拟导航栏）
+  useEffect(() => {
+    if (typeof window !== "undefined" && /Android/.test(navigator.userAgent)) {
+      setIsAndroid(true);
+    }
+  }, []);
 
   // 加载礼物数据和特效配置
   useEffect(() => {
@@ -810,8 +819,8 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         )}
       </div>
 
-      {/* 底部栏 - 绝对定位，使输入框/人气票/礼物按钮行可精确控制距底距离 */}
-      <div className="absolute bottom-0 inset-x-0 z-30 px-3 pb-1.5 pt-1.5" style={{ paddingBottom: "var(--safe-bottom, 0px)" }}>
+      {/* 底部栏 - 绝对定位，Android 平台额外上移避开虚拟导航栏 */}
+      <div className="absolute bottom-0 inset-x-0 z-30 px-3 pb-1.5 pt-1.5" style={{ paddingBottom: isAndroid ? "24px" : "var(--safe-bottom, 0px)" }}>
         <div className="flex items-center gap-2">
           {/* 聊天输入框 */}
           <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">

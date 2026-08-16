@@ -32,10 +32,10 @@ interface AvatarBubbleChartProps {
   onClose: () => void;
 }
 
-// 下载导出分辨率：桌面端 1080×1920 保证高清；移动端减半避免 Android GPU 纹理限制
-// 导致 canvas 下半截被硬件裁剪（点击/导出数据完整，仅视觉渲染被截断）。
-const DOWNLOAD_W = typeof window !== "undefined" && /Android|iPhone|iPad|iPod/.test(navigator.userAgent) ? 720 : 1080;
-const DOWNLOAD_H = typeof window !== "undefined" && /Android|iPhone|iPad|iPod/.test(navigator.userAgent) ? 1280 : 1920;
+// 下载导出分辨率：统一 720×1280（9:16），所有平台一致。
+// 避免 Android GPU 纹理限制导致 canvas 下半截被硬件裁剪。
+const DOWNLOAD_W = 720;
+const DOWNLOAD_H = 1280;
 const MAX_DISPLAY = 300;
 
 const PLACEHOLDER_COLORS = [
@@ -75,14 +75,12 @@ function cleanBilibiliFaceUrl(url: string): string {
   return cleaned;
 }
 
-/** 统一使用 400x400 缩略图。
- *  原始 face 是全尺寸大图（约 200~300KB），400w 缩略图约 7KB（全图 1/38）：
- *  - 大幅加快首屏加载（300 张从 ~90MB 降到 ~2MB）
- *  - 避免并发下载被 8s 超时误判为"加载失败"，从而消除"失败→刷新"的无谓往返
- *  - 400px 在 1080x1920 导出图上放大到最大格子(~800px)也仅 2 倍，清晰度可接受
+/** 统一使用 200×200 缩略图。
+ *  原始 face 是全尺寸大图，200w 缩略图约 3KB——足够用于头像分布图（720×1280 画布上
+ *  最大格子约 200px，200×200 缩略图正好 1:1 显示，不会模糊）。
  */
 function displayFaceUrl(url: string): string {
-  return cleanBilibiliFaceUrl(url) + "@400w_400h_1c_1s.webp";
+  return cleanBilibiliFaceUrl(url) + "@200w_200h_1c_1s.webp";
 }
 
 function proxyUrl(url: string): string {
