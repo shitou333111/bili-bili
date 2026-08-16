@@ -267,23 +267,26 @@ fn android_finish_activity(app: &tauri::AppHandle, webview_label: &str) {
         eprintln!("[BILI-ANDROID] android_finish_activity: 找不到 webview label={webview_label}");
         return;
     };
-    // jni_handle() 定义在 PlatformWebview 上，Webview 需经 with_webview（主线程回调）取得
-    let _ = wv.with_webview(|platform_wv| {
-        let r = platform_wv.jni_handle().exec(|env, activity, _webview| {
+    // jni_handle() 定义在 PlatformWebview 上，Webview 需经 with_webview（主线程回调）取得。
+    // 注意：① JniHandle::exec 是异步的（把闭包发送到 WebView 线程），返回 () 而非 Result，
+    // 所以只检查 with_webview 的派发结果，JNI 调用结果在闭包内通过 call_method 的 Result 记录；
+    // ② with_webview 与 exec 的闭包都要求 'static + Send，因此捕获改为 owned String。
+    let label = webview_label.to_string();
+    if let Err(e) = wv.with_webview(move |platform_wv| {
+        platform_wv.jni_handle().exec(move |env, activity, _webview| {
             if activity.is_null() {
-                eprintln!("[BILI-ANDROID] android_finish_activity: activity 为空 label={webview_label}");
+                eprintln!("[BILI-ANDROID] android_finish_activity: activity 为空 label={label}");
                 return;
             }
             let res = env.call_method(activity, "finish", "()V", &[]);
             match res {
-                Ok(_) => eprintln!("[BILI-ANDROID] finish Activity ({webview_label}) 成功"),
-                Err(e) => eprintln!("[BILI-ANDROID] finish Activity ({webview_label}) 失败: {e}"),
+                Ok(_) => eprintln!("[BILI-ANDROID] finish Activity ({label}) 成功"),
+                Err(e) => eprintln!("[BILI-ANDROID] finish Activity ({label}) 失败: {e}"),
             }
         });
-        if r.is_err() {
-            eprintln!("[BILI-ANDROID] android_finish_activity: jni_handle().exec 失败 label={webview_label}");
-        }
-    });
+    }) {
+        eprintln!("[BILI-ANDROID] android_finish_activity: with_webview 派发失败 label={label}: {e}");
+    }
 }
 
 /// 移动端（iOS）：隐藏面板（复用策略，不销毁窗口）。
