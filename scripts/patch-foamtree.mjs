@@ -45,12 +45,22 @@ try {
   }
 
   // 补丁 2：阻止 attribution 组的标题栏背景矩形绘制（否则文字清空后仍留下色块）
-  const OLD_TITLEBAR = 'if(b.attribution)var y=yd.Zf("")';
+  // 注意：OLD_TITLEBAR 必须包含末尾分号，否则替换后 `;else` 变成无效语法
+  const OLD_TITLEBAR = 'if(b.attribution)var y=yd.Zf("");';
   const NEW_TITLEBAR = 'if(b.attribution){var y=yd.Zf("");w.titleBarShown=false}';
   if (src.includes(OLD_TITLEBAR) && !src.includes(NEW_TITLEBAR)) {
     src = src.replace(OLD_TITLEBAR, NEW_TITLEBAR);
     changed = true;
     console.log("[patch-foamtree] 补丁2: 已禁用 attribution 标题栏背景");
+  }
+
+  // 修复：旧版补丁不含分号，替换后残留 `;else` 导致语法错误
+  // 修复前：if(b.attribution){var y=...;w.titleBarShown=false};else
+  // 修复后：if(b.attribution){var y=...;w.titleBarShown=false}else
+  if (src.includes("w.titleBarShown=false};else")) {
+    src = src.replace("w.titleBarShown=false};else", "w.titleBarShown=false}else");
+    changed = true;
+    console.log("[patch-foamtree] 修复: 已移除残留分号（;else → else）");
   }
 
   if (changed) {
