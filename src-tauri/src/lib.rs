@@ -180,6 +180,20 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       }}
     }} catch (e) {{}}
   }}
+  // Android 系统返回键拦截：向历史压入哨兵记录，使 WryActivity 的返回键回调
+  // 判定 canGoBack()=true → goBack() → 触发本页 popstate → 关闭面板。
+  // Rust/tao 在 Android 上收不到返回键事件（tao 输入事件处理整段被注释），只能靠 WebView 历史栈。
+  (function installAndroidBackGuard() {{
+    try {{
+      if (!/Android/i.test(navigator.userAgent || "")) return;
+      if (window.__bili_activity_back_guard) return;
+      window.__bili_activity_back_guard = true;
+      history.pushState({{ __biliBack: true }}, "");
+      window.addEventListener("popstate", function () {{
+        dismiss();
+      }});
+    }} catch (e) {{}}
+  }})();
   keep();
   setInterval(keep, 400);
 }})();"##
@@ -233,6 +247,45 @@ fn activity_panel_rect(
     Ok(activity_panel_rect_of(w, h))
 }
 
+/// Android：把指定 label 的 WebView 设为主 Activity 的内容视图（切换前台显示）。
+///
+/// 关键事实（wry/tao 源码确认）：Android 上所有 WebviewWindow 共享同一个 WryActivity，
+/// 后创建的 WebView 通过 setContentView 顶替前一个成为全屏内容；且 set_visible 是 no-op，
+/// close()/destroy() 只清 Rust 侧句柄、既不恢复原内容也不触发 Destroyed → label 永不释放、
+/// 主页面永远被顶替（表现为"黑屏、上滑拽回、无法再次打开"）。
+/// 因此"关闭面板" = 用 JNI 把主窗口 WebView 设回内容视图；"打开面板" = 设回面板 WebView。
+#[cfg(target_os = "android")]
+fn android_set_content_view(app: &tauri::AppHandle, webview_label: &str) {
+    if let Some(wv) = app.get_webview(webview_label) {
+        let _ = wv.jni_handle().exec(|env, activity, webview| {
+            if !activity.is_null() && !webview.is_null() {
+                let _ = env.call_method(
+                    activity,
+                    "setContentView",
+                    "(Landroid/view/View;)V",
+                    &[(&webview).into()],
+                );
+            }
+        });
+    }
+}
+
+/// 移动端（iOS）：隐藏面板（复用策略，不销毁窗口）。
+///
+/// iOS 的 tao 关闭窗口不会触发 WindowEvent::Destroyed（仅应用退出时触发），Tauri 注册表中的
+/// label 永远无法释放 → 再次创建必然 WebviewLabelAlreadyExists。因此 iOS 面板"创建一次 + 复用"，
+/// 关闭仅隐藏（set_visible(false)），打开时导航/显示。隐藏后把主窗口重新置为 key，
+/// 确保模拟器页面回到前台显示。
+#[cfg(target_os = "ios")]
+fn hide_mobile_panel(app: &tauri::AppHandle, label: &str) {
+    if let Some(panel) = app.get_webview_window(label) {
+        let _ = panel.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.set_focus();
+    }
+}
+
 /// 打开 B站 活动页，做成「主窗口内下方 3/4 面板」（像礼物面板弹出一部分页面）。
 ///
 /// 实现：不是 HTML iframe（跨域沙箱限制绕不过），而是用原生 WebView 承载真实 H5，
@@ -241,6 +294,15 @@ fn activity_panel_rect(
 ///
 ///  - 桌面端：向主窗口 add_child 一个子 WebView，宽度与模拟器页面一致（水平居中），占下方 3/4；
 ///  - 移动端：Tauri 子 WebView 不支持，回退为独立全屏窗口。
+///
+/// 移动端窗口生命周期的重要结论（troubleshooting 后确认）：
+///  - Android：Tauri 的 WebviewWindow::close()/destroy() 只清 Rust 侧句柄（inner=None），
+///    底层 Activity 永不 finish → 残留在返回栈（表现为"黑屏、上滑可拽回、返回键退不出"），
+///    且不触发 WindowEvent::Destroyed → label 永不从注册表释放 → 再次创建报 WebviewLabelAlreadyExists。
+///    修复：关闭时用 JNI 调用 Activity.finish()（真结束 + 触发 Destroyed → label 自动清理）。
+///  - iOS：tao 只在应用退出时发 WindowEvent::Destroyed，单窗口关闭不发 → label 永远无法释放，
+///    重复"创建→销毁→创建"必然失败。修复：窗口"创建一次 + 复用"，关闭仅隐藏（set_visible(false)），
+///    打开时若 URL 变化才重新导航，否则直接显示（保留页面内实时状态）。
 #[tauri::command]
 async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(), String> {
     let url = config
@@ -331,17 +393,18 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         Ok(())
     }
 
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "android")]
     {
-        // 移动端：Tauri 不支持子 WebView（Window::add_child 仅限桌面端），
-        // 改用 WebviewWindowBuilder 创建独立全屏窗口。移动端窗口默认全屏铺满，
-        // 不能显式 set_size/set_position（iOS 上 set_size+居中会产生左侧触摸死区）。
-        // 关闭通过 WebviewWindow::close() 可靠完成：标题栏脚本经 Tauri IPC
-        // 调用 close_activity_panel 命令触发（不依赖自定义 URL scheme，iOS 不触发
-        // on_navigation 自定义 scheme 的问题不复存在）。
-        // 清理上次残留的面板（若上次未正常关闭）
-        if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
-            let _ = panel.close();
+        // Android：所有窗口共享一个 WryActivity，面板"创建一次 + 复用"。
+        // 已存在则始终重新导航：①页面新鲜（避免复用旧页出现按钮无响应，与 iOS 一致）；
+        // ②重新加载会重新注入返回键哨兵记录——若不导航，历史已被上次返回消耗
+        //   （canGoBack()=false），系统返回键将再次失效。然后切回内容视图恢复前台。
+        if app.get_webview_window(ACTIVITY_PANEL_LABEL).is_some() {
+            if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
+                let _ = panel.navigate(parsed_url);
+            }
+            android_set_content_view(&app, ACTIVITY_PANEL_LABEL);
+            return Ok(());
         }
 
         let nav_app = app.clone();
@@ -362,9 +425,53 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
             // 通过 Tauri IPC 调用 close_activity_panel 命令关闭）
             if url.contains("close-activity.local") || url.contains("close-activity://") {
                 let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                if let Some(panel) = nav_app.get_webview_window(ACTIVITY_PANEL_LABEL) {
-                    let _ = panel.close();
-                }
+                android_set_content_view(&nav_app, "main");
+                return false;
+            }
+            true
+        });
+
+        // 新窗口创建时即 setContentView，自动成为前台全屏内容
+        let panel = builder
+            .build()
+            .map_err(|e| format!("创建活动面板失败: {}", e))?;
+        let _ = panel.set_focus();
+        Ok(())
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        // iOS：tao 关闭窗口不触发 Destroyed，label 无法释放 → 不能重复创建销毁。
+        // 采用"创建一次 + 复用"：窗口常驻，关闭仅隐藏（见 hide_mobile_panel）。
+        if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
+            // 每次打开都重新导航：WKWebView 窗口被隐藏后可能被系统挂起/冻结，
+            // 复用旧页面会出现按钮无响应等异常（如黑抽页"已确认风险"按钮）。
+            // 重新加载保证页面功能始终正常。
+            let _ = panel.navigate(parsed_url);
+            let _ = panel.show();
+            let _ = panel.set_focus();
+            return Ok(());
+        }
+
+        let nav_app = app.clone();
+        let builder = WebviewWindowBuilder::new(
+            &app,
+            ACTIVITY_PANEL_LABEL,
+            WebviewUrl::External(parsed_url),
+        )
+        .initialization_script(inject_config)
+        .initialization_script(mock_shim)
+        .initialization_script(&title_bar_script)
+        .on_navigation(move |nav_url| {
+            let url = nav_url.as_str();
+            if is_login_url(url) {
+                return false;
+            }
+            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
+            // 通过 Tauri IPC 调用 close_activity_panel 命令关闭）
+            if url.contains("close-activity.local") || url.contains("close-activity://") {
+                let _ = nav_app.emit_to("main", "activity-panel-closed", ());
+                hide_mobile_panel(&nav_app, ACTIVITY_PANEL_LABEL);
                 return false;
             }
             true
@@ -373,6 +480,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         let panel = builder
             .build()
             .map_err(|e| format!("创建活动面板失败: {}", e))?;
+        let _ = panel.show();
         let _ = panel.set_focus();
         Ok(())
     }
@@ -394,11 +502,13 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
             let _ = wv.close();
         }
     }
-    // 移动端：独立全屏窗口（WebviewWindow）
-    #[cfg(not(desktop))]
-    if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
-        let _ = panel.close();
-    }
+    // 移动端：
+    //  - Android：把主窗口 WebView 设回内容视图，恢复模拟器页面（面板窗口保留复用）
+    //  - iOS：仅隐藏（复用策略，不销毁窗口，避免 label 永久泄漏导致无法再次打开）
+    #[cfg(target_os = "android")]
+    android_set_content_view(&app, "main");
+    #[cfg(target_os = "ios")]
+    hide_mobile_panel(&app, ACTIVITY_PANEL_LABEL);
     Ok(())
 }
 
@@ -511,15 +621,7 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
       backBtn.innerHTML =
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
         '<path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>';
-      backBtn.onclick = function () {{
-        // 直接通过 Tauri IPC 调用关闭命令（同 activity_panel 逻辑）。
-        // iOS WKWebView 不触发自定义 scheme 的 on_navigation，IPC 是最可靠路径。
-        try {{
-          window.__TAURI_INTERNALS__.invoke("close_real_activity_panel");
-        }} catch (e) {{
-          window.location.href = "close-activity://local";
-        }}
-      }};
+      backBtn.onclick = closePanel;
       // 标题文字
       var titleEl = document.createElement("span");
       titleEl.textContent = TITLE;
@@ -545,8 +647,30 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
       }}
     }} catch (e) {{}}
   }}
+  // 关闭黑抽面板（返回按钮 / Android 系统返回键共用）
+  function closePanel() {{
+    try {{
+      window.__TAURI_INTERNALS__.invoke("close_real_activity_panel");
+    }} catch (e) {{
+      window.location.href = "close-activity://local";
+    }}
+  }}
   ensureViewportFit();
   mount();
+  // Android 系统返回键拦截：压入哨兵记录 → WryActivity 返回回调判定 canGoBack()=true
+  // → goBack() → 触发本页 popstate → closePanel()。Rust/tao 在 Android 收不到返回键，
+  // 只能靠 WebView 历史栈拦截（与 activity_panel 脚本一致）。
+  (function installAndroidBackGuard() {{
+    try {{
+      if (!/Android/i.test(navigator.userAgent || "")) return;
+      if (window.__bili_real_back_guard) return;
+      window.__bili_real_back_guard = true;
+      history.pushState({{ __biliBack: true }}, "");
+      window.addEventListener("popstate", function () {{
+        closePanel();
+      }});
+    }} catch (e) {{}}
+  }})();
   setInterval(keep, 400);
 }})();"##
     )
@@ -688,14 +812,16 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         Ok(())
     }
 
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "android")]
     {
-        // 移动端：Tauri 不支持子 WebView（Window::add_child 仅限桌面端），
-        // 改用 WebviewWindowBuilder 创建独立全屏窗口。关闭经 Tauri IPC 调用
-        // close_real_activity_panel 命令完成（不依赖自定义 URL scheme）。
-        // 清理上次残留的面板（若上次未正常关闭）
-        if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
-            let _ = panel.close();
+        // Android：所有窗口共享一个 WryActivity，面板"创建一次 + 复用"。
+        // 已存在则始终重新导航（页面新鲜 + 返回键哨兵重新注入，理由同 open_activity_panel）。
+        if app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL).is_some() {
+            if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
+                let _ = panel.navigate(parsed_url);
+            }
+            android_set_content_view(&app, REAL_ACTIVITY_PANEL_LABEL);
+            return Ok(());
         }
 
         let app_handle = app.clone();
@@ -711,9 +837,48 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             // 通过 Tauri IPC 调用 close_real_activity_panel 命令关闭）
             if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
                 let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                if let Some(panel) = app_handle.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
-                    let _ = panel.close();
-                }
+                android_set_content_view(&app_handle, "main");
+                return false;
+            }
+            true
+        });
+
+        // 新窗口创建时即 setContentView，自动成为前台全屏内容
+        let panel = builder
+            .build()
+            .map_err(|e| format!("创建真实活动面板失败: {}", e))?;
+        let _ = panel.set_focus();
+        Ok(())
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        // iOS：tao 关闭窗口不触发 Destroyed，label 无法释放 → 不能重复创建销毁。
+        // 采用"创建一次 + 复用"：窗口常驻，关闭仅隐藏（见 hide_mobile_panel）。
+        if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
+            // 每次打开都重新导航：WKWebView 窗口被隐藏后可能被系统挂起/冻结，
+            // 复用旧页面会出现按钮无响应等异常（如黑抽页"已确认风险"按钮）。
+            // 重新加载保证页面功能始终正常。
+            let _ = panel.navigate(parsed_url);
+            let _ = panel.show();
+            let _ = panel.set_focus();
+            return Ok(());
+        }
+
+        let app_handle = app.clone();
+        let init_script = format!("{}\n{}", cookie_script, title_bar_script);
+        let builder = WebviewWindowBuilder::new(
+            &app,
+            REAL_ACTIVITY_PANEL_LABEL,
+            WebviewUrl::External(parsed_url),
+        )
+        .initialization_script(&init_script)
+        .on_navigation(move |nav_url| {
+            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
+            // 通过 Tauri IPC 调用 close_real_activity_panel 命令关闭）
+            if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
+                let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
+                hide_mobile_panel(&app_handle, REAL_ACTIVITY_PANEL_LABEL);
                 return false;
             }
             true
@@ -722,6 +887,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         let panel = builder
             .build()
             .map_err(|e| format!("创建真实活动面板失败: {}", e))?;
+        let _ = panel.show();
         let _ = panel.set_focus();
         Ok(())
     }
@@ -742,11 +908,14 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
             let _ = wv.close();
         }
     }
-    // 移动端：独立全屏窗口（WebviewWindow）
-    #[cfg(not(desktop))]
-    if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
-        let _ = panel.close();
-    }
+    // 移动端：
+    //  - Android：把主窗口 WebView 设回内容视图，恢复模拟器页面（面板窗口保留复用，
+    //    与 open_* 的"创建一次 + 复用"策略一致；JNI finish 方案已被废弃）
+    //  - iOS：仅隐藏（复用策略，不销毁窗口，避免 label 永久泄漏导致无法再次打开）
+    #[cfg(target_os = "android")]
+    android_set_content_view(&app, "main");
+    #[cfg(target_os = "ios")]
+    hide_mobile_panel(&app, REAL_ACTIVITY_PANEL_LABEL);
     Ok(())
 }
 

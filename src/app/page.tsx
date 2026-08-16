@@ -2300,7 +2300,7 @@ export default function HomePage() {
                 {/* 反馈卡片 */}
                 <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">
-                    欢迎点击<a href="https://wj.qq.com/s2/27596805/8vr6/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline decoration-2 underline-offset-2 hover:text-blue-700 active:text-blue-800 transition">链接</a>或者扫码反馈使用中的问题
+                    欢迎点击<a href="https://wj.qq.com/s2/27596805/8vr6/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline decoration-2 underline-offset-2 hover:text-blue-700 active:text-blue-800 transition">链接</a>或者扫码反馈使用中的问题，现阶段BUG满屏幕飞...
                   </p>
                   <img src="/feedback.jpg" alt="反馈二维码" className="w-24 h-24 object-contain shrink-0" />
                 </div>
