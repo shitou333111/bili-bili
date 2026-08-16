@@ -257,15 +257,18 @@ fn activity_panel_rect(
 #[cfg(target_os = "android")]
 fn android_set_content_view(app: &tauri::AppHandle, webview_label: &str) {
     if let Some(wv) = app.get_webview(webview_label) {
-        let _ = wv.jni_handle().exec(|env, activity, webview| {
-            if !activity.is_null() && !webview.is_null() {
-                let _ = env.call_method(
-                    activity,
-                    "setContentView",
-                    "(Landroid/view/View;)V",
-                    &[(&webview).into()],
-                );
-            }
+        // jni_handle() 定义在 PlatformWebview 上，Webview 需经 with_webview（主线程回调）取得
+        let _ = wv.with_webview(|platform_wv| {
+            let _ = platform_wv.jni_handle().exec(|env, activity, webview| {
+                if !activity.is_null() && !webview.is_null() {
+                    let _ = env.call_method(
+                        activity,
+                        "setContentView",
+                        "(Landroid/view/View;)V",
+                        &[(&webview).into()],
+                    );
+                }
+            });
         });
     }
 }
