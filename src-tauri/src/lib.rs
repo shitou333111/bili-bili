@@ -1,6 +1,10 @@
 use serde_json::Value;
 use tauri::{Emitter, Manager, WebviewUrl};
+// 桌面端用 WebviewBuilder 建子 WebView；移动端不支持子 WebView，用 WebviewWindowBuilder 建独立窗口
+#[cfg(desktop)]
 use tauri::WebviewBuilder;
+#[cfg(not(desktop))]
+use tauri::WebviewWindowBuilder;
 
 /// 活动面板子 WebView label（桌面端 + 移动端统一使用）
 const ACTIVITY_PANEL_LABEL: &str = "activity-panel";
@@ -329,60 +333,47 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
 
     #[cfg(not(desktop))]
     {
-        // 移动端：与桌面端完全相同的模式 —— 用 WebviewBuilder + add_child() 在主窗口
-        // 内创建子 WebView 面板。之前用 WebviewWindowBuilder 创建独立窗口，但
-        // destroy()/close() 在 iOS/Android 上不可靠（Android 窗口残留可滑动拽回，
-        // iOS 自定义 scheme 不触发 on_navigation 回调）。子 WebView 由主窗口直接
-        // 管理，close() 可靠移除，与桌面端行为一致。
-        let main_window = app.get_window("main").ok_or("找不到主窗口")?;
-        // 清理已有的子 WebView（避免重复面板）
-        if let Some(wv) = main_window
-            .webviews()
-            .iter()
-            .find(|w| w.label() == ACTIVITY_PANEL_LABEL)
-        {
-            let _ = wv.close();
+        // 移动端：Tauri 不支持子 WebView（Window::add_child 仅限桌面端），
+        // 改用 WebviewWindowBuilder 创建独立全屏窗口。移动端窗口默认全屏铺满，
+        // 不能显式 set_size/set_position（iOS 上 set_size+居中会产生左侧触摸死区）。
+        // 关闭通过 WebviewWindow::close() 可靠完成：标题栏脚本经 Tauri IPC
+        // 调用 close_activity_panel 命令触发（不依赖自定义 URL scheme，iOS 不触发
+        // on_navigation 自定义 scheme 的问题不复存在）。
+        // 清理上次残留的面板（若上次未正常关闭）
+        if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
+            let _ = panel.close();
         }
-        // 全屏尺寸（移动端 fill 整个屏幕）
-        let scale = main_window.scale_factor().map_err(|e| e.to_string())?;
-        let phys = main_window.inner_size().map_err(|e| e.to_string())?;
-        let w = phys.width as f64 / scale;
-        let h = phys.height as f64 / scale;
-        let position = tauri::LogicalPosition::new(0.0, 0.0);
-        let size = tauri::LogicalSize::new(w, h);
 
         let nav_app = app.clone();
-        let builder = WebviewBuilder::new(ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
-            .initialization_script(inject_config)
-            .initialization_script(mock_shim)
-            .initialization_script(&title_bar_script)
-            .on_navigation(move |nav_url| {
-                let url = nav_url.as_str();
-                if is_login_url(url) {
-                    return false;
+        let builder = WebviewWindowBuilder::new(
+            &app,
+            ACTIVITY_PANEL_LABEL,
+            WebviewUrl::External(parsed_url),
+        )
+        .initialization_script(inject_config)
+        .initialization_script(mock_shim)
+        .initialization_script(&title_bar_script)
+        .on_navigation(move |nav_url| {
+            let url = nav_url.as_str();
+            if is_login_url(url) {
+                return false;
+            }
+            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
+            // 通过 Tauri IPC 调用 close_activity_panel 命令关闭）
+            if url.contains("close-activity.local") || url.contains("close-activity://") {
+                let _ = nav_app.emit_to("main", "activity-panel-closed", ());
+                if let Some(panel) = nav_app.get_webview_window(ACTIVITY_PANEL_LABEL) {
+                    let _ = panel.close();
                 }
-                // 关闭由标题栏脚本通过 Tauri IPC 调用 close_activity_panel 命令。
-                // 兼容旧版：如果 on_navigation 也捕获到 close-activity URL，同样关闭。
-                if url.contains("close-activity.local") || url.contains("close-activity://") {
-                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                    if let Some(main_window) = nav_app.get_window("main") {
-                        if let Some(wv) = main_window
-                            .webviews()
-                            .iter()
-                            .find(|w| w.label() == ACTIVITY_PANEL_LABEL)
-                        {
-                            let _ = wv.close();
-                        }
-                    }
-                    return false;
-                }
-                true
-            });
+                return false;
+            }
+            true
+        });
 
-        let webview = main_window
-            .add_child(builder, position, size)
+        let panel = builder
+            .build()
             .map_err(|e| format!("创建活动面板失败: {}", e))?;
-        let _ = webview.set_focus();
+        let _ = panel.set_focus();
         Ok(())
     }
 }
@@ -392,7 +383,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
 async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
     // 先 emit 再 close：确保前端收到事件复位 nativePanelOpen
     let _ = app.emit_to("main", "activity-panel-closed", ());
-    // 桌面和移动端都使用 WebviewBuilder + add_child() 模式，关闭方式统一
+    // 桌面端：子 WebView 面板（Window::webviews 枚举）
+    #[cfg(desktop)]
     if let Some(main_window) = app.get_window("main") {
         if let Some(wv) = main_window
             .webviews()
@@ -401,6 +393,11 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
         {
             let _ = wv.close();
         }
+    }
+    // 移动端：独立全屏窗口（WebviewWindow）
+    #[cfg(not(desktop))]
+    if let Some(panel) = app.get_webview_window(ACTIVITY_PANEL_LABEL) {
+        let _ = panel.close();
     }
     Ok(())
 }
@@ -693,50 +690,39 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
 
     #[cfg(not(desktop))]
     {
-        // 移动端：与桌面端相同的 WebviewBuilder + add_child() 模式
-        let main_window = app.get_window("main").ok_or("找不到主窗口")?;
-        // 清理已有的子 WebView
-        if let Some(wv) = main_window
-            .webviews()
-            .iter()
-            .find(|w| w.label() == REAL_ACTIVITY_PANEL_LABEL)
-        {
-            let _ = wv.close();
+        // 移动端：Tauri 不支持子 WebView（Window::add_child 仅限桌面端），
+        // 改用 WebviewWindowBuilder 创建独立全屏窗口。关闭经 Tauri IPC 调用
+        // close_real_activity_panel 命令完成（不依赖自定义 URL scheme）。
+        // 清理上次残留的面板（若上次未正常关闭）
+        if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
+            let _ = panel.close();
         }
-        // 全屏尺寸
-        let scale = main_window.scale_factor().map_err(|e| e.to_string())?;
-        let phys = main_window.inner_size().map_err(|e| e.to_string())?;
-        let w = phys.width as f64 / scale;
-        let h = phys.height as f64 / scale;
-        let position = tauri::LogicalPosition::new(0.0, 0.0);
-        let size = tauri::LogicalSize::new(w, h);
 
         let app_handle = app.clone();
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
-        let builder = WebviewBuilder::new(REAL_ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
-            .initialization_script(&init_script)
-            .on_navigation(move |nav_url| {
-                // 兼容旧版：on_navigation 也捕获 close-activity URL
-                if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
-                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                    if let Some(main_window) = app_handle.get_window("main") {
-                        if let Some(wv) = main_window
-                            .webviews()
-                            .iter()
-                            .find(|w| w.label() == REAL_ACTIVITY_PANEL_LABEL)
-                        {
-                            let _ = wv.close();
-                        }
-                    }
-                    return false;
+        let builder = WebviewWindowBuilder::new(
+            &app,
+            REAL_ACTIVITY_PANEL_LABEL,
+            WebviewUrl::External(parsed_url),
+        )
+        .initialization_script(&init_script)
+        .on_navigation(move |nav_url| {
+            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
+            // 通过 Tauri IPC 调用 close_real_activity_panel 命令关闭）
+            if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
+                let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
+                if let Some(panel) = app_handle.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
+                    let _ = panel.close();
                 }
-                true
-            });
+                return false;
+            }
+            true
+        });
 
-        let webview = main_window
-            .add_child(builder, position, size)
+        let panel = builder
+            .build()
             .map_err(|e| format!("创建真实活动面板失败: {}", e))?;
-        let _ = webview.set_focus();
+        let _ = panel.set_focus();
         Ok(())
     }
 }
@@ -745,7 +731,8 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
 #[tauri::command]
 async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
     let _ = app.emit_to("main", "real-activity-panel-closed", ());
-    // 桌面和移动端都使用 WebviewBuilder + add_child() 模式，关闭方式统一
+    // 桌面端：子 WebView 面板
+    #[cfg(desktop)]
     if let Some(main_window) = app.get_window("main") {
         if let Some(wv) = main_window
             .webviews()
@@ -754,6 +741,11 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
         {
             let _ = wv.close();
         }
+    }
+    // 移动端：独立全屏窗口（WebviewWindow）
+    #[cfg(not(desktop))]
+    if let Some(panel) = app.get_webview_window(REAL_ACTIVITY_PANEL_LABEL) {
+        let _ = panel.close();
     }
     Ok(())
 }
