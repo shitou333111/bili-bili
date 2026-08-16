@@ -74,7 +74,7 @@ fn debug_acl(webview: tauri::Webview) -> String {
 /// 生成时把活动标题内联进脚本，因此返回 String（标题需转义）。
 ///
 /// `top_offset`：标题栏距离窗口顶部的逻辑像素偏移。
-///  - 桌面端 = 0（标题栏贴顶，子 WebView 面板本身已占下方 3/4）
+///  - 桌面端 = 0（标题栏贴顶，子 WebView 面板本身已占下方 2/3）
 ///  - 移动端 = 100（iOS/Android 窗口天然全屏，无法用原生尺寸裁剪；通过把标题栏整体下移、
 ///    页面内容 paddingTop 下移 100px，视觉上活动页顶部与模拟器顶部之间留出 100px 空隙）
 fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
@@ -215,7 +215,7 @@ fn desktop_titlebar_h() -> f64 {
 
 /// 根据给定的逻辑窗口宽高计算活动面板矩形。
 /// 宽度与"模拟器页面"（固定 inset-0 + max-width:page_max_width 水平居中）保持一致：
-/// 宽 = min(窗口宽, 页面最大宽度) 并水平居中；高 = 窗口高 * 3/4，贴底（顶部留 1/4）。
+/// 宽 = min(窗口宽, 页面最大宽度) 并水平居中；高 = 窗口高 * 2/3，贴底（顶部留 1/3）。
 /// 这样无论软件窗口放大缩小，活动页都只落在模拟器页面范围内，与模拟器对齐。
 #[cfg(desktop)]
 fn activity_panel_rect_of(
@@ -223,7 +223,7 @@ fn activity_panel_rect_of(
     h: f64,
 ) -> (tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>) {
     let panel_w = if w < page_max_width() { w } else { page_max_width() };
-    let panel_h = h * 3.0 / 4.0;
+    let panel_h = h * 2.0 / 3.0;
     let pos = tauri::LogicalPosition::new((w - panel_w) / 2.0, h - panel_h);
     let size = tauri::LogicalSize::new(panel_w, panel_h);
     (pos, size)
@@ -271,11 +271,21 @@ fn android_finish_activity(app: &tauri::AppHandle, webview_label: &str) {
                 eprintln!("[BILI-ANDROID] android_finish_activity: activity 为空 label={label}");
                 return;
             }
+            // finish() 结束 Activity 后立即 overridePendingTransition(0,0) 关闭默认的
+            // Activity 退出转场动画：否则 JS 收起动画播完后系统还会再播一次
+            // "黑背景页面向右收起"的转场，看起来像收起了两次。
+            use jni::objects::JValue;
             let res = env.call_method(activity, "finish", "()V", &[]);
             match res {
                 Ok(_) => eprintln!("[BILI-ANDROID] finish Activity ({label}) 成功"),
                 Err(e) => eprintln!("[BILI-ANDROID] finish Activity ({label}) 失败: {e}"),
             }
+            let _ = env.call_method(
+                activity,
+                "overridePendingTransition",
+                "(II)V",
+                &[JValue::Int(0), JValue::Int(0)],
+            );
         });
     }) {
         eprintln!("[BILI-ANDROID] android_finish_activity: with_webview 派发失败 label={webview_label}: {e}");
@@ -298,13 +308,13 @@ fn hide_mobile_panel(app: &tauri::AppHandle, label: &str) {
     }
 }
 
-/// 打开 B站 活动页，做成「主窗口内下方 3/4 面板」（像礼物面板弹出一部分页面）。
+/// 打开 B站 活动页，做成「主窗口内下方 2/3 面板」（像礼物面板弹出一部分页面）。
 ///
 /// 实现：不是 HTML iframe（跨域沙箱限制绕不过），而是用原生 WebView 承载真实 H5，
 /// 并在文档开始前注入 mock-shim.js —— 脚本运行在 B站 页面自身 origin 上下文里，
 /// 覆盖 fetch/XHR 返回本地 mock，达到「真实 B站 UI + 本地数据 + 不登录 + 不扣费 + 无服务器」。
 ///
-///  - 桌面端：向主窗口 add_child 一个子 WebView，宽度与模拟器页面一致（水平居中），占下方 3/4；
+///  - 桌面端：向主窗口 add_child 一个子 WebView，宽度与模拟器页面一致（水平居中），占下方 2/3；
 ///  - 移动端：Tauri 子 WebView 不支持，回退为独立全屏窗口。
 ///
 /// 移动端窗口生命周期（Android 采用 Tauri 官方多窗口机制，见
@@ -337,7 +347,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
     let mock_shim = include_str!("../../public/native-inject/mock-shim.js");
     // 按序注入：①mock 配置 → ②mock-shim → ③返回按钮 → ④标题栏
     let inject_config = format!("window.__BILI_ACTIVITY_MOCK_CONFIG__ = {};", mock_cfg_js);
-    // 标题栏顶部偏移：桌面端子 WebView 面板占下方 3/4，标题栏贴顶（0）；
+    // 标题栏顶部偏移：桌面端子 WebView 面板占下方 2/3，标题栏贴顶（0）；
     // 移动端窗口天然全屏，通过注入把标题栏/内容整体下移 100px，留出顶部空隙。
     let title_bar_script = {
         #[cfg(desktop)]
@@ -366,7 +376,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         }
 
         // 子 WebView 尺寸：宽与"模拟器页面"一致（min(窗口宽, 页面最大宽度) 并水平居中），
-        // 高占主窗口下方 3/4。无论软件窗口如何缩放，活动页都只落在模拟器页面范围内。
+        // 高占主窗口下方 2/3。无论软件窗口如何缩放，活动页都只落在模拟器页面范围内。
         let (position, size) = activity_panel_rect(&main_window)?;
 
         let nav_app = app.clone();
@@ -596,7 +606,11 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
     try {{
       var ua = navigator.userAgent || '';
       if (/iPad|iPhone|iPod/.test(ua)) return 47; // iOS 刘海/状态栏
-      if (/Android/.test(ua)) return 24; // Android 状态栏（Android 15 起强制 edge-to-edge）
+      // Android：默认非 edge-to-edge（Tauri 未启用），WebView 内容本身从系统状态栏下方开始，
+      // 状态栏是独立的黑条，标题栏无需再加安全区高度；否则标题栏会被额外垫高，
+      // 视觉上形成"状态栏黑条 + 标题栏"两个黑条相接（标题栏高度像 2 倍）。
+      // 若设备为 Android 15+ 强制 edge-to-edge，env() 探针已能取到真实 inset，不会走到这里。
+      if (/Android/.test(ua)) return 0;
     }} catch (e) {{}}
     return 0;
   }}
@@ -947,12 +961,26 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    // iOS：注册 webview-insets 插件，把 WKWebView 的 contentInsetAdjustmentBehavior 设为 .never，
+    // 关闭系统对 WebView 自动施加的安全区内边距，使 Web 内容真正铺满全屏（edge-to-edge），
+    // 此时 env(safe-area-inset-*) 才返回真实值 —— 竖屏直播视频才能扩展到状态栏/Home 指示区，
+    // 否则视频上下各露出一条黑边（本次顽固问题 #6 的根因）。
+    // builder 仅在移动端因插件注册需要 mut；桌面端不加允许属性会产生 unused_mut 警告。
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_pldownloader::init());
+    // iOS：注册 webview-insets 插件，把 WKWebView 的 contentInsetAdjustmentBehavior 设为 .never，
+    // 关闭系统对 WebView 自动施加的安全区内边距，使 Web 内容真正铺满全屏（edge-to-edge），
+    // 此时 env(safe-area-inset-*) 才返回真实值 —— 竖屏直播视频才能扩展到状态栏/Home 指示区，
+    // 否则视频上下各露出一条黑边（本次顽固问题 #6 的根因）。
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_ios_webview_insets::init());
+    }
 
     builder
         // 启动时调整主窗口：

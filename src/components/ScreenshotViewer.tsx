@@ -39,8 +39,12 @@ export default function ScreenshotViewer({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
-      {/* 顶栏 */}
-      <div className="flex items-center gap-3 px-3 py-2 border-b border-black/5 bg-white/90 backdrop-blur">
+      {/* 顶栏：paddingTop 取全局 --safe-top —— 手机端避开状态栏/刘海（SafeAreaStyler 注入），
+          PC 端避开自定义窗口标题栏（--safe-top = DESKTOP_TITLEBAR_H，否则返回栏被其遮住） */}
+      <div
+        className="flex items-center gap-3 px-3 pb-2 border-b border-black/5 bg-white/90 backdrop-blur"
+        style={{ paddingTop: "calc(var(--safe-top, 0px) + 8px)" }}
+      >
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95"

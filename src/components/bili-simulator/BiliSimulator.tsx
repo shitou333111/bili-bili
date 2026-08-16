@@ -27,7 +27,7 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
   const [comboMultiplier, setComboMultiplier] = useState(1);
   const [comboProgress, setComboProgress] = useState(0);
   const [showFloatingCombo, setShowFloatingCombo] = useState(false);
-  // 原生活动面板（桌面子 WebView 下方 3/4 / 移动端窗口）是否打开：仅此时显示顶部遮罩
+  // 原生活动面板（桌面子 WebView 下方 2/3 / 移动端窗口）是否打开：仅此时显示顶部遮罩
   const [nativePanelOpen, setNativePanelOpen] = useState(false);
   // Android 平台：底部栏需要额外距离，避免虚拟导航栏遮挡
   const [isAndroid, setIsAndroid] = useState(false);
@@ -881,11 +881,11 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
         cornerMarkOverride={cornerMarkOverride}
       />
 
-      {/* 活动原生面板顶部遮罩 - 原生面板占据下方 3/4，遮罩覆盖上方 1/4，点击关闭（同礼物面板交互） */}
+      {/* 活动原生面板顶部遮罩 - 原生面板占据下方 2/3，遮罩覆盖上方 1/3，点击关闭（同礼物面板交互） */}
       {nativePanelOpen && (
         <div
           className="absolute inset-x-0 top-0 z-[40] transition-opacity duration-300"
-          style={{ height: "25%", backgroundColor: "rgba(0,0,0,0.35)" }}
+          style={{ height: "33.333%", backgroundColor: "rgba(0,0,0,0.35)" }}
           onClick={handleCloseActivity}
         />
       )}

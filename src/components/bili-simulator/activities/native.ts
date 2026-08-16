@@ -32,7 +32,7 @@ function buildMockConfig(pageType: string): Record<string, unknown> {
 
 /**
  * 在原生客户端打开真实 B站 H5 活动页。
- * 桌面端：主窗口内下方 3/4 子 WebView 面板（高 = 主窗口 3/4）；移动端回退独立全屏窗口。
+ * 桌面端：主窗口内下方 2/3 子 WebView 面板（高 = 主窗口 2/3）；移动端回退独立全屏窗口。
  * @param config 活动配置
  * @param slotState 上次保存的槽位抽取状态（可选），随 mock 配置注入，
  *                  使活动页打开时即可还原上次的抽取状态

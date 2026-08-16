@@ -330,6 +330,15 @@ jobs:
           EOF
 
           MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          # 允许明文 HTTP：复活曲截图页以 iframe 加载 http://<服务器>/screenshot，
+          # Android 9+ (API 28+) 默认禁止 cleartext，不加此属性 iframe 将加载不出内容
+          # （Tauri 的 Rust HTTP 插件不走 WebView，不受此限制，故其余数据接口正常而 iframe 空白）。
+          if ! grep -q 'android:usesCleartextTraffic' "$MANIFEST"; then
+            sed -i 's#<application#<application android:usesCleartextTraffic="true"#' "$MANIFEST"
+            echo "已为 <application> 添加 android:usesCleartextTraffic=\"true\""
+          else
+            echo "android:usesCleartextTraffic 已存在，跳过"
+          fi
           if ! grep -q 'ActivityPanelActivity' "$MANIFEST"; then
             sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
           fi
@@ -467,6 +476,15 @@ jobs:
           # 允许通过"文件"App 访问应用文档（便于导出 JSON 等）
           add_key "UIFileSharingEnabled" "bool" "true"
           add_key "LSSupportsOpeningDocumentsInPlace" "bool" "true"
+          # 允许 WebView 加载明文 HTTP：复活曲截图页以 iframe 加载 http://<服务器>/screenshot，
+          # iOS ATS 默认阻止 HTTP，必须放行 WKWebView 内的任意加载（只影响 Web 内容，不放开原生请求）。
+          add_key "NSAppTransportSecurity" "dict" "{}"
+          if /usr/libexec/PlistBuddy -c "Print :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent" "$APP_PLIST" >/dev/null 2>&1; then
+            echo "NSAllowsArbitraryLoadsInWebContent already present, skip"
+          else
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" "$APP_PLIST"
+            echo "Added NSAllowsArbitraryLoadsInWebContent=true"
+          fi
           # 设置应用语言为中文（确保系统对话框、长按菜单等显示中文）
           /usr/libexec/PlistBuddy -c "Delete :CFBundleDevelopmentRegion" "$APP_PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string zh_CN" "$APP_PLIST"

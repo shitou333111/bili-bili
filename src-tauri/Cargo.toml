@@ -16,6 +16,13 @@ tauri-build = { version = "2", features = [] }
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
+# 仅移动端：iOS 上把 WKWebView 的 contentInsetAdjustmentBehavior 设为 .never，
+# 关闭系统自动施加的安全区内边距，让 Web 内容真正铺满全屏（edge-to-edge），
+# env(safe-area-inset-*) 才返回真实值 —— 修复 iOS 竖屏直播视频上下黑边问题。
+# Android 上为 no-op。
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-ios-webview-insets = "=0.1.0"
+
 [dependencies]
 tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }

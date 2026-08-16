@@ -138,7 +138,7 @@ export default function LiveStreamBackground({ roomId }: Props) {
           left: 0,
           width: "100%",
           height: "calc(100% + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))",
-        } : { top: "100px" }}
+        } : { top: "200px" }}
         onLoadedMetadata={updatePortrait}
         onLoadedData={updatePortrait}
         onCanPlay={updatePortrait}
