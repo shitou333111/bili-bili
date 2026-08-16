@@ -106,7 +106,18 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       document.body.style.transition = "transform 0.32s ease-in";
       document.body.style.transform = "translateY(100%)";
     }} catch (e) {{}}
-    setTimeout(function () {{ window.location.href = "close-activity://local"; }}, 320);
+    setTimeout(function () {{
+      // 直接通过 Tauri IPC 调用关闭命令，而非导航到自定义 URL scheme。
+      // iOS WKWebView 只为 http/https 触发 on_navigation 回调，自定义 scheme
+      // （close-activity://）会被静默忽略 → Rust 永远收不到关闭事件 → 窗口无法销毁。
+      // Tauri 的 IPC bridge 在初始化脚本注入前已就绪，所有平台可靠可用。
+      try {{
+        window.__TAURI_INTERNALS__.invoke("close_activity_panel");
+      }} catch (e) {{
+        // 兜底：如果 IPC 不可用，回退到旧方案（桌面端仍可工作）
+        window.location.href = "close-activity://local";
+      }}
+    }}, 320);
   }}
   function mount() {{
     try {{
@@ -336,7 +347,6 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         if let Some(w) = app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
             let _ = w.destroy();
         }
-        let nav_app = app.clone();
         let window = WebviewWindowBuilder::new(&app, ACTIVITY_WINDOW_LABEL, WebviewUrl::External(parsed_url))
             .title(title)
             .initialization_script(inject_config)
@@ -344,21 +354,13 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
             .initialization_script(&title_bar_script)
             .on_navigation(move |nav_url| {
                 let url = nav_url.as_str();
+                // 仅拦截登录页跳转（模拟器注入的 mock 环境需要）
                 if is_login_url(url) {
                     return false;
                 }
-                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭。
-                // 移动端在 on_navigation 回调中 destroy() 会导致窗口生命周期异常
-                // （Android 窗口残留可滑动拽回、iOS 无法重建）。
-                // 改为 close() 隐藏窗口 + emit 通知前端，真正的 destroy() 在
-                // open_activity_panel 中执行（不在导航回调内，避免了回调 -> 销毁 -> 回调的递归问题）。
-                if url.contains("close-activity.local") || url.contains("close-activity://") {
-                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                    if let Some(w) = nav_app.get_webview_window(ACTIVITY_WINDOW_LABEL) {
-                        let _ = w.close();
-                    }
-                    return false;
-                }
+                // 关闭由标题栏脚本通过 Tauri IPC 直接调用 close_activity_panel 命令，
+                // 不再依赖 on_navigation 拦截自定义 URL scheme
+                // （iOS WKWebView 不触发自定义 scheme 的导航回调）。
                 true
             })
             .build()
@@ -504,9 +506,13 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">' +
         '<path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>';
       backBtn.onclick = function () {{
-        // Android WebView 对 https:// 导航可能先尝试 DNS 解析再触发 on_navigation，
-        // 导致回调不被调用。改用自定义 scheme 确保跨平台可靠拦截。
-        window.location.href = "close-activity://local";
+        // 直接通过 Tauri IPC 调用关闭命令（同 activity_panel 逻辑）。
+        // iOS WKWebView 不触发自定义 scheme 的 on_navigation，IPC 是最可靠路径。
+        try {{
+          window.__TAURI_INTERNALS__.invoke("close_real_activity_panel");
+        }} catch (e) {{
+          window.location.href = "close-activity://local";
+        }}
       }};
       // 标题文字
       var titleEl = document.createElement("span");
@@ -682,23 +688,10 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         if let Some(w) = app.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
             let _ = w.destroy();
         }
-        let app_handle = app.clone();
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
         let window = WebviewWindowBuilder::new(&app, REAL_ACTIVITY_WINDOW_LABEL, WebviewUrl::External(parsed_url))
             .title(title)
             .initialization_script(&init_script)
-            .on_navigation(move |nav_url| {
-                // 返回按钮触发导航到 close-activity.local：
-                // close() 隐藏窗口 + emit 通知前端，destroy() 在 open_real_activity_panel 中执行
-                if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
-                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                    if let Some(w) = app_handle.get_webview_window(REAL_ACTIVITY_WINDOW_LABEL) {
-                        let _ = w.close();
-                    }
-                    return false;
-                }
-                true
-            })
             .build()
             .map_err(|e| format!("创建真实活动窗口失败: {}", e))?;
         let _ = window.show();

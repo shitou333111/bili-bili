@@ -105,11 +105,19 @@ export default function LiveStreamBackground({ roomId }: Props) {
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden bg-[#1a1a2e]">
-      {/* 直播视频流：竖屏时填满整个容器（含安全区），横屏时保持宽度对应页面宽度、高度按比例自适应 */}
+      {/* 直播视频流：竖屏时填满整个容器，并向上/下延伸到安全区（iOS 状态栏/Home Indicator 区域）。
+          横屏时保持宽度对应页面宽度、高度按比例自适应 */}
       <video
         ref={videoRef}
-        className={portrait ? "absolute inset-0 w-full h-full object-cover" : "absolute left-0 w-full object-contain"}
-        style={portrait ? undefined : { top: "100px" }}
+        className={portrait ? "absolute w-full h-full object-cover" : "absolute left-0 w-full object-contain"}
+        style={portrait ? {
+          // 向上延伸到状态栏安全区、向下延伸到 Home Indicator 安全区。
+          // env() 在 iOS 返回实际像素值，Android 返回 0，桌面端返回 0。
+          top: "calc(-1 * env(safe-area-inset-top, 0px))",
+          left: 0,
+          width: "100%",
+          height: "calc(100% + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))",
+        } : { top: "100px" }}
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
           // 严格竖屏判定：高/宽 > 1.2 才算竖屏，接近方形的流不铺满全屏
