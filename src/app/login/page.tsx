@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authApi } from "@/lib/api";
+import { pageUrl } from "@/lib/server-api";
 
 type QRGenerateResponse = {
   code: number;
@@ -94,7 +95,7 @@ export default function LoginPage() {
           }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {
-            window.location.href = "/";
+            window.location.href = pageUrl("/");
           }, 800);
           return;
         }
@@ -283,7 +284,7 @@ export default function LoginPage() {
                   clearPollTimer();
                   // 记录返回目标，跳回主页后由主页恢复"帮助"模块
                   sessionStorage.setItem("bili_live_return", "help");
-                  window.location.href = "/";
+                  window.location.href = pageUrl("/");
                 }}
                 className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
               >

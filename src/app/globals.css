@@ -214,13 +214,13 @@ a {
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   flex-shrink: 0;
 }
-/* 绿色缺口圆环画在伪元素上，避免 mask 遮住圆圈内的时间文字 */
+/* 绿色完整圆环画在伪元素上，避免 mask 遮住圆圈内的时间文字 */
 .refresh-btn-arc::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: conic-gradient(from 0deg, #22c55e 0deg 30deg, transparent 30deg 66deg, #22c55e 66deg 360deg);
+  background: #22c55e;
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
 }

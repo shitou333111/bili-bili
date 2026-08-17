@@ -6,7 +6,7 @@ import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
-import { serverApiUrl, serverPost } from "@/lib/server-api";
+import { serverApiUrl, serverPost, pageUrl } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
 import { useOnlineStatus } from "@/lib/use-online";
@@ -1008,9 +1008,9 @@ export default function HomePage() {
               try { localStorage.setItem("bili_live_admin_sid", data.sid); } catch { /* ignore */ }
             }
             // 静默登录成功，直接进入 admin，不显示登录框
-            // 用本地路径 /admin（而非 serverApiUrl("/admin")）加载同源的 admin 页面，
+            // 用本地路径（Tauri 静态导出需 .html 后缀）加载同源的 admin 页面，
             // 保证与首页共享 localStorage（跨源会导致密码/设备令牌/sid 读取失败，引发二次弹窗等连锁问题）。
-            window.location.href = "/admin";
+            window.location.href = pageUrl("/admin");
           } else {
             // 密码已变更等原因导致自动登录失败，弹出模态框重新输入
             localStorage.removeItem("bili_live_admin_cred");
@@ -1045,8 +1045,8 @@ export default function HomePage() {
         setAdminUsed(true);
         setShowAdminPwd(false);
         setAdminPwd("");
-        // 进入同源本地 /admin（与首页共享 localStorage），避免跨源导致二次登录/无法识别当前账号
-        window.location.href = "/admin";
+        // 进入同源本地 admin 页面（Tauri 静态导出需 .html 后缀），与首页共享 localStorage
+        window.location.href = pageUrl("/admin");
       } else {
         setAdminPwdError(data?.message || "密码错误");
       }
@@ -1101,7 +1101,7 @@ export default function HomePage() {
       setIsFirstTime(true);
       setLoading(false);
       setApiLoggedIn(false);
-      window.location.href = "/login";
+      window.location.href = pageUrl("/login");
       return;
     }
     // 返回用户：先快速显示本地数据（不发 B站），再后台静默同步（不阻塞界面）
@@ -1256,6 +1256,8 @@ export default function HomePage() {
 
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
+        // 数据已加载（无论本地缓存还是 B站 实时），不再是首次初始化
+        setIsFirstTime(false);
         // 根据 message 判断数据来源
         if (snapshotData.message === "needs-relogin") {
           await handleAuthExpired();
@@ -1640,6 +1642,8 @@ export default function HomePage() {
 
   const refreshData = useCallback(async () => {
     setSyncing(true);
+    // 手动刷新不是首次初始化，确保不弹阻塞遮罩
+    setIsFirstTime(false);
     setAuthError(null);
     try {
       const snapshotRes = await dataFetch("/api/revenue/pay-record?refresh=true", { cache: "no-store" });

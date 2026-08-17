@@ -16,6 +16,19 @@ export function isTauri(): boolean {
   }
 }
 
+/**
+ * 解析页面导航 URL。
+ * Tauri 静态导出生成 path.html（如 admin.html），但 WebView 不会自动补 .html 后缀，
+ * 导航到 /admin 会 "this page couldn't load"。Tauri 环境下补 .html，Web 环境保持原样。
+ */
+export function pageUrl(path: string): string {
+  if (isTauri()) {
+    if (path === "/") return "/index.html";
+    return path + ".html";
+  }
+  return path;
+}
+
 /** 获取服务器 API 完整 URL */
 export function serverApiUrl(path: string): string {
   const tauri = isTauri();

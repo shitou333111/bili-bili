@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { serverApiUrl, serverPost, isTauri } from "@/lib/server-api";
+import { serverApiUrl, serverPost, isTauri, pageUrl } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import Dropdown from "@/components/Dropdown";
@@ -384,7 +384,7 @@ export default function AdminPage() {
       try { localStorage.setItem("bili_live_sid", sess.data.sid); } catch { /* ignore */ }
       setUsers((prev) => prev.map((u) => ({ ...u, isCurrent: u.mid === user.mid })));
       console.log(`[admin] 已从服务器加载 ${user.uname} 的 ${fileNames.length} 个数据文件，切换到该账号`);
-      window.location.href = "/";
+      window.location.href = pageUrl("/");
     } catch (err) {
       alert("加载失败: " + (err instanceof Error ? err.message : "网络错误"));
     } finally {
@@ -679,7 +679,7 @@ export default function AdminPage() {
                     {user.isLocal ? (
                       !user.isCurrent && (
                         <button
-                          onClick={() => handleImpersonate(user).then(() => { window.location.href = "/"; })}
+                          onClick={() => handleImpersonate(user).then(() => { window.location.href = pageUrl("/"); })}
                           className="rounded-lg border border-black/10 bg-white px-3 py-1 text-xs text-black/60 hover:bg-black/5 transition"
                         >
                           切换
