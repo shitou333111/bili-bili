@@ -91,6 +91,23 @@ jobs:
           fi
 
       - name: Upload dist to server
+        id: scp-dist
+        uses: appleboy/scp-action@v0.1.7
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: deploy-dist/*
+          target: /tmp/bili_live-deploy
+          overwrite: true
+          strip_components: 1
+          timeout: 120s
+          command_timeout: 120s
+
+      - name: Retry upload dist (wait 15s)
+        if: steps.scp-dist.outcome == 'failure'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -101,6 +118,8 @@ jobs:
           target: /tmp/bili_live-deploy
           overwrite: true
           strip_components: 1
+          timeout: 120s
+          command_timeout: 120s
 
       # 在 runner 上解析版本名（GITHUB_RUN_ID/ATTEMPT 只存在于 runner，
       # 不能直接在 ssh 脚本里用 ${GITHUB_RUN_ID}，否则到服务器上被展开为空值，
@@ -110,7 +129,9 @@ jobs:
         run: echo "RELEASE_NAME=release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Atomic deploy on server
+        id: ssh-deploy
         uses: appleboy/ssh-action@v1.0.3
+        continue-on-error: true
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -175,6 +196,53 @@ jobs:
               HOST=127.0.0.1 PORT=3000 nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
               echo $! > "${PID_FILE}"
             fi
+
+            # 清理旧版本，保留最近 5 个
+            ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+
+      - name: Retry atomic deploy (wait 15s)
+        if: steps.ssh-deploy.outcome == 'failure'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            set -e
+            TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
+            RELEASES_DIR="${TARGET_DIR}/.releases"
+            RELEASE_DIR="${RELEASES_DIR}/${{ steps.release-name.outputs.RELEASE_NAME }}"
+            CURRENT_DIR="${TARGET_DIR}/current"
+            PRESERVE_DIR="${TARGET_DIR}/preserved"
+
+            rm -rf "${RELEASE_DIR}"
+            mkdir -p "${RELEASE_DIR}"
+            cp -r /tmp/bili_live-deploy/. "${RELEASE_DIR}/"
+
+            PRESERVE_LIST=""
+            for link in current_apk current_exe current_ipa; do
+              if [ -L "${TARGET_DIR}/${link}" ]; then
+                REAL="$(readlink -f "${TARGET_DIR}/${link}" 2>/dev/null || true)"
+                if [ -n "${REAL}" ]; then PRESERVE_LIST="${PRESERVE_LIST} ${REAL}"; fi
+              fi
+            done
+
+            ln -sfn "${RELEASE_DIR}" "${CURRENT_DIR}"
+
+            PID_FILE="${TARGET_DIR}/server.pid"
+            if [ -f "${PID_FILE}" ]; then
+              OLD_PID="$(cat "${PID_FILE}" 2>/dev/null || true)"
+              if [ -n "${OLD_PID}" ] && kill -0 "${OLD_PID}" 2>/dev/null; then
+                kill "${OLD_PID}" || true
+              fi
+              rm -f "${PID_FILE}"
+            fi
+
+            cd "${TARGET_DIR}/current"
+            HOST=127.0.0.1 PORT=3000 nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+            echo $! > "${PID_FILE}"
 
             # 清理旧版本，保留最近 5 个
             ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | tail -n +6 | xargs -r rm -rf
@@ -613,7 +681,24 @@ jobs:
           echo "HAS_FILES=$([ -n "$(ls -A publish 2>/dev/null)" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts to server (staging)
+        id: scp-artifacts
         if: steps.prepare.outputs.HAS_FILES == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: publish/*
+          target: /tmp/bili_live-artifacts
+          overwrite: true
+          strip_components: 1
+          timeout: 120s
+          command_timeout: 120s
+
+      - name: Retry upload artifacts (wait 15s)
+        if: steps.prepare.outputs.HAS_FILES == 'true' && steps.scp-artifacts.outcome == 'failure'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -624,10 +709,14 @@ jobs:
           target: /tmp/bili_live-artifacts
           overwrite: true
           strip_components: 1
+          timeout: 120s
+          command_timeout: 120s
 
       - name: Atomic publish on server
+        id: ssh-publish
         if: steps.prepare.outputs.HAS_FILES == 'true'
         uses: appleboy/ssh-action@v1.0.3
+        continue-on-error: true
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -731,6 +820,82 @@ jobs:
             ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
               case "${PROTECTED}" in
                 *"${dir}"*) echo "保留（current 链接指向）: ${dir}"; continue ;;
+              esac
+              rm -rf "${dir}"
+            done
+
+      - name: Retry atomic publish (wait 15s)
+        if: steps.prepare.outputs.HAS_FILES == 'true' && steps.ssh-publish.outcome == 'failure'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 10m
+          script: |
+            set -e
+            TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
+            ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
+            RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
+            mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
+            cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            pick_release() {
+              local dir="$1" ext="$2"
+              [ -d "$dir" ] || return 1
+              local f
+              for f in "$dir"/*release*"$ext"; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+              for f in "$dir"/*"$ext"; do
+                [ -f "$f" ] || continue
+                case "$(basename "$f")" in *debug*|*DEBUG*) continue;; *) echo "$f"; return 0;; esac
+              done
+              for f in "$dir"/*"$ext"; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+              return 1
+            }
+            PICKED_EXE="$(pick_release "${RELEASE_DIR}" ".exe" || true)"
+            PICKED_APK="$(pick_release "${RELEASE_DIR}" ".apk" || true)"
+            PICKED_IPA="$(pick_release "${RELEASE_DIR}" ".ipa" || true)"
+            if [ -n "${PICKED_EXE}" ]; then ln -sfn "${PICKED_EXE}" "${ARTIFACTS_DIR}/current_exe"; fi
+            if [ -n "${PICKED_APK}" ]; then ln -sfn "${PICKED_APK}" "${ARTIFACTS_DIR}/current_apk"; fi
+            if [ -n "${PICKED_IPA}" ]; then ln -sfn "${PICKED_IPA}" "${ARTIFACTS_DIR}/current_ipa"; fi
+            extract_date() {
+              local link="$1"
+              local target rel
+              target="$(readlink -f "${link}" 2>/dev/null || true)"
+              [ -z "${target}" ] && return 1
+              rel="${target#*release-}"
+              case "${rel}" in
+                [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*)
+                  echo "${rel:0:4}-${rel:4:2}-${rel:6:2}"
+                  return 0
+                  ;;
+              esac
+              return 1
+            }
+            W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
+            A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
+            I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
+            VJSON="{\n"
+            VSEP=""
+            add_ver() {
+              local key="$1" val="$2"
+              [ -z "${val}" ] && return 0
+              VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
+              VSEP=",\n"
+            }
+            add_ver "windows" "${W_DATE}"
+            add_ver "android" "${A_DATE}"
+            add_ver "ios" "${I_DATE}"
+            VJSON="${VJSON}\n}"
+            printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
+            PROTECTED=""
+            for link in current_exe current_apk current_ipa; do
+              target="$(readlink "${ARTIFACTS_DIR}/${link}" 2>/dev/null || true)"
+              [ -n "$target" ] && PROTECTED="${PROTECTED} ${target%/*}"
+            done
+            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
+              case "${PROTECTED}" in
+                *"${dir}"*) continue ;;
               esac
               rm -rf "${dir}"
             done
