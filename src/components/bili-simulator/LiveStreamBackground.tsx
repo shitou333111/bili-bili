@@ -126,16 +126,12 @@ export default function LiveStreamBackground({ roomId }: Props) {
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden bg-[#1a1a2e]">
-      {/* 直播视频流：竖屏时完整显示整个视频（不裁剪），居中铺满整个屏幕。
-          竖屏流通常比屏幕更"瘦长"，object-contain 会把整段视频按比例缩放完整呈现，绝不上/下裁剪；
-          若用 object-cover 会为了铺满而裁掉视频上/下内容（用户反馈"没有包括整个高度"）。
-          注意：竖屏视频的盒子必须严格等于屏幕大小（inset-0），不能再向安全区延伸
-          （top/height 用 env() 放大），否则超高竖屏流会把盒子撑过屏幕边界，被
-          overflow-hidden 裁掉顶部/底部——这正是之前"竖屏视频被上下裁剪"的根因。
+      {/* 直播视频流：竖屏时铺满全屏（object-cover），即使上下裁剪也要无黑边。
+          用户要求：宁可裁剪/放大也要铺满全屏，不接受黑边。
           横屏时保持宽度对应页面宽度、高度按比例自适应 */}
       <video
         ref={videoRef}
-        className={portrait ? "absolute inset-0 w-full h-full object-contain" : "absolute left-0 w-full object-contain"}
+        className={portrait ? "absolute inset-0 w-full h-full object-cover" : "absolute left-0 w-full object-contain"}
         style={!portrait ? { top: "200px" } : undefined}
         onLoadedMetadata={updatePortrait}
         onLoadedData={updatePortrait}

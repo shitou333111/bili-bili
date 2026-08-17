@@ -660,5 +660,17 @@ jobs:
             ls -la "${RELEASE_DIR}"
             echo "artifacts 目录:"
             ls -la "${ARTIFACTS_DIR}"
-            # 清理旧版本，保留最近 10 个
-            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | xargs -r rm -rf
+            # 清理旧版本，保留最近 10 个，但不能删 current_* 链接指向的 release 目录。
+            # 场景：某次只构建 exe 没构建 apk，current_apk 仍指向旧 release，
+            # 若该 release 因排序落在 11 名以后被清理，链接就断了。
+            PROTECTED=""
+            for link in current_exe current_apk current_ipa; do
+              target="$(readlink "${ARTIFACTS_DIR}/${link}" 2>/dev/null || true)"
+              [ -n "$target" ] && PROTECTED="${PROTECTED} ${target%/*}"
+            done
+            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
+              case "${PROTECTED}" in
+                *"${dir}"*) echo "保留（current 链接指向）: ${dir}"; continue ;;
+              esac
+              rm -rf "${dir}"
+            done

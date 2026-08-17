@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 复活曲截图工具页 —— 打包进 APP 的本地静态页面（Tauri 静态导出 /screenshot.html）。
- * 在 APP 内由 ScreenshotViewer 以 iframe 打开，保留应用外壳与返回按钮。
+ * 复活曲截图工具页 —— 托管在网站服务器上，由 ScreenshotViewer 以 iframe 加载。
+ * 内容会变动（下载链接、教程视频等），不打包进 APP。
  */
 export default function ScreenshotPage() {
   return (
