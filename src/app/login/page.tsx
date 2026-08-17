@@ -138,20 +138,31 @@ export default function LoginPage() {
     setError("");
     setStatus("正在生成登录二维码...");
 
-    try {
-      const data = await authApi.generateQR();
+    // iOS 首次打开 APP 时，系统网络权限弹窗尚未授予，首个请求必然失败。
+    // 标准解法：自动重试，间隔递增（1s → 2s → 3s），给用户时间授予权限。
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const data = await authApi.generateQR();
 
-      if (!data.data?.qrcode_key) {
-        throw new Error(data.message || "二维码生成失败");
+        if (!data.data?.qrcode_key) {
+          throw new Error(data.message || "二维码生成失败");
+        }
+
+        setQrKey(data.data.qrcode_key);
+        setQrImage(data.data.image || `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(data.data.url)}`);
+        setStatus("请使用哔哩哔哩 APP 扫码登录");
+        pollLogin(data.data.qrcode_key);
+        return;
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          setStatus(`正在等待网络就绪...(${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise((r) => setTimeout(r, (attempt + 1) * 1000));
+          continue;
+        }
+        setError(err instanceof Error ? err.message : "二维码生成失败");
+        setStatus("二维码生成失败，请重试");
       }
-
-      setQrKey(data.data.qrcode_key);
-      setQrImage(data.data.image || `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(data.data.url)}`);
-      setStatus("请使用哔哩哔哩 APP 扫码登录");
-      pollLogin(data.data.qrcode_key);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "二维码生成失败");
-      setStatus("二维码生成失败，请重试");
     }
   }, [clearPollTimer, pollLogin]);
 

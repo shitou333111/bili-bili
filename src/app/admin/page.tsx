@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { serverApiUrl, serverPost } from "@/lib/server-api";
+import { serverApiUrl, serverPost, isTauri } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import Dropdown from "@/components/Dropdown";
@@ -55,12 +55,16 @@ function getStoredAdminSid(): string | null {
 }
 
 /**
- * 管理员 API 请求封装：始终附带 X-Admin-Sid 请求头 + credentials。
- * 原因：Tauri(iOS/Android) 前端与服务器跨源，登录 cookie 用 SameSite=lax 不会随跨源 fetch 发送，
- * 导致 admin 内容为空。改为登录后把 sid 存本地，每个请求显式带上请求头，绕开跨源 cookie 限制。
+ * 管理员 API 请求封装：始终附带 X-Admin-Sid 请求头。
+ * Tauri 环境下使用 @tauri-apps/plugin-http（Rust 侧 HTTP，无 CORS 限制），
+ * 否则前端与远程服务器跨源，原生 fetch 会被浏览器 CORS 策略拦截。
  */
-function adminFetch(url: string, options: RequestInit = {}): Promise<Response> {
+async function adminFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = { ...(options.headers as Record<string, string> | undefined), ...(getStoredAdminSid() ? { "X-Admin-Sid": getStoredAdminSid()! } : {}) };
+  if (isTauri()) {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    return tauriFetch(url, { ...options, headers });
+  }
   return fetch(url, { ...options, headers, credentials: "include" });
 }
 

@@ -9,7 +9,7 @@
  * - 不注入 mock-shim，不拦截任何请求
  * - 使用当前登录账号的 Cookie（WebView 共享 Cookie）
  * - 真实消费、真实交易
- * - 标题栏带返回按钮（点击通过 on_navigation 拦截 close-activity.local 关闭）
+ * - 标题栏带返回按钮（点击通过 Tauri IPC 调用 close_real_activity_panel 关闭）
  */
 
 import { useState, useEffect, useCallback } from "react";

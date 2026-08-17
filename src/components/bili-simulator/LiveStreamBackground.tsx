@@ -126,19 +126,17 @@ export default function LiveStreamBackground({ roomId }: Props) {
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden bg-[#1a1a2e]">
-      {/* 直播视频流：竖屏时填满整个容器，并向上/下延伸到安全区（iOS 状态栏/Home Indicator 区域）。
+      {/* 直播视频流：竖屏时完整显示整个视频（不裁剪），居中铺满整个屏幕。
+          竖屏流通常比屏幕更"瘦长"，object-contain 会把整段视频按比例缩放完整呈现，绝不上/下裁剪；
+          若用 object-cover 会为了铺满而裁掉视频上/下内容（用户反馈"没有包括整个高度"）。
+          注意：竖屏视频的盒子必须严格等于屏幕大小（inset-0），不能再向安全区延伸
+          （top/height 用 env() 放大），否则超高竖屏流会把盒子撑过屏幕边界，被
+          overflow-hidden 裁掉顶部/底部——这正是之前"竖屏视频被上下裁剪"的根因。
           横屏时保持宽度对应页面宽度、高度按比例自适应 */}
       <video
         ref={videoRef}
-        className={portrait ? "absolute w-full h-full object-cover" : "absolute left-0 w-full object-contain"}
-        style={portrait ? {
-          // 向上延伸到状态栏安全区、向下延伸到 Home Indicator 安全区。
-          // env() 在 iOS 返回实际像素值，Android 返回 0，桌面端返回 0。
-          top: "calc(-1 * env(safe-area-inset-top, 0px))",
-          left: 0,
-          width: "100%",
-          height: "calc(100% + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px))",
-        } : { top: "200px" }}
+        className={portrait ? "absolute inset-0 w-full h-full object-contain" : "absolute left-0 w-full object-contain"}
+        style={!portrait ? { top: "200px" } : undefined}
         onLoadedMetadata={updatePortrait}
         onLoadedData={updatePortrait}
         onCanPlay={updatePortrait}

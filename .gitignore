@@ -45,6 +45,12 @@ yarn-error.log*
 # tauri default icon (replaced by public/orig_icon.png)
 app-icon.png
 
+# test scratch files
+.fttest/
+
+# notes
+TO DO.txt
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

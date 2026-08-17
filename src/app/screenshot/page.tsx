@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 复活曲截图工具页 —— 托管在网站服务器（NEXT_PUBLIC_SERVER_URL）上，由服务器实时提供内容。
- * 因本页内容会变动，故不再打包进移动端安装包；移动端从“帮助”页的卡片跳转到服务器访问本页。
+ * 复活曲截图工具页 —— 打包进 APP 的本地静态页面（Tauri 静态导出 /screenshot.html）。
+ * 在 APP 内由 ScreenshotViewer 以 iframe 打开，保留应用外壳与返回按钮。
  */
 export default function ScreenshotPage() {
   return (

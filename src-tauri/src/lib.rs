@@ -75,8 +75,8 @@ fn debug_acl(webview: tauri::Webview) -> String {
 ///
 /// `top_offset`：标题栏距离窗口顶部的逻辑像素偏移。
 ///  - 桌面端 = 0（标题栏贴顶，子 WebView 面板本身已占下方 2/3）
-///  - 移动端 = 100（iOS/Android 窗口天然全屏，无法用原生尺寸裁剪；通过把标题栏整体下移、
-///    页面内容 paddingTop 下移 100px，视觉上活动页顶部与模拟器顶部之间留出 100px 空隙）
+///  - 移动端 = -1（iOS/Android 窗口天然全屏，无法用原生尺寸裁剪；由脚本按视口高度动态计算：
+///    偏移 = 视口高度 / 3，即活动面板从底部起占屏 2/3，上方 1/3 为可点击收起区 + 标题栏）
 fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
     let escaped = title
         .replace('\\', "\\\\")
@@ -90,7 +90,13 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
   var TITLE = '{escaped}';
   var TOP_OFFSET = {top_offset};
   var BAR_H = 44;
-  var TOTAL_H = BAR_H + TOP_OFFSET;
+  var TOTAL_H = 0;
+  // top_offset < 0 表示移动端：按视口高度的 1/3 计算偏移（面板从底部起占屏 2/3）。
+  function resolveTop() {{
+    if (TOP_OFFSET >= 0) return TOP_OFFSET;
+    var vh = window.innerHeight || document.documentElement.clientHeight || 600;
+    return Math.max(40, Math.round(vh / 3));
+  }}
   function dismiss() {{
     if (window.__BILI_ACTIVITY_DISMISSING__) return;
     window.__BILI_ACTIVITY_DISMISSING__ = true;
@@ -104,17 +110,14 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       // iOS WKWebView 只为 http/https 触发 on_navigation 回调，自定义 scheme
       // （close-activity://）会被静默忽略 → Rust 永远收不到关闭事件 → 窗口无法销毁。
       // Tauri 的 IPC bridge 在初始化脚本注入前已就绪，所有平台可靠可用。
-      try {{
-        window.__TAURI_INTERNALS__.invoke("close_activity_panel");
-      }} catch (e) {{
-        // 兜底：如果 IPC 不可用，回退到旧方案（桌面端仍可工作）
-        window.location.href = "close-activity://local";
-      }}
+      window.__TAURI_INTERNALS__.invoke("close_activity_panel");
     }}, 320);
   }}
   function mount() {{
     try {{
       if (!document.body) return false;
+      var TOP = resolveTop();
+      TOTAL_H = BAR_H + TOP;
       var existing = document.getElementById("__bili_activity_titlebar__");
       if (existing) existing.remove();
       var oldMask = document.getElementById("__bili_activity_titlebar_mask__");
@@ -126,11 +129,11 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       //    背景改为完全不透明：否则页面内容滚动时会从半透明处"透到标题栏上方"，
       //    造成"内容可以滑动超出标题栏"的错觉。不再用纯黑铺满偏移区（避免黑屏观感）。
       //    曾在此区居中显示"↑ 收起"胶囊作视觉提示，已按需求删除，仅保留可点击暗紫遮罩。
-      if (TOP_OFFSET > 0) {{
+      if (TOP > 0) {{
         var scrim = document.createElement("div");
         scrim.id = "__bili_activity_scrim__";
         scrim.style.cssText =
-          "position:fixed;top:0;left:0;right:0;height:" + TOP_OFFSET + "px;z-index:2147483644;" +
+          "position:fixed;top:0;left:0;right:0;height:" + TOP + "px;z-index:2147483644;" +
           "background:linear-gradient(to bottom, #2b1f2b 0%, #241a2e 60%, #1c1426 100%);" +
           "display:flex;align-items:center;justify-content:center;cursor:pointer;";
         scrim.onclick = dismiss;
@@ -140,14 +143,14 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       var mask = document.createElement("div");
       mask.id = "__bili_activity_titlebar_mask__";
       mask.style.cssText =
-        "position:fixed;top:" + TOP_OFFSET + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483645;" +
+        "position:fixed;top:" + TOP + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483645;" +
         "background:#000;pointer-events:none;";
       // 3. 标题栏本体（黑色、顶部两角圆角、居中显示标题、固定不随页面滚动）
       var bar = document.createElement("div");
       bar.id = "__bili_activity_titlebar__";
       bar.textContent = TITLE;
       bar.style.cssText =
-        "position:fixed;top:" + TOP_OFFSET + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483646;" +
+        "position:fixed;top:" + TOP + "px;left:0;right:0;height:" + BAR_H + "px;z-index:2147483646;" +
         "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;";
@@ -165,7 +168,7 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       var bar = document.getElementById("__bili_activity_titlebar__");
       var mask = document.getElementById("__bili_activity_titlebar_mask__");
       var scrim = document.getElementById("__bili_activity_scrim__");
-      var need = TOP_OFFSET > 0 ? (!bar || !mask || !scrim) : (!bar || !mask);
+      var need = resolveTop() > 0 ? (!bar || !mask || !scrim) : (!bar || !mask);
       if (need) mount();
       // SPA 可能重置 body 样式，持续保证 paddingTop
       if (document.body.style.paddingTop !== TOTAL_H + "px") {{
@@ -249,8 +252,11 @@ fn activity_panel_rect(
 /// 关闭链路（源码确认）：
 ///   finish() → onActivityDestroy（tao/ndk_glue.rs）→ 触发 WindowEvent::Destroyed
 ///   → Tauri 移除该窗口并释放 label → 下次打开可正常重建（解决"第二次打不开"）。
-/// 系统返回键同理由 WryActivity 原生处理：webview canGoBack() 则 goBack()，
-/// 否则 onBackPressed() → finish() → 回到模拟器，无需 history.pushState 哨兵 hack。
+///
+/// 系统返回键：WryActivity 原生判定 webview canGoBack() 则 goBack()，否则
+/// onBackPressed() → finish()。因此标题栏脚本向历史压入一个哨兵记录，使返回键命中
+/// canGoBack()=true → goBack() → 触发 popstate → 走 JS dismiss() → IPC close_*_panel
+/// （先播收起动画再 finish，并 emit 关闭事件让前端复位面板状态）。
 ///
 /// 相比旧的 setContentView 顶替方案：模拟器 Activity 始终在栈底不被顶替，
 /// 因此不再有黑屏、上滑拽回、label 永久泄漏等问题。
@@ -348,7 +354,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
     // 按序注入：①mock 配置 → ②mock-shim → ③返回按钮 → ④标题栏
     let inject_config = format!("window.__BILI_ACTIVITY_MOCK_CONFIG__ = {};", mock_cfg_js);
     // 标题栏顶部偏移：桌面端子 WebView 面板占下方 2/3，标题栏贴顶（0）；
-    // 移动端窗口天然全屏，通过注入把标题栏/内容整体下移 100px，留出顶部空隙。
+    // 移动端窗口天然全屏，由脚本按视口 1/3 动态偏移（-1 触发），使面板从底部起占屏 2/3。
     let title_bar_script = {
         #[cfg(desktop)]
         {
@@ -356,7 +362,7 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         }
         #[cfg(not(desktop))]
         {
-            activity_title_bar_script(title, 100.0)
+            activity_title_bar_script(title, -1.0)
         }
     };
 
@@ -379,34 +385,13 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         // 高占主窗口下方 2/3。无论软件窗口如何缩放，活动页都只落在模拟器页面范围内。
         let (position, size) = activity_panel_rect(&main_window)?;
 
-        let nav_app = app.clone();
         let builder = WebviewBuilder::new(ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
             .initialization_script(inject_config)
             .initialization_script(mock_shim)
             .initialization_script(&title_bar_script)
-            .on_navigation(move |nav_url| {
-                let url = nav_url.as_str();
-                // 阻止 B站 登录页跳转（跳过登录）
-                if is_login_url(url) {
-                    return false;
-                }
-                // 页面内"点击收起"通过导航到 close-activity.local 触发关闭
-                if url.contains("close-activity.local") || url.contains("close-activity://") {
-                    // 先 emit 事件通知前端，再关闭 WebView（避免 destroy/close 打断事件投递）
-                    let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                    if let Some(main_window) = nav_app.get_window("main") {
-                        if let Some(wv) = main_window
-                            .webviews()
-                            .iter()
-                            .find(|w| w.label() == ACTIVITY_PANEL_LABEL)
-                        {
-                            let _ = wv.close();
-                        }
-                    }
-                    return false;
-                }
-                true
-            });
+            // 仅阻止 B站 登录页跳转（跳过登录）。关闭由标题栏脚本通过 IPC 调用
+            // close_activity_panel 完成（close-activity:// 旧导航方案已废弃）。
+            .on_navigation(|nav_url| !is_login_url(nav_url.as_str()));
 
         let webview = main_window
             .add_child(builder, position, size)
@@ -431,7 +416,6 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         }
 
         eprintln!("[BILI-ANDROID] open_activity_panel: 首次创建面板（独立 Activity）");
-        let nav_app = app.clone();
         let builder = WebviewWindowBuilder::new(
             &app,
             ACTIVITY_PANEL_LABEL,
@@ -441,20 +425,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         .initialization_script(inject_config)
         .initialization_script(mock_shim)
         .initialization_script(&title_bar_script)
-        .on_navigation(move |nav_url| {
-            let url = nav_url.as_str();
-            if is_login_url(url) {
-                return false;
-            }
-            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
-            // 通过 Tauri IPC 调用 close_activity_panel 命令关闭）
-            if url.contains("close-activity.local") || url.contains("close-activity://") {
-                let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                android_finish_activity(&nav_app, ACTIVITY_PANEL_LABEL);
-                return false;
-            }
-            true
-        });
+        // 仅阻止 B站 登录页跳转（跳过登录）。关闭由标题栏脚本通过 IPC 调用 close_activity_panel
+        .on_navigation(|nav_url| !is_login_url(nav_url.as_str()));
 
         // 新窗口创建时即 startActivity，自动成为前台全屏内容
         let panel = builder
@@ -478,7 +450,6 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
             return Ok(());
         }
 
-        let nav_app = app.clone();
         let builder = WebviewWindowBuilder::new(
             &app,
             ACTIVITY_PANEL_LABEL,
@@ -487,20 +458,8 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         .initialization_script(inject_config)
         .initialization_script(mock_shim)
         .initialization_script(&title_bar_script)
-        .on_navigation(move |nav_url| {
-            let url = nav_url.as_str();
-            if is_login_url(url) {
-                return false;
-            }
-            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
-            // 通过 Tauri IPC 调用 close_activity_panel 命令关闭）
-            if url.contains("close-activity.local") || url.contains("close-activity://") {
-                let _ = nav_app.emit_to("main", "activity-panel-closed", ());
-                hide_mobile_panel(&nav_app, ACTIVITY_PANEL_LABEL);
-                return false;
-            }
-            true
-        });
+        // 仅阻止 B站 登录页跳转（跳过登录）。关闭由标题栏脚本通过 IPC 调用 close_activity_panel
+        .on_navigation(|nav_url| !is_login_url(nav_url.as_str()));
 
         let panel = builder
             .build()
@@ -540,7 +499,8 @@ async fn close_activity_panel(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 真实活动页标题栏注入脚本：带左侧返回按钮，点击返回触发导航到 close-activity.local。
+/// 真实活动页标题栏注入脚本：带左侧返回按钮，点击返回通过 Tauri IPC 调用
+/// close_real_activity_panel 命令关闭面板。
 /// 与模拟器的 activity_title_bar_script 完全独立，不复用任何代码。
 ///
 /// `top_offset`：标题栏额外顶部偏移（桌面/移动端均为 0）。
@@ -645,7 +605,7 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;" +
         "display:flex;align-items:center;justify-content:center;box-sizing:border-box;";
-      // 3. 返回按钮（与标题文字同处 44px 行，垂直对齐；点击导航到 close-activity.local）
+      // 3. 返回按钮（与标题文字同处 44px 行，垂直对齐；点击触发 closePanel → IPC 关闭）
       var backBtn = document.createElement("div");
       backBtn.style.cssText =
         "position:absolute;left:12px;top:" + SAFE_TOP + "px;bottom:0;width:44px;display:flex;" +
@@ -680,12 +640,10 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
     }} catch (e) {{}}
   }}
   // 关闭黑抽面板（返回按钮 / Android 系统返回键共用）
+  // 直接通过 Tauri IPC 调用关闭命令，不再用 close-activity:// 导航方案
+  // （iOS WKWebView 只为 http/https 触发 on_navigation，自定义 scheme 会被静默忽略）。
   function closePanel() {{
-    try {{
-      window.__TAURI_INTERNALS__.invoke("close_real_activity_panel");
-    }} catch (e) {{
-      window.location.href = "close-activity://local";
-    }}
+    window.__TAURI_INTERNALS__.invoke("close_real_activity_panel");
   }}
   ensureViewportFit();
   mount();
@@ -710,7 +668,7 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
 
 /// 打开真实 B站 活动页（无 mock，真实交易）。
 /// 与模拟器的 open_activity_panel 完全独立：不注入 mock-shim，不拦截登录，
-/// 标题栏带返回按钮（点击触发导航到 close-activity.local，由 on_navigation 拦截并关闭面板）。
+/// 标题栏带返回按钮（点击通过 IPC 调用 close_real_activity_panel 关闭面板）。
 /// config.cookies: ["k=v", "k2=v2"]，将软件当前登录账号的 B站 Cookie 注入到 WebView，
 /// 使 live.bilibili.com / .bilibili.com 请求自动携带登录态。
 #[tauri::command]
@@ -814,28 +772,11 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         let position = tauri::LogicalPosition::new((w - panel_w) / 2.0, tb);
         let size = tauri::LogicalSize::new(panel_w, (h - tb).max(0.0));
 
-        let app_handle = app.clone();
-        // 拼接所有初始化脚本：先注 Cookie，再挂标题栏
+        // 拼接所有初始化脚本：先注 Cookie，再挂标题栏。
+        // 关闭由标题栏脚本通过 IPC 调用 close_real_activity_panel 完成（close-activity:// 旧导航方案已废弃）
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
         let builder = WebviewBuilder::new(REAL_ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
-            .initialization_script(&init_script)
-            .on_navigation(move |nav_url| {
-                // 先 emit 再 close：避免 close 打断事件投递（与 activity_panel 一致）
-                if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
-                    let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                    if let Some(main_window) = app_handle.get_window("main") {
-                        if let Some(wv) = main_window
-                            .webviews()
-                            .iter()
-                            .find(|w| w.label() == REAL_ACTIVITY_PANEL_LABEL)
-                        {
-                            let _ = wv.close();
-                        }
-                    }
-                    return false;
-                }
-                true
-            });
+            .initialization_script(&init_script);
 
         let webview = main_window
             .add_child(builder, position, size)
@@ -859,7 +800,6 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         }
 
         eprintln!("[BILI-ANDROID] open_real_activity_panel: 首次创建面板（独立 Activity）");
-        let app_handle = app.clone();
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
         let builder = WebviewWindowBuilder::new(
             &app,
@@ -867,19 +807,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             WebviewUrl::External(parsed_url),
         )
         .activity_name("RealActivityPanelActivity")
-        .initialization_script(&init_script)
-        .on_navigation(move |nav_url| {
-            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
-            // 通过 Tauri IPC 调用 close_real_activity_panel 命令关闭）
-            let url = nav_url.as_str();
-            eprintln!("[BILI-ANDROID] real-panel on_navigation: {url}");
-            if url.contains("close-activity.local") || url.contains("close-activity://") {
-                let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                android_finish_activity(&app_handle, REAL_ACTIVITY_PANEL_LABEL);
-                return false;
-            }
-            true
-        });
+        .initialization_script(&init_script);
 
         // 新窗口创建时即 startActivity，自动成为前台全屏内容
         let panel = builder
@@ -903,24 +831,13 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             return Ok(());
         }
 
-        let app_handle = app.clone();
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
         let builder = WebviewWindowBuilder::new(
             &app,
             REAL_ACTIVITY_PANEL_LABEL,
             WebviewUrl::External(parsed_url),
         )
-        .initialization_script(&init_script)
-        .on_navigation(move |nav_url| {
-            // 兼容旧版：on_navigation 也捕获 close-activity URL（实际由标题栏脚本
-            // 通过 Tauri IPC 调用 close_real_activity_panel 命令关闭）
-            if nav_url.as_str().contains("close-activity.local") || nav_url.as_str().contains("close-activity://") {
-                let _ = app_handle.emit_to("main", "real-activity-panel-closed", ());
-                hide_mobile_panel(&app_handle, REAL_ACTIVITY_PANEL_LABEL);
-                return false;
-            }
-            true
-        });
+        .initialization_script(&init_script);
 
         let panel = builder
             .build()

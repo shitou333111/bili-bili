@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * 复活曲截图查看器：在 APP 内（WebView）以 iframe 嵌入服务器页面，
- * 保持应用外壳与返回按钮，避免整页跳转时服务器不可达而出现丑陋的浏览器报错页。
+ * 复活曲截图查看器：在 APP 内（WebView）以 iframe 嵌入打包进 APP 的本地静态页面
+ * （screenshot.html），保持应用外壳与返回按钮，本地页面即时加载，不依赖外网服务器。
  *
  * - 加载中：显示进度指示。
- * - 服务器可达：iframe 正常显示，内容随服务器实时更新。
- * - 服务器不可达（超时）：显示自绘的错误面板，提供“重试”与“返回首页”按钮。
+ * - 页面加载完成：iframe 正常显示。
+ * - 页面加载异常（超时）：显示自绘的错误面板，提供“重试”与“返回首页”按钮。
  */
 export default function ScreenshotViewer({
   url,

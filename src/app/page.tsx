@@ -6,7 +6,7 @@ import Link from "next/link";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
-import { serverApiUrl, serverPost } from "@/lib/server-api";
+import { serverApiUrl, serverPost, isTauri } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
 import { useOnlineStatus } from "@/lib/use-online";
@@ -952,14 +952,17 @@ export default function HomePage() {
     if (offlineToastTimer.current) window.clearTimeout(offlineToastTimer.current);
     offlineToastTimer.current = window.setTimeout(() => setOfflineToast(""), 2000);
   }
-  // 复活曲截图页内容托管在网站服务器上（会变动），在 APP 内以 iframe 打开，
-  // 保留应用外壳与返回按钮，服务器不可达时显示自绘错误面板（而非浏览器报错页）。
+  // 复活曲截图页是打包进 APP 的本地静态页面（src/app/screenshot/page.tsx），
+  // 在 APP 内以 iframe 打开，保留应用外壳与返回按钮。
+  // 不再用 serverApiUrl("/screenshot") 指向外网服务器：PC 端会因服务器 SPA 回退
+  // 在页面内多出一层"软件首页"，移动端服务器不可达时 iframe 永远加载不出来
+  // （一直"加载中"）。改走本地路由：Tauri 静态导出生成 /screenshot.html，
+  // Web 开发模式为 /screenshot。
   function openScreenshotPage() {
-    // serverApiUrl：Tauri 返回服务器完整地址，Web 返回相对路径，自动适配
-    setScreenshotUrl(serverApiUrl("/screenshot"));
+    setScreenshotUrl(isTauri() ? "/screenshot.html" : "/screenshot");
     setScreenshotOpen(true);
   }
-  // 版本号卡片连续点击 → admin 入口（点击3次），已使用过 admin 后再其他工具页显示入口卡片
+  // 版本号卡片连续点击 → admin 入口（点击10次），已使用过 admin 后再其他工具页显示入口卡片
   const [versionClickCount, setVersionClickCount] = useState(0);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
   const [adminPwd, setAdminPwd] = useState("");
@@ -2389,16 +2392,16 @@ export default function HomePage() {
               </>
             )}
 
-            {/* 版本号卡片 - 显示构建日期，连续点击3次进入管理员页面 */}
+            {/* 版本号卡片 - 显示构建日期，连续点击10次进入管理员页面 */}
             {toolsPage === "home" && (
               <div className="mt-3 flex justify-center">
                 <button
                   onClick={() => {
                     const next = versionClickCount + 1;
                     setVersionClickCount(next);
-                    if (next >= 3) {
+                    if (next >= 10) {
                       setVersionClickCount(0);
-                      // 三连击仅显示"管理后台"卡片，不再直接进入 admin。
+                      // 十连击仅显示"管理后台"卡片，不再直接进入 admin。
                       // 点击"管理后台"卡片才触发登录流程（首次弹密码框/非首次后台静默登录）。
                       localStorage.setItem("bili_live_admin_used", "1");
                       setAdminUsed(true);
