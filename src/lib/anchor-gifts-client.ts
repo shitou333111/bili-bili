@@ -90,12 +90,15 @@ export type AnchorGiftsResult = {
 
 // ==================== 常量 ====================
 
-const REQUEST_INTERVAL_MS = 1500;
-const SLOW_REQUEST_INTERVAL_MS = 4000;
+// 正常翻页之间的请求间隔；B 站反爬阈值实测 ~ 1 次/秒，400ms 留有余量
+const REQUEST_INTERVAL_MS = 100;
+// 遇到 412 限流冷却后恢复阶段的请求间隔（更保守）
+const SLOW_REQUEST_INTERVAL_MS = 1500;
 const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
-const MONTH_CONCURRENCY = 1;
+// 月度并行度：1=串行，>1 时批内多个月份并行拉取（注意：多个月同时翻页会增加 412 限流风险）
+const MONTH_CONCURRENCY = 4;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
@@ -346,6 +349,7 @@ async function fetchGiftStreamPage(
     console.log(`[AnchorGifts-Tauri][API] 请求 page=0 begin=${beginDate} end=${endDate}`);
   }
 
+  const t0 = performance.now();
   try {
     const result = await platform.fetchBilibiliJson<BiliGiftStreamResponse>({
       url: GIFT_STREAM_API,
@@ -354,6 +358,8 @@ async function fetchGiftStreamPage(
       cookie: fullCookie,
       live: true,
     });
+    const elapsed = Math.round(performance.now() - t0);
+    console.log(`[AnchorGifts-Tauri][API] page=${page} 耗时=${elapsed}ms`);
     if (page === 0) {
       console.log(
         `[AnchorGifts-Tauri][API] 响应 page=0: code=${result.code} total_page=${result.data?.total_page ?? -1} total_count=${result.data?.total_count ?? -1} list_len=${result.data?.list?.length ?? 0}`,
@@ -399,10 +405,35 @@ export type FetchProgressHandler = (p: {
   total?: number;
 }) => void;
 
+// 模块级防重入锁：不依赖组件 ref，HMR 重挂载也不会失效
+let _fetchingGlobal = false;
+let _fetchingGlobalAt = 0;
+// 锁超时（5分钟）：防止 HMR 或异常导致锁永久卡死
+const _FETCHING_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+
+// 调试用：在 window 上暴露强制释放锁的方法
+if (typeof window !== "undefined") {
+  (window as any).__resetAnchorGiftsLock = () => {
+    _fetchingGlobal = false;
+    console.log("[AnchorGifts] 锁已强制释放");
+  };
+}
+
 export async function fetchAnchorGifts(
   platform: Platform,
   opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler } = {},
 ): Promise<{ code: number; message: string; data?: AnchorGiftsResult | null }> {
+  if (_fetchingGlobal && Date.now() - _fetchingGlobalAt < _FETCHING_LOCK_TIMEOUT_MS) {
+    console.log("[AnchorGifts] 模块级锁：已有拉取进行中，跳过重复请求");
+    return { code: -1, message: "already fetching", data: null };
+  }
+  if (_fetchingGlobal) {
+    console.log("[AnchorGifts] 锁超时自动释放");
+  }
+  _fetchingGlobal = true;
+  _fetchingGlobalAt = Date.now();
+
+  try {
   const { refresh = false, dateRange = "all", fan = "", onProgress } = opts;
 
   const session = await resolveSession(platform);
@@ -458,15 +489,23 @@ export async function fetchAnchorGifts(
     if (session.source !== "server" && startDate <= yesterdayStr) {
       const buvidCookie = await platform.getBuvidCookie().catch(() => "");
       const chunks = generateMonthChunks(startDate, yesterdayStr);
-      console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月`);
+      console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月, 并发度=${MONTH_CONCURRENCY}`);
 
       const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
       const totalChunks = chunks.length;
       // 第一个有数据的月份下标；进度只从该月起算（前导无数据月份仅显示"探测中"）
       let firstDataCi = -1;
 
-      for (let ci = 0; ci < chunks.length; ci++) {
-        const chunk = chunks[ci];
+      // 单个月份 chunk 处理：拉取该月所有页，返回结果（不修改全局状态，并行安全）
+      async function processChunk(
+        chunk: { start: string; end: string },
+      ): Promise<{
+        records: BiliGiftRecord[];
+        totalPages: number;
+        hasData: boolean;
+        yesterdayReady?: boolean;
+        interrupted: boolean;
+      }> {
         const records: BiliGiftRecord[] = [];
         let rateLimited = false;
 
@@ -483,49 +522,37 @@ export async function fetchAnchorGifts(
               console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 数据已过期，跳过`);
               break;
             }
-            await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+            await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
           } catch (err: any) {
             if (err?.message?.includes("412")) {
               rateLimited = true;
               await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
             } else {
-              await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+              await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
             }
           }
         }
 
         if (!firstPage || firstPage.code === 1301000) {
-          onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
-          continue;
+          return { records, totalPages: 0, hasData: false, interrupted: false };
         }
 
-        // 从包含"昨日"的最近分段响应中读取 ready 标识，判断官方昨日数据是否已更新
+        let yesterdayReady: boolean | undefined;
         if (chunk.end === yesterdayStr && firstPage.data) {
-          yesterdayApiReady = firstPage.data.ready === 1;
+          yesterdayReady = firstPage.data.ready === 1;
         }
 
         const totalPages = firstPage.data?.total_page ?? 0;
         if (totalPages === 0) {
-          onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
-          continue;
+          return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false };
         }
-
-        // 该月有数据：从第一个有数据的月份起算进度（总月份 = 该月到现在）
-        if (firstDataCi === -1) firstDataCi = ci;
-        const dataTotal = totalChunks - firstDataCi;
-        const dataDone = ci - firstDataCi + 1;
-        onProgress?.({
-          text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${dataDone}/${dataTotal}）`,
-          ratio: dataDone / dataTotal,
-          current: dataDone,
-          total: dataTotal,
-        });
 
         if (firstPage.data?.list?.length) {
           records.push(...firstPage.data.list);
         }
 
         // 翻页
+        let interrupted = false;
         for (let p = 1; p < totalPages; p++) {
           if (existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
             const lastN = records.slice(-CONSECUTIVE_MATCH_THRESHOLD);
@@ -551,36 +578,79 @@ export async function fetchAnchorGifts(
             } catch (err: any) {
               if (err?.message?.includes("412")) {
                 rateLimited = true;
-                await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS + attempt * 10_000));
+                await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS + attempt * 5000));
               } else {
-                await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+                await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
               }
             }
           }
           if (!success) {
+            interrupted = true;
+            break;
+          }
+        }
+
+        return { records, totalPages, hasData: true, yesterdayReady, interrupted };
+      }
+
+      // 按并行度分批拉取，批内并行、批间串行
+      let interrupted = false;
+      for (let batchStart = 0; batchStart < chunks.length; batchStart += MONTH_CONCURRENCY) {
+        if (interrupted) break;
+        const batchEnd = Math.min(batchStart + MONTH_CONCURRENCY, chunks.length);
+        const batch = chunks.slice(batchStart, batchEnd);
+
+        const results = await Promise.all(batch.map((chunk) => processChunk(chunk)));
+
+        for (let i = 0; i < results.length; i++) {
+          const ci = batchStart + i;
+          const chunk = batch[i];
+          const result = results[i];
+
+          if (result.yesterdayReady !== undefined) {
+            yesterdayApiReady = result.yesterdayReady;
+          }
+
+          if (!result.hasData) {
+            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
+            continue;
+          }
+
+          if (firstDataCi === -1) firstDataCi = ci;
+          const dataTotal = totalChunks - firstDataCi;
+          const dataDone = ci - firstDataCi + 1;
+          onProgress?.({
+            text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${dataDone}/${dataTotal}）`,
+            ratio: dataDone / dataTotal,
+            current: dataDone,
+            total: dataTotal,
+          });
+
+          // 去重并合并（串行，避免竞态）
+          for (const r of result.records) {
+            if (existingKeyCounter) {
+              const key = recordKey(r);
+              const existingCount = existingKeyCounter.get(key) ?? 0;
+              if (existingCount > 0) {
+                existingKeyCounter.set(key, existingCount - 1);
+                continue;
+              }
+            }
+            allRecords.push(r);
+          }
+          fetchedNewPages += Math.min(result.records.length > 0 ? 1 : 0, result.totalPages);
+
+          if (result.interrupted) {
             const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
             await saveRecordsWithMeta(platform, session.mid, allSorted, {
               end_date: chunk.start,
               total_page: (meta?.total_page ?? 0) + fetchedNewPages,
               last_fetch: getBeijingTime(),
             });
+            interrupted = true;
             break;
           }
         }
-
-        // 去重并合并
-        for (const r of records) {
-          if (existingKeyCounter) {
-            const key = recordKey(r);
-            const existingCount = existingKeyCounter.get(key) ?? 0;
-            if (existingCount > 0) {
-              existingKeyCounter.set(key, existingCount - 1);
-              continue;
-            }
-          }
-          allRecords.push(r);
-        }
-        fetchedNewPages += Math.min(records.length > 0 ? 1 : 0, totalPages);
       }
 
       allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
@@ -885,5 +955,8 @@ export async function fetchAnchorGifts(
   } catch (err: any) {
     console.error("[AnchorGifts-Tauri] 获取礼物流水失败:", err?.message || err);
     return { code: 500, message: `获取礼物流水失败: ${err?.message || String(err)}`, data: null };
+  }
+  } finally {
+    _fetchingGlobal = false;
   }
 }

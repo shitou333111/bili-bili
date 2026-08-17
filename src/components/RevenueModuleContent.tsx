@@ -1095,7 +1095,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                 </div>
               )}
 
-              <div className={`mt-4 rounded-xl border border-black/10 ${HISTORICAL_PNL_BG} p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
+              <div className={`mt-4 rounded-xl border border-black/10 ${HISTORICAL_PNL_BG} p-2 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
                 <div className="flex items-center justify-between">
                   <div className="textsm font-bold uppercase tracking-[0.15em] text-black/70">历史总盈亏</div>
                   {/* 调试按钮已隐藏，保留调试代码 */}
@@ -1370,10 +1370,10 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                               过去1年有 <b className="text-black/80">{room.maxDaysInYear}</b> 天给TA送过礼物
                             </div>
                           )}
-                          <div className="flex items-center gap-4 text-xs text-black/55 mt-0.5">
-                            <span>连续最长 <b className="text-black/80">{room.maxConsecutiveDays}</b> 天给TA送过礼物</span>
+                          <div className="text-xs text-black/55 mt-0.5 space-y-0.5">
+                            <div>连续最长 <b className="text-black/80">{room.maxConsecutiveDays}</b> 天给TA送过礼物</div>
                             {room.maxConsecutiveDays > 0 && (
-                              <span className="text-black/40">{room.maxConsecutiveStart.replace(/-/g, ".")} - {room.maxConsecutiveEnd.replace(/-/g, ".")}</span>
+                              <div className="text-black/40">{room.maxConsecutiveStart.replace(/-/g, ".")} - {room.maxConsecutiveEnd.replace(/-/g, ".")}</div>
                             )}
                           </div>
                         </div>

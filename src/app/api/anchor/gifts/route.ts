@@ -369,20 +369,20 @@ function recordKey(r: GiftRecord): string {
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 /** 并发获取月度数据的并发数 */
-const MONTH_CONCURRENCY = 2;
+const MONTH_CONCURRENCY = 1;
 
 /** 页面请求失败时的重试次数（page=0用5次，翻页用3次） */
 const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 
 /** 连续请求间隔（ms），避免触发B站限流 */
-const REQUEST_INTERVAL_MS = 500;
+const REQUEST_INTERVAL_MS = 700;
 
 /** 412限流后的冷却间隔（ms） */
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 
 /** 412限流后恢复翻页的慢速间隔（ms） */
-const SLOW_REQUEST_INTERVAL_MS = 4000;
+const SLOW_REQUEST_INTERVAL_MS = 1500;
 
 /** 月度数据获取失败时抛出的错误，携带失败的月份范围 */
 class MonthFetchError extends Error {
@@ -601,8 +601,8 @@ export async function GET(request: Request) {
               console.log(`[AnchorGifts] ${begin}~${end} 第${page}页 code=1301000（数据已过期超过3年），跳过该月`);
               return result;
             }
-            // 其他API错误：指数退避
-            const delay = 1000 * Math.pow(2, attempt);
+            // 其他API错误：指数退避（减半基础，避免等待过久）
+            const delay = 500 * Math.pow(2, attempt);
             console.error(`[AnchorGifts] ${begin}~${end} 第${page}页 API错误 code=${result.code}，等待${delay}ms后重试${attempt + 1}/${totalAttempts}`);
             if (attempt < maxRetries) await new Promise(r => setTimeout(r, delay));
           } catch (err: any) {
@@ -610,11 +610,11 @@ export async function GET(request: Request) {
             if (isRateLimit) {
               // 412限流：先冷却，再以慢速重试
               rateLimited = true;
-              const cooldownDelay = RATE_LIMIT_COOLDOWN_MS + attempt * 10_000;
+              const cooldownDelay = RATE_LIMIT_COOLDOWN_MS + attempt * 5000;
               console.warn(`[AnchorGifts] ${begin}~${end} 第${page}页 触发412限流，冷却${cooldownDelay}ms后进入慢速模式重试${attempt + 1}/${totalAttempts}`);
               await new Promise(r => setTimeout(r, cooldownDelay));
             } else {
-              const delay = 1000 * Math.pow(2, attempt);
+              const delay = 500 * Math.pow(2, attempt);
               console.error(`[AnchorGifts] ${begin}~${end} 第${page}页请求失败，等待${delay}ms后重试${attempt + 1}/${totalAttempts}:`, err);
               if (attempt < maxRetries) await new Promise(r => setTimeout(r, delay));
             }

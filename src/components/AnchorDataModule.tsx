@@ -9,6 +9,8 @@ import { serverApiUrl } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
+import { ensureGiftCatalogLoaded } from "@/lib/gift-catalog-client";
+import { getPlatform } from "@/lib/platform";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import PieTooltip from "@/components/PieTooltip";
@@ -252,7 +254,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [yesterdayAvailable, setYesterdayAvailable] = useState(true); // 默认 true，避免初始闪烁
   const [fanBubbleData, setFanBubbleData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [fanFaces, setFanFaces] = useState<Record<number, string>>({});
-  const [giftDb, setGiftDb] = useState<Record<number, { img: string }>>({});
+
+  // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
+  const fetchingRef = useRef(false);
 
   useEffect(() => {
     fetchData();
@@ -265,19 +269,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
     }
   });
 
-  // 加载礼物图标目录（来自 B站 giftConfig API，无需登录）
-  useEffect(() => {
-    fetch(serverApiUrl("/api/gift-catalog"))
-      .then(r => r.json())
-      .then(data => {
-        if (data.code === 0 && data.data) {
-          setGiftDb(data.data);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   async function fetchData() {
+    if (fetchingRef.current) {
+      console.log("[AnchorGifts] 已有拉取进行中，跳过重复请求");
+      return;
+    }
+    fetchingRef.current = true;
     setLoading(true);
     setAuthError(null);
     setFetchProgress(null);
@@ -285,6 +282,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
     setBlindBoxDateFilter("all");
     setBlindBoxFanFilter("");
     try {
+      // 先确保本地礼物目录已加载（给 GiftScreenshotPanel、giftSummary 图标读取用）
+      try {
+        const platform = await getPlatform();
+        await ensureGiftCatalogLoaded(platform);
+      } catch {
+        // Web 模式下 getPlatform 可能抛错，忽略，走 stats.giftSummary 已带图标即可
+      }
       const res = await dataFetch("/api/anchor/gifts", { cache: "no-store" }, (p) => setFetchProgress({ text: p.text, ratio: p.ratio }));
       const data = await res.json();
       if (data.message === "needs-relogin") {
@@ -312,6 +316,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
       console.error("Failed to fetch anchor data:", error);
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
+      fetchingRef.current = false;
       setLoading(false);
       setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
     }
@@ -488,10 +493,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
     if (!stats) return [];
     const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
     const map = new Map<number, { gift_id: number; name: string; num: number; hamster: number; img: string }>();
-    // 用 stats.giftSummary 中的 img 做映射
+    // stats.giftSummary 中的 img 已从本地 gift-list.json 获取（getGiftImg()），直接作为主数据源
     const imgMap = new Map(stats.giftSummary.map(g => [g.gift_id, g.img]));
     for (const r of rawRecords) {
-      const existing = map.get(r.gift_id) ?? { gift_id: r.gift_id, name: r.name, num: 0, hamster: 0, img: imgMap.get(r.gift_id) ?? "" };
+      const img = imgMap.get(r.gift_id) || "";
+      const existing = map.get(r.gift_id) ?? { gift_id: r.gift_id, name: r.name, num: 0, hamster: 0, img };
       existing.num += r.num;
       existing.hamster += r.hamster;
       map.set(r.gift_id, existing);
@@ -531,7 +537,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
 
       {/* Loading state */}
       {loading && !stats && (
-        <div className="flex-1 flex items-center justify-center px-8">
+        <div className="flex-1 flex items-center justify-center px-8 min-h-[55vh]">
           <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
             <p className="text-sm text-black/45">加载中...</p>
@@ -1112,7 +1118,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
                   records={stats.records}
                   anchorName={anchorName}
                   anchorFace={anchorFace}
-                  giftDb={giftDb}
                   fanFaces={fanFaces}
                   yesterdayAvailable={yesterdayAvailable}
                   mid={mid}
@@ -1148,17 +1153,17 @@ const AnchorDataModule = memo(function AnchorDataModule({
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium">{fan.uname}</span>
                             </div>
-                            <div className="flex items-center gap-4 mt-1 text-xs text-black/55">
-                              <span>共 {fan.totalDays} 天来给你送礼物</span>
+                            <div className="mt-1 space-y-1 text-xs text-black/55">
+                              <div>共 {fan.totalDays} 天来给你送礼物</div>
                               {fan.maxConsecutiveDays > 0 && (
-                                <span>
+                                <div>
                                   连续 {fan.maxConsecutiveDays} 天来给你送礼物
                                   {fan.consecutiveStart && fan.consecutiveEnd && (
                                     <span className="text-black/35 ml-1">
                                       ({fan.consecutiveStart.replace(/-/g, ".")} - {fan.consecutiveEnd.replace(/-/g, ".")})
                                     </span>
                                   )}
-                                </span>
+                                </div>
                               )}
                             </div>
                           </div>

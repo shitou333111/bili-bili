@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authApi } from "@/lib/api";
 import { pageUrl } from "@/lib/server-api";
+import WindowTitleBar from "@/components/WindowTitleBar";
+import SafeAreaStyler from "@/components/SafeAreaStyler";
 
 type QRGenerateResponse = {
   code: number;
@@ -225,7 +227,12 @@ export default function LoginPage() {
   }, [loadQR, clearPollTimer]);
 
   return (
-    <main className="min-h-screen bg-[#f5f5f5] px-4 py-10 text-[#1f1c17]">
+    <main
+      className="min-h-screen bg-[#f5f5f5] px-4 py-10 text-[#1f1c17]"
+      style={{ paddingTop: "var(--safe-top, 0px)" }}
+    >
+      <SafeAreaStyler />
+      <WindowTitleBar />
       <section className="mx-auto w-full max-w-md">
         <article className="rounded-[2rem] border border-black/10 bg-white/82 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
           <h1 className="font-[family-name:var(--font-inter)] text-3xl font-semibold tracking-tight text-center">

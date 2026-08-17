@@ -13,7 +13,7 @@ export default function ScreenshotPage() {
         <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur space-y-5">
           <div className="text-center">
             <div className="text-5xl mb-3">📸</div>
-            <h3 className="text-xl font-bold">复活曲截图工具</h3>
+            <h3 className="text-xl font-bold">复活曲截图工具（单独下载）</h3>
             <p className="text-base text-black/50 mt-1">直播多人局必备，解决复活曲倒计时投屏和医药费争议</p>
           </div>
 

@@ -17,12 +17,34 @@ export function isTauri(): boolean {
 }
 
 /**
+ * 当前是否为 Tauri 生产构建（静态导出 output:export → 本地 file:// HTML 文件）。
+ * 判断依据：TAURI_ENV 环境变量（tauriBuild时会设为"production"，dev时为"development"），
+ * 以及 URL 协议为 file: （静态打包产物的特征）。
+ * 只有生产构建时才有 xxx.html 静态文件；next dev server 只有 /admin 这样的路由，不能加 .html。
+ */
+export function isTauriProduction(): boolean {
+  if (!isTauri()) return false;
+  try {
+    const tauriEnv: string | undefined =
+      (globalThis as any).__TAURI_ENVIRONMENT__ as string | undefined;
+    if (tauriEnv === "production") return true;
+    if (typeof window !== "undefined" && window.location?.protocol === "file:") return true;
+    // 兜底：如果页面URL里含 ".html" 说明已经是静态导出页了
+    if (typeof window !== "undefined" && /\.html($|\?|#)/.test(window.location.pathname)) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/**
  * 解析页面导航 URL。
- * Tauri 静态导出生成 path.html（如 admin.html），但 WebView 不会自动补 .html 后缀，
- * 导航到 /admin 会 "this page couldn't load"。Tauri 环境下补 .html，Web 环境保持原样。
+ * Tauri 生产构建（静态导出）才生成 path.html（如 admin.html），WebView 不会自动补 .html，
+ * 导航到 /admin 会 "this page couldn't load"。
+ * Tauri 开发模式走 Next dev server（http://），无 .html，加了会 404。
  */
 export function pageUrl(path: string): string {
-  if (isTauri()) {
+  if (isTauriProduction()) {
     if (path === "/") return "/index.html";
     return path + ".html";
   }

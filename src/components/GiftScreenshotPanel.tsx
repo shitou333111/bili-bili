@@ -5,6 +5,7 @@ import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
+import { getGiftImg } from "@/lib/gift-catalog-client";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import Dropdown from "@/components/Dropdown";
@@ -460,7 +461,6 @@ export default function GiftScreenshotPanel({
   records,
   anchorName,
   anchorFace,
-  giftDb,
   fanFaces: parentFanFaces,
   yesterdayAvailable,
   mid = 0,
@@ -469,7 +469,6 @@ export default function GiftScreenshotPanel({
   records: AnchorGiftRecord[];
   anchorName: string;
   anchorFace: string;
-  giftDb: Record<number, { img: string }>;
   fanFaces: Record<number, string>;
   yesterdayAvailable?: boolean;
   mid?: number;
@@ -587,7 +586,7 @@ export default function GiftScreenshotPanel({
         gifts.push({
           gift_id: giftId,
           name: g.name,
-          img: giftDb[giftId]?.img ?? "",
+          img: getGiftImg(giftId),
           num: g.num,
           price: ((g.num > 0 ? g.hamster / g.num : g.hamster) * 2) / 100, // 单价(电池)
           fanUid: uid,
