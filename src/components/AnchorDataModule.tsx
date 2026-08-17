@@ -258,11 +258,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
   const fetchingRef = useRef(false);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
   // 每次渲染把最新 fetchData 注册到父级 ref，供页面统一刷新时调用（收益随页面一起更新）
+  // 加载时机完全由父组件掌控：初始化 loadAllData → finishRefresh、绿色刷新按钮 → refreshData → finishRefresh、
+  // 以及切换到 anchor 标签时兜底触发。组件自身不做自加载，避免与父组件触发重复请求。
   useEffect(() => {
     if (onFetchRequest) {
       onFetchRequest.current = fetchData;
@@ -309,6 +307,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
           }
           setFullBlindBoxAnchors(anchors);
         }
+      } else if (data.message === "already fetching") {
+        // 另一个并发请求正在进行，静默跳过（锁等待模式下基本不会走到此分支）
+        console.log("[AnchorGifts] another fetch in progress, skipping this call");
       } else {
         setAuthError(data.message || "获取数据失败");
       }

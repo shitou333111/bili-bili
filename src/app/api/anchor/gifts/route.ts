@@ -694,6 +694,33 @@ export async function GET(request: Request) {
     // refresh=true 只是代表用户手动触发，不影响起始日期判断
     const startDate = (() => {
       if (meta?.end_date) {
+        // ===== 保底：end_date 已推进至近期但 records 为空 → 视为被错误推进，回退全量 =====
+        // 典型场景：首次打开时网络/412 导致 page 0 失败被旧代码当成"无数据"跳过，
+        // end_date 被错误写入"昨天"。即使现在网络已恢复，按 meta.end_date=昨天 只会拉 1-2 天，
+        // 永远拿不到 3 年历史。
+        // 判据：本地一条记录都没有（从来没成功获取过）且 end_date 距离昨天 ≤ 30 天
+        // （已经推到"最新"），则放弃 end_date，从 3 年前重新全量。
+        // 对于真·3年无任何礼物的极小号：无非多跑一次全部月份的 total_page=0，
+        // 耗时很小，正确性无损。
+        if (existingRecords.length === 0) {
+          try {
+            const endD = parseDateStr(meta.end_date);
+            const yesD = parseDateStr(yesterdayStr);
+            const diffDays = Math.round((yesD.getTime() - endD.getTime()) / 86400000);
+            if (diffDays >= 0 && diffDays <= 30) {
+              const now = new Date();
+              const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+              const beijing = new Date(utc + 8 * 3600000);
+              const startYear = beijing.getFullYear() - 3;
+              const startMonth = beijing.getMonth() + 1;
+              const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+              const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+              const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+              console.warn(`[AnchorGifts] 保底回退：end_date=${meta.end_date}(距昨天${diffDays}天)但现有0条记录，视为被错误推进，改为从${beginDate}全量拉取`);
+              return beginDate;
+            }
+          } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
+        }
         console.log(`[AnchorGifts] 起始日期：使用 end_date=${meta.end_date}${refresh ? " (用户手动触发)" : ""}`);
         return meta.end_date;
       }

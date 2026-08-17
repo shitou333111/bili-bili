@@ -410,6 +410,8 @@ let _fetchingGlobal = false;
 let _fetchingGlobalAt = 0;
 // 锁超时（5分钟）：防止 HMR 或异常导致锁永久卡死
 const _FETCHING_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+// 锁等待检查间隔和最大等待时间（与超时一致）
+const _LOCK_POLL_MS = 500;
 
 // 调试用：在 window 上暴露强制释放锁的方法
 if (typeof window !== "undefined") {
@@ -419,19 +421,34 @@ if (typeof window !== "undefined") {
   };
 }
 
+/** 等待锁释放/超时后，抢占锁。返回 true 表示获取到锁。 */
+async function acquireLock(): Promise<boolean> {
+  const startWait = Date.now();
+  while (_fetchingGlobal && Date.now() - _fetchingGlobalAt < _FETCHING_LOCK_TIMEOUT_MS) {
+    // 防止无限等待：最多等一个锁超时周期
+    if (Date.now() - startWait >= _FETCHING_LOCK_TIMEOUT_MS) break;
+    await new Promise((r) => setTimeout(r, _LOCK_POLL_MS));
+  }
+  // 到这里要么 _fetchingGlobal=false（被释放），要么超时已过期：直接抢占
+  if (_fetchingGlobal) {
+    console.warn("[AnchorGifts] 等待锁超时后强制抢占释放（上次锁于 "
+      + new Date(_fetchingGlobalAt).toLocaleTimeString("zh-CN") + "）");
+  } else if (Date.now() - startWait > 500) {
+    console.log(`[AnchorGifts] 锁等待完成，等待 ${Date.now() - startWait}ms 后获取`);
+  }
+  _fetchingGlobal = true;
+  _fetchingGlobalAt = Date.now();
+  return true;
+}
+
 export async function fetchAnchorGifts(
   platform: Platform,
   opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler } = {},
 ): Promise<{ code: number; message: string; data?: AnchorGiftsResult | null }> {
-  if (_fetchingGlobal && Date.now() - _fetchingGlobalAt < _FETCHING_LOCK_TIMEOUT_MS) {
-    console.log("[AnchorGifts] 模块级锁：已有拉取进行中，跳过重复请求");
+  const ok = await acquireLock();
+  if (!ok) {
     return { code: -1, message: "already fetching", data: null };
   }
-  if (_fetchingGlobal) {
-    console.log("[AnchorGifts] 锁超时自动释放");
-  }
-  _fetchingGlobal = true;
-  _fetchingGlobalAt = Date.now();
 
   try {
   const { refresh = false, dateRange = "all", fan = "", onProgress } = opts;
@@ -464,6 +481,33 @@ export async function fetchAnchorGifts(
       // - 两者皆无 → 首次使用，从3年前下个月开始
       // refresh=true 只是代表用户手动触发，不影响起始日期判断
       if (meta?.end_date) {
+        // ===== 保底：end_date 已推进至近期但 records 为空 → 视为被错误推进，回退全量 =====
+        // 典型场景：首次打开时网络/412 导致 page 0 失败被旧代码当成"无数据"跳过，
+        // end_date 被错误写入"昨天"。即使现在网络已恢复，按 meta.end_date=昨天 只会拉 1-2 天，
+        // 永远拿不到 3 年历史。
+        // 判据：本地一条记录都没有（从来没成功获取过）且 end_date 距离昨天 ≤ 30 天
+        // （已经推到"最新"），则放弃 end_date，从 3 年前重新全量。
+        // 对于真·3年无任何礼物的极小号：无非多跑一次全部月份的 total_page=0，
+        // 耗时很小，正确性无损。
+        if (existingRecords.length === 0) {
+          try {
+            const endD = parseDateStr(meta.end_date);
+            const yesD = parseDateStr(yesterdayStr);
+            const diffDays = Math.round((yesD.getTime() - endD.getTime()) / 86400000);
+            if (diffDays >= 0 && diffDays <= 30) {
+              console.warn(`[AnchorGifts-Tauri] 保底回退：end_date=${meta.end_date}(距昨天${diffDays}天)但现有0条记录，视为被错误推进，改为从3年前全量拉取`);
+              // 直接复用下面首次使用的 3年前计算（展开代码避免重复）
+              const now = new Date();
+              const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+              const beijing = new Date(utc + 8 * 3600000);
+              const startYear = beijing.getFullYear() - 3;
+              const startMonth = beijing.getMonth() + 1;
+              const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+              const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+              return `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+            }
+          } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
+        }
         return meta.end_date;
       }
       if (existingRecords.length > 0) {
@@ -505,6 +549,7 @@ export async function fetchAnchorGifts(
         hasData: boolean;
         yesterdayReady?: boolean;
         interrupted: boolean;
+        page0Failed: boolean;
       }> {
         const records: BiliGiftRecord[] = [];
         let rateLimited = false;
@@ -533,8 +578,16 @@ export async function fetchAnchorGifts(
           }
         }
 
-        if (!firstPage || firstPage.code === 1301000) {
-          return { records, totalPages: 0, hasData: false, interrupted: false };
+        // page 0 所有重试均失败（网络错误、412 限流持续等）：
+        // 必须标记 page0Failed，否则上层会当作"正常无数据"推进 end_date，
+        // 导致该月及更早的历史数据被永久跳过。
+        if (!firstPage) {
+          console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page 0 获取完全失败，标记为 page0Failed`);
+          return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: true };
+        }
+        // code=1301000 表示该月数据已过期，属于 B站正常响应，不是失败
+        if (firstPage.code === 1301000) {
+          return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: false };
         }
 
         let yesterdayReady: boolean | undefined;
@@ -544,7 +597,7 @@ export async function fetchAnchorGifts(
 
         const totalPages = firstPage.data?.total_page ?? 0;
         if (totalPages === 0) {
-          return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false };
+          return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false };
         }
 
         if (firstPage.data?.list?.length) {
@@ -590,7 +643,7 @@ export async function fetchAnchorGifts(
           }
         }
 
-        return { records, totalPages, hasData: true, yesterdayReady, interrupted };
+        return { records, totalPages, hasData: true, yesterdayReady, interrupted, page0Failed: false };
       }
 
       // 按并行度分批拉取，批内并行、批间串行
@@ -609,6 +662,21 @@ export async function fetchAnchorGifts(
 
           if (result.yesterdayReady !== undefined) {
             yesterdayApiReady = result.yesterdayReady;
+          }
+
+          // page 0 完全失败：不应推进 end_date 到昨天，否则该月及更早的历史数据
+          // 将被永久跳过。保存当前已获取的记录，end_date 设为失败月份的起始日期，
+          // 下次从该月重新拉取。
+          if (result.page0Failed) {
+            console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page0Failed，保存 end_date=${chunk.start} 并中断`);
+            const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
+            await saveRecordsWithMeta(platform, session.mid, allSorted, {
+              end_date: chunk.start,
+              total_page: (meta?.total_page ?? 0) + fetchedNewPages,
+              last_fetch: getBeijingTime(),
+            });
+            interrupted = true;
+            break;
           }
 
           if (!result.hasData) {
@@ -653,12 +721,16 @@ export async function fetchAnchorGifts(
         }
       }
 
-      allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
-      await saveRecordsWithMeta(platform, session.mid, allRecords, {
-        end_date: yesterdayStr,
-        total_page: (meta?.total_page ?? 0) + fetchedNewPages,
-        last_fetch: getBeijingTime(),
-      });
+      // 仅当未发生中断/失败时才推进 end_date 到昨天。
+      // 若 interrupted=true，上面已在中断点保存了 end_date=chunk.start，此处不可覆盖。
+      if (!interrupted) {
+        allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
+        await saveRecordsWithMeta(platform, session.mid, allRecords, {
+          end_date: yesterdayStr,
+          total_page: (meta?.total_page ?? 0) + fetchedNewPages,
+          last_fetch: getBeijingTime(),
+        });
+      }
     }
 
     // ==================== 统计 ====================

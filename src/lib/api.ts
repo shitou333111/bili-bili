@@ -172,6 +172,41 @@ export const toolsApi = {
   },
 };
 
+// ==================== 账号数据管理 API ====================
+
+export const accountApi = {
+  /**
+   * 重建当前账号的数据库：删除 uid_<mid> 目录下所有数据文件，
+   * 相当于首次使用 APP 的状态，下次打开从 3 年前重新拉取全部数据。
+   * 只在数据严重不全时使用。
+   */
+  async rebuildDatabase(): Promise<{ code: number; message: string }> {
+    const platform = await p();
+    if (platform.isNative) {
+      const { resolveSession } = await import("./stats-client");
+      const session = await resolveSession(platform);
+      if (!session) {
+        return { code: -1, message: "未登录" };
+      }
+      const dataDir = `${await platform.getDataDir()}/uid_${session.mid}`;
+      if (!(await platform.exists(dataDir))) {
+        return { code: 0, message: "数据目录不存在，无需清理" };
+      }
+      // 列出目录下文件，保留 account-info.json（含头像/昵称等元数据）
+      const keepFiles = new Set(["account-info.json"]);
+      const allFiles = await platform.readdir(dataDir);
+      const toRemove = allFiles.filter((f) => !keepFiles.has(f));
+      for (const f of toRemove) {
+        await platform.unlink(`${dataDir}/${f}`);
+      }
+      console.log(`[rebuildDatabase] 已删除 ${toRemove.length}/${allFiles.length} 个文件: ${toRemove.join(", ")}`);
+      return { code: 0, message: `已删除 ${toRemove.length} 个数据文件` };
+    }
+    // Web 模式：调用服务器 API 删除服务器上的用户数据文件
+    return webPost<{ code: number; message: string }>("/api/rebuild-database");
+  },
+};
+
 // ==================== 配置 API ====================
 
 export const configApi = {

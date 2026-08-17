@@ -20,6 +20,7 @@ import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleCha
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
+import { accountApi } from "@/lib/api";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
@@ -825,10 +826,18 @@ export default function HomePage() {
   const pieIsMobile = mounted && isMobileDevice();
 
   // 加载模拟器历史记录
-  useEffect(() => { setSimHistory(getHistory()); }, []);
+  const simHistoryInitOnce = useRef(false);
+  useEffect(() => {
+    if (simHistoryInitOnce.current) return;
+    simHistoryInitOnce.current = true;
+    setSimHistory(getHistory());
+  }, []);
 
   // 加载服务器公开配置（含黑抽页面 URL 模板），失败则视为未配置（禁用黑抽入口）
+  const publicConfigOnce = useRef(false);
   useEffect(() => {
+    if (publicConfigOnce.current) return;
+    publicConfigOnce.current = true;
     (async () => {
       try {
         const res = await dataFetch("/api/public-config", { cache: "no-store" });
@@ -969,6 +978,31 @@ export default function HomePage() {
     if (offlineToastTimer.current) window.clearTimeout(offlineToastTimer.current);
     offlineToastTimer.current = window.setTimeout(() => setOfflineToast(""), 2000);
   }
+  // 重建账号数据库：删除 uid_<mid> 下所有数据文件，成功后刷新页面从空开始加载
+  async function handleRebuildDatabase() {
+    if (!isLoggedIn) {
+      showToast("请先登录账号");
+      return;
+    }
+    setRebuildDbLoading(true);
+    try {
+      const res = await accountApi.rebuildDatabase();
+      if (res.code === 0) {
+        showToast(res.message || "数据库已重建，即将重新加载...");
+        setShowRebuildDbConfirm(false);
+        // 稍等片刻让 Toast 显示，然后重新加载页面从空数据启动初始化流程
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      } else {
+        showToast(res.message || "重建失败");
+      }
+    } catch (err: any) {
+      showToast(`重建失败: ${err?.message || String(err)}`);
+    } finally {
+      setRebuildDbLoading(false);
+    }
+  }
   // 复活曲截图页内容托管在网站服务器上（会变动），在 APP 内以 iframe 打开，
   // 保留应用外壳与返回按钮，服务器不可达时显示自绘错误面板（而非浏览器报错页）。
   function openScreenshotPage() {
@@ -982,6 +1016,9 @@ export default function HomePage() {
   const [adminPwd, setAdminPwd] = useState("");
   const [adminPwdError, setAdminPwdError] = useState<string>("");
   const [adminUsed, setAdminUsed] = useState(false);
+  // 重建数据库确认弹窗
+  const [showRebuildDbConfirm, setShowRebuildDbConfirm] = useState(false);
+  const [rebuildDbLoading, setRebuildDbLoading] = useState(false);
 
   // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
   // 否则服务端渲染(false)与客户端首次渲染(true)不一致会触发 Hydration 报错，
@@ -1106,7 +1143,10 @@ export default function HomePage() {
   }, []);
 
   // 本地优先：返回用户先快速显示本地缓存，再后台同步 B站；首次使用直接扫码登录
+  const initOnceRef = useRef(false);
   useEffect(() => {
+    if (initOnceRef.current) return;
+    initOnceRef.current = true;
     initLocalFirst();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1216,6 +1256,10 @@ export default function HomePage() {
   }, []);
 
   // 收益模块（AnchorDataModule）的 fetchData 注册引用，供页面统一刷新时调用（收益随页面一起更新）
+  // 主播数据的更新触发只有两处（与粉丝数据完全一致）：
+  //   ① 首次打开 APP：initLocalFirst → fetchData → finishRefresh → anchorRefreshRef.current()
+  //   ② 点绿色环形按钮：refreshData → finishRefresh → anchorRefreshRef.current()
+  // 切换标签栏（display:none / display:flex）不触发任何请求，仅展示已加载到 React state 中的数据
   const anchorRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
   /** 刷新收尾：先让收益模块重新拉取，再统一上传本账号所有变化的数据（哈希判断，未变则跳过） */
@@ -2258,6 +2302,24 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
+                {/* 重建数据库卡片：只在有登录账号时显示 */}
+                {isLoggedIn && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4">
+                    <button
+                      onClick={() => setShowRebuildDbConfirm(true)}
+                      className="shrink-0 w-16 h-16 rounded-full bg-[#eab308] flex items-center justify-center text-sm font-semibold text-white shadow-md hover:bg-[#ca8a04] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={rebuildDbLoading || syncing}
+                    >
+                      {rebuildDbLoading ? <span className="animate-spin text-xl">↻</span> : "重建"}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-bold text-amber-900">重建当前账号数据库</h3>
+                      <p className="mt-0.5 text-xs text-amber-800/75 leading-relaxed">
+                        点击重建此账号的数据库，相当于首次使用APP重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {[
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
@@ -2473,6 +2535,37 @@ export default function HomePage() {
                     <button
                       onClick={() => { setShowAdminPwd(false); setAdminPwd(""); setAdminPwdError(""); }}
                       className="flex-1 rounded-lg border border-black/10 py-2 text-sm text-black/60 hover:bg-gray-50 transition"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
+            {/* 重建数据库确认弹窗 */}
+            {showRebuildDbConfirm && createPortal(
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !rebuildDbLoading && setShowRebuildDbConfirm(false)}>
+                <div className="rounded-xl border border-black/10 bg-white p-5 shadow-xl w-[300px] mx-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="mb-4">
+                    <h3 className="text-base font-semibold text-amber-900 text-center">⚠️ 确认重建数据库？</h3>
+                    <p className="mt-3 text-sm text-black/70 leading-relaxed">
+                      删除本地保存的数据，重新从 B 站拉取全部数据，耗时较长。
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleRebuildDatabase}
+                      disabled={rebuildDbLoading}
+                      className="flex-1 rounded-lg bg-[#eab308] py-2.5 text-sm text-white font-semibold hover:bg-[#ca8a04] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {rebuildDbLoading ? "删除中..." : "确认删除并重建"}
+                    </button>
+                    <button
+                      onClick={() => setShowRebuildDbConfirm(false)}
+                      disabled={rebuildDbLoading}
+                      className="flex-1 rounded-lg border border-black/10 py-2.5 text-sm text-black/60 hover:bg-gray-50 transition disabled:opacity-50"
                     >
                       取消
                     </button>
