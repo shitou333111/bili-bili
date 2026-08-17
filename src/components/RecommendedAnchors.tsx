@@ -123,7 +123,7 @@ export default function RecommendedAnchors() {
             暂无推荐主播
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-3 gap-2.5">
             {anchors.map((anchor) => (
               <button
                 key={anchor.uid}

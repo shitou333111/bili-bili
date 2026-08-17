@@ -3,7 +3,7 @@ import path from "path";
 import type { SynthesisActivityConfig, SynthesisActivityType } from "./config";
 
 const CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.json");
-const DEFAULT_CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.default.json");
+const DEFAULT_CONFIG_FILE = path.join(process.cwd(), "public", "admin-config.default.json");
 
 export type BlindBoxItem = {
   id: number;

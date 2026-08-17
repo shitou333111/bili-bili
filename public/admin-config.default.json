@@ -1,0 +1,93 @@
+{
+  "current_activity_blind_box_ids": [35786],
+  "blind_boxes": [
+    {
+      "id": 32251,
+      "name": "心动盲盒",
+      "icon": "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png"
+    },
+    {
+      "id": 35206,
+      "name": "幸运盲盒",
+      "icon": "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png"
+    },
+    {
+      "id": 35786,
+      "name": "",
+      "icon": "https://s1.hdslb.com/bfs/live/5dd5f6b52956b1de6e3356c572a7ce82ddd50a3f.png"
+    }
+  ],
+  "synthesis_activities": [
+    {
+      "id": "activity-1",
+      "type": "material_package",
+      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/HalfInit?config_id=sp_2076590402963353600",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/PlayRecord?config_id=sp_2076590402963353600",
+      "active": true
+    },
+    {
+      "id": "activity-2",
+      "type": "slot_draw",
+      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id=9",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneRecord?conf_id=9",
+      "active": true
+    },
+    {
+      "id": "activity-3",
+      "type": "card_flip",
+      "info_url": "",
+      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/cardplay/PlayRecord?config_id=8",
+      "active": true
+    }
+  ],
+  "recommended_anchors": [
+    {
+      "uid": 3546376791133013,
+      "uname": "三条是大猛男",
+      "face": "https://i2.hdslb.com/bfs/face/abf02e467a8ae6d2583f48024c0fbb5afef27c88.jpg",
+      "room_id": 30755008,
+      "visible": true,
+      "order": 1
+    },
+    {
+      "uid": 3546967191849918,
+      "uname": "在下香菜教主",
+      "face": "https://i0.hdslb.com/bfs/face/b658082a6324a6e7032ae714d1b35e912808ff98.jpg",
+      "room_id": 1844040969,
+      "visible": true,
+      "order": 2
+    },
+    {
+      "uid": 470902297,
+      "uname": "双双不爱睡觉",
+      "face": "https://i1.hdslb.com/bfs/face/9b63b8845ba94a7c7d98384817c43e0f1b6728f5.jpg",
+      "room_id": 1772925882,
+      "visible": true,
+      "order": 3
+    },
+    {
+      "uid": 67934122,
+      "uname": "菠萝今天敲开心",
+      "face": "https://i1.hdslb.com/bfs/face/aecec6745bffccc937e053f961507c83e38fec99.jpg",
+      "room_id": 26910029,
+      "visible": true,
+      "order": 4
+    },
+    {
+      "uid": 3546682924992864,
+      "uname": "oi我是嘤嘤怪",
+      "face": "https://i0.hdslb.com/bfs/face/28a4d07fa818bb6fdde63e42f7d27b631a2e8fb3.jpg",
+      "room_id": 1989943935,
+      "visible": true,
+      "order": 5
+    },
+    {
+      "uid": 3546655875926225,
+      "uname": "奶芙心里软i",
+      "face": "https://i2.hdslb.com/bfs/face/1f5b6801622074027596f8c964594d9c8602d654.jpg",
+      "room_id": 1790893837,
+      "visible": true,
+      "order": 6
+    }
+  ]
+}
