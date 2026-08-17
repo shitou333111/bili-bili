@@ -19,13 +19,11 @@ import { getPlatform } from "@/lib/platform";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  /** 活动页 URL 模板，使用 {roomId} 和 {uid} 占位符；由 admin 页面配置 */
+  activityUrlTemplate?: string;
 }
 
-/** 活动页 URL 模板（与 activities.json 中一致，但此处独立维护，不引用模拟器配置） */
-const ACTIVITY_URL_TEMPLATE =
-  "https://live.bilibili.com/activity/live-activity-battle/index.html?app_name=area_stone_template&show_refresh=0&show_close=0&room_id={roomId}&uid={uid}#/play?config_id=11&rank_config_id=3";
-
-export default function RealActivityModal({ isOpen, onClose }: Props) {
+export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate }: Props) {
   const [uidInput, setUidInput] = useState("");
   const [streamer, setStreamer] = useState<StreamerInfo | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,7 +57,11 @@ export default function RealActivityModal({ isOpen, onClose }: Props) {
 
   const handleConfirm = useCallback(async () => {
     if (!streamer) return;
-    const url = ACTIVITY_URL_TEMPLATE
+    if (!activityUrlTemplate) {
+      setError("管理员暂未配置黑抽活动地址");
+      return;
+    }
+    const url = activityUrlTemplate
       .replace("{roomId}", String(streamer.roomId))
       .replace("{uid}", String(streamer.uid));
     try {
@@ -85,7 +87,7 @@ export default function RealActivityModal({ isOpen, onClose }: Props) {
     } catch (e: any) {
       setError(e?.message || "打开活动页面失败");
     }
-  }, [streamer, onClose]);
+  }, [streamer, onClose, activityUrlTemplate]);
 
   if (!isOpen) return null;
 

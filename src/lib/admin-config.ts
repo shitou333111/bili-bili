@@ -34,6 +34,8 @@ export type AdminConfig = {
   synthesis_activities: SynthesisActivityConfig[];
   /** 推荐主播列表（管理员配置） */
   recommended_anchors?: RecommendedAnchor[];
+  /** 黑抽（真实合成活动）页面 URL 模板，包含 {roomId} 和 {uid} 占位符；为空则禁用黑抽入口 */
+  real_activity_url?: string;
 };
 
 async function ensureConfigFile() {

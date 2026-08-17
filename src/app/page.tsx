@@ -813,6 +813,8 @@ export default function HomePage() {
   const [simError, setSimError] = useState("");
   const [currentStreamer, setCurrentStreamer] = useState<StreamerInfo | null>(null);
   const [realActivityModalOpen, setRealActivityModalOpen] = useState(false);
+  // 黑抽（真实合成活动）页面URL模板：从服务器公开配置读取；为空/未配置时卡片变灰不可点击
+  const [realActivityUrl, setRealActivityUrl] = useState<string>("");
   // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框
   const [pieActive, setPieActive] = useState<{ chart: "all" | "period"; index: number } | null>(null);
   const [pieTipPos, setPieTipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -824,6 +826,21 @@ export default function HomePage() {
 
   // 加载模拟器历史记录
   useEffect(() => { setSimHistory(getHistory()); }, []);
+
+  // 加载服务器公开配置（含黑抽页面 URL 模板），失败则视为未配置（禁用黑抽入口）
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await dataFetch("/api/public-config", { cache: "no-store" });
+        const data = await res.json();
+        if (data.code === 0 && typeof data.data?.real_activity_url === "string") {
+          setRealActivityUrl(data.data.real_activity_url);
+        }
+      } catch {
+        // 忽略网络错误：realActivityUrl 保持空字符串 → 黑抽卡片变灰不可点击
+      }
+    })();
+  }, []);
 
   // 进入模拟器（通过 UID 查询主播信息；uid=0 时不选主播，使用默认背景）
   const enterSimulator = useCallback(async (uid: number) => {
@@ -2288,15 +2305,26 @@ export default function HomePage() {
                 {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟 */}
                 <button
                   onClick={() => setRealActivityModalOpen(true)}
-                  className="rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
+                  disabled={!realActivityUrl}
+                  className={
+                    realActivityUrl
+                      ? "rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
+                      : "rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+                  }
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-3xl">⚡</span>
                     <div>
-                      <h3 className="text-base font-bold text-red-700">合成活动"黑抽"</h3>
-                      <p className="mt-0.5 text-xs text-red-600/60">主播未开播时直接进入真实合成活动页面，真实消费</p>
+                      <h3 className={realActivityUrl ? "text-base font-bold text-red-700" : "text-base font-bold text-black/40"}>合成活动"黑抽"</h3>
+                      <p className={realActivityUrl ? "mt-0.5 text-xs text-red-600/60" : "mt-0.5 text-xs text-black/30"}>
+                        {realActivityUrl ? "主播未开播时直接进入真实合成活动页面，真实消费" : "管理员暂未配置黑抽活动地址"}
+                      </p>
                     </div>
-                    <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    {realActivityUrl ? (
+                      <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    ) : (
+                      <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+                    )}
                   </div>
                 </button>
                 {/* 主播推荐卡片 */}
@@ -2863,6 +2891,7 @@ export default function HomePage() {
       <RealActivityModal
         isOpen={realActivityModalOpen}
         onClose={() => setRealActivityModalOpen(false)}
+        activityUrlTemplate={realActivityUrl}
       />
     </main>
   );

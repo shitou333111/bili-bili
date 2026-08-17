@@ -78,7 +78,6 @@ export default function LandingPage() {
           <p className="mt-3 text-base text-[#6b6b6b] sm:text-lg">
             B站 直播数据分析工具
           </p>
-          {/* 宣传语：七句在同一位置循环打字机效果，只占一行 */}
           <SloganRotator />
         </section>
 

@@ -26,6 +26,7 @@ export async function GET(request: Request) {
         synthesis_activities: [],
         valid_activity_types: getValidActivityTypes(),
         recommended_anchors: [],
+        real_activity_url: "",
       },
     });
   }
@@ -38,6 +39,7 @@ export async function GET(request: Request) {
       synthesis_activities: adminConfig.synthesis_activities ?? [],
       valid_activity_types: getValidActivityTypes(),
       recommended_anchors: adminConfig.recommended_anchors ?? [],
+      real_activity_url: adminConfig.real_activity_url ?? "",
     },
   });
 }
@@ -91,6 +93,7 @@ export async function POST(request: Request) {
           order: Number(r.order) || 0,
         }))
       : [],
+    real_activity_url: typeof body.real_activity_url === "string" ? body.real_activity_url : "",
   };
 
   await writeAdminConfig(config);

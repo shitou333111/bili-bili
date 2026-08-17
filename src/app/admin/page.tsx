@@ -46,6 +46,7 @@ type AdminConfigData = {
   synthesis_activities: ActivityItem[];
   valid_activity_types: string[];
   recommended_anchors: RecommendedAnchorItem[];
+  real_activity_url: string;
 };
 
 /** 读取本地保存的管理员会话 sid */
@@ -260,6 +261,7 @@ export default function AdminPage() {
           recommended_anchors: Array.isArray(data.recommended_anchors)
             ? data.recommended_anchors
             : [],
+          real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
         };
         setConfig(normalized);
         loadActivityNames(normalized.synthesis_activities);
@@ -916,6 +918,29 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+            </div>
+
+            <hr className="border-black/5" />
+
+            {/* 黑抽（真实合成活动）URL 配置 */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold">黑抽（真实合成活动）页面 URL</h3>
+              <p className="text-[10px] text-black/40">
+                填写 B站 真实合成活动页面 URL 模板，使用 {'{roomId}'} 和 {'{uid}'} 作为占位符；留空则"黑抽"卡片变灰不可点击
+              </p>
+              <input
+                type="text"
+                value={config.real_activity_url}
+                onChange={(e) => setConfig({ ...config, real_activity_url: e.target.value })}
+                placeholder="例如：https://live.bilibili.com/activity/...?room_id={roomId}&uid={uid}#/play?config_id=..."
+                className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+              />
+              {config.real_activity_url && (
+                <p className="text-[10px] text-[#2ecc71]">✓ 已配置，黑抽入口可用</p>
+              )}
+              {!config.real_activity_url && (
+                <p className="text-[10px] text-black/40">⚠ 未配置，首页"黑抽"卡片将变灰不可点击</p>
+              )}
             </div>
 
             <hr className="border-black/5" />
