@@ -156,12 +156,13 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
         <div className="text-s text-black/70 font-medium whitespace-nowrap overflow-x-auto scrollbar-none flex-1 min-w-0">
           合成 {totalGiftCount} 个礼物 | {filteredStats.totalEarned}-{filteredStats.totalSpent}=<span className={filteredStats.profit >= 0 ? "text-green-600 font-bold" : "text-red-500 font-bold"}>{filteredStats.profit >= 0 ? "+" : ""}{filteredStats.profit}</span>电池
         </div>
-        <button
+        {/* 调试按钮已隐藏，保留调试代码 */}
+        {/* <button
           onClick={() => setShowDebug(!showDebug)}
           className="text-xs text-black/40 hover:text-black/70 transition underline flex-shrink-0"
         >
           {showDebug ? "收起调试" : "调试"}
-        </button>
+        </button> */}
       </div>
 
       {filteredStats.giftList.length > 0 && (
