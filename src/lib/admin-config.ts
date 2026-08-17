@@ -3,6 +3,7 @@ import path from "path";
 import type { SynthesisActivityConfig, SynthesisActivityType } from "./config";
 
 const CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.json");
+const DEFAULT_CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.default.json");
 
 export type BlindBoxItem = {
   id: number;
@@ -49,8 +50,21 @@ export async function readAdminConfig(): Promise<AdminConfig | null> {
   const raw = await fs.readFile(CONFIG_FILE, "utf8");
   try {
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed || typeof parsed !== "object") {
+      // 主文件无效 → 回退到默认模板
+      return readDefaultConfig();
+    }
     return parsed as AdminConfig;
+  } catch {
+    return readDefaultConfig();
+  }
+}
+
+/** 读取仓库内置的默认配置模板（admin-config.default.json） */
+async function readDefaultConfig(): Promise<AdminConfig | null> {
+  try {
+    const raw = await fs.readFile(DEFAULT_CONFIG_FILE, "utf8");
+    return JSON.parse(raw) as AdminConfig;
   } catch {
     return null;
   }

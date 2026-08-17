@@ -222,8 +222,25 @@ export default function AdminPage() {
         return;
       }
       if (configData.code === 0) {
-        setConfig(configData.data);
-        loadActivityNames(configData.data.synthesis_activities ?? []);
+        const data = configData.data ?? {};
+        // 数组字段全部兜底，避免老配置文件缺字段引发 TypeError: undefined.length
+        const normalized: AdminConfigData = {
+          current_activity_blind_box_ids: Array.isArray(data.current_activity_blind_box_ids)
+            ? data.current_activity_blind_box_ids
+            : [],
+          blind_boxes: Array.isArray(data.blind_boxes) ? data.blind_boxes : [],
+          synthesis_activities: Array.isArray(data.synthesis_activities)
+            ? data.synthesis_activities
+            : [],
+          valid_activity_types: Array.isArray(data.valid_activity_types)
+            ? data.valid_activity_types
+            : [],
+          recommended_anchors: Array.isArray(data.recommended_anchors)
+            ? data.recommended_anchors
+            : [],
+        };
+        setConfig(normalized);
+        loadActivityNames(normalized.synthesis_activities);
       } else if (configData.code === 403) {
         try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
         setAdminLoggedIn(false);

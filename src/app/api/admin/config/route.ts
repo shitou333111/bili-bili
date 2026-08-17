@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { readAdminConfig, writeAdminConfig, validateActivityType, getValidActivityTypes, type AdminConfig } from "@/lib/admin-config";
-import { BLIND_BOX_CONFIG, SYNTHESIS_CONFIG } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
@@ -9,44 +8,35 @@ async function checkAdmin(request: Request): Promise<boolean> {
   return validateAdminSession(getAdminSid(request));
 }
 
-function getDefaultConfig() {
-  const blind_boxes = Object.entries(BLIND_BOX_CONFIG.icons).map(([id, icon]) => ({
-    id: Number(id),
-    name: Number(id) === BLIND_BOX_CONFIG.xindong ? "心动盲盒" : Number(id) === BLIND_BOX_CONFIG.lucky ? "幸运盲盒" : "",
-    icon,
-  }));
-
-  const defaultCurrentIds = BLIND_BOX_CONFIG.current_activity_blind_box_id
-    ? [BLIND_BOX_CONFIG.current_activity_blind_box_id]
-    : [];
-
-  return {
-    current_activity_blind_box_ids: defaultCurrentIds,
-    blind_boxes,
-    synthesis_activities: SYNTHESIS_CONFIG.current_activity,
-    valid_activity_types: getValidActivityTypes(),
-  };
-}
-
 export async function GET(request: Request) {
   if (!(await checkAdmin(request))) {
     return NextResponse.json({ code: 403, message: "forbidden" }, { status: 403 });
   }
 
+  // readAdminConfig() 自动回退到 .data/admin-config.default.json
   const adminConfig = await readAdminConfig();
-  const defaults = getDefaultConfig();
 
   if (!adminConfig) {
-    return NextResponse.json({ code: 0, data: defaults });
+    // 极端情况：主文件和默认模板都不存在
+    return NextResponse.json({
+      code: 0,
+      data: {
+        current_activity_blind_box_ids: [],
+        blind_boxes: [],
+        synthesis_activities: [],
+        valid_activity_types: getValidActivityTypes(),
+        recommended_anchors: [],
+      },
+    });
   }
 
   return NextResponse.json({
     code: 0,
     data: {
       current_activity_blind_box_ids: adminConfig.current_activity_blind_box_ids ?? [],
-      blind_boxes: adminConfig.blind_boxes,
-      synthesis_activities: adminConfig.synthesis_activities,
-      valid_activity_types: defaults.valid_activity_types,
+      blind_boxes: adminConfig.blind_boxes ?? [],
+      synthesis_activities: adminConfig.synthesis_activities ?? [],
+      valid_activity_types: getValidActivityTypes(),
       recommended_anchors: adminConfig.recommended_anchors ?? [],
     },
   });

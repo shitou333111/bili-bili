@@ -3,7 +3,7 @@
  * 包括：盲盒检测、盲盒记录、天选礼物列表、合成活动信息
  */
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
-import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG, SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
+import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
 import type { BlindBoxGift } from "@/lib/blind-box-db";
 import { getCachedName, setCachedAnchorInfo, getCachedFace, setCachedFanInfo } from "@/lib/user-data";
 
