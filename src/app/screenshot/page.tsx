@@ -6,8 +6,8 @@
  */
 export default function ScreenshotPage() {
   return (
-    <main className="page-main">
-      <div className="content-wrapper px-4 min-w-0 py-4">
+    <main>
+      <div className="content-wrapper px-4 min-w-0 py-2">
         {/* 返回由 APP 内的 ScreenshotViewer 顶栏提供（避免 iframe 内整页跳转不丝滑） */}
 
         <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur space-y-5">

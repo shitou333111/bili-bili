@@ -6,6 +6,7 @@ import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import Dropdown from "@/components/Dropdown";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
+import WindowTitleBar from "@/components/WindowTitleBar";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -266,7 +267,21 @@ export default function AdminPage() {
         try {
           const catalogData = await catalogRes.json();
           if (catalogData.code === 0 && catalogData.data?.gifts) {
-            setGiftCatalog(catalogData.data.gifts);
+            const catalog: Record<number, { name: string; img: string }> = catalogData.data.gifts;
+            setGiftCatalog(catalog);
+            // 自动填充名称为空的盲盒
+            let modified = false;
+            const boxes = normalized.blind_boxes.map((b) => {
+              if (b.id > 0 && !b.name && catalog[b.id]?.name) {
+                modified = true;
+                return { ...b, name: catalog[b.id].name };
+              }
+              return b;
+            });
+            if (modified) {
+              normalized.blind_boxes = boxes;
+              setConfig({ ...normalized });
+            }
           }
         } catch { /* ignore */ }
       } else if (configData.code === 403) {
@@ -656,6 +671,7 @@ export default function AdminPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#faf9f6]">
         <SafeAreaStyler />
+        <WindowTitleBar />
         <div className="w-8 h-8 border-2 border-black/15 border-t-black/40 rounded-full animate-spin"></div>
       </div>
     );
@@ -665,6 +681,7 @@ export default function AdminPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#faf9f6]">
         <SafeAreaStyler />
+        <WindowTitleBar />
         <div className="w-full max-w-xs rounded-xl border border-black/10 bg-white p-6 shadow-sm">
           <h1 className="text-base font-bold text-center mb-4">管理员登录</h1>
           {loginError && <p className="text-xs text-[#e74c3c] mb-2 text-center">{loginError}</p>}
@@ -692,6 +709,7 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
       <SafeAreaStyler />
+      <WindowTitleBar />
       <div className="max-w-3xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between">
