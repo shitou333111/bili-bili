@@ -79,6 +79,8 @@ export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [config, setConfig] = useState<AdminConfigData | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
+  // 数据加载失败时显示错误提示（而非让组件崩溃）
+  const [loadError, setLoadError] = useState(false);
   const [fetchingName, setFetchingName] = useState<number | null>(null);
   // 推荐主播管理
   const [newAnchorUid, setNewAnchorUid] = useState("");
@@ -154,77 +156,83 @@ export default function AdminPage() {
   }, []);
 
   const loadData = useCallback(async () => {
-    // 附带当前浏览器登录账号的 sid，用于默认选中当前用户
-    const sid = typeof window !== "undefined" ? localStorage.getItem("bili_live_sid") : null;
-    // 本机登录标识（稳定设备令牌），用于标记"本机登录"账号并置顶
-    const deviceToken = typeof window !== "undefined"
-      ? (localStorage.getItem("bili_live_device_token") ?? localStorage.getItem("bili_live_user_token") ?? "")
-      : "";
-    console.log("[admin] loadData: sid=", sid, "deviceToken=", deviceToken?.slice(0, 8) + "...");
-    const usersUrl = sid
-      ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
-      : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
-    const [usersRes, configRes] = await Promise.all([
-      adminFetch(serverApiUrl(usersUrl)),
-      adminFetch(serverApiUrl("/api/admin/config")),
-    ]);
-    const usersData = await usersRes.json();
-    const configData = await configRes.json();
-    console.log("[admin] usersData.code=", usersData.code, "users count=", usersData.data?.users?.length, "currentSid=", usersData.data?.currentSid, "deviceToken=", usersData.data?.deviceToken);
-
-    // 本机/当前标记：Tauri 本地会话为准（PC/iOS 会话只存本机，服务器 deviceToken 匹配不到）
-    let finalUsers = usersData.data?.users ?? [];
+    setLoadError(false);
     try {
-      const platform = await getPlatform();
-      if (platform.isNative) {
-        const state = await platform.getSessionState();
-        const localSessions = state.sessions;
-        const localCurrentSid = state.currentSid;
-        finalUsers = finalUsers.map((u: any) => {
-          const local = localSessions.find((s) => s.mid === u.mid);
-          if (!local) return { ...u, isLocal: false, isCurrent: false };
-          const isCurrent = local.sid === localCurrentSid;
-          // 本机 = 在本机登录、有 B站 登录凭证、可从 B站更新数据的账号。
-          // 服务器收集账号（source=server）本机无其登录凭证，仅可查看，不算本机。
-          const isLocal = local.source !== "server";
-          return {
-            ...u,
-            sid: local.sid ?? u.sid,
-            face: local.face ?? u.face,
-            uname: local.uname ?? u.uname,
-            isLocal,
-            isCurrent,
-          };
-        });
-        // 本机账号置顶，其余按更新时间倒序
-        finalUsers.sort((a: any, b: any) => {
-          if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
-          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      // 附带当前浏览器登录账号的 sid，用于默认选中当前用户
+      const sid = typeof window !== "undefined" ? localStorage.getItem("bili_live_sid") : null;
+      // 本机登录标识（稳定设备令牌），用于标记"本机登录"账号并置顶
+      const deviceToken = typeof window !== "undefined"
+        ? (localStorage.getItem("bili_live_device_token") ?? localStorage.getItem("bili_live_user_token") ?? "")
+        : "";
+      console.log("[admin] loadData: sid=", sid, "deviceToken=", deviceToken?.slice(0, 8) + "...");
+      const usersUrl = sid
+        ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
+        : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
+      const [usersRes, configRes] = await Promise.all([
+        adminFetch(serverApiUrl(usersUrl)),
+        adminFetch(serverApiUrl("/api/admin/config")),
+      ]);
+      const usersData = await usersRes.json();
+      const configData = await configRes.json();
+      console.log("[admin] usersData.code=", usersData.code, "users count=", usersData.data?.users?.length, "currentSid=", usersData.data?.currentSid, "deviceToken=", usersData.data?.deviceToken);
+
+      // 本机/当前标记：Tauri 本地会话为准（PC/iOS 会话只存本机，服务器 deviceToken 匹配不到）
+      let finalUsers = usersData.data?.users ?? [];
+      try {
+        const platform = await getPlatform();
+        if (platform.isNative) {
+          const state = await platform.getSessionState();
+          const localSessions = state.sessions;
+          const localCurrentSid = state.currentSid;
+          finalUsers = finalUsers.map((u: any) => {
+            const local = localSessions.find((s) => s.mid === u.mid);
+            if (!local) return { ...u, isLocal: false, isCurrent: false };
+            const isCurrent = local.sid === localCurrentSid;
+            // 本机 = 在本机登录、有 B站 登录凭证、可从 B站更新数据的账号。
+            // 服务器收集账号（source=server）本机无其登录凭证，仅可查看，不算本机。
+            const isLocal = local.source !== "server";
+            return {
+              ...u,
+              sid: local.sid ?? u.sid,
+              face: local.face ?? u.face,
+              uname: local.uname ?? u.uname,
+              isLocal,
+              isCurrent,
+            };
+          });
+          // 本机账号置顶，其余按更新时间倒序
+          finalUsers.sort((a: any, b: any) => {
+            if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          });
+        }
+      } catch { /* 非原生环境忽略 */ }
+
+      if (usersData.data?.users) {
+        finalUsers.forEach((u: any) => {
+          if (u.isLocal || u.isCurrent) console.log("[admin] user:", u.uname, "isLocal=", u.isLocal, "isCurrent=", u.isCurrent, "sid=", u.sid?.slice(0, 8));
         });
       }
-    } catch { /* 非原生环境忽略 */ }
-
-    if (usersData.data?.users) {
-      finalUsers.forEach((u: any) => {
-        if (u.isLocal || u.isCurrent) console.log("[admin] user:", u.uname, "isLocal=", u.isLocal, "isCurrent=", u.isCurrent, "sid=", u.sid?.slice(0, 8));
-      });
-    }
-    if (usersData.code === 0) setUsers(finalUsers);
-    else if (usersData.code === 403) {
-      // 会话失效：清除本地 sid 并提示重新登录
-      try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
-      setAdminLoggedIn(false);
-      setChecking(false);
-      return;
-    }
-    if (configData.code === 0) {
-      setConfig(configData.data);
-      loadActivityNames(configData.data.synthesis_activities ?? []);
-    } else if (configData.code === 403) {
-      try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
-      setAdminLoggedIn(false);
-      setChecking(false);
-      return;
+      if (usersData.code === 0) setUsers(finalUsers);
+      else if (usersData.code === 403) {
+        // 会话失效：清除本地 sid 并提示重新登录
+        try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
+        setAdminLoggedIn(false);
+        setChecking(false);
+        return;
+      }
+      if (configData.code === 0) {
+        setConfig(configData.data);
+        loadActivityNames(configData.data.synthesis_activities ?? []);
+      } else if (configData.code === 403) {
+        try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
+        setAdminLoggedIn(false);
+        setChecking(false);
+        return;
+      }
+    } catch (err) {
+      console.error("[admin] loadData error:", err);
+      setLoadError(true);
     }
   }, [loadActivityNames]);
 
@@ -647,6 +655,19 @@ export default function AdminPage() {
           <h1 className="text-lg font-bold">管理后台</h1>
           <a href="/" className="text-xs text-black/40 hover:text-black/70 transition">← 返回首页</a>
         </div>
+
+        {/* 数据加载失败提示 */}
+        {loadError && (
+          <div className="rounded-xl border border-[#e74c3c]/30 bg-[#fdf0ef] p-4">
+            <p className="text-sm text-[#e74c3c] font-medium">无法连接服务器，请检查网络或服务器状态</p>
+            <button
+              onClick={() => loadData()}
+              className="mt-2 text-xs text-[#e74c3c] underline hover:opacity-70"
+            >
+              重新加载
+            </button>
+          </div>
+        )}
 
         {/* Users */}
         <div className="rounded-xl border border-black/10 bg-white/80 p-4">

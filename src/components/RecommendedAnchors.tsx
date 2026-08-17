@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { dataFetch } from "@/lib/client-fetch";
+import { serverPost } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { showToast } from "@/lib/toast";
 
@@ -10,6 +11,7 @@ type AnchorItem = {
   uname: string;
   face?: string;
   room_id: number;
+  click_count?: number;
 };
 
 function fixImageUrl(url: string): string {
@@ -125,7 +127,21 @@ export default function RecommendedAnchors() {
             {anchors.map((anchor) => (
               <button
                 key={anchor.uid}
-                onClick={() => openBiliLiveRoom(anchor.room_id)}
+                onClick={() => {
+                  // 乐观更新角标
+                  setAnchors((prev) =>
+                    prev.map((a) =>
+                      a.uid === anchor.uid
+                        ? { ...a, click_count: (a.click_count || 0) + 1 }
+                        : a,
+                    ),
+                  );
+                  // 后台静默上报点击
+                  serverPost("/api/recommended-anchors/click", { uid: anchor.uid }).catch(
+                    () => {},
+                  );
+                  openBiliLiveRoom(anchor.room_id);
+                }}
                 className="group flex flex-col items-center gap-1.5 p-2 rounded-xl border border-black/5 bg-black/[0.02] hover:bg-[#fafafa] hover:border-black/10 transition active:scale-95"
               >
                 {/* 头像 */}
@@ -141,7 +157,12 @@ export default function RecommendedAnchors() {
                       👤
                     </div>
                   )}
-
+                  {/* 点击次数角标 */}
+                  {typeof anchor.click_count === "number" && anchor.click_count > 0 && (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 min-w-[16px] h-[16px] px-1 rounded-full bg-[#ff5b6e] text-white text-[9px] font-bold flex items-center justify-center leading-none shadow-sm">
+                      {anchor.click_count}
+                    </span>
+                  )}
                 </div>
                 {/* 昵称 */}
                 <div className="w-full text-center">

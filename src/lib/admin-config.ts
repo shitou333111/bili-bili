@@ -23,6 +23,8 @@ export type RecommendedAnchor = {
   visible: boolean;
   /** 排序（升序，越小越靠前） */
   order: number;
+  /** 全局点击次数（所有用户共享，用户点击主播时递增） */
+  click_count?: number;
 };
 
 export type AdminConfig = {
