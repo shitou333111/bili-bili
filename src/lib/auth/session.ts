@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
-import { saveAccountInfo } from "@/lib/user-data";
+import { saveAccountInfo, upsertUserInList } from "@/lib/user-data";
 
 const STATE_DIR = path.join(process.cwd(), ".data");
 const STATE_FILE = path.join(STATE_DIR, "web-login-state.json");
@@ -130,6 +130,9 @@ export async function saveSession(session: AuthSession): Promise<AuthSession> {
   if (effectiveSession.face) {
     saveAccountInfo(effectiveSession.mid, effectiveSession.uname, effectiveSession.face).catch(() => {});
   }
+  // 同步更新 users-list.json，使 admin 用户列表能显示通过 B站登录的用户
+  // （此前只有 /api/upload 才会写入 users-list，导致扫码登录的用户在 admin 页不显示）
+  upsertUserInList(effectiveSession.mid, effectiveSession.uname).catch(() => {});
   return effectiveSession;
 }
 

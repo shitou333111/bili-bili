@@ -567,14 +567,47 @@ jobs:
         run: |
           set -e
           mkdir -p publish
-          EXE="$(find artifacts-dl -type f -name '*.exe' | head -n1 || true)"
-          # APK 优先取 universal 变体（避免同时存在通用包/特定包时选错）
-          APK="$(find artifacts-dl -type f -name '*.apk' | grep universal | head -n1 || true)"
-          [ -n "${APK}" ] || APK="$(find artifacts-dl -type f -name '*.apk' | head -n1 || true)"
-          IPA="$(find artifacts-dl -type f -name '*.ipa' | head -n1 || true)"
-          if [ -n "${EXE}" ]; then cp "${EXE}" publish/; fi
-          if [ -n "${APK}" ]; then cp "${APK}" publish/; fi
-          if [ -n "${IPA}" ]; then cp "${IPA}" publish/; fi
+          #
+          # 选择规则（同平台多文件混进 artifacts-dl 时只保留正确的一个）：
+          #   1. 优先 release 包（路径含 /release/ 或文件名含 release），
+          #      没有 release 才退到 debug（路径含 /debug/ 或文件名含 debug）。
+          #      这是最关键的一层，避免 publish-artifacts 从 Actions 仓库下载到
+          #      上一次 debug 构建留下的同名 artifact（workflow run 间会残留），
+          #      导致 current_apk 指向 debug、一个 release-目录里混进两个 APK。
+          #   2. APK 额外优先 universal 变体（避免同时存在通用包/特定 ABI 包时选错）。
+          #
+          pick_first() {
+            # stdin 为候选路径列表（每行一个）；输出第一个非空的，空则输出空
+            while IFS= read -r line; do
+              [ -n "${line}" ] && [ -f "${line}" ] && { echo "${line}"; return 0; }
+            done
+            return 1
+          }
+          # EXE：先 release，再 debug
+          EXE_CANDIDATES() {
+            find artifacts-dl -type f -name '*.exe' | grep -E '/release/|release[^/]*\.exe$' || true
+            find artifacts-dl -type f -name '*.exe' | grep -vE '/debug/|debug[^/]*\.exe$' || true
+            find artifacts-dl -type f -name '*.exe' || true
+          }
+          EXE="$(EXE_CANDIDATES | awk '!seen[$0]++' | pick_first || true)"
+          # APK：先 universal+release，再 universal(任意)，再 release，最后任意
+          APK_CANDIDATES() {
+            find artifacts-dl -type f -name '*.apk' | grep universal | grep -E '/release/|release[^/]*\.apk$' || true
+            find artifacts-dl -type f -name '*.apk' | grep universal || true
+            find artifacts-dl -type f -name '*.apk' | grep -E '/release/|release[^/]*\.apk$' || true
+            find artifacts-dl -type f -name '*.apk' || true
+          }
+          APK="$(APK_CANDIDATES | awk '!seen[$0]++' | pick_first || true)"
+          # IPA：先 release，再 debug
+          IPA_CANDIDATES() {
+            find artifacts-dl -type f -name '*.ipa' | grep -E '/release/|release[^/]*\.ipa$' || true
+            find artifacts-dl -type f -name '*.ipa' | grep -vE '/debug/|debug[^/]*\.ipa$' || true
+            find artifacts-dl -type f -name '*.ipa' || true
+          }
+          IPA="$(IPA_CANDIDATES | awk '!seen[$0]++' | pick_first || true)"
+          if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" publish/; fi
+          if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" publish/; fi
+          if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" publish/; fi
           echo "发布文件:"
           ls -la publish/
           echo "HAS_FILES=$([ -n "$(ls -A publish 2>/dev/null)" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
@@ -608,15 +641,42 @@ jobs:
             RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            # ==================== 选包工具函数：release 优先，debug 兜底 ====================
+            # 防止 release 目录混进 debug 包时 current_* 指向错误版本。
+            # 选择顺序（同平台多文件时只返回第一个命中）：
+            #   1. 文件名含 release（优先级最高）
+            #   2. 文件名不含 debug（中性兜底，通常就是 release）
+            #   3. 任意文件（纯 debug 场景兜底）
+            pick_release() {
+              local dir="$1" ext="$2"
+              [ -d "$dir" ] || return 1
+              local f
+              # 1) release 关键字
+              for f in "$dir"/*release*"$ext"; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+              # 2) 不含 debug 关键字
+              for f in "$dir"/*"$ext"; do
+                [ -f "$f" ] || continue
+                case "$(basename "$f")" in *debug*|*DEBUG*) continue;; *) echo "$f"; return 0;; esac
+              done
+              # 3) 兜底任意
+              for f in "$dir"/*"$ext"; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+              return 1
+            }
             # 更新各平台 current 链接（仅当本次含该平台产物时更新，其余保持指向旧版）
-            if ls "${RELEASE_DIR}"/*.exe >/dev/null 2>&1; then
-              ln -sfn "$(ls "${RELEASE_DIR}"/*.exe | head -n1)" "${ARTIFACTS_DIR}/current_exe"
+            PICKED_EXE="$(pick_release "${RELEASE_DIR}" ".exe" || true)"
+            PICKED_APK="$(pick_release "${RELEASE_DIR}" ".apk" || true)"
+            PICKED_IPA="$(pick_release "${RELEASE_DIR}" ".ipa" || true)"
+            if [ -n "${PICKED_EXE}" ]; then
+              echo "EXE 选中 -> ${PICKED_EXE}"
+              ln -sfn "${PICKED_EXE}" "${ARTIFACTS_DIR}/current_exe"
             fi
-            if ls "${RELEASE_DIR}"/*.apk >/dev/null 2>&1; then
-              ln -sfn "$(ls "${RELEASE_DIR}"/*.apk | head -n1)" "${ARTIFACTS_DIR}/current_apk"
+            if [ -n "${PICKED_APK}" ]; then
+              echo "APK 选中 -> ${PICKED_APK}"
+              ln -sfn "${PICKED_APK}" "${ARTIFACTS_DIR}/current_apk"
             fi
-            if ls "${RELEASE_DIR}"/*.ipa >/dev/null 2>&1; then
-              ln -sfn "$(ls "${RELEASE_DIR}"/*.ipa | head -n1)" "${ARTIFACTS_DIR}/current_ipa"
+            if [ -n "${PICKED_IPA}" ]; then
+              echo "IPA 选中 -> ${PICKED_IPA}"
+              ln -sfn "${PICKED_IPA}" "${ARTIFACTS_DIR}/current_ipa"
             fi
 
             # ---- 生成各平台当前版本日期 versions.json（供 landing 页显示构建日期）----

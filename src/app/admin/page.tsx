@@ -200,6 +200,23 @@ export default function AdminPage() {
               isCurrent,
             };
           });
+          // 追加本地有而服务器没有的用户（Tauri 登录不经过服务器，users-list.json 可能无记录）
+          for (const local of localSessions) {
+            if (!finalUsers.some((u: any) => u.mid === local.mid)) {
+              finalUsers.push({
+                sid: local.sid,
+                mid: local.mid,
+                uname: local.uname,
+                face: local.face ?? "",
+                source: local.source ?? "qr",
+                createdAt: local.createdAt ?? "",
+                updatedAt: local.updatedAt ?? "",
+                lastUpload: undefined,
+                isCurrent: local.sid === localCurrentSid,
+                isLocal: local.source !== "server",
+              });
+            }
+          }
           // 本机账号置顶，其余按更新时间倒序
           finalUsers.sort((a: any, b: any) => {
             if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
@@ -585,15 +602,46 @@ export default function AdminPage() {
     if (!box.id || box.id <= 0) return;
     setFetchingName(index);
     try {
-      const res = await adminFetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
-      const data = await res.json();
-      if (data.code === 0 && data.data?.name) {
-        const boxes = [...config.blind_boxes];
-        boxes[index] = { ...boxes[index], name: data.data.name };
-        setConfig({ ...config, blind_boxes: boxes });
+      let name = "";
+      if (isTauri()) {
+        // Tauri 环境：B站登录在本地完成，服务器无 session，
+        // 直接在客户端通过 platform.fetchBilibiliJson 调 B站 API
+        const platform = await getPlatform();
+        const state = await platform.getSessionState();
+        const session = state.sessions.find((s) => s.sid === state.currentSid);
+        if (!session) {
+          alert("需要先登录B站账号才能查询盲盒信息");
+          setFetchingName(null);
+          return;
+        }
+        const cookie = session.biliCookies?.join("; ") || `SESSDATA=${session.biliSessdata}`;
+        const url = `https://api.live.bilibili.com/xlive/general-interface/v1/blindFirstWin/getInfo?gift_id=${box.id}`;
+        const resp = await platform.fetchBilibiliJson<{
+          code: number;
+          data?: { blind_gift_name?: string; gifts?: unknown[] };
+        }>({ url, cookie });
+        if (resp.code === 0 && resp.data?.blind_gift_name) {
+          name = resp.data.blind_gift_name;
+        } else {
+          alert("未找到该ID的盲盒信息");
+          setFetchingName(null);
+          return;
+        }
       } else {
-        alert(data.message || "未找到盲盒信息");
+        // Web 环境：通过服务器 API 调用（服务器持有 B站 session）
+        const res = await adminFetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
+        const data = await res.json();
+        if (data.code === 0 && data.data?.name) {
+          name = data.data.name;
+        } else {
+          alert(data.message || "未找到盲盒信息");
+          setFetchingName(null);
+          return;
+        }
       }
+      const boxes = [...config.blind_boxes];
+      boxes[index] = { ...boxes[index], name };
+      setConfig({ ...config, blind_boxes: boxes });
     } catch {
       alert("查询失败");
     }

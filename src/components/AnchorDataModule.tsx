@@ -333,7 +333,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
       value: Math.round(f.hamster / 100),
       face: fanFaces[f.uid] || "",
     }));
-    setFanBubbleData({ items: initialItems, title: "送礼粉丝分布", loading: true, loadingText: "正在获取粉丝头像...<br /> 首次加载需要等待几分钟，请耐心等待" });
+    setFanBubbleData({ items: initialItems, title: "送礼粉丝分布", loading: true, loadingText: "正在获取粉丝头像...<br /> 首次加载较慢，请耐心等待" });
 
     // 找出还没有头像的uid（只针对top300）
     const missingUids = topFans.filter(f => !fanFaces[f.uid]).map(f => f.uid);
@@ -627,7 +627,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       <div className="mt-1 text-xl font-semibold">{stats.fanCount}</div>
                       {/* Tooltip */}
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-black/85 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] text-center leading-relaxed">
-                        点击查看粉丝贡献分布图<br/>此操作耗时约3分钟，频繁访问会限流，建议访问一次后保存图片
+                        点击查看粉丝贡献分布图<br/>频繁访问会限流，建议访问一次后保存图片
                         <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/85"></div>
                       </div>
                     </div>
