@@ -1098,12 +1098,13 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
               <div className={`mt-4 rounded-xl border border-black/10 ${HISTORICAL_PNL_BG} p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
                 <div className="flex items-center justify-between">
                   <div className="textsm font-bold uppercase tracking-[0.15em] text-black/70">历史总盈亏</div>
-                  <button
+                  {/* 调试按钮已隐藏，保留调试代码 */}
+                  {/* <button
                     onClick={() => setShowHistoricalDebug(!showHistoricalDebug)}
                     className="text-xs text-black/40 hover:text-black/70 transition underline"
                   >
                     {showHistoricalDebug ? "收起调试" : "调试"}
-                  </button>
+                  </button> */}
                 </div>
                 <div className="mt-3">
                   <div className="text-lg font-semibold whitespace-nowrap overflow-x-auto scrollbar-none">

@@ -76,7 +76,7 @@ export default function LandingPage() {
             <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">B瓜</h1>
           </div>
           <p className="mt-3 text-base text-[#6b6b6b] sm:text-lg">
-            Bilibili 直播数据分析工具
+            B站 直播数据分析工具
           </p>
           {/* 宣传语：七句在同一位置循环打字机效果，只占一行 */}
           <SloganRotator />
