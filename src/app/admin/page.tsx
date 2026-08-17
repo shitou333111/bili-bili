@@ -81,7 +81,6 @@ export default function AdminPage() {
   const [configSaved, setConfigSaved] = useState(false);
   // 数据加载失败时显示错误提示（而非让组件崩溃）
   const [loadError, setLoadError] = useState(false);
-  const [fetchingName, setFetchingName] = useState<number | null>(null);
   // 推荐主播管理
   const [newAnchorUid, setNewAnchorUid] = useState("");
   const [addingAnchor, setAddingAnchor] = useState(false);
@@ -91,6 +90,10 @@ export default function AdminPage() {
   const [activityNames, setActivityNames] = useState<Record<string, string>>({});
   // 从服务器拉取账号数据时的阻塞遮罩
   const [serverLoading, setServerLoading] = useState(false);
+  // 礼物目录（用于盲盒按名称搜索：gift_id -> { name, img }）
+  const [giftCatalog, setGiftCatalog] = useState<Record<number, { name: string; img: string }>>({});
+  // 盲盒名称搜索建议（当前展开的行索引）
+  const [blindBoxSearchIndex, setBlindBoxSearchIndex] = useState<number | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -168,9 +171,10 @@ export default function AdminPage() {
       const usersUrl = sid
         ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
         : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
-      const [usersRes, configRes] = await Promise.all([
+      const [usersRes, configRes, catalogRes] = await Promise.all([
         adminFetch(serverApiUrl(usersUrl)),
         adminFetch(serverApiUrl("/api/admin/config")),
+        adminFetch(serverApiUrl("/api/gift-catalog")),
       ]);
       const usersData = await usersRes.json();
       const configData = await configRes.json();
@@ -258,6 +262,13 @@ export default function AdminPage() {
         };
         setConfig(normalized);
         loadActivityNames(normalized.synthesis_activities);
+        // 解析礼物目录（用于盲盒按名称搜索）
+        try {
+          const catalogData = await catalogRes.json();
+          if (catalogData.code === 0 && catalogData.data?.gifts) {
+            setGiftCatalog(catalogData.data.gifts);
+          }
+        } catch { /* ignore */ }
       } else if (configData.code === 403) {
         try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
         setAdminLoggedIn(false);
@@ -493,6 +504,25 @@ export default function AdminPage() {
     setConfig({ ...config, blind_boxes: boxes });
   };
 
+  // 从礼物目录按名称搜索匹配的礼物（最多返回 5 个）
+  const searchGiftsByName = (query: string) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return Object.entries(giftCatalog)
+      .filter(([, g]) => g.name.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map(([id, g]) => ({ id: Number(id), name: g.name, img: g.img }));
+  };
+
+  // 选中搜索建议后自动填充盲盒行的 id/name/icon
+  const selectGiftForBlindBox = (index: number, gift: { id: number; name: string; img: string }) => {
+    if (!config) return;
+    const boxes = [...config.blind_boxes];
+    boxes[index] = { ...boxes[index], id: gift.id, name: gift.name, icon: gift.img };
+    setConfig({ ...config, blind_boxes: boxes });
+    setBlindBoxSearchIndex(null);
+  };
+
   const updateActivity = (index: number, field: keyof ActivityItem, value: string) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
@@ -594,58 +624,6 @@ export default function AdminPage() {
     // 重新编号 order
     list.forEach((a, i) => { a.order = i + 1; });
     setConfig({ ...config, recommended_anchors: list });
-  };
-
-  const fetchBlindBoxName = async (index: number) => {
-    if (!config) return;
-    const box = config.blind_boxes[index];
-    if (!box.id || box.id <= 0) return;
-    setFetchingName(index);
-    try {
-      let name = "";
-      if (isTauri()) {
-        // Tauri 环境：B站登录在本地完成，服务器无 session，
-        // 直接在客户端通过 platform.fetchBilibiliJson 调 B站 API
-        const platform = await getPlatform();
-        const state = await platform.getSessionState();
-        const session = state.sessions.find((s) => s.sid === state.currentSid);
-        if (!session) {
-          alert("需要先登录B站账号才能查询盲盒信息");
-          setFetchingName(null);
-          return;
-        }
-        const cookie = session.biliCookies?.join("; ") || `SESSDATA=${session.biliSessdata}`;
-        const url = `https://api.live.bilibili.com/xlive/general-interface/v1/blindFirstWin/getInfo?gift_id=${box.id}`;
-        const resp = await platform.fetchBilibiliJson<{
-          code: number;
-          data?: { blind_gift_name?: string; gifts?: unknown[] };
-        }>({ url, cookie });
-        if (resp.code === 0 && resp.data?.blind_gift_name) {
-          name = resp.data.blind_gift_name;
-        } else {
-          alert("未找到该ID的盲盒信息");
-          setFetchingName(null);
-          return;
-        }
-      } else {
-        // Web 环境：通过服务器 API 调用（服务器持有 B站 session）
-        const res = await adminFetch(serverApiUrl(`/api/admin/blind-box-info?gift_id=${box.id}`));
-        const data = await res.json();
-        if (data.code === 0 && data.data?.name) {
-          name = data.data.name;
-        } else {
-          alert(data.message || "未找到盲盒信息");
-          setFetchingName(null);
-          return;
-        }
-      }
-      const boxes = [...config.blind_boxes];
-      boxes[index] = { ...boxes[index], name };
-      setConfig({ ...config, blind_boxes: boxes });
-    } catch {
-      alert("查询失败");
-    }
-    setFetchingName(null);
   };
 
   const toggleCurrentBoxId = (id: number) => {
@@ -864,37 +842,56 @@ export default function AdminPage() {
                         className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
                         title="勾选为当前活动盲盒"
                       />
-                      <input
-                        type="text"
-                        value={box.id || ""}
-                        onChange={(e) => updateBlindBox(realIndex, "id", e.target.value)}
-                        onBlur={() => { if (box.id > 0 && !box.name) fetchBlindBoxName(realIndex); }}
-                        placeholder="gift_id"
-                        className="w-20 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                      />
-                      <input
-                        type="text"
-                        value={box.name}
-                        readOnly
-                        placeholder="自动获取"
-                        className="flex-1 min-w-[110px] rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
-                      />
-                      {box.id > 0 && (
-                        <button
-                          onClick={() => fetchBlindBoxName(realIndex)}
-                          disabled={fetchingName === realIndex}
-                          className="text-[10px] text-[#00a1d6] hover:underline shrink-0 disabled:opacity-50"
-                        >
-                          {fetchingName === realIndex ? "查询中..." : "获取名称"}
-                        </button>
+                      {box.id > 0 && box.icon && (
+                        <img src={box.icon} alt="" className="w-7 h-7 rounded shrink-0" />
                       )}
+                      {/* 名称输入 + 下拉搜索建议 */}
+                      <div className="relative flex-1 min-w-[120px]">
+                        <input
+                          type="text"
+                          value={box.name}
+                          onChange={(e) => {
+                            updateBlindBox(realIndex, "name", e.target.value);
+                            // 输入名称时清除已匹配的 id 和 icon（待重新选择）
+                            if (box.id > 0) updateBlindBox(realIndex, "id", 0);
+                            setBlindBoxSearchIndex(realIndex);
+                          }}
+                          onFocus={() => setBlindBoxSearchIndex(realIndex)}
+                          onBlur={() => setTimeout(() => setBlindBoxSearchIndex(null), 200)}
+                          placeholder="输入盲盒名称搜索"
+                          className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                        />
+                        {blindBoxSearchIndex === realIndex && box.name.trim() && (
+                          <div className="absolute z-10 mt-1 w-full rounded-lg border border-black/10 bg-white shadow-lg max-h-40 overflow-y-auto">
+                            {searchGiftsByName(box.name).length > 0 ? (
+                              searchGiftsByName(box.name).map((g) => (
+                                <button
+                                  key={g.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    selectGiftForBlindBox(realIndex, g);
+                                  }}
+                                  className="flex items-center gap-2 w-full px-2 py-1.5 text-left hover:bg-black/5 text-xs"
+                                >
+                                  {g.img && <img src={g.img} alt="" className="w-5 h-5 rounded shrink-0" />}
+                                  <span className="truncate">{g.name}</span>
+                                  <span className="ml-auto text-black/40 shrink-0">id:{g.id}</span>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-2 py-1.5 text-xs text-black/40">未找到匹配的礼物</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-xs text-black/50 shrink-0">{box.id > 0 ? box.id : "?"}</span>
                       <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
                     </div>
                     <input
                       type="text"
                       value={box.icon}
                       onChange={(e) => updateBlindBox(realIndex, "icon", e.target.value)}
-                      placeholder="图标链接"
+                      placeholder="图标链接（选择礼物后自动填充，可手动修改）"
                       className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
                     />
                   </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { getBlindBoxInfo } from "@/lib/blind-box-db";
+import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftPrice } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
@@ -89,7 +89,7 @@ export async function GET(request: Request) {
   const validSession = session;
 
   try {
-    const blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, XINDONG_ID);
+    await ensureGiftCatalogLoaded();
     const records = await readBlindBoxRecords(validSession.mid, validSession.uname, XINDONG_ID);
 
     if (records.length === 0) {
@@ -102,16 +102,6 @@ export async function GET(request: Request) {
         { status: 200 },
       );
     }
-
-    // 构建 gift_id -> price 映射表
-    const priceMap = new Map<number, number>();
-    if (blindBoxInfo?.gifts) {
-      for (const g of blindBoxInfo.gifts) {
-        priceMap.set(g.gift_id, g.price);
-      }
-    }
-
-    const castleGift = blindBoxInfo?.gifts?.find((g) => g.gift_id === CASTLE_ID);
 
     // 按天聚合
     const dailyMap = new Map<string, {
@@ -131,15 +121,15 @@ export async function GET(request: Request) {
       if (record.gift_id === CASTLE_ID) {
         daily.castleCount += record.gift_num;
       }
-      const price = priceMap.get(record.gift_id) ?? 0;
+      const price = getGiftPrice(record.gift_id);
       daily.earned += price * record.gift_num;
     }
 
     // 找出认证
     const certifications: Certification[] = [];
-    const blindBoxImg = blindBoxInfo?.blind_box_img ?? "";
-    const castleImg = castleGift?.gift_img ?? "";
-    const castleName = castleGift?.gift_name ?? "浪漫城堡";
+    const blindBoxImg = getGiftImg(XINDONG_ID);
+    const castleImg = getGiftImg(CASTLE_ID);
+    const castleName = getGiftName(CASTLE_ID) || "浪漫城堡";
 
     for (const [date, daily] of dailyMap) {
       const spent = daily.drawCount * XINDONG_PRICE;

@@ -116,6 +116,22 @@ export function getGiftImg(giftId: number): string {
   return memCache?.data.gifts?.[giftId]?.img ?? "";
 }
 
+/** 根据 gift_id 获取礼物名称，没找到返回空字符串 */
+export function getGiftName(giftId: number): string {
+  return memCache?.data.gifts?.[giftId]?.name ?? "";
+}
+
+/**
+ * 根据 gift_id 获取礼物价格（电池）。
+ * gold 类型：price/100 = 电池（1元=10电池，giftConfig price 单位为金瓜子 1元=1000金瓜子）；
+ * silver 类型（银瓜子）视为免费返回 0；未找到返回 0。
+ */
+export function getGiftPrice(giftId: number): number {
+  const item = memCache?.data.list?.find((g) => g.id === giftId);
+  if (!item || item.coin_type !== "gold" || !item.price) return 0;
+  return Math.round(item.price / 100);
+}
+
 /**
  * 返回完整礼物目录（gift_id -> { name, img }）。
  * 优先内存缓存；若为空则回退到 .data 落盘文件。

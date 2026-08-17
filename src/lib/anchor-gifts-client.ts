@@ -763,7 +763,7 @@ export async function fetchAnchorGifts(
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
-      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? getGiftImg(blindBoxId) ?? "";
+      const boxImg = getGiftImg(blindBoxId) ?? blindBoxConfig.icons[blindBoxId] ?? info?.blind_box_img ?? "";
       const drawCount = count?.num ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;
       const blindPrice = (info?.blind_price ?? 0) * 50;
@@ -779,7 +779,7 @@ export async function fetchAnchorGifts(
             name: g.gift_name,
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
-            img: getGiftImg(g.gift_id) ?? g.gift_img ?? "",
+            img: g.gift_img,
           });
         }
       }

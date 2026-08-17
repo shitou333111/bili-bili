@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { fetchBlindBoxDrawStream, checkBlindBox } from "@/lib/bilibili/gift-api";
-import { getBlindBoxInfo, saveBlindBoxInfo, type BlindBoxGift } from "@/lib/blind-box-db";
+import { fetchBlindBoxDrawStream } from "@/lib/bilibili/gift-api";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
-import { ensureGiftCatalogLoaded, getGiftImg } from "@/lib/gift-catalog";
+import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftPrice } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
@@ -73,13 +72,10 @@ const CASTLE_ID = 32132;
 // 计算城堡统计
 function calculateCastleStats(
   drawRecords: BlindBoxDrawRecord[],
-  blindBoxEntry: { price: number; gift_name: string; gift_img: string; blind_box_gifts?: BlindBoxGift[] } | null,
 ): { castleStats: CastleStat[]; castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null } {
-  const castleGift = blindBoxEntry?.blind_box_gifts?.find((g) => g.gift_id === CASTLE_ID) ?? null;
-
   const castleRecords = drawRecords.filter((r) => r.gift_id === CASTLE_ID);
   if (castleRecords.length === 0) {
-    return { castleStats: [], castleGift: castleGift ? { gift_id: castleGift.gift_id, gift_name: castleGift.gift_name, gift_img: castleGift.gift_img, price: castleGift.price } : null };
+    return { castleStats: [], castleGift: null };
   }
 
   const anchorMap = new Map<number, { rname: string; totalCount: number; dates: Map<string, number> }>();
@@ -108,7 +104,7 @@ function calculateCastleStats(
 
   return {
     castleStats,
-    castleGift: castleGift ? { gift_id: castleGift.gift_id, gift_name: castleGift.gift_name, gift_img: castleGift.gift_img, price: castleGift.price } : null,
+    castleGift: { gift_id: CASTLE_ID, gift_name: getGiftName(CASTLE_ID), gift_img: getGiftImg(CASTLE_ID), price: getGiftPrice(CASTLE_ID) },
   };
 }
 
@@ -333,20 +329,11 @@ function getDateRange(records: BlindBoxDrawRecord[]): { start: string; end: stri
 // 计算盲盒盈亏
 function calculateProfit(
   blindBoxId: number,
-  blindBoxEntry: { price: number; gift_name: string; gift_img: string; blind_box_gifts?: BlindBoxGift[] } | null,
   drawRecords: BlindBoxDrawRecord[],
 ): BlindBoxProfitResult {
-  const blindPrice = blindBoxEntry?.price ?? 0;
-  const blindBoxName = blindBoxEntry?.gift_name ?? `盲盒_${blindBoxId}`;
-  const blindBoxImg = blindBoxEntry?.gift_img ?? getGiftImg(blindBoxId) ?? "";
-
-  // 构建 gift_id -> {price, img} 映射表
-  const giftInfoMap = new Map<number, { price: number; img: string }>();
-  if (blindBoxEntry?.blind_box_gifts) {
-    for (const g of blindBoxEntry.blind_box_gifts) {
-      giftInfoMap.set(g.gift_id, { price: g.price, img: g.gift_img });
-    }
-  }
+  const blindPrice = getGiftPrice(blindBoxId);
+  const blindBoxName = getGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
+  const blindBoxImg = getGiftImg(blindBoxId) || "";
 
   // 统计每种爆出礼物的数量和价值
   const giftStats = new Map<number, { gift_name: string; count: number; totalValue: number }>();
@@ -358,28 +345,25 @@ function calculateProfit(
       totalValue: 0,
     };
     existing.count += record.gift_num;
-    const info = giftInfoMap.get(record.gift_id);
-    const giftPrice = info?.price ?? 0;
+    const giftPrice = getGiftPrice(record.gift_id);
     existing.totalValue += giftPrice * record.gift_num;
     giftStats.set(record.gift_id, existing);
   }
 
   let totalEarned = 0;
   for (const record of drawRecords) {
-    const info = giftInfoMap.get(record.gift_id);
-    totalEarned += (info?.price ?? 0) * record.gift_num;
+    totalEarned += getGiftPrice(record.gift_id) * record.gift_num;
   }
 
   const drawCount = drawRecords.reduce((sum, r) => sum + r.gift_num, 0);
   const totalSpent = drawCount * blindPrice;
 
   const gifts = Array.from(giftStats.entries()).map(([gift_id, stats]) => {
-    const info = giftInfoMap.get(gift_id);
     return {
       gift_id,
       gift_name: stats.gift_name,
-      gift_img: info?.img ?? "",
-      unitPrice: info?.price ?? 0,
+      gift_img: getGiftImg(gift_id),
+      unitPrice: getGiftPrice(gift_id),
       count: stats.count,
       totalValue: stats.totalValue,
     };
@@ -437,7 +421,7 @@ export async function GET(request: Request) {
 
   try {
     await ensureGiftCatalogLoaded();
-    const biliCookie = "";
+    const biliCookie = validSession.biliCookies?.join("; ") || `SESSDATA=${validSession.biliSessdata}`;
 
     const effectiveBlindBoxConfig = await getEffectiveBlindBoxConfig();
     const currentIds = effectiveBlindBoxConfig.current_activity_blind_box_ids ?? [];
@@ -474,12 +458,8 @@ export async function GET(request: Request) {
           ? [...newRecords, ...existingRecords]
           : existingRecords;
 
-        // 获取盲盒名称（用于文件名）
-        let blindBoxNameForFile: string | undefined;
-        try {
-          const existingInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId);
-          blindBoxNameForFile = existingInfo?.blind_box_name;
-        } catch { /* ignore */ }
+        // 盲盒名称直接从礼物目录获取（用于文件名）
+        const blindBoxNameForFile = getGiftName(blindBoxId) || undefined;
 
         // 保存（只有有新记录时才保存）
         if (newRecords.length > 0) {
@@ -488,23 +468,6 @@ export async function GET(request: Request) {
 
         console.log(`[BlindBoxStats] 盲盒 ${blindBoxId}: 新记录 ${newRecords.length} 条, 已存储 ${existingRecords.length} 条, 合并后 ${mergedRecords.length} 条`);
 
-        // 获取盲盒信息（只在本地没有时才请求API，离线时跳过B站请求）
-        let blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId);
-        if (!blindBoxInfo && !offline) {
-          const checkResult = await checkBlindBox(blindBoxId, biliCookie);
-          if (checkResult) {
-            await saveBlindBoxInfo(session.mid, session.uname, blindBoxId, {
-              gift_name: checkResult.blindGiftName,
-              gift_img: "",
-              price: checkResult.blindPrice,
-              gifts: checkResult.gifts,
-            });
-            blindBoxInfo = await getBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId);
-          }
-        }
-
-        // 礼物图标由 gift-catalog 从 B站 giftConfig API 获取，无需再累积保存
-
         // 从全部记录构建元数据
         const dateRange = getDateRange(mergedRecords);
         const anchors = buildAnchorList(mergedRecords);
@@ -512,14 +475,12 @@ export async function GET(request: Request) {
         // 按筛选条件过滤记录
         const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
 
-        // 计算盈亏
-        const entry = blindBoxInfo ? {
-          price: blindBoxInfo.blind_price,
-          gift_name: blindBoxInfo.blind_box_name,
-          gift_img: blindBoxInfo.blind_box_img,
-          blind_box_gifts: blindBoxInfo.gifts,
-        } : null;
-        const profit = calculateProfit(blindBoxId, entry, filteredRecords);
+        // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）
+        const profit = calculateProfit(blindBoxId, filteredRecords);
+        // 补充 admin-config 中的 icon 作为图标 fallback
+        if (!profit.blindBoxImg) {
+          profit.blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
+        }
 
         // 填充元数据
         profit.dateRange = dateRange;
@@ -528,7 +489,7 @@ export async function GET(request: Request) {
 
         // 计算城堡统计（仅心动盲盒）
         if (blindBoxId === 32251) {
-          const { castleStats, castleGift } = calculateCastleStats(mergedRecords, entry);
+          const { castleStats, castleGift } = calculateCastleStats(mergedRecords);
           profit.castleStats = castleStats;
           profit.castleGift = castleGift;
         }

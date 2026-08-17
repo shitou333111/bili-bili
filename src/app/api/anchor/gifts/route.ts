@@ -841,6 +841,7 @@ export async function GET(request: Request) {
     const allBlindBoxInfo = await getAllBlindBoxInfo(0, "");
 
     // 如果本地没有盲盒信息，尝试从B站API获取（离线时跳过）
+    // 注意：名称/图标/价格已从 gift-catalog 获取，此处仅获取盲盒内 gift_id 列表用于反向映射
     for (const blindBoxId of blindBoxIds) {
       if (!offline && !allBlindBoxInfo[blindBoxId]) {
         try {
@@ -993,7 +994,8 @@ export async function GET(request: Request) {
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
-      const boxImg = info?.blind_box_img ?? blindBoxConfig.icons[blindBoxId] ?? getGiftImg(blindBoxId) ?? "";
+      // blind_box_img 在 saveBlindBoxInfo 时为空，从 gift-catalog 或 admin-config 获取
+      const boxImg = getGiftImg(blindBoxId) || blindBoxConfig.icons[blindBoxId] || info?.blind_box_img || "";
       const drawCount = count?.num ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;
       // blind_price 单位是电池，乘以50转换为 hamster（收益已/2，成本也需/2）
@@ -1011,7 +1013,7 @@ export async function GET(request: Request) {
             name: g.gift_name,
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
-            img: getGiftImg(g.gift_id) || g.gift_img || "",
+            img: g.gift_img,
           });
         }
       }

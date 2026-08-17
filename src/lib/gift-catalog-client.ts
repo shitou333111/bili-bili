@@ -10,6 +10,8 @@ import type { Platform } from "./platform/types";
 import {
   ensureGiftDataLoaded,
   getGiftImg as storeGetGiftImg,
+  getGiftName as storeGetGiftName,
+  getGiftPrice as storeGetGiftPrice,
   getGiftList as storeGetGiftList,
   getRoomGiftData as storeGetRoomGiftData,
   type GiftConfigItem,
@@ -26,6 +28,16 @@ export async function ensureGiftCatalogLoaded(platform: Platform): Promise<void>
 /** 根据 gift_id 获取礼物图片，没找到返回空字符串 */
 export function getGiftImg(giftId: number): string {
   return storeGetGiftImg(giftId);
+}
+
+/** 根据 gift_id 获取礼物名称，没找到返回空字符串 */
+export function getGiftName(giftId: number): string {
+  return storeGetGiftName(giftId);
+}
+
+/** 根据 gift_id 获取礼物价格（元），gold 类型 /1000，silver 或未找到返回 0 */
+export function getGiftPrice(giftId: number): number {
+  return storeGetGiftPrice(giftId);
 }
 
 /** 返回完整礼物列表（含价格、角标等全部字段） */

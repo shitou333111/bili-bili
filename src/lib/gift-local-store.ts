@@ -235,6 +235,22 @@ export function getGiftImg(giftId: number): string {
   return memImgMap?.get(giftId) ?? "";
 }
 
+/** 根据 gift_id 获取礼物名称，没找到返回空字符串 */
+export function getGiftName(giftId: number): string {
+  const item = memList?.find((g) => g.id === giftId);
+  return item?.name ?? "";
+}
+
+/**
+ * 根据 gift_id 获取礼物价格（电池）。
+ * gold 类型：price/100 = 电池；silver 类型视为免费返回 0；未找到返回 0。
+ */
+export function getGiftPrice(giftId: number): number {
+  const item = memList?.find((g) => g.id === giftId);
+  if (!item || item.coin_type !== "gold" || !item.price) return 0;
+  return Math.round(item.price / 100);
+}
+
 /** 特效绑定表 gift_id -> { web_mp4, web_mp4_json } */
 export function getGiftEffectsMap(): Record<number, GiftEffectBinding> {
   return memEffects ?? {};

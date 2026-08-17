@@ -14,7 +14,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
-import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg } from "./gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice } from "./gift-catalog-client";
 import {
   BLIND_BOX_CONFIG,
   BLIND_BOX_API,
@@ -2081,18 +2081,11 @@ export async function fetchCertificationStats(
 
   try {
     await ensureGiftCatalogLoaded(platform);
-    const blindBoxInfo = await getBlindBoxInfo(platform, session.mid, session.uname, XINDONG_ID);
     const records = await readBlindBoxRecords(platform, session.mid, session.uname, XINDONG_ID);
 
     if (records.length === 0) {
       return { code: 0, message: "ok", data: { certifications: [], hasCertification: false } };
     }
-
-    const priceMap = new Map<number, number>();
-    if (blindBoxInfo?.gifts) {
-      for (const g of blindBoxInfo.gifts) priceMap.set(g.gift_id, g.price);
-    }
-    const castleGift = blindBoxInfo?.gifts?.find((g) => g.gift_id === CASTLE_ID);
 
     const dailyMap = new Map<string, { drawCount: number; castleCount: number; earned: number }>();
     for (const record of records) {
@@ -2104,14 +2097,14 @@ export async function fetchCertificationStats(
       }
       daily.drawCount += record.gift_num;
       if (record.gift_id === CASTLE_ID) daily.castleCount += record.gift_num;
-      const price = priceMap.get(record.gift_id) ?? 0;
+      const price = getCatalogGiftPrice(record.gift_id);
       daily.earned += price * record.gift_num;
     }
 
     const certifications: Certification[] = [];
-    const blindBoxImg = blindBoxInfo?.blind_box_img ?? "";
-    const castleImg = castleGift?.gift_img ?? "";
-    const castleName = castleGift?.gift_name ?? "浪漫城堡";
+    const blindBoxImg = getCatalogGiftImg(XINDONG_ID);
+    const castleImg = getCatalogGiftImg(CASTLE_ID);
+    const castleName = getCatalogGiftName(CASTLE_ID) || "浪漫城堡";
 
     for (const [date, daily] of dailyMap) {
       const spent = daily.drawCount * XINDONG_PRICE;
@@ -2470,17 +2463,10 @@ type BlindBoxProfitResult = {
 
 function calculateCastleStats(
   drawRecords: BlindBoxDrawRecord[],
-  blindBoxEntry: { price: number; gift_name: string; gift_img: string; blind_box_gifts?: BlindBoxGift[] } | null,
 ): { castleStats: CastleStat[]; castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null } {
-  const castleGift = blindBoxEntry?.blind_box_gifts?.find((g) => g.gift_id === CASTLE_ID) ?? null;
   const castleRecords = drawRecords.filter((r) => r.gift_id === CASTLE_ID);
   if (castleRecords.length === 0) {
-    return {
-      castleStats: [],
-      castleGift: castleGift
-        ? { gift_id: castleGift.gift_id, gift_name: castleGift.gift_name, gift_img: castleGift.gift_img, price: castleGift.price }
-        : null,
-    };
+    return { castleStats: [], castleGift: null };
   }
 
   const anchorMap = new Map<number, { rname: string; totalCount: number; dates: Map<string, number> }>();
@@ -2507,9 +2493,7 @@ function calculateCastleStats(
 
   return {
     castleStats,
-    castleGift: castleGift
-      ? { gift_id: castleGift.gift_id, gift_name: castleGift.gift_name, gift_img: castleGift.gift_img, price: castleGift.price }
-      : null,
+    castleGift: { gift_id: CASTLE_ID, gift_name: getCatalogGiftName(CASTLE_ID), gift_img: getCatalogGiftImg(CASTLE_ID), price: getCatalogGiftPrice(CASTLE_ID) },
   };
 }
 
@@ -2594,46 +2578,37 @@ function getDateRange(records: BlindBoxDrawRecord[]): { start: string; end: stri
 }
 
 async function calculateProfit(
-  platform: Platform,
+  _platform: Platform,
   blindBoxId: number,
-  blindBoxEntry: { price: number; gift_name: string; gift_img: string; blind_box_gifts?: BlindBoxGift[] } | null,
   drawRecords: BlindBoxDrawRecord[],
 ): Promise<BlindBoxProfitResult> {
-  const blindPrice = blindBoxEntry?.price ?? 0;
-  const blindBoxName = blindBoxEntry?.gift_name ?? `盲盒_${blindBoxId}`;
-  const blindBoxImg = blindBoxEntry?.gift_img ?? getCatalogGiftImg(blindBoxId) ?? "";
-
-  const giftInfoMap = new Map<number, { price: number; img: string }>();
-  if (blindBoxEntry?.blind_box_gifts) {
-    for (const g of blindBoxEntry.blind_box_gifts) giftInfoMap.set(g.gift_id, { price: g.price, img: g.gift_img });
-  }
+  const blindPrice = getCatalogGiftPrice(blindBoxId);
+  const blindBoxName = getCatalogGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
+  const blindBoxImg = getCatalogGiftImg(blindBoxId) || "";
 
   const giftStats = new Map<number, { gift_name: string; count: number; totalValue: number }>();
   for (const record of drawRecords) {
     const existing = giftStats.get(record.gift_id) ?? { gift_name: record.gift_name, count: 0, totalValue: 0 };
     existing.count += record.gift_num;
-    const info = giftInfoMap.get(record.gift_id);
-    const giftPrice = info?.price ?? 0;
+    const giftPrice = getCatalogGiftPrice(record.gift_id);
     existing.totalValue += giftPrice * record.gift_num;
     giftStats.set(record.gift_id, existing);
   }
 
   let totalEarned = 0;
   for (const record of drawRecords) {
-    const info = giftInfoMap.get(record.gift_id);
-    totalEarned += (info?.price ?? 0) * record.gift_num;
+    totalEarned += getCatalogGiftPrice(record.gift_id) * record.gift_num;
   }
 
   const drawCount = drawRecords.reduce((sum, r) => sum + r.gift_num, 0);
   const totalSpent = drawCount * blindPrice;
 
   const gifts = Array.from(giftStats.entries()).map(([gift_id, stats]) => {
-    const info = giftInfoMap.get(gift_id);
     return {
       gift_id,
       gift_name: stats.gift_name,
-      gift_img: info?.img ?? "",
-      unitPrice: info?.price ?? 0,
+      gift_img: getCatalogGiftImg(gift_id),
+      unitPrice: getCatalogGiftPrice(gift_id),
       count: stats.count,
       totalValue: stats.totalValue,
     };
@@ -2703,11 +2678,8 @@ export async function fetchBlindBoxStats(
 
         const mergedRecords = newRecords.length > 0 ? [...newRecords, ...existingRecords] : existingRecords;
 
-        let blindBoxNameForFile: string | undefined;
-        try {
-          const existingInfo = await getBlindBoxInfo(platform, session.mid, session.uname, blindBoxId);
-          blindBoxNameForFile = existingInfo?.blind_box_name;
-        } catch { /* ignore */ }
+        // 盲盒名称直接从礼物目录获取（用于文件名）
+        const blindBoxNameForFile = getCatalogGiftName(blindBoxId) || undefined;
 
         if (newRecords.length > 0) {
           await saveBlindBoxRecords(
@@ -2720,64 +2692,23 @@ export async function fetchBlindBoxStats(
           );
         }
 
-        let blindBoxInfo = await getBlindBoxInfo(platform, session.mid, session.uname, blindBoxId);
-        // 名称/单价依赖 blindBoxInfo 的 gifts 与 blind_box_name。
-        // 与 WEB 版一致：本地信息缺失、或名称/单价/礼物列表不完整（含历史误存为"盲盒_<id>"的兜底名、单价0）
-        // 时，重新通过 B站接口获取，并直接用返回结果构建，避免依赖"保存后再读回"导致本次仍拿不到数据。
-        const needsBlindBoxInfo =
-          !blindBoxInfo ||
-          !blindBoxInfo.gifts ||
-          blindBoxInfo.gifts.length === 0 ||
-          !blindBoxInfo.blind_box_name ||
-          blindBoxInfo.blind_price <= 0 ||
-          blindBoxInfo.blind_box_name === `盲盒_${blindBoxId}`;
-        if (needsBlindBoxInfo && session.source !== "server") {
-          // source=server 账号无 B站 Cookie，checkBlindBox 必然返回未登录(-101)导致名称/单价异常；
-          // 直接使用本地（已从自建服务器拉取）的盲盒信息，不再发空 Cookie 请求。
-          const checkResult = await checkBlindBox(platform, blindBoxId, cookie);
-          if (checkResult && checkResult.gifts.length > 0) {
-            await saveBlindBoxInfo(platform, session.mid, session.uname, blindBoxId, {
-              gift_name: checkResult.blindGiftName,
-              gift_img: "",
-              price: checkResult.blindPrice,
-              gifts: checkResult.gifts,
-            });
-            blindBoxInfo = await getBlindBoxInfo(platform, session.mid, session.uname, blindBoxId);
-            // 读回失败时直接用接口结果，保证本次展示正确名称与单价
-            if (!blindBoxInfo) {
-              blindBoxInfo = {
-                blind_box_id: blindBoxId,
-                blind_box_name: checkResult.blindGiftName,
-                blind_box_img: "",
-                blind_price: checkResult.blindPrice,
-                gifts: checkResult.gifts,
-                updated_at: getBeijingTime(),
-              };
-            }
-          }
-        }
-
         const dateRange = getDateRange(mergedRecords);
         const anchors = buildAnchorList(mergedRecords);
         const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
 
-        const entry = blindBoxInfo
-          ? {
-              price: blindBoxInfo.blind_price,
-              gift_name: blindBoxInfo.blind_box_name,
-              gift_img: blindBoxInfo.blind_box_img,
-              blind_box_gifts: blindBoxInfo.gifts,
-            }
-          : null;
-
-        const profit = await calculateProfit(platform, blindBoxId, entry, filteredRecords);
+        // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）
+        const profit = await calculateProfit(platform, blindBoxId, filteredRecords);
+        // 补充 admin-config 中的 icon 作为图标 fallback
+        if (!profit.blindBoxImg) {
+          profit.blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
+        }
 
         profit.dateRange = dateRange;
         profit.anchors = anchors;
         profit.filter = { ruid, dateRange: filterDateRange };
 
         if (blindBoxId === 32251) {
-          const { castleStats, castleGift } = calculateCastleStats(mergedRecords, entry);
+          const { castleStats, castleGift } = calculateCastleStats(mergedRecords);
           profit.castleStats = castleStats;
           profit.castleGift = castleGift;
         }
