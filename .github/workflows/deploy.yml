@@ -754,15 +754,22 @@ jobs:
     needs: [build-exe, build-apk, build-ipa, build-hot-update]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo for version reading
+        uses: actions/checkout@v4
+
       - name: Download all client artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: "bili-live-*"
           path: artifacts-dl
           if-no-files-found: ignore
+        continue-on-error: true
 
-      - name: Checkout repo for version reading
-        uses: actions/checkout@v4
+      - name: Verify downloaded artifacts
+        run: |
+          echo "artifacts-dl 目录内容:"
+          ls -la artifacts-dl/ 2>/dev/null || echo "(目录不存在或为空)"
+          find artifacts-dl -maxdepth 2 -type d 2>/dev/null || true
 
       - name: Resolve build timestamp
         id: ts
