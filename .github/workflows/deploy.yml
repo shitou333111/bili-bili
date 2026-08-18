@@ -715,9 +715,17 @@ jobs:
           HOT_UPDATE_KEY_PASSWORD: ${{ secrets.HOT_UPDATE_KEY_PASSWORD }}
         run: |
           mkdir -p hot-update-release
+          # hot-update-sign 的 --version 必须是严格 semver（X.Y.Z 或 X.Y.Z-pre）。
+          # 把构建时间戳 20260818-144244 转成 1.0.0-20260818.144244：
+          #   - 主版本号 1.0.0 来自 tauri.conf.json 的 version 字段
+          #   - prerelease 段用时间戳（连字符替换为点），semver 允许
+          NATIVE_VERSION=$(grep -E '"version"\s*:' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version"\s*:\s*"([^"]+)".*/\1/')
+          BUILD_PRERELEASE=$(echo "${{ steps.ts.outputs.BUILD_TS }}" | tr '-' '.')
+          HOT_VERSION="${NATIVE_VERSION}-${BUILD_PRERELEASE}"
+          echo "热更新 semver 版本号: ${HOT_VERSION}"
           hot-update-sign \
             --dist out \
-            --version "${{ steps.ts.outputs.BUILD_TS }}" \
+            --version "${HOT_VERSION}" \
             --min-shell 1.0.0 \
             --key /tmp/hot-update.key \
             --base-url "${{ env.SERVER_URL }}/artifacts/webapp" \
