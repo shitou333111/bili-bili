@@ -28,6 +28,10 @@ export interface HotUpdateInfo {
   available: boolean;
   version?: string;
   error?: string;
+  /** shellTooOld = 热更新有新版本但原生版本太低，需要先装原生更新 */
+  shellTooOld?: boolean;
+  /** alreadyStaged = 热更新已下载暂存，下次冷启动生效 */
+  alreadyStaged?: boolean;
 }
 
 export interface NativeUpdateInfo {
@@ -37,6 +41,8 @@ export interface NativeUpdateInfo {
   date?: string;
   downloadUrl?: string;
   error?: string;
+  /** checkFailed = 检查本身失败（网络/CORS/JSON 解析等），与"无更新"区分 */
+  checkFailed?: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -134,11 +140,19 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     checkNativeUpdate(),
   ]);
 
-  const recommended: UpdateType = hot.available
-    ? "hot"
-    : native.available
-      ? "native"
-      : "none";
+  // 推荐优先级：原生更新 > 热更新
+  // 理由：原生更新涉及 Rust/配置/权限等核心变更，是热更新的"底座"。
+  // 如果跳过原生更新直接应用热更新，前端代码可能调用了旧原生包里没有的
+  // 命令/插件，导致功能异常或白屏。
+  let recommended: UpdateType = "none";
+  if (native.available) {
+    recommended = "native";
+  } else if (hot.available) {
+    recommended = "hot";
+  }
+  // shellTooOld 场景：热更新有新版本但用户原生版本太低（不满足 --min-shell）。
+  // 此时不推荐热更新，推荐逻辑保持 native（如果同时有原生更新）或 none。
+  // hot.shellTooOld 标记会在 UI 上单独提示用户"先更新原生包"。
 
   return { hot, native, recommended };
 }
@@ -154,9 +168,14 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
     // 用 any 做兜底安全访问，避免类型不匹配导致构建报错。
     const o = outcome as any;
     const version: string | undefined = o?.manifest?.version || o?.version;
+    const shellTooOld = outcome.status === "shellTooOld";
+    const alreadyStaged = outcome.status === "alreadyStaged";
     return {
-      available: outcome.status === "available",
+      // alreadyStaged 也算"可更新"（只是下载过了），UI 会提示"重启即生效"
+      available: outcome.status === "available" || alreadyStaged,
       version,
+      shellTooOld,
+      alreadyStaged,
     };
   } catch (e: any) {
     // 插件未启用（enabled:false 暗部署）或非 OTA bundle 时会返回 upToDate / 抛错
@@ -194,10 +213,17 @@ async function checkNativeUpdate(): Promise<NativeUpdateInfo> {
       downloadUrl,
     };
   } catch (e: any) {
+    // 区分"检查失败"（网络/CORS/JSON 解析等）与"无更新"。
+    // shellTooOld 场景下，如果原生检查也失败，用户会陷入死循环：
+    //   - 想装原生 → 卡片没按钮
+    //   - 想装热更新 → 被提示先装原生
+    // 所以 checkFailed 用于 UI 显示"原生检查失败，请稍后重试"，
+    // 不引导用户去装不存在的原生更新。
     return {
       available: false,
       currentVersion: "0.0.0",
       error: String(e?.message || e),
+      checkFailed: true,
     };
   }
 }

@@ -1028,7 +1028,11 @@ export default function HomePage() {
       if (result.recommended === "none") {
         // 无可用更新：热更新和原生更新都无
         const native = result.native;
-        if (native.currentVersion && native.currentVersion !== "0.0.0") {
+        if (native.checkFailed) {
+          // 原生检查失败（网络/versions.json 拉不到等），不算"已是最新"
+          // 如果同时热更新也失败或无，提示用户重试
+          setUpdateError(`原生更新检查失败：${native.error || "网络错误"}，请稍后重试`);
+        } else if (native.currentVersion && native.currentVersion !== "0.0.0") {
           setUpdateToast(`已是最新版本 V${native.currentVersion}`);
         } else {
           setUpdateToast("已是最新版本");
@@ -1041,7 +1045,7 @@ export default function HomePage() {
     }
   }
 
-  // 应用更新（按推荐类型：热更新优先，其次原生更新）
+  // 应用更新（按推荐类型：原生更新优先，其次热更新）
   // onProgress 回调用于显示下载进度
   async function handleApplyUpdate() {
     if (!updateResult) return;
@@ -1052,22 +1056,18 @@ export default function HomePage() {
     setCanRestart(false);
     try {
       const { recommended, hot, native } = updateResult;
-      if (recommended === "hot" && hot.available) {
-        // 热更新：下载 + stage，下次冷启动生效
-        const r = await applyHotUpdate((p) => setUpdateProgress(p));
-        if (r.status === "staged" || r.status === "alreadyStaged") {
-          setUpdateToast(`更新已准备就绪（v${r.version || "?"}），重启 APP 后生效`);
-          setCanRestart(true);
-        } else if (r.status === "upToDate") {
-          setUpdateToast("已是最新版本");
-        } else if (r.status === "error") {
-          setUpdateError(r.error || "热更新失败");
-        } else {
-          // blacklisted / shellTooOld 等其他状态
-          setUpdateToast(`更新状态: ${r.status}`);
-        }
-      } else if (recommended === "native" && native.available) {
-        // 原生更新：平台特定
+      // shellTooOld 保护：热更新有新版本但 min-shell 不满足时，
+      // 即使用户强制选了 hot（不应该发生，但兜底），也拒绝应用。
+      if (hot.shellTooOld) {
+        setUpdateError(
+          native.available
+            ? "热更新需要更高的 APP 版本，请先安装原生更新，然后可再应用热更新"
+            : "热更新需要更高的 APP 版本，但服务器上暂无可用原生更新，请稍后重试",
+        );
+        return;
+      }
+      if (recommended === "native" && native.available) {
+        // 原生更新优先：涉及 Rust/配置/权限等核心变更，是热更新的底座
         if (!native.downloadUrl && !__isDesktopForUpdater()) {
           setUpdateError("缺少下载地址，无法更新");
           return;
@@ -1075,7 +1075,11 @@ export default function HomePage() {
         const r = await applyNativeUpdate(native.downloadUrl || "", (p) => setUpdateProgress(p));
         if (r.status === "installing") {
           // Windows: updater 自动安装+重启；Android: 系统安装器已弹出
-          setUpdateToast("正在安装，请稍候...");
+          setUpdateToast(
+            hot.available && !hot.shellTooOld
+              ? "原生更新安装完成后，请重新检查更新以应用前端热更新"
+              : "正在安装，请稍候...",
+          );
         } else if (r.status === "openIn") {
           // iOS: Open In 面板已弹出，用户需选自签工具覆盖安装
           setUpdateToast("IPA 已下载，请在弹出的面板中选择自签工具覆盖安装");
@@ -1084,6 +1088,27 @@ export default function HomePage() {
           setCanRestart(true);
         } else if (r.status === "error") {
           setUpdateError(r.error || "原生更新失败");
+        }
+      } else if (recommended === "hot" && hot.available) {
+        // 热更新：下载 + stage，下次冷启动生效
+        // 注：如果同时也有原生更新，recommended 应该是 native（原生优先），
+        // 走到这里说明只有热更新可用。
+        const r = await applyHotUpdate((p) => setUpdateProgress(p));
+        if (r.status === "staged" || r.status === "alreadyStaged") {
+          setUpdateToast(`更新已准备就绪（v${r.version || "?"}），重启 APP 后生效`);
+          setCanRestart(true);
+        } else if (r.status === "upToDate") {
+          setUpdateToast("已是最新版本");
+        } else if (r.status === "shellTooOld") {
+          setUpdateError(
+            native.available
+              ? "热更新需要更高的 APP 版本，请先安装原生更新"
+              : "热更新需要更高的 APP 版本，但服务器暂无原生更新，请稍后重试",
+          );
+        } else if (r.status === "error") {
+          setUpdateError(r.error || "热更新失败");
+        } else {
+          setUpdateToast(`更新状态: ${r.status}`);
         }
       }
     } catch (err: any) {
@@ -2436,7 +2461,7 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
-                {/* 检查更新卡片：检测热更新（前端 OTA）+ 原生包更新 */}
+                {/* 检查更新卡片：检测热更新（前端 OTA）+ 原生包更新（原生优先） */}
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
                   <div className="flex items-center gap-4">
                     <button
@@ -2453,30 +2478,81 @@ export default function HomePage() {
                       </p>
                     </div>
                   </div>
-                  {/* 发现新版本 */}
-                  {updateResult && updateResult.recommended !== "none" && !updateApplying && !updateToast && (
-                    <div className="mt-3 rounded-lg bg-white/60 p-3 border border-indigo-100">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-indigo-900">
-                            {updateResult.hot.available ? `发现热更新 v${updateResult.hot.version || ""}` : `发现新版本 V${updateResult.native.serverVersion || ""}`}
+                  {/* 发现新版本（原生优先） + shellTooOld 提示 */}
+                  {updateResult && !updateApplying && !updateToast && (
+                    <>
+                      {/* 有原生更新：优先推荐（核心底座） */}
+                      {updateResult.native.available && (
+                        <div className="mt-3 rounded-lg bg-amber-50 p-3 border border-amber-200">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-amber-900">
+                                ⚠️ 发现核心版本更新 V{updateResult.native.serverVersion || ""}
+                              </p>
+                              <p className="mt-0.5 text-xs text-amber-800/80">
+                                {updateResult.native.date
+                                  ? `构建日期：${updateResult.native.date} · `
+                                  : ""}
+                                核心功能升级，需要下载安装包
+                                {updateResult.hot.available && !updateResult.hot.shellTooOld && (
+                                  <>，安装后还可应用前端热更新</>
+                                )}
+                              </p>
+                            </div>
+                            <button
+                              onClick={handleApplyUpdate}
+                              className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white font-semibold hover:bg-amber-700 active:scale-95 transition"
+                            >
+                              立即更新
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 只有热更新（无原生更新） */}
+                      {!updateResult.native.available && updateResult.hot.available && !updateResult.hot.shellTooOld && (
+                        <div className="mt-3 rounded-lg bg-white/60 p-3 border border-indigo-100">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-indigo-900">
+                                发现热更新 v{updateResult.hot.version || ""}
+                              </p>
+                              <p className="mt-0.5 text-xs text-black/50">
+                                {updateResult.hot.alreadyStaged
+                                  ? "已下载，重启 APP 即可生效"
+                                  : "前端资源更新，下载后重启 APP 即可生效，无需重装"}
+                              </p>
+                              {updateResult.native.checkFailed && (
+                                <p className="mt-1 text-xs text-amber-700">
+                                  注：原生更新检查失败（{updateResult.native.error || "网络错误"}），可能也有核心版本更新，建议稍后重试
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              onClick={handleApplyUpdate}
+                              disabled={updateResult.hot.alreadyStaged}
+                              className="shrink-0 rounded-lg bg-[#6366f1] px-3 py-1.5 text-xs text-white font-semibold hover:bg-[#4f46e5] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {updateResult.hot.alreadyStaged ? "已下载" : "立即更新"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* shellTooOld：热更新有新版本，但用户原生版本太低 */}
+                      {!updateResult.native.available && updateResult.hot.shellTooOld && (
+                        <div className="mt-3 rounded-lg bg-red-50 p-3 border border-red-200">
+                          <p className="text-sm font-semibold text-red-900">
+                            ⚠️ 发现前端热更新，但需要先升级 APP
                           </p>
-                          <p className="mt-0.5 text-xs text-black/50">
-                            {updateResult.hot.available
-                              ? "前端资源更新，下载后重启 APP 即可生效，无需重装"
-                              : updateResult.native.date
-                                ? `构建日期：${updateResult.native.date}`
-                                : "核心功能升级，需下载安装包"}
+                          <p className="mt-0.5 text-xs text-red-800/80">
+                            {updateResult.native.checkFailed
+                              ? `原生更新检查失败：${updateResult.native.error || "网络错误"}。请稍后重试检查，原生更新可用后即可应用热更新。`
+                              : "热更新要求更高的 APP 原生版本，但服务器上暂无可用原生更新。请稍后重试。"}
                           </p>
                         </div>
-                        <button
-                          onClick={handleApplyUpdate}
-                          className="shrink-0 rounded-lg bg-[#6366f1] px-3 py-1.5 text-xs text-white font-semibold hover:bg-[#4f46e5] active:scale-95 transition"
-                        >
-                          立即更新
-                        </button>
-                      </div>
-                    </div>
+                      )}
+                    </>
                   )}
                   {/* 下载进度 */}
                   {updateProgress && updateProgress.total > 0 && (

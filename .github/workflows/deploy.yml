@@ -723,10 +723,15 @@ jobs:
           BUILD_PRERELEASE=$(echo "${{ steps.ts.outputs.BUILD_TS }}" | tr '-' '.')
           HOT_VERSION="${NATIVE_VERSION}-${BUILD_PRERELEASE}"
           echo "热更新 semver 版本号: ${HOT_VERSION}"
+          # --min-shell 使用当前原生版本号：
+          # 含义 = 这个热更新包只能应用在"原生版本 ≥ ${NATIVE_VERSION}"的 APP 上。
+          # 因为热更新包是基于本次源码构建的，它的前端代码可能依赖了新的 Rust 命令/插件，
+          # 所以最低兼容的原生版本就是本次构建的原生版本。
+          # 只有当用户安装了 ≥ 此版本的原生包后，才能安全应用这个热更新。
           hot-update-sign \
             --dist out \
             --version "${HOT_VERSION}" \
-            --min-shell 1.0.0 \
+            --min-shell "${NATIVE_VERSION}" \
             --key /tmp/hot-update.key \
             --base-url "${{ env.SERVER_URL }}/artifacts/webapp" \
             --out hot-update-release/
