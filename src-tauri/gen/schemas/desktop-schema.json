@@ -2331,12 +2331,6 @@
           "markdownDescription": "Enables the debug_acl command without any pre-configured scope."
         },
         {
-          "description": "Enables the download_and_install_apk command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-download-and-install-apk",
-          "markdownDescription": "Enables the download_and_install_apk command without any pre-configured scope."
-        },
-        {
           "description": "Enables the download_and_open_ipa command without any pre-configured scope.",
           "type": "string",
           "const": "allow-download-and-open-ipa",
@@ -2407,12 +2401,6 @@
           "type": "string",
           "const": "deny-debug-acl",
           "markdownDescription": "Denies the debug_acl command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the download_and_install_apk command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-download-and-install-apk",
-          "markdownDescription": "Denies the download_and_install_apk command without any pre-configured scope."
         },
         {
           "description": "Denies the download_and_open_ipa command without any pre-configured scope.",
