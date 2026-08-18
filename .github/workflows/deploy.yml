@@ -339,6 +339,19 @@ jobs:
         with:
           workspaces: "src-tauri"
 
+      # 缓存 Gradle 依赖与 wrapper，避免每次 run 重新下载 kotlin-stdlib / kotlin-gradle-plugin 等
+      # （GitHub Runner 共享 IP 常被 Maven Central 429 限流，缓存可显著减少 Maven 命中次数）。
+      # gen/android 由下方 tauri android init 生成，缓存恢复时还不存在，故用固定版本号 key 保证跨 run 命中。
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-v1
+          restore-keys: |
+            gradle-${{ runner.os }}-v1
+
       # 注：这里不需要装 libwebkit2gtk-4.1-dev / libappindicator3-dev / librsvg2-dev /
       # patchelf / libssl-dev —— 那些是 Linux 桌面端构建依赖（GTK WebView、系统托盘、
       # ELF rpath、OpenSSL）。APK 是 Android 交叉编译（Rust 用 rustls，图标输入是 PNG），
@@ -456,11 +469,26 @@ jobs:
           JAVA_HOME: ${{ env.JAVA_HOME }}
           NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
         run: |
-          if [ "$IS_DEBUG" = "true" ]; then
-            npx tauri android build --target aarch64 --debug
-          else
-            npx tauri android build --target aarch64
-          fi
+          # Maven Central 偶发 429 限流（GitHub Runner 共享 IP），自动重试 3 次。
+          # 依赖已缓存（~/.gradle）+ Rust target 已缓存，重试不会全量重下。
+          for i in 1 2 3; do
+            echo "===== APK 构建尝试 $i/3 ====="
+            if [ "$IS_DEBUG" = "true" ]; then
+              npx tauri android build --target aarch64 --debug
+            else
+              npx tauri android build --target aarch64
+            fi
+            if [ $? -eq 0 ]; then
+              echo "APK 构建成功"
+              break
+            fi
+            echo "!!!! APK 构建失败（第 $i 次），可能是 Maven Central 429 限流，20s 后重试"
+            if [ "$i" -ge 3 ]; then
+              echo "!!!! APK 构建连续 3 次失败"
+              exit 1
+            fi
+            sleep 20
+          done
 
       # Debug 包已用 debug keystore 自动签名；仅 Release 包需要手动签名
       - name: Sign APK with debug keystore
