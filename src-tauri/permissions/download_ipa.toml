@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-download-ipa"
+description = "允许调用 download_ipa 命令下载 IPA 文件到本地缓存（仅 iOS）"
+commands.allow = ["download_ipa"]
+
+[[permission]]
+identifier = "deny-download-ipa"
+description = "禁止调用 download_ipa 命令"
+commands.deny = ["download_ipa"]

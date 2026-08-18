@@ -412,7 +412,7 @@ jobs:
           fi
 
           # ==================== APK 自更新：FileProvider + 安装权限 ====================
-          # tauri-plugin-hot-update 命令 download_and_install_apk 下载 APK 到 app cache 目录后，
+          # 自定义命令 download_and_install_apk（src-tauri/src/lib.rs）下载 APK 到 app cache 目录后，
           # 通过 FileProvider 生成 content URI 并触发 ACTION_VIEW Intent 让系统安装器覆盖安装。
           # 需要：
           #   1. REQUEST_INSTALL_PACKAGES 权限（Android 8+ 安装未知来源 APK 必需）
@@ -625,12 +625,13 @@ jobs:
             src-tauri/gen/ios/build/*/*.ipa
 
   # ==================== 热更新包（前端资源 OTA） ====================
-  # 构建前端 out/ 目录，用 hot-update-sign 签名生成 manifest.json + bundle tar.gz，
+  # 构建前端 out/ 目录，用 tauri-plugin-hotswap 方案打包签名：
+  #   frontend-<seq>.tar.gz（bundle）+ hotswap.json（manifest，含签名/sequence/min_binary_version）
   # 上传为 artifact，由 publish-artifacts 下载后发布到服务器 /artifacts/webapp/。
   # 触发条件：commit 含 "hot" 关键词，或任一原生客户端构建（exe/apk/ipa）同时触发。
   # 需在 GitHub Settings → Secrets 中配置：
-  #   HOT_UPDATE_SIGN_KEY     — base64 编码的 minisign 私钥（minisign -G 生成后 base64 编码）
-  #   HOT_UPDATE_KEY_PASSWORD — 私钥密码（无加密私钥则留空）
+  #   HOT_UPDATE_SIGN_KEY — base64 编码的 minisign 私钥（minisign -G 生成后 base64 编码）。
+  #     无密码私钥即可（无需 HOT_UPDATE_KEY_PASSWORD）
   build-hot-update:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (contains(github.event.head_commit.message, 'hot') || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa'))) }}
     runs-on: ubuntu-latest
@@ -644,39 +645,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "src-tauri"
-
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
-
-      - name: Install Linux system dependencies (GTK/webkit/glib)
-        run: |
-          sudo apt-get update
-          # Tauri v2 官方依赖清单（Ubuntu 24.04 noble）+ tauri-plugin-hot-update CLI
-          # 额外需要的 glib/gobject/gio -dev 包（提供 .pc 文件供 pkg-config 查找）。
-          # 注意：libglib2.0-dev 已依赖拉入 libgobject-2.0-dev 和 libgio-2.0-dev 的 .pc 文件。
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            pkg-config \
-            libglib2.0-dev
-
-      - name: Install hot-update-sign CLI
-        run: cargo install tauri-plugin-hot-update --features cli
 
       - name: Resolve build timestamp
         id: ts
@@ -711,32 +681,46 @@ jobs:
 
       - name: Sign hot update bundle
         if: env.HAS_KEY == 'true'
-        env:
-          HOT_UPDATE_KEY_PASSWORD: ${{ secrets.HOT_UPDATE_KEY_PASSWORD }}
         run: |
+          set -e
           mkdir -p hot-update-release
-          # hot-update-sign 的 --version 必须是严格 semver（X.Y.Z 或 X.Y.Z-pre）。
-          # 把构建时间戳 20260818-144244 转成 1.0.0-20260818.144244：
-          #   - 主版本号 1.0.0 来自 tauri.conf.json 的 version 字段
-          #   - prerelease 段用时间戳（连字符替换为点），semver 允许
+          # 原生版本号（tauri.conf.json 的 version）：
+          #   - 作为 manifest.min_binary_version（最低兼容原生版本）。
+          #     热更新包基于本次源码构建，前端可能依赖新 Rust 命令/插件，
+          #     所以只对"原生版本 ≥ 本次版本"的 APP 生效。
+          #   - 拼进显示版本 version。
           NATIVE_VERSION=$(grep -E '"version"\s*:' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version"\s*:\s*"([^"]+)".*/\1/')
-          BUILD_PRERELEASE=$(echo "${{ steps.ts.outputs.BUILD_TS }}" | tr '-' '.')
-          HOT_VERSION="${NATIVE_VERSION}-${BUILD_PRERELEASE}"
-          echo "热更新 semver 版本号: ${HOT_VERSION}"
-          # --min-shell 使用当前原生版本号：
-          # 含义 = 这个热更新包只能应用在"原生版本 ≥ ${NATIVE_VERSION}"的 APP 上。
-          # 因为热更新包是基于本次源码构建的，它的前端代码可能依赖了新的 Rust 命令/插件，
-          # 所以最低兼容的原生版本就是本次构建的原生版本。
-          # 只有当用户安装了 ≥ 此版本的原生包后，才能安全应用这个热更新。
-          hot-update-sign \
-            --dist out \
-            --version "${HOT_VERSION}" \
-            --min-shell "${NATIVE_VERSION}" \
-            --key /tmp/hot-update.key \
-            --base-url "${{ env.SERVER_URL }}/artifacts/webapp" \
-            --out hot-update-release/
+          # sequence：单调递增计数器（hotswap 唯一排序依据，version 仅显示用）。
+          # 用 github.run_number（本 workflow 每次运行递增）即可。
+          SEQUENCE=${{ github.run_number }}
+          echo "sequence=${SEQUENCE}  min_binary_version=${NATIVE_VERSION}"
+          # 1) 归档 out/ 为 tar.gz：根目录必须直接含 index.html（用 -C out .）
+          tar -czf hot-update-release/frontend-${SEQUENCE}.tar.gz -C out .
+          # 2) 用 minisign 私钥签名 → frontend-${SEQUENCE}.tar.gz.sig
+          npx @tauri-apps/cli signer sign hot-update-release/frontend-${SEQUENCE}.tar.gz -k /tmp/hot-update.key
+          # 3) 生成 hotswap.json manifest：
+          #    signature        = .sig 文件全文（minisign 原始格式，untrusted comment: 开头）
+          #    url              = bundle 的绝对 HTTPS 地址（插件 require_https 强制校验非 HTTPS 拒绝）
+          #    min_binary_version = 本次原生版本（semver，插件在 download 阶段客户端强制校验）
+          #    bundle_size      = bundle 字节数（供前端按流量提示）
+          SIGNATURE=$(cat hot-update-release/frontend-${SEQUENCE}.tar.gz.sig)
+          SIZE=$(stat -c%s hot-update-release/frontend-${SEQUENCE}.tar.gz)
+          jq -n \
+            --arg version "${NATIVE_VERSION}-ota.${SEQUENCE}" \
+            --argjson sequence "${SEQUENCE}" \
+            --arg min_binary_version "${NATIVE_VERSION}" \
+            --arg url "${{ env.SERVER_URL }}/artifacts/webapp/frontend-${SEQUENCE}.tar.gz" \
+            --arg signature "${SIGNATURE}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson bundle_size "${SIZE}" \
+            '{version:$version, sequence:$sequence, min_binary_version:$min_binary_version, url:$url, signature:$signature, pub_date:$pub_date, bundle_size:$bundle_size}' \
+            > hot-update-release/hotswap.json
+          # 签名已内嵌进 manifest，无需单独分发 .sig 文件
+          rm hot-update-release/frontend-${SEQUENCE}.tar.gz.sig
           echo "热更新产物："
           ls -la hot-update-release/
+          echo "hotswap.json:"
+          cat hot-update-release/hotswap.json
 
       - name: Upload hot update bundle
         if: env.HAS_KEY == 'true'
@@ -840,7 +824,7 @@ jobs:
           if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" publish/; fi
           if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" publish/; fi
           if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" publish/; fi
-          # 热更新包（manifest.json + manifest.json.minisig + bundle-*.tar.gz）
+          # 热更新包（hotswap.json + frontend-<seq>.tar.gz）
           if [ -d "artifacts-dl/bili-live-hot-update" ]; then
             mkdir -p publish/webapp
             cp -a artifacts-dl/bili-live-hot-update/. publish/webapp/
@@ -907,8 +891,8 @@ jobs:
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
             # ==================== 热更新包发布到 webapp 目录 ====================
-            # manifest.json + manifest.json.minisig + bundle-*.tar.gz
-            # 客户端从 ${ARTIFACTS_DIR}/webapp/manifest.json 拉取热更新清单
+            # hotswap.json（manifest）+ frontend-<seq>.tar.gz（bundle）
+            # 客户端从 ${ARTIFACTS_DIR}/webapp/hotswap.json 拉取热更新清单
             if [ -d "${RELEASE_DIR}/webapp" ]; then
               mkdir -p "${ARTIFACTS_DIR}/webapp"
               cp -a "${RELEASE_DIR}/webapp/." "${ARTIFACTS_DIR}/webapp/"

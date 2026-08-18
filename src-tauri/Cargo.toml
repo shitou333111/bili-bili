@@ -39,8 +39,10 @@ tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-pldownloader = "1.0.1"
 # 热更新（三平台通用）：前端资源 OTA，类似 CodePush，仅更新 JS/CSS/HTML。
-# 初始设置 enabled:false（暗部署），生成 minisign 密钥后改为 true 启用。
-tauri-plugin-hot-update = "0.1"
+# tauri-plugin-hotswap：运行时替换 asset provider，apply/activate 后
+# window.location.reload() 立即生效（无需重启进程，iOS/Android 均可）。
+# 默认 tar.gz bundle；如改发 zip 需开启 features = ["zip"]。
+tauri-plugin-hotswap = "0.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

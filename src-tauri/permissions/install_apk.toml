@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-install-apk"
+description = "允许调用 install_apk 命令触发 Android 系统安装器（仅 Android）"
+commands.allow = ["install_apk"]
+
+[[permission]]
+identifier = "deny-install-apk"
+description = "禁止调用 install_apk 命令"
+commands.deny = ["install_apk"]

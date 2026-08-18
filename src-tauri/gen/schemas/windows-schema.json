@@ -2307,6 +2307,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the check_native_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-native-update",
+          "markdownDescription": "Enables the check_native_update command without any pre-configured scope."
+        },
+        {
           "description": "Enables the close_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-close-activity-panel",
@@ -2325,10 +2331,40 @@
           "markdownDescription": "Enables the debug_acl command without any pre-configured scope."
         },
         {
+          "description": "Enables the download_and_install_apk command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-and-install-apk",
+          "markdownDescription": "Enables the download_and_install_apk command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_and_open_ipa command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-and-open-ipa",
+          "markdownDescription": "Enables the download_and_open_ipa command without any pre-configured scope."
+        },
+        {
+          "description": "允许调用 download_apk 命令下载 APK 文件到本地缓存（仅 Android）",
+          "type": "string",
+          "const": "allow-download-apk",
+          "markdownDescription": "允许调用 download_apk 命令下载 APK 文件到本地缓存（仅 Android）"
+        },
+        {
+          "description": "允许调用 download_ipa 命令下载 IPA 文件到本地缓存（仅 iOS）",
+          "type": "string",
+          "const": "allow-download-ipa",
+          "markdownDescription": "允许调用 download_ipa 命令下载 IPA 文件到本地缓存（仅 iOS）"
+        },
+        {
           "description": "Enables the fetch_json command without any pre-configured scope.",
           "type": "string",
           "const": "allow-fetch-json",
           "markdownDescription": "Enables the fetch_json command without any pre-configured scope."
+        },
+        {
+          "description": "允许调用 install_apk 命令触发 Android 系统安装器（仅 Android）",
+          "type": "string",
+          "const": "allow-install-apk",
+          "markdownDescription": "允许调用 install_apk 命令触发 Android 系统安装器（仅 Android）"
         },
         {
           "description": "Enables the open_activity_panel command without any pre-configured scope.",
@@ -2341,6 +2377,18 @@
           "type": "string",
           "const": "allow-open-real-activity-panel",
           "markdownDescription": "Enables the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）",
+          "type": "string",
+          "const": "allow-restart-app",
+          "markdownDescription": "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）"
+        },
+        {
+          "description": "Denies the check_native_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-native-update",
+          "markdownDescription": "Denies the check_native_update command without any pre-configured scope."
         },
         {
           "description": "Denies the close_activity_panel command without any pre-configured scope.",
@@ -2361,10 +2409,40 @@
           "markdownDescription": "Denies the debug_acl command without any pre-configured scope."
         },
         {
+          "description": "Denies the download_and_install_apk command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-and-install-apk",
+          "markdownDescription": "Denies the download_and_install_apk command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_and_open_ipa command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-and-open-ipa",
+          "markdownDescription": "Denies the download_and_open_ipa command without any pre-configured scope."
+        },
+        {
+          "description": "禁止调用 download_apk 命令",
+          "type": "string",
+          "const": "deny-download-apk",
+          "markdownDescription": "禁止调用 download_apk 命令"
+        },
+        {
+          "description": "禁止调用 download_ipa 命令",
+          "type": "string",
+          "const": "deny-download-ipa",
+          "markdownDescription": "禁止调用 download_ipa 命令"
+        },
+        {
           "description": "Denies the fetch_json command without any pre-configured scope.",
           "type": "string",
           "const": "deny-fetch-json",
           "markdownDescription": "Denies the fetch_json command without any pre-configured scope."
+        },
+        {
+          "description": "禁止调用 install_apk 命令",
+          "type": "string",
+          "const": "deny-install-apk",
+          "markdownDescription": "禁止调用 install_apk 命令"
         },
         {
           "description": "Denies the open_activity_panel command without any pre-configured scope.",
@@ -2377,6 +2455,12 @@
           "type": "string",
           "const": "deny-open-real-activity-panel",
           "markdownDescription": "Denies the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "禁止调用 restart_app 命令",
+          "type": "string",
+          "const": "deny-restart-app",
+          "markdownDescription": "禁止调用 restart_app 命令"
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
@@ -6147,70 +6231,118 @@
           "markdownDescription": "This enables all file write related commands without any pre-configured accessible paths."
         },
         {
-          "description": "Default permissions for the hot-update plugin\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-notify-app-ready`\n- `allow-current-bundle`\n- `allow-reset`",
+          "description": "Default permissions for the Hotswap plugin\n#### This default permission set includes:\n\n- `allow-hotswap-check`\n- `allow-hotswap-apply`\n- `allow-hotswap-download`\n- `allow-hotswap-activate`\n- `allow-hotswap-rollback`\n- `allow-hotswap-current-version`\n- `allow-hotswap-notify-ready`\n- `allow-hotswap-configure`\n- `allow-hotswap-get-config`",
           "type": "string",
-          "const": "hot-update:default",
-          "markdownDescription": "Default permissions for the hot-update plugin\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-notify-app-ready`\n- `allow-current-bundle`\n- `allow-reset`"
+          "const": "hotswap:default",
+          "markdownDescription": "Default permissions for the Hotswap plugin\n#### This default permission set includes:\n\n- `allow-hotswap-check`\n- `allow-hotswap-apply`\n- `allow-hotswap-download`\n- `allow-hotswap-activate`\n- `allow-hotswap-rollback`\n- `allow-hotswap-current-version`\n- `allow-hotswap-notify-ready`\n- `allow-hotswap-configure`\n- `allow-hotswap-get-config`"
         },
         {
-          "description": "Enables the check command without any pre-configured scope.",
+          "description": "Enables the hotswap_activate command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:allow-check",
-          "markdownDescription": "Enables the check command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-activate",
+          "markdownDescription": "Enables the hotswap_activate command without any pre-configured scope."
         },
         {
-          "description": "Enables the current_bundle command without any pre-configured scope.",
+          "description": "Enables the hotswap_apply command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:allow-current-bundle",
-          "markdownDescription": "Enables the current_bundle command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-apply",
+          "markdownDescription": "Enables the hotswap_apply command without any pre-configured scope."
         },
         {
-          "description": "Enables the download command without any pre-configured scope.",
+          "description": "Enables the hotswap_check command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:allow-download",
-          "markdownDescription": "Enables the download command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-check",
+          "markdownDescription": "Enables the hotswap_check command without any pre-configured scope."
         },
         {
-          "description": "Enables the notify_app_ready command without any pre-configured scope.",
+          "description": "Enables the hotswap_configure command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:allow-notify-app-ready",
-          "markdownDescription": "Enables the notify_app_ready command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-configure",
+          "markdownDescription": "Enables the hotswap_configure command without any pre-configured scope."
         },
         {
-          "description": "Enables the reset command without any pre-configured scope.",
+          "description": "Enables the hotswap_current_version command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:allow-reset",
-          "markdownDescription": "Enables the reset command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-current-version",
+          "markdownDescription": "Enables the hotswap_current_version command without any pre-configured scope."
         },
         {
-          "description": "Denies the check command without any pre-configured scope.",
+          "description": "Enables the hotswap_download command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:deny-check",
-          "markdownDescription": "Denies the check command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-download",
+          "markdownDescription": "Enables the hotswap_download command without any pre-configured scope."
         },
         {
-          "description": "Denies the current_bundle command without any pre-configured scope.",
+          "description": "Enables the hotswap_get_config command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:deny-current-bundle",
-          "markdownDescription": "Denies the current_bundle command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-get-config",
+          "markdownDescription": "Enables the hotswap_get_config command without any pre-configured scope."
         },
         {
-          "description": "Denies the download command without any pre-configured scope.",
+          "description": "Enables the hotswap_notify_ready command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:deny-download",
-          "markdownDescription": "Denies the download command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-notify-ready",
+          "markdownDescription": "Enables the hotswap_notify_ready command without any pre-configured scope."
         },
         {
-          "description": "Denies the notify_app_ready command without any pre-configured scope.",
+          "description": "Enables the hotswap_rollback command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:deny-notify-app-ready",
-          "markdownDescription": "Denies the notify_app_ready command without any pre-configured scope."
+          "const": "hotswap:allow-hotswap-rollback",
+          "markdownDescription": "Enables the hotswap_rollback command without any pre-configured scope."
         },
         {
-          "description": "Denies the reset command without any pre-configured scope.",
+          "description": "Denies the hotswap_activate command without any pre-configured scope.",
           "type": "string",
-          "const": "hot-update:deny-reset",
-          "markdownDescription": "Denies the reset command without any pre-configured scope."
+          "const": "hotswap:deny-hotswap-activate",
+          "markdownDescription": "Denies the hotswap_activate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-apply",
+          "markdownDescription": "Denies the hotswap_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-check",
+          "markdownDescription": "Denies the hotswap_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-configure",
+          "markdownDescription": "Denies the hotswap_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_current_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-current-version",
+          "markdownDescription": "Denies the hotswap_current_version command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-download",
+          "markdownDescription": "Denies the hotswap_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_get_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-get-config",
+          "markdownDescription": "Denies the hotswap_get_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_notify_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-notify-ready",
+          "markdownDescription": "Denies the hotswap_notify_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hotswap_rollback command without any pre-configured scope.",
+          "type": "string",
+          "const": "hotswap:deny-hotswap-rollback",
+          "markdownDescription": "Denies the hotswap_rollback command without any pre-configured scope."
         },
         {
           "description": "This permission set configures what kind of\nfetch operations are available from the http plugin.\n\nThis enables all fetch operations but does not\nallow explicitly any origins to be fetched. This needs to\nbe manually configured before usage.\n\n#### Granted Permissions\n\nAll fetch operations are enabled.\n\n\n#### This default permission set includes:\n\n- `allow-fetch`\n- `allow-fetch-cancel`\n- `allow-fetch-send`\n- `allow-fetch-read-body`\n- `allow-fetch-cancel-body`",

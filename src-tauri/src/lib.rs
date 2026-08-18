@@ -927,16 +927,12 @@ async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Resul
     }))
 }
 
-/// Android：下载 APK 并触发系统安装器
-/// 1. 用 reqwest 下载 APK 到 app cache 目录
-/// 2. 通过 JNI 创建 FileProvider content URI + ACTION_VIEW Intent
-/// 3. 系统弹窗提示用户覆盖安装（同包名+同签名密钥 → 数据保留）
-/// 需 AndroidManifest 注册 FileProvider + REQUEST_INSTALL_PACKAGES 权限（CI 注入）
+/// Android：仅下载 APK 到 app cache 目录，返回文件路径
+/// 前端拿到路径后可调用 install_apk() 触发系统安装器。
+/// 拆分原因：支持"静默后台先下载，用户点击按钮再安装"的统一用户体验。
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    use jni::objects::JValue;
-
+async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, String> {
     // 1. 下载 APK
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -962,8 +958,18 @@ async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<
     std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
     let apk_path = cache_dir.join("update.apk");
     std::fs::write(&apk_path, &bytes).map_err(|e| format!("写入 APK 文件失败: {}", e))?;
+    Ok(apk_path.to_string_lossy().to_string())
+}
 
-    // 3. 通过 JNI 触发系统安装器
+/// Android：调用系统安装器安装已下载好的 APK 文件
+/// 前端先调用 download_apk() 获取路径，再传入此函数触发安装器。
+/// 需 AndroidManifest 注册 FileProvider + REQUEST_INSTALL_PACKAGES 权限（CI 注入）
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn install_apk(app: tauri::AppHandle, apk_path: String) -> Result<(), String> {
+    use jni::objects::JValue;
+
+    // 通过 JNI 触发系统安装器
     let main_wv = app.get_webview("main").ok_or("找不到主 webview")?;
 
     main_wv
@@ -1119,19 +1125,206 @@ async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<
     Ok(())
 }
 
-/// 非 Android 平台的 stub（保证 invoke_handler 在所有平台编译通过）
+/// Android：重启 APP
+/// 流程：AlarmManager.set(100ms 后拉起本包 LAUNCHER Activity) → 立即 killProcess(...)
+/// 系统会在 100ms 后启动一个全新进程，等同于冷启动，新前端 bundle 生效。
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
+    use jni::objects::JValue;
+
+    let main_wv = app.get_webview("main").ok_or("找不到主 webview")?;
+    main_wv.with_webview(move |platform_wv| {
+        platform_wv.jni_handle().exec(move |env, activity, _webview| {
+            if activity.is_null() {
+                eprintln!("[BILI-RESTART] activity 为空");
+                return;
+            }
+
+            // 1. 获取包名
+            let pkg_obj = match env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[]) {
+                Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                Err(e) => { eprintln!("[BILI-RESTART] getPackageName 失败: {e}"); return; }
+            };
+            let pkg_str: String = if pkg_obj.is_null() {
+                eprintln!("[BILI-RESTART] getPackageName 返回空");
+                return;
+            } else {
+                env.get_string(&pkg_obj.into()).map(|s| s.into()).unwrap_or_default()
+            };
+
+            // 2. 用 PackageManager.getLaunchIntentForPackage(pkg) 获取启动本 APP 的 Intent
+            //    这是最简单可靠的方式（不用 hardcode Activity 类名）
+            let pm_obj = match env.call_method(
+                activity,
+                "getPackageManager",
+                "()Landroid/content/pm/PackageManager;",
+                &[],
+            ) {
+                Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                Err(e) => { eprintln!("[BILI-RESTART] getPackageManager 失败: {e}"); return; }
+            };
+            if pm_obj.is_null() {
+                eprintln!("[BILI-RESTART] PackageManager 为空");
+                return;
+            }
+            let pkg_jstr = match env.new_string(&pkg_str) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[BILI-RESTART] new_string pkg 失败: {e}"); return; }
+            };
+            let intent_obj = match env.call_method(
+                &pm_obj,
+                "getLaunchIntentForPackage",
+                "(Ljava/lang/String;)Landroid/content/Intent;",
+                &[JValue::Object(&pkg_jstr)],
+            ) {
+                Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                Err(e) => { eprintln!("[BILI-RESTART] getLaunchIntentForPackage 失败: {e}"); return; }
+            };
+            if intent_obj.is_null() {
+                eprintln!("[BILI-RESTART] launch intent 为空");
+                return;
+            }
+            // FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_NEW_TASK：确保新 Activity 覆盖整个返回栈
+            const FLAGS: i32 = 0x00008000 | 0x10000000; // CLEAR_TOP | NEW_TASK
+            if let Err(e) = env.call_method(&intent_obj, "addFlags", "(I)Landroid/content/Intent;", &[JValue::Int(FLAGS)]) {
+                eprintln!("[BILI-RESTART] addFlags 失败: {e}");
+                return;
+            }
+
+            // 3. 包装 Intent 为 PendingIntent.getBroadcast → 用 AlarmManager.RTC_WAKEUP 设 150ms 后触发
+            //    使用 PendingIntent.getActivity 直接拉起 Activity
+            let context_class = match env.find_class("android/content/Context") {
+                Ok(c) => c,
+                Err(e) => { eprintln!("[BILI-RESTART] find_class Context 失败: {e}"); return; }
+            };
+            let alarm_service_field = match env.get_static_field(context_class, "ALARM_SERVICE", "Ljava/lang/String;") {
+                Ok(f) => f,
+                Err(e) => { eprintln!("[BILI-RESTART] ALARM_SERVICE field 失败: {e}"); return; }
+            };
+            let alarm_service_jstr = match alarm_service_field.l() {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[BILI-RESTART] ALARM_SERVICE get 失败: {e}"); return; }
+            };
+            let alarm_service = if alarm_service_jstr.is_null() {
+                eprintln!("[BILI-RESTART] ALARM_SERVICE 为空");
+                return;
+            } else {
+                env.get_string(&alarm_service_jstr.into()).map(|s| s.into()).unwrap_or_default()
+            };
+            let alarm_service_arg = match env.new_string(&alarm_service) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[BILI-RESTART] new_string alarm_service 失败: {e}"); return; }
+            };
+            let am_obj = match env.call_method(
+                activity,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[JValue::Object(&alarm_service_arg)],
+            ) {
+                Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                Err(e) => { eprintln!("[BILI-RESTART] getSystemService 失败: {e}"); return; }
+            };
+            if am_obj.is_null() {
+                eprintln!("[BILI-RESTART] AlarmManager 为空");
+                return;
+            }
+
+            // 4. 创建 PendingIntent.getActivity
+            let pi_class = match env.find_class("android/app/PendingIntent") {
+                Ok(c) => c,
+                Err(e) => { eprintln!("[BILI-RESTART] find_class PendingIntent 失败: {e}"); return; }
+            };
+            // requestCode = 12345（任意值，唯一即可）
+            const REQUEST_CODE: i32 = 12345;
+            // flags: FLAG_IMMUTABLE (0x04000000)
+            const PI_FLAGS: i32 = 0x04000000; // FLAG_IMMUTABLE
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64 + 150) // 150ms 后
+                .unwrap_or(150);
+
+            let pi_obj = match env.call_static_method(
+                pi_class,
+                "getActivity",
+                "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+                &[
+                    JValue::Object(activity),
+                    JValue::Int(REQUEST_CODE),
+                    JValue::Object(&intent_obj),
+                    JValue::Int(PI_FLAGS),
+                ],
+            ) {
+                Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                Err(e) => { eprintln!("[BILI-RESTART] PendingIntent.getActivity 失败: {e}"); return; }
+            };
+            if pi_obj.is_null() {
+                eprintln!("[BILI-RESTART] PendingIntent 为空");
+                return;
+            }
+
+            // 5. AlarmManager.set(RTC_WAKEUP, triggerAtMillis, pi)
+            const RTC_WAKEUP: i32 = 0;
+            if let Err(e) = env.call_method(
+                &am_obj,
+                "set",
+                "(IJLandroid/app/PendingIntent;)V",
+                &[
+                    JValue::Int(RTC_WAKEUP),
+                    JValue::Long(current_time),
+                    JValue::Object(&pi_obj),
+                ],
+            ) {
+                eprintln!("[BILI-RESTART] AlarmManager.set 失败: {e}");
+                return;
+            }
+
+            // 6. 立即杀掉自己（Process.killProcess(Process.myPid())）
+            let proc_class = match env.find_class("android/os/Process") {
+                Ok(c) => c,
+                Err(e) => { eprintln!("[BILI-RESTART] find_class Process 失败: {e}"); return; }
+            };
+            let my_pid = match env.call_static_method(proc_class, "myPid", "()I", &[]) {
+                Ok(v) => v.i().unwrap_or(0),
+                Err(e) => { eprintln!("[BILI-RESTART] myPid 失败: {e}"); return; }
+            };
+            let _ = env.call_static_method(proc_class, "killProcess", "(I)V", &[JValue::Int(my_pid)]);
+        });
+    }).map_err(|e| format!("with_webview 派发失败: {}", e))
+}
+
+/// 非 Android 平台的 restart_app（保持编译通过）
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn restart_app(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("restart_app 仅 Android 实现；桌面端用 process 插件，iOS 无 API".into())
+}
+
+/// 非 Android 平台的 APK 命令 stub（保证 invoke_handler 在所有平台编译通过）
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn download_and_install_apk(_app: tauri::AppHandle, _url: String) -> Result<(), String> {
     Err("APK 安装仅在 Android 平台可用".into())
 }
 
-/// iOS：下载 IPA 并返回文件路径
-/// 前端拿到路径后用 @tauri-apps/plugin-opener 的 open() 触发"Open In"面板，
-/// 用户选择 Esign/Feather 等自签工具打开 IPA 进行覆盖安装。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn download_apk(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+    Err("download_apk 仅在 Android 平台可用".into())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn install_apk(_app: tauri::AppHandle, _apk_path: String) -> Result<(), String> {
+    Err("install_apk 仅在 Android 平台可用".into())
+}
+
+/// iOS：仅下载 IPA 到 app cache 目录，返回文件路径
+/// 前端拿到路径后可再次调用或直接用 openPath 触发"Open In"面板。
+/// 拆分与 download_apk 相同的目的：静默下载，用户点击按钮再打开面板。
 #[cfg(target_os = "ios")]
 #[tauri::command]
-async fn download_and_open_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
+async fn download_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
     // 1. 下载 IPA
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -1158,8 +1351,14 @@ async fn download_and_open_ipa(app: tauri::AppHandle, url: String) -> Result<Str
     let ipa_path = cache_dir.join("update.ipa");
     std::fs::write(&ipa_path, &bytes).map_err(|e| format!("写入 IPA 文件失败: {}", e))?;
 
-    // 3. 返回文件路径，前端用 opener 打开触发"Open In"面板
     Ok(ipa_path.to_string_lossy().to_string())
+}
+
+/// iOS：download_and_open_ipa = download_ipa 保持兼容（不破坏旧调用）
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn download_and_open_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    download_ipa(app, url).await
 }
 
 /// 非 iOS 平台的 stub
@@ -1169,21 +1368,30 @@ async fn download_and_open_ipa(_app: tauri::AppHandle, _url: String) -> Result<S
     Err("IPA 安装仅在 iOS 平台可用".into())
 }
 
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn download_ipa(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+    Err("download_ipa 仅在 iOS 平台可用".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // ==================== 热更新插件初始化 ====================
-    // tauri-plugin-hot-update：三平台通用的前端资源 OTA（CodePush 风格）。
-    // 必须在任何窗口/webview 创建之前注册（FIRST），因为插件在 setup hook 中
-    // 执行 staged→booting 指针提升，需在 webview 加载资源前完成。
-    // 初始 enabled:false（暗部署模式），生成 minisign 密钥后改为 true 启用。
-    let mut context = tauri::generate_context!();
-    let hot_update = tauri_plugin_hot_update::install(&mut context);
+    // tauri-plugin-hotswap：三平台通用的前端资源 OTA（CodePush 风格）。
+    // 与 hot-update 不同：hotswap 在启动时用 Context::set_assets() 替换 embedded
+    // asset provider，live_asset_dir 是运行时共享的 Arc<RwLock>，apply/activate 后
+    // 立即切换，window.location.reload() 即加载新资源（无需重启进程，iOS 也可用）。
+    // init() 必须最先调用：它消费原 context 并返回替换了 asset provider 的新 context，
+    // 后续 Builder 必须用新 context run，WebView 才从 hotswap 服务资源。
+    let context = tauri::generate_context!();
+    let (hotswap, context) =
+        tauri_plugin_hotswap::init(context).expect("failed to initialize hotswap plugin");
 
     // builder 仅在移动端因插件注册需要 mut；桌面端不加允许属性会产生 unused_mut 警告。
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
-        // 热更新插件必须最先注册，确保 setup hook 在任何资源加载前执行
-        .plugin(tauri_plugin_hot_update::init(hot_update))
+        // 热更新插件（asset provider 替换已在 init() 完成，这里注册命令与状态）
+        .plugin(hotswap)
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -1285,7 +1493,11 @@ pub fn run() {
             close_real_activity_panel,
             check_native_update,
             download_and_install_apk,
+            download_apk,
+            install_apk,
             download_and_open_ipa,
+            download_ipa,
+            restart_app,
         ])
         .run(context)
         .expect("error while running tauri application");

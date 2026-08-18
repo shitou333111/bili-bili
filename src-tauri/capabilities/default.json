@@ -19,6 +19,10 @@
     "allow-check-native-update",
     "allow-download-and-install-apk",
     "allow-download-and-open-ipa",
+    "allow-download-apk",
+    "allow-install-apk",
+    "allow-download-ipa",
+    "allow-restart-app",
     {
       "identifier": "http:default",
       "allow": [
@@ -33,6 +37,6 @@
     "store:default",
     "opener:default",
     "pldownloader:default",
-    "hot-update:default"
+    "hotswap:default"
   ]
 }

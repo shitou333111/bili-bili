@@ -2,16 +2,22 @@
  * 统一更新模块
  *
  * 两层更新策略：
- * 1. 热更新（前端资源 OTA）：tauri-plugin-hot-update，三平台通用，
- *    仅更新 JS/CSS/HTML，下次冷启动生效，支持自动回滚防砖。
+ * 1. 热更新（前端资源 OTA）：tauri-plugin-hotswap，三平台通用，
+ *    仅更新 JS/CSS/HTML。运行时替换 asset provider，apply/activate 后
+ *    window.location.reload() 立即生效（无需重启进程，iOS/Android 也可用中更新）。
  * 2. 原生包更新：替换整个安装包
  *    - Windows: tauri-plugin-updater 官方插件（下载+安装+自动重启）
- *    - Android: 自定义命令 download_and_install_apk（下载 APK + 触发系统安装器）
- *    - iOS: 自定义命令 download_and_open_ipa（下载 IPA + Open In 面板交自签工具）
+ *    - Android: 自定义命令 download_apk/install_apk（下载 APK + 触发系统安装器）
+ *    - iOS: 自定义命令 download_ipa + Open In 面板（交自签工具覆盖安装）
  *
  * 版本显示格式：V1.0.0 (2026-08-18)
  *   - V1.0.0：原生版本号（来自 tauri.conf.json 的 version，仅原生更新会变）
  *   - 2026-08-18：前端构建日期（来自 NEXT_PUBLIC_BUILD_DATE，热更新会变）
+ *
+ * 热更新 UX（与原生更新统一）：
+ *   - 启动静默检查 + 静默下载（downloadUpdate，不激活）→ 卡片"前端更新已就绪"
+ *   - 用户点"立即生效"→ activateUpdate() + location.reload()（无需重启进程）
+ *   - 防砖：每次启动 notifyReady() 确认当前版本可用，未确认则下次启动自动回滚
  */
 
 import { isTauri, serverFetch, serverApiUrl } from "./server-api";
@@ -27,11 +33,11 @@ export type UpdateType = "hot" | "native" | "none";
 export interface HotUpdateInfo {
   available: boolean;
   version?: string;
+  /** 热更新单调递增序号（hotswap 的唯一排序依据） */
+  sequence?: number;
   error?: string;
-  /** shellTooOld = 热更新有新版本但原生版本太低，需要先装原生更新 */
+  /** shellTooOld = 热更新有新版本但原生版本太低（min_binary_version 不满足），需要先装原生更新 */
   shellTooOld?: boolean;
-  /** alreadyStaged = 热更新已下载暂存，下次冷启动生效 */
-  alreadyStaged?: boolean;
 }
 
 export interface NativeUpdateInfo {
@@ -157,28 +163,55 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
   return { hot, native, recommended };
 }
 
-/** 检查热更新（tauri-plugin-hot-update） */
+/** 简单 semver 比较（忽略 prerelease/build 段），返回 a < b */
+function isVersionLt(a: string, b: string): boolean {
+  const pa = (a.split("-")[0] || a).split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = (b.split("-")[0] || b).split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/** 检查热更新（tauri-plugin-hotswap） */
 async function checkHotUpdate(): Promise<HotUpdateInfo> {
   try {
-    const { check } = await import("tauri-plugin-hot-update-api");
-    const outcome = await check();
-    // status: available | upToDate | blacklisted | shellTooOld | alreadyStaged
-    // 注意：CheckOutcome 在 "available" 分支下 version 嵌套在 manifest.version，
-    // 不是直接挂在 outcome 上；其他分支可能都没有 version 字段。
-    // 用 any 做兜底安全访问，避免类型不匹配导致构建报错。
-    const o = outcome as any;
-    const version: string | undefined = o?.manifest?.version || o?.version;
-    const shellTooOld = outcome.status === "shellTooOld";
-    const alreadyStaged = outcome.status === "alreadyStaged";
+    const { checkUpdate } = await import("tauri-plugin-hotswap-api");
+    const result = await checkUpdate();
+    // checkUpdate() 内部已做两道门（见插件 updater.rs check_update）：
+    //   1. min_binary_version 门：当前原生版本 < manifest.min_binary_version → 跳过（available=false，不暴露原因）
+    //   2. sequence 门：manifest.sequence <= 当前 sequence → 无更新
+    // 因此 shellTooOld 无法从 checkUpdate 直接判断，需自己拉 hotswap.json
+    // 比对 min_binary_version 与当前原生版本。
+    let shellTooOld = false;
+    let version: string | undefined = result.version || undefined;
+    if (!result.available) {
+      try {
+        const manifest = await serverFetch<{
+          version?: string;
+          min_binary_version?: string;
+        }>("/artifacts/webapp/hotswap.json", { cache: "no-store" });
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const native = await getVersion();
+        const min = manifest?.min_binary_version;
+        if (min && native && isVersionLt(native, min)) {
+          shellTooOld = true;
+          version = manifest.version || undefined;
+        }
+      } catch {
+        // 拉不到 hotswap.json 就当作无更新
+      }
+    }
     return {
-      // alreadyStaged 也算"可更新"（只是下载过了），UI 会提示"重启即生效"
-      available: outcome.status === "available" || alreadyStaged,
+      available: result.available,
       version,
+      sequence: result.sequence || undefined,
       shellTooOld,
-      alreadyStaged,
     };
   } catch (e: any) {
-    // 插件未启用（enabled:false 暗部署）或非 OTA bundle 时会返回 upToDate / 抛错
+    // 网络失败 / 插件未启用等：返回错误，与"无更新"区分
     return { available: false, error: String(e?.message || e) };
   }
 }
@@ -231,42 +264,105 @@ async function checkNativeUpdate(): Promise<NativeUpdateInfo> {
 export type DownloadProgress = { downloaded: number; total: number };
 export type ProgressCb = (p: DownloadProgress) => void;
 
-/** 热更新下载结果 */
+/** 热更新应用结果（hotswap：apply = 下载+校验+激活一步） */
 export interface HotUpdateApplyResult {
-  /** staged = 已暂存，下次冷启动生效；upToDate = 无需更新；alreadyStaged = 已暂存过 */
-  status: "staged" | "upToDate" | "alreadyStaged" | "blacklisted" | "shellTooOld" | "error";
+  /** applied = 已下载+激活，reload 即生效；error = 失败 */
+  status: "applied" | "error";
   version?: string;
   error?: string;
 }
 
 /**
- * 应用热更新（下载 + 验证 + stage，下次冷启动生效）
- * 进度回调通过 tauri-plugin-hot-update-api 的 onDownloadProgress 事件
+ * 应用热更新（下载 + 验证 + 激活一步，hotswap applyUpdate）
+ * 激活后 asset provider 已切换，window.location.reload() 立即生效（无需重启进程）。
+ * 进度回调通过 tauri-plugin-hotswap-api 的 onDownloadProgress 事件
  */
 export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdateApplyResult> {
   if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
   try {
-    const { download, onDownloadProgress } = await import("tauri-plugin-hot-update-api");
+    const { applyUpdate, onDownloadProgress } = await import("tauri-plugin-hotswap-api");
     let unlisten: (() => void) | null = null;
     if (onProgress) {
-      unlisten = await onDownloadProgress((p) => onProgress(p));
+      unlisten = await onDownloadProgress((p) =>
+        onProgress({ downloaded: p.downloaded, total: p.total || 0 }),
+      );
     }
     try {
-      const outcome = await download();
-      // DownloadOutcome 的 version 可能在 outcome.manifest.version 或 outcome.version，
-      // 用 any 做兜底安全访问，避免类型不匹配。
-      const o = outcome as any;
-      const version: string | undefined = o?.manifest?.version || o?.version;
-      return {
-        status: outcome.status as HotUpdateApplyResult["status"],
-        version,
-      };
+      const version = await applyUpdate();
+      return { status: "applied", version };
     } finally {
       unlisten?.();
     }
   } catch (e: any) {
     return { status: "error", error: String(e?.message || e) };
   }
+}
+
+/** 热更新静默下载结果（hotswap：download 只下载不激活） */
+export interface HotDownloadResult {
+  status: "downloaded" | "error";
+  version?: string;
+  error?: string;
+}
+
+/**
+ * 静默下载热更新（hotswap downloadUpdate，下载+校验但不激活）。
+ * 下载完成后用户点"立即生效"才 activateUpdate() + reload，与原生更新
+ * "静默下载 → 点按钮安装"的用户体验统一。
+ * 需先调用过 checkUpdate（hotswap 的 download 依赖 pending manifest）。
+ */
+export async function downloadHotUpdateSilently(onProgress?: ProgressCb): Promise<HotDownloadResult> {
+  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
+  try {
+    const { downloadUpdate, onDownloadProgress } = await import("tauri-plugin-hotswap-api");
+    let unlisten: (() => void) | null = null;
+    if (onProgress) {
+      unlisten = await onDownloadProgress((p) =>
+        onProgress({ downloaded: p.downloaded, total: p.total || 0 }),
+      );
+    }
+    try {
+      const version = await downloadUpdate();
+      return { status: "downloaded", version };
+    } finally {
+      unlisten?.();
+    }
+  } catch (e: any) {
+    return { status: "error", error: String(e?.message || e) };
+  }
+}
+
+/** 热更新激活结果（hotswap activateUpdate） */
+export interface HotActivateResult {
+  status: "activated" | "error";
+  version?: string;
+  error?: string;
+}
+
+/**
+ * 激活已下载的热更新（hotswap activateUpdate）。
+ * 激活后 live asset provider 立即切换到新 bundle，window.location.reload() 即生效。
+ * 供"立即生效"按钮调用；需先 downloadHotUpdateSilently 下载过。
+ */
+export async function activateHotUpdate(): Promise<HotActivateResult> {
+  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
+  try {
+    const { activateUpdate } = await import("tauri-plugin-hotswap-api");
+    const version = await activateUpdate();
+    return { status: "activated", version };
+  } catch (e: any) {
+    return { status: "error", error: String(e?.message || e) };
+  }
+}
+
+/** 原生更新静默下载结果 */
+export interface NativeDownloadResult {
+  status: "downloaded" | "downloading" | "error" | "updaterAvailable";
+  /** Android/iOS: 本地文件路径；Windows: 空（官方 updater 自己管） */
+  filePath?: string;
+  /** 当前平台 */
+  platform?: "windows" | "macos" | "linux" | "android" | "ios";
+  error?: string;
 }
 
 /** 原生更新应用结果 */
@@ -282,10 +378,110 @@ export interface NativeUpdateApplyResult {
 }
 
 /**
- * 应用原生更新（平台特定）
+ * 静默下载原生更新安装包（统一体验：先后台下，再点按钮安装）
+ * - Windows/macOS/Linux: 官方 updater 插件自行管理下载过程，此处不实际下载，
+ *   返回 status="updaterAvailable"，点击安装时交给官方 downloadAndInstall（一步到位）。
+ * - Android: 后台静默下载 APK 到 cache，返回路径
+ * - iOS: 后台静默下载 IPA 到 cache，返回路径
+ * @param onProgress 进度回调（大文件下载时显示百分比）
+ */
+export async function downloadNativeSilently(
+  downloadUrl: string,
+  onProgress?: ProgressCb,
+): Promise<NativeDownloadResult> {
+  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
+  if (!downloadUrl) return { status: "error", error: "缺少下载地址" };
+
+  const platform = detectPlatform();
+  if (platform === "windows" || platform === "macos" || platform === "linux") {
+    // 桌面端：官方 updater 的 check 已经暴露了 contentLength 等元信息，
+    // 但 download 与 install 是绑定的 downloadAndInstall。这里不做预下载，
+    // 直接返回 updaterAvailable，点击安装时一步到位。
+    return { status: "updaterAvailable", platform: platform as NativeDownloadResult["platform"] };
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    // Android/iOS：静默下载
+    let total = 0;
+    let downloaded = 0;
+    let unlisten: (() => void) | null = null;
+    try {
+      // pldownloader 插件有全局下载进度事件，这里简单绑定通知 UI
+      // 如果没装/没权限也不阻塞——onProgress(undefined, ...) 忽略即可
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const pldl = await import("tauri-plugin-pldownloader-api");
+        unlisten = await listen("pldownloader://progress", (e: any) => {
+          const p = e.payload as any;
+          if (p && typeof p.total === "number" && typeof p.progress === "number") {
+            onProgress?.({ downloaded: Math.round((p.progress / 100) * p.total), total: p.total });
+          }
+        });
+      } catch { /* ignore */ }
+
+      if (platform === "android") {
+        const path = await invoke<string>("download_apk", { url: downloadUrl });
+        return { status: "downloaded", filePath: path, platform: "android" };
+      }
+      if (platform === "ios") {
+        const path = await invoke<string>("download_ipa", { url: downloadUrl });
+        return { status: "downloaded", filePath: path, platform: "ios" };
+      }
+      return { status: "error", error: `不支持的平台: ${platform}` };
+    } finally {
+      unlisten?.();
+    }
+  } catch (e: any) {
+    return { status: "error", error: String(e?.message || e) };
+  }
+}
+
+/**
+ * 安装已下载好的原生更新（用户点击按钮触发）
+ * - 桌面端: 交给官方 updater.downloadAndInstall 一步到位
+ * - Android: install_apk(path) 触发系统安装器
+ * - iOS: openPath(path) 触发 "Open In" 面板
+ */
+export async function installDownloadedNative(
+  platform: "windows" | "macos" | "linux" | "android" | "ios" | undefined,
+  filePath: string | undefined,
+  onProgress?: ProgressCb,
+): Promise<NativeUpdateApplyResult> {
+  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
+
+  const p = platform || detectPlatform();
+  if (p === "windows" || p === "macos" || p === "linux") {
+    return applyDesktopUpdate(onProgress);
+  }
+  if (p === "android") {
+    if (!filePath) return { status: "error", error: "APK 未下载" };
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("install_apk", { apkPath: filePath });
+      return { status: "installing" };
+    } catch (e: any) {
+      return { status: "error", error: String(e?.message || e) };
+    }
+  }
+  if (p === "ios") {
+    if (!filePath) return { status: "error", error: "IPA 未下载" };
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(filePath);
+      return { status: "openIn" };
+    } catch (e: any) {
+      return { status: "error", error: String(e?.message || e) };
+    }
+  }
+  return { status: "error", error: `不支持的平台: ${p}` };
+}
+
+/**
+ * 应用原生更新（保留一键旧接口，兼容代码；内部流程与新两步一致）
  * - Windows: tauri-plugin-updater 下载+安装+自动重启
- * - Android: download_and_install_apk 命令（下载 APK + 触发系统安装器）
- * - iOS: download_and_open_ipa 命令（下载 IPA + 触发 Open In 面板）
+ * - Android: 下载 APK + 触发系统安装器
+ * - iOS: 下载 IPA + 触发 Open In 面板
  */
 export async function applyNativeUpdate(
   downloadUrl: string,
@@ -299,10 +495,14 @@ export async function applyNativeUpdate(
     return applyDesktopUpdate(onProgress);
   }
   if (platform === "android") {
-    return applyAndroidUpdate(downloadUrl);
+    const d = await downloadNativeSilently(downloadUrl, onProgress);
+    if (d.status !== "downloaded") return { status: "error", error: d.error || "下载 APK 失败" };
+    return installDownloadedNative("android", d.filePath);
   }
   if (platform === "ios") {
-    return applyIosUpdate(downloadUrl);
+    const d = await downloadNativeSilently(downloadUrl, onProgress);
+    if (d.status !== "downloaded") return { status: "error", error: d.error || "下载 IPA 失败" };
+    return installDownloadedNative("ios", d.filePath);
   }
   return { status: "error", error: `不支持的平台: ${platform}` };
 }
@@ -377,7 +577,7 @@ async function applyIosUpdate(url: string): Promise<NativeUpdateApplyResult> {
 }
 
 /**
- * 通知热更新插件：当前 bundle 已成功启动
+ * 通知热更新插件：当前 bundle 已成功启动（hotswap notifyReady）
  * 每次 APP 冷启动后调用一次（在 app shell 挂载后即可）。
  * 如果当前运行的是 OTA bundle 而未调用此方法，下次启动会自动回滚到上一个好 bundle。
  * 非 OTA bundle 或插件未启用时为 no-op，可无条件调用。
@@ -385,58 +585,62 @@ async function applyIosUpdate(url: string): Promise<NativeUpdateApplyResult> {
 export async function notifyAppReady(): Promise<void> {
   if (!isTauri()) return;
   try {
-    const { notifyAppReady: notify } = await import("tauri-plugin-hot-update-api");
-    await notify();
+    const { notifyReady } = await import("tauri-plugin-hotswap-api");
+    await notifyReady();
   } catch {
     // 静默失败：插件未启用或非 OTA bundle 时为 no-op
   }
 }
 
 /**
- * 重置热更新状态（调试/支持用）
- * 清空所有 OTA 状态，下次启动回退到编译时内嵌的资源
+ * 静默检查并下载热更新（不打扰用户，后台执行）。
+ * - 检查和下载均静默，失败不抛错，返回结果供调用方判断。
+ * - 需要先满足原生更新：有原生更新时不下载热更新（min-shell 不满足或命令/插件版本不匹配）。
+ * - 下载完成后处于 "staged"（已下载待激活）状态，用户点"立即生效"才激活+reload。
+ * - 若激活后崩溃未 notifyReady，下次启动自动回滚（防砖）。
+ * - 已经下载过（staged）则直接返回，不重复下载。
+ *
+ * 调用时机：APP 启动后 useEffect 中调用（per-session 一次）。
  */
-export async function resetHotUpdate(): Promise<void> {
-  if (!isTauri()) return;
+export async function checkAndStageHotUpdateIfEligible(): Promise<
+  | { status: "none" }
+  | { status: "staged"; version: string }
+  | { status: "shellTooOld" }
+  | { status: "nativePending" }
+  | { status: "error" }
+> {
+  if (!isTauri()) return { status: "none" };
   try {
-    const { reset } = await import("tauri-plugin-hot-update-api");
-    await reset();
+    const result = await checkForUpdates();
+
+    // 有原生更新优先：先装原生再谈热更新。静默模式下不提示，跳过。
+    if (result.native.available) {
+      return { status: "nativePending" };
+    }
+    // min_binary_version 不满足：不能应用热更新，跳过
+    if (result.hot.shellTooOld) {
+      return { status: "shellTooOld" };
+    }
+    if (!result.hot.available) {
+      return { status: "none" };
+    }
+    // 无原生更新、满足 min_binary_version、有热更新 → 后台静默下载（不激活）
+    // checkForUpdates 已调 checkUpdate 设置 pending manifest，download 可直接用。
+    const r = await downloadHotUpdateSilently();
+    if (r.status === "downloaded") {
+      return { status: "staged", version: r.version || "" };
+    }
+    return { status: "error" };
   } catch {
-    // 静默失败
+    return { status: "error" };
   }
 }
 
 /**
- * 查询当前运行的 bundle 信息
- * 返回 { source: "ota" | "embedded", seq, version }
- */
-export async function currentBundle(): Promise<{
-  source: "ota" | "embedded";
-  seq: number;
-  version?: string;
-} | null> {
-  if (!isTauri()) return null;
-  try {
-    const { currentBundle: query } = await import("tauri-plugin-hot-update-api");
-    const result = await query();
-    // CurrentBundle 实际类型（source/seq/version 命名/值）可能与接口声明有细微差异，
-    // 做一次结构化兜底后再返回，避免构建期类型不匹配。
-    const r = result as any;
-    if (!r) return null;
-    return {
-      source: r.source as "ota" | "embedded",
-      seq: Number(r.seq) || 0,
-      version: typeof r.version === "string" ? r.version : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 重启 APP（热更新暂存后调用，使新 bundle 在下次冷启动生效）
- * - 桌面端：用 @tauri-apps/plugin-process 的 relaunch() 真正退出并重启进程
- * - 移动端：无等价 API，返回 false 提示用户手动关闭再打开
+ * 重启 APP。热更新改用 activate + reload 后，此函数仅剩原生更新场景兜底：
+ * - 桌面端 Windows updater 安装完成后 relaunch()（也用于 needRestart 兜底）
+ * - Android：Rust restart_app（AlarmManager + killProcess）冷拉起
+ * - iOS：无等价 API，返回 false 提示用户手动重开
  */
 export async function restartApp(): Promise<boolean> {
   if (!isTauri()) return false;
@@ -449,6 +653,16 @@ export async function restartApp(): Promise<boolean> {
       return false;
     }
   }
-  // 移动端：热更新在下次冷启动生效，需用户手动关闭再打开 APP
+  const p = detectPlatform();
+  if (p === "android") {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("restart_app");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  // iOS：没有任何 API 能自重启
   return false;
 }

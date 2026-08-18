@@ -41,10 +41,14 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
-    "hot-update": {
-      "manifestUrl": "https://bili-bili.icu/artifacts/webapp/manifest.json",
-      "pubkeys": ["RWT4TcdT0ohMSmvTKHCFHRkIL4yWy5B+8/xmuTOcJAogwLmTm+AuWKW3"],
-      "enabled": true
+    "hotswap": {
+      "endpoint": "https://bili-bili.icu/artifacts/webapp/hotswap.json",
+      "pubkey": "RWT4TcdT0ohMSmvTKHCFHRkIL4yWy5B+8/xmuTOcJAogwLmTm+AuWKW3",
+      "require_https": true,
+      "binary_cache_policy": "keep_compatible",
+      "confirmation_policy": "single_launch",
+      "rollback_policy": "latest_confirmed",
+      "max_retained_versions": 2
     },
     "updater": {
       "pubkey": "",

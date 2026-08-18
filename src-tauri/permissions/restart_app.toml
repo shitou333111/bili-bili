@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-restart-app"
+description = "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）"
+commands.allow = ["restart_app"]
+
+[[permission]]
+identifier = "deny-restart-app"
+description = "禁止调用 restart_app 命令"
+commands.deny = ["restart_app"]

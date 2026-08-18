@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-download-apk"
+description = "允许调用 download_apk 命令下载 APK 文件到本地缓存（仅 Android）"
+commands.allow = ["download_apk"]
+
+[[permission]]
+identifier = "deny-download-apk"
+description = "禁止调用 download_apk 命令"
+commands.deny = ["download_apk"]
