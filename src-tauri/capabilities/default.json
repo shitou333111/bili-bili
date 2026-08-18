@@ -29,6 +29,7 @@
     "fs:allow-appdata-meta-recursive",
     "store:default",
     "opener:default",
-    "pldownloader:default"
+    "pldownloader:default",
+    "hot-update:default"
   ]
 }

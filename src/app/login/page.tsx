@@ -228,8 +228,8 @@ export default function LoginPage() {
 
   return (
     <main
-      className="min-h-screen bg-[#f5f5f5] px-4 py-10 text-[#1f1c17]"
-      style={{ paddingTop: "var(--safe-top, 0px)" }}
+      className="min-h-screen bg-[#f5f5f5] px-4 pb-10 text-[#1f1c17]"
+      style={{ paddingTop: "calc(var(--safe-top, 0px) + 3rem)" }}
     >
       <SafeAreaStyler />
       <WindowTitleBar />

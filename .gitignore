@@ -45,6 +45,14 @@ yarn-error.log*
 # tauri default icon (replaced by public/orig_icon.png)
 app-icon.png
 
+# minisign keys (hot-update signing) — never commit private keys
+*.key
+*.key.b64
+hot-update.key
+hot-update.pub
+minisign.key
+minisign.pub
+
 # test scratch files
 .fttest/
 

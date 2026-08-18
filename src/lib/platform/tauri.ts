@@ -272,10 +272,4 @@ export const tauriPlatform: Platform = {
   randomUUID(): string {
     return crypto.randomUUID();
   },
-
-  publicEncrypt(_key: string, _data: Buffer): Buffer {
-    // Tauri 中 crypto 模块不可用，使用 Web Crypto API
-    // 注意：OAEP 加密需要 SubtleCrypto，这里简化处理
-    throw new Error("RSA-OAEP not available in Tauri; use Web Crypto API instead");
-  },
 };

@@ -6,6 +6,7 @@
  */
 
 import type { Platform } from "./platform/types";
+import { ensureValidCredentialClient } from "./bilibili/cookie-refresh-client";
 
 // ==================== 类型定义 ====================
 
@@ -369,9 +370,21 @@ export async function fetchPayRecords(
     return { code: -1, message: "会话无效" };
   }
 
-  const cookie = session.biliCookies?.length
-    ? session.biliCookies.join("; ")
-    : `SESSDATA=${session.biliSessdata}`;
+  // 客户端凭证验证与自动刷新（仅非 server 账号有 B站 Cookie）
+  // SESSDATA 失效时用 refresh_token 自动刷新，避免频繁要求重新登录
+  let cookie: string;
+  if (session.source !== "server") {
+    const credResult = await ensureValidCredentialClient(platform, session);
+    if (!credResult.valid) {
+      console.warn("[PayRecordClient] 凭证失效且刷新失败，需重新登录:", credResult.reason);
+      return { code: -101, message: "needs-relogin" };
+    }
+    cookie = credResult.cookie;
+  } else {
+    cookie = session.biliCookies?.length
+      ? session.biliCookies.join("; ")
+      : `SESSDATA=${session.biliSessdata}`;
+  }
 
   if (!cookie) {
     return { code: -1, message: "无有效 B站 Cookie" };
@@ -432,6 +445,13 @@ export async function fetchPayRecords(
 
       const url = buildPayRecordUrl(cookie, nextId);
       const response = await fetchPayRecordPageWithRetry(platform, url, cookie);
+
+      // B站 SESSDATA 失效：返回特殊 code 和 message，让上层（fetchData）调 handleAuthExpired 跳 /login
+      // 不在这里 throw，避免 Promise.all 整体 reject 吃掉 accountsRes 的结果
+      if (response.code === -101 || response.code === 3 || (response.message && response.message.includes("未登录"))) {
+        console.warn(`[PayRecordClient] B站凭证失效（code=${response.code}, msg=${response.message}），需重新登录`);
+        return { code: -101, message: "needs-relogin" };
+      }
 
       if (response.code !== 0 || !response.data?.list) {
         throw new Error(response.message || "payRecord request failed");

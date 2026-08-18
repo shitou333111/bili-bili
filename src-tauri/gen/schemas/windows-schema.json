@@ -6147,6 +6147,72 @@
           "markdownDescription": "This enables all file write related commands without any pre-configured accessible paths."
         },
         {
+          "description": "Default permissions for the hot-update plugin\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-notify-app-ready`\n- `allow-current-bundle`\n- `allow-reset`",
+          "type": "string",
+          "const": "hot-update:default",
+          "markdownDescription": "Default permissions for the hot-update plugin\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-notify-app-ready`\n- `allow-current-bundle`\n- `allow-reset`"
+        },
+        {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the current_bundle command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:allow-current-bundle",
+          "markdownDescription": "Enables the current_bundle command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:allow-download",
+          "markdownDescription": "Enables the download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the notify_app_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:allow-notify-app-ready",
+          "markdownDescription": "Enables the notify_app_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:allow-reset",
+          "markdownDescription": "Enables the reset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the current_bundle command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:deny-current-bundle",
+          "markdownDescription": "Denies the current_bundle command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:deny-download",
+          "markdownDescription": "Denies the download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the notify_app_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:deny-notify-app-ready",
+          "markdownDescription": "Denies the notify_app_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "hot-update:deny-reset",
+          "markdownDescription": "Denies the reset command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures what kind of\nfetch operations are available from the http plugin.\n\nThis enables all fetch operations but does not\nallow explicitly any origins to be fetched. This needs to\nbe manually configured before usage.\n\n#### Granted Permissions\n\nAll fetch operations are enabled.\n\n\n#### This default permission set includes:\n\n- `allow-fetch`\n- `allow-fetch-cancel`\n- `allow-fetch-send`\n- `allow-fetch-read-body`\n- `allow-fetch-cancel-body`",
           "type": "string",
           "const": "http:default",
@@ -6363,6 +6429,36 @@
           "markdownDescription": "Denies the save_file_public_from_path command without any pre-configured scope."
         },
         {
+          "description": "This permission set configures which\nprocess features are by default exposed.\n\n#### Granted Permissions\n\nThis enables to quit via `allow-exit` and restart via `allow-restart`\nthe application.\n\n#### This default permission set includes:\n\n- `allow-exit`\n- `allow-restart`",
+          "type": "string",
+          "const": "process:default",
+          "markdownDescription": "This permission set configures which\nprocess features are by default exposed.\n\n#### Granted Permissions\n\nThis enables to quit via `allow-exit` and restart via `allow-restart`\nthe application.\n\n#### This default permission set includes:\n\n- `allow-exit`\n- `allow-restart`"
+        },
+        {
+          "description": "Enables the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "process:allow-exit",
+          "markdownDescription": "Enables the exit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "process:allow-restart",
+          "markdownDescription": "Enables the restart command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "process:deny-exit",
+          "markdownDescription": "Denies the exit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "process:deny-restart",
+          "markdownDescription": "Denies the restart command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures what kind of\noperations are available from the store plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-load`\n- `allow-get-store`\n- `allow-set`\n- `allow-get`\n- `allow-has`\n- `allow-delete`\n- `allow-clear`\n- `allow-reset`\n- `allow-keys`\n- `allow-values`\n- `allow-entries`\n- `allow-length`\n- `allow-reload`\n- `allow-save`",
           "type": "string",
           "const": "store:default",
@@ -6535,6 +6631,60 @@
           "type": "string",
           "const": "store:deny-values",
           "markdownDescription": "Denies the values command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`",
+          "type": "string",
+          "const": "updater:default",
+          "markdownDescription": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`"
+        },
+        {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download",
+          "markdownDescription": "Enables the download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download-and-install",
+          "markdownDescription": "Enables the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download",
+          "markdownDescription": "Denies the download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download-and-install",
+          "markdownDescription": "Denies the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
         }
       ]
     },

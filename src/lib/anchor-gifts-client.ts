@@ -23,6 +23,10 @@ import {
   type BlindBoxGift,
   type EffectiveBlindBoxConfig,
 } from "./stats-client";
+import {
+  ensureValidCredentialClient,
+  extractCookieValue,
+} from "./bilibili/cookie-refresh-client";
 
 // ==================== 类型定义（与 API route 保持一致） ====================
 
@@ -457,8 +461,23 @@ export async function fetchAnchorGifts(
   if (!session) {
     return { code: 0, message: "needs-relogin", data: null };
   }
-  const cookie = buildCookie(session);
-  const csrf = cookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
+
+  // 客户端凭证验证与自动刷新（仅非 server 账号有 B站 Cookie）
+  // SESSDATA 失效时用 refresh_token 自动刷新，避免频繁要求重新登录
+  let cookie = buildCookie(session);
+  let csrf = cookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
+
+  if (session.source !== "server") {
+    const credResult = await ensureValidCredentialClient(platform, session);
+    if (!credResult.valid) {
+      console.warn("[AnchorGifts-Tauri] 凭证失效且刷新失败，需重新登录:", credResult.reason);
+      return { code: 0, message: "needs-relogin", data: null };
+    }
+    cookie = credResult.cookie;
+    csrf = credResult.session.biliCookies
+      ? extractCookieValue(credResult.session.biliCookies, "bili_jct")
+      : "";
+  }
 
   try {
     await ensureGiftCatalogLoaded(platform);
@@ -550,6 +569,8 @@ export async function fetchAnchorGifts(
         yesterdayReady?: boolean;
         interrupted: boolean;
         page0Failed: boolean;
+        /** B站凭证失效（code=-101/3/"未登录"）：与 page0Failed 不同，需要立即终止整个 fetchAnchorGifts 并让上层跳 /login */
+        credentialExpired?: boolean;
       }> {
         const records: BiliGiftRecord[] = [];
         let rateLimited = false;
@@ -562,6 +583,11 @@ export async function fetchAnchorGifts(
             if (result.code === 0) {
               firstPage = result;
               break;
+            }
+            // B站 SESSDATA 失效：立即标记 credentialExpired 退出循环，不再重试（重试只会拿到同样的 -101）
+            if (result.code === -101 || result.code === 3 || (result.message && result.message.includes("未登录"))) {
+              console.warn(`[AnchorGifts-Tauri] B站凭证失效（code=${result.code}），需重新登录`);
+              return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: false, credentialExpired: true };
             }
             if (result.code === 1301000) {
               console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 数据已过期，跳过`);
@@ -662,6 +688,13 @@ export async function fetchAnchorGifts(
 
           if (result.yesterdayReady !== undefined) {
             yesterdayApiReady = result.yesterdayReady;
+          }
+
+          // B站凭证失效（code=-101/3）：立即返回 needs-relogin，让上层（page.tsx finishRefresh）
+          // 调 handleAuthExpired 跳 /login。不保存任何 end_date，下次重新拉取。
+          // 外层 finally 会自动释放 _fetchingGlobal 锁，不需要手动释放
+          if (result.credentialExpired) {
+            return { code: 0, message: "needs-relogin", data: null };
           }
 
           // page 0 完全失败：不应推进 end_date 到昨天，否则该月及更早的历史数据

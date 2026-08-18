@@ -38,6 +38,19 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "hot-update": {
+      "manifestUrl": "https://bili-bili.icu/artifacts/webapp/manifest.json",
+      "pubkeys": ["RWT4TcdT0ohMSmvTKHCFHRkIL4yWy5B+8/xmuTOcJAogwLmTm+AuWKW3"],
+      "enabled": true
+    },
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://bili-bili.icu/artifacts/updater/latest.json"
+      ]
+    }
   }
 }

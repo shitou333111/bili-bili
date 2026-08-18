@@ -8,7 +8,7 @@
  * 1. 检测 isNative = false（决定走服务器路由）
  * 2. 提供浏览器可用的 fetchBilibiliJson / fetchRaw / getBuvidCookie / randomUUID
  *
- * 依赖 Node 内置模块（fs/path/crypto publicEncrypt）的方法在浏览器中不可用，
+ * 依赖 Node 内置模块（fs/path）的方法在浏览器中不可用，
  * 且在本架构下不会被调用（数据流走服务器路由），故统一抛错以避免误用。
  */
 
@@ -196,9 +196,5 @@ export const webPlatform: Platform = {
       const v = ch === "x" ? r : (r & 0x3) | 0x8;
       return v.toString(16);
     });
-  },
-
-  publicEncrypt(): Buffer {
-    return unavailable("publicEncrypt");
   },
 };

@@ -410,8 +410,41 @@ jobs:
           if ! grep -q 'ActivityPanelActivity' "$MANIFEST"; then
             sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
           fi
+
+          # ==================== APK 自更新：FileProvider + 安装权限 ====================
+          # tauri-plugin-hot-update 命令 download_and_install_apk 下载 APK 到 app cache 目录后，
+          # 通过 FileProvider 生成 content URI 并触发 ACTION_VIEW Intent 让系统安装器覆盖安装。
+          # 需要：
+          #   1. REQUEST_INSTALL_PACKAGES 权限（Android 8+ 安装未知来源 APK 必需）
+          #   2. FileProvider 注册（authority = ${applicationId}.fileprovider，与 Rust 代码一致）
+          #   3. file_paths.xml 资源（声明 cache-path 可被 FileProvider 共享）
+          RES_DIR="src-tauri/gen/android/app/src/main/res/xml"
+          mkdir -p "$RES_DIR"
+          cat > "$RES_DIR/file_paths.xml" <<'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="cache" path="." />
+          </paths>
+          XMLEOF
+
+          if ! grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST"; then
+            sed -i 's#</manifest>#\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n</manifest>#' "$MANIFEST"
+            echo "已添加 REQUEST_INSTALL_PACKAGES 权限"
+          else
+            echo "REQUEST_INSTALL_PACKAGES 权限已存在，跳过"
+          fi
+
+          if ! grep -q 'fileprovider' "$MANIFEST"; then
+            sed -i 's#</application>#\n    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" /></provider>\n  </application>#' "$MANIFEST"
+            echo "已注册 FileProvider"
+          else
+            echo "FileProvider 已存在，跳过"
+          fi
+
           echo "--- 注册的 Activity ---"
           grep -n 'activity android:name' "$MANIFEST"
+          echo "--- 注册的 Provider ---"
+          grep -n 'provider android:name' "$MANIFEST" || true
           echo "--- 新增 Kotlin 文件 ---"
           ls -la "$PKG_DIR"
 
@@ -591,6 +624,94 @@ jobs:
             src-tauri/gen/apple/build/*/*.ipa
             src-tauri/gen/ios/build/*/*.ipa
 
+  # ==================== 热更新包（前端资源 OTA） ====================
+  # 构建前端 out/ 目录，用 hot-update-sign 签名生成 manifest.json + bundle tar.gz，
+  # 上传为 artifact，由 publish-artifacts 下载后发布到服务器 /artifacts/webapp/。
+  # 触发条件：commit 含 "hot" 关键词，或任一原生客户端构建（exe/apk/ipa）同时触发。
+  # 需在 GitHub Settings → Secrets 中配置：
+  #   HOT_UPDATE_SIGN_KEY     — base64 编码的 minisign 私钥（minisign -G 生成后 base64 编码）
+  #   HOT_UPDATE_KEY_PASSWORD — 私钥密码（无加密私钥则留空）
+  build-hot-update:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (contains(github.event.head_commit.message, 'hot') || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa'))) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+
+      - name: Install npm dependencies
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
+
+      - name: Install hot-update-sign CLI
+        run: cargo install tauri-plugin-hot-update --features cli
+
+      - name: Resolve build timestamp
+        id: ts
+        run: |
+          TS_RAW="$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            | jq -r '.created_at' 2>/dev/null || true)"
+          BUILD_TS="$(TZ=Asia/Shanghai date -d "${TS_RAW}" +%Y%m%d-%H%M%S 2>/dev/null || true)"
+          if ! [[ "${BUILD_TS}" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+            BUILD_TS="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
+          fi
+          echo "BUILD_TS=${BUILD_TS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        env:
+          NEXT_PUBLIC_SERVER_URL: ${{ env.SERVER_URL }}
+          NEXT_PUBLIC_BUILD_DATE: ${{ steps.ts.outputs.BUILD_TS }}
+        run: npm run build:tauri
+
+      - name: Decode signing key
+        env:
+          HOT_UPDATE_SIGN_KEY: ${{ secrets.HOT_UPDATE_SIGN_KEY }}
+        run: |
+          if [ -z "$HOT_UPDATE_SIGN_KEY" ]; then
+            echo "!! HOT_UPDATE_SIGN_KEY secret 未设置，跳过热更新签名"
+            echo "HAS_KEY=false" >> "$GITHUB_ENV"
+          else
+            echo "$HOT_UPDATE_SIGN_KEY" | base64 -d > /tmp/hot-update.key
+            chmod 600 /tmp/hot-update.key
+            echo "HAS_KEY=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Sign hot update bundle
+        if: env.HAS_KEY == 'true'
+        env:
+          HOT_UPDATE_KEY_PASSWORD: ${{ secrets.HOT_UPDATE_KEY_PASSWORD }}
+        run: |
+          mkdir -p hot-update-release
+          hot-update-sign \
+            --dist out \
+            --version "${{ steps.ts.outputs.BUILD_TS }}" \
+            --min-shell 1.0.0 \
+            --key /tmp/hot-update.key \
+            --base-url "${{ env.SERVER_URL }}/artifacts/webapp" \
+            --out hot-update-release/
+          echo "热更新产物："
+          ls -la hot-update-release/
+
+      - name: Upload hot update bundle
+        if: env.HAS_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-live-hot-update
+          path: hot-update-release/
+
   # ==================== 发布客户端产物到服务器 ====================
   # 将 exe/apk/ipa 三种平台产物按构建时间打包发布到服务器：
   #   ${TARGET_DIR}/artifacts/release-<构建时间戳>/  -> 本次 run 的所有平台产物（归组）
@@ -601,8 +722,8 @@ jobs:
   # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
   # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 10 个。
   publish-artifacts:
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa')) }}
-    needs: [build-exe, build-apk, build-ipa]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot')) }}
+    needs: [build-exe, build-apk, build-ipa, build-hot-update]
     runs-on: ubuntu-latest
     steps:
       - name: Download all client artifacts
@@ -611,6 +732,9 @@ jobs:
           pattern: "bili-live-*"
           path: artifacts-dl
           if-no-files-found: ignore
+
+      - name: Checkout repo for version reading
+        uses: actions/checkout@v4
 
       - name: Resolve build timestamp
         id: ts
@@ -676,6 +800,18 @@ jobs:
           if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" publish/; fi
           if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" publish/; fi
           if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" publish/; fi
+          # 热更新包（manifest.json + manifest.json.minisig + bundle-*.tar.gz）
+          if [ -d "artifacts-dl/bili-live-hot-update" ]; then
+            mkdir -p publish/webapp
+            cp -a artifacts-dl/bili-live-hot-update/. publish/webapp/
+            echo "热更新包已加入 publish/webapp/"
+            ls -la publish/webapp/
+          else
+            echo "无热更新包（HOT_UPDATE_SIGN_KEY 未配置或本次未构建）"
+          fi
+          # 读取原生版本号（tauri.conf.json 的 version 字段）
+          APP_VERSION="$(jq -r '.version' src-tauri/tauri.conf.json 2>/dev/null || echo '')"
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
           echo "发布文件:"
           ls -la publish/
           echo "HAS_FILES=$([ -n "$(ls -A publish 2>/dev/null)" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
@@ -730,6 +866,15 @@ jobs:
             RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            # ==================== 热更新包发布到 webapp 目录 ====================
+            # manifest.json + manifest.json.minisig + bundle-*.tar.gz
+            # 客户端从 ${ARTIFACTS_DIR}/webapp/manifest.json 拉取热更新清单
+            if [ -d "${RELEASE_DIR}/webapp" ]; then
+              mkdir -p "${ARTIFACTS_DIR}/webapp"
+              cp -a "${RELEASE_DIR}/webapp/." "${ARTIFACTS_DIR}/webapp/"
+              echo "热更新包已发布到 webapp/"
+              ls -la "${ARTIFACTS_DIR}/webapp/"
+            fi
             # ==================== 选包工具函数：release 优先，debug 兜底 ====================
             # 防止 release 目录混进 debug 包时 current_* 指向错误版本。
             # 选择顺序（同平台多文件时只返回第一个命中）：
@@ -789,6 +934,9 @@ jobs:
             W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
             A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
             I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
+            APP_VERSION="${{ env.APP_VERSION }}"
+            # versions.json：原生版本号 + 各平台构建日期 + 下载地址（相对路径）
+            # 客户端用 serverApiUrl() 补全为绝对 URL 传给 Rust reqwest 下载
             VJSON="{\n"
             VSEP=""
             add_ver() {
@@ -797,9 +945,23 @@ jobs:
               VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
               VSEP=",\n"
             }
+            add_ver "version" "${APP_VERSION}"
             add_ver "windows" "${W_DATE}"
             add_ver "android" "${A_DATE}"
             add_ver "ios" "${I_DATE}"
+            # 下载地址（相对路径，客户端用 serverApiUrl 补全服务器地址）
+            VJSON="${VJSON}${VSEP}  \"downloads\": {\n"
+            VSEP=""
+            add_dl() {
+              local key="$1" link="$2"
+              [ -L "${ARTIFACTS_DIR}/${link}" ] || return 0
+              VJSON="${VJSON}${VSEP}    \"${key}\": \"/artifacts/${link}\""
+              VSEP=",\n"
+            }
+            add_dl "windows" "current_exe"
+            add_dl "android" "current_apk"
+            add_dl "ios" "current_ipa"
+            VJSON="${VJSON}\n  }"
             VJSON="${VJSON}\n}"
             printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
             echo "versions.json:"
@@ -817,6 +979,8 @@ jobs:
               target="$(readlink "${ARTIFACTS_DIR}/${link}" 2>/dev/null || true)"
               [ -n "$target" ] && PROTECTED="${PROTECTED} ${target%/*}"
             done
+            # 同时保护 webapp 目录不被清理
+            PROTECTED="${PROTECTED} ${ARTIFACTS_DIR}/webapp"
             ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
               case "${PROTECTED}" in
                 *"${dir}"*) echo "保留（current 链接指向）: ${dir}"; continue ;;
@@ -840,6 +1004,10 @@ jobs:
             RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            if [ -d "${RELEASE_DIR}/webapp" ]; then
+              mkdir -p "${ARTIFACTS_DIR}/webapp"
+              cp -a "${RELEASE_DIR}/webapp/." "${ARTIFACTS_DIR}/webapp/"
+            fi
             pick_release() {
               local dir="$1" ext="$2"
               [ -d "$dir" ] || return 1
@@ -875,6 +1043,7 @@ jobs:
             W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
             A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
             I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
+            APP_VERSION="${{ env.APP_VERSION }}"
             VJSON="{\n"
             VSEP=""
             add_ver() {
@@ -883,9 +1052,22 @@ jobs:
               VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
               VSEP=",\n"
             }
+            add_ver "version" "${APP_VERSION}"
             add_ver "windows" "${W_DATE}"
             add_ver "android" "${A_DATE}"
             add_ver "ios" "${I_DATE}"
+            VJSON="${VJSON}${VSEP}  \"downloads\": {\n"
+            VSEP=""
+            add_dl() {
+              local key="$1" link="$2"
+              [ -L "${ARTIFACTS_DIR}/${link}" ] || return 0
+              VJSON="${VJSON}${VSEP}    \"${key}\": \"/artifacts/${link}\""
+              VSEP=",\n"
+            }
+            add_dl "windows" "current_exe"
+            add_dl "android" "current_apk"
+            add_dl "ios" "current_ipa"
+            VJSON="${VJSON}\n  }"
             VJSON="${VJSON}\n}"
             printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
             PROTECTED=""
@@ -893,6 +1075,7 @@ jobs:
               target="$(readlink "${ARTIFACTS_DIR}/${link}" 2>/dev/null || true)"
               [ -n "$target" ] && PROTECTED="${PROTECTED} ${target%/*}"
             done
+            PROTECTED="${PROTECTED} ${ARTIFACTS_DIR}/webapp"
             ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
               case "${PROTECTED}" in
                 *"${dir}"*) continue ;;

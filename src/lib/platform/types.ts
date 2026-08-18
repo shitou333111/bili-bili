@@ -71,6 +71,4 @@ export interface Platform {
   getProjectRoot(): string;
   /** 获取 crypto 模块的 randomUUID */
   randomUUID(): string;
-  /** 获取 crypto 模块的 publicEncrypt */
-  publicEncrypt?(key: string, data: Buffer): Buffer;
 }

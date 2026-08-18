@@ -876,15 +876,314 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+// ==================== 更新系统 ====================
+
+/// 检查原生包更新（三平台通用）
+/// 前端传入服务器地址，Rust 请求 versions.json，比对本地版本号。
+/// versions.json 由 CI 在 publish-artifacts 步骤生成，包含 version 字段（原生版本号）
+/// 和各平台日期。本地版本号从 app.package_info() 获取（tauri.conf.json 的 version）。
+#[tauri::command]
+async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(format!("{}/artifacts/versions.json", server_url))
+        .send()
+        .await
+        .map_err(|e| format!("请求版本信息失败: {}", e))?;
+
+    let versions: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析版本信息失败: {}", e))?;
+
+    let server_version = versions
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let current_version = app.package_info().version.to_string();
+
+    #[cfg(target_os = "windows")]
+    let platform = "windows";
+    #[cfg(target_os = "android")]
+    let platform = "android";
+    #[cfg(target_os = "ios")]
+    let platform = "ios";
+    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "ios")))]
+    let platform = "unknown";
+
+    let date = versions.get(platform).and_then(|v| v.as_str()).unwrap_or("");
+
+    Ok(serde_json::json!({
+        "hasUpdate": !server_version.is_empty() && server_version != current_version,
+        "currentVersion": current_version,
+        "serverVersion": server_version,
+        "platform": platform,
+        "date": date,
+    }))
+}
+
+/// Android：下载 APK 并触发系统安装器
+/// 1. 用 reqwest 下载 APK 到 app cache 目录
+/// 2. 通过 JNI 创建 FileProvider content URI + ACTION_VIEW Intent
+/// 3. 系统弹窗提示用户覆盖安装（同包名+同签名密钥 → 数据保留）
+/// 需 AndroidManifest 注册 FileProvider + REQUEST_INSTALL_PACKAGES 权限（CI 注入）
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use jni::objects::JValue;
+
+    // 1. 下载 APK
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("下载 APK 失败: {}", e))?;
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 APK 数据失败: {}", e))?;
+
+    // 2. 保存到 app cache 目录
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+    let apk_path = cache_dir.join("update.apk");
+    std::fs::write(&apk_path, &bytes).map_err(|e| format!("写入 APK 文件失败: {}", e))?;
+
+    // 3. 通过 JNI 触发系统安装器
+    let main_wv = app.get_webview("main").ok_or("找不到主 webview")?;
+
+    main_wv
+        .with_webview(move |platform_wv| {
+            platform_wv.jni_handle().exec(move |env, activity, _webview| {
+                if activity.is_null() {
+                    eprintln!("[BILI-UPDATE] activity 为空");
+                    return;
+                }
+
+                // 3a. 创建 java.io.File 对象
+                let path_str = match env.new_string(apk_path.to_string_lossy().to_string()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_string path 失败: {e}");
+                        return;
+                    }
+                };
+                let file_class = match env.find_class("java/io/File") {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] find_class File 失败: {e}");
+                        return;
+                    }
+                };
+                let file_obj = match env.new_object(
+                    file_class,
+                    &"(Ljava/lang/String;)V",
+                    &[JValue::Object(&path_str)],
+                ) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_object File 失败: {e}");
+                        return;
+                    }
+                };
+
+                // 3b. 获取包名并构造 FileProvider authority
+                let pkg_obj = match env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[]) {
+                    Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] getPackageName 失败: {e}");
+                        return;
+                    }
+                };
+                let pkg_str: String = if pkg_obj.is_null() {
+                    eprintln!("[BILI-UPDATE] getPackageName 返回空");
+                    return;
+                } else {
+                    env.get_string(&pkg_obj.into())
+                        .map(|s| s.into())
+                        .unwrap_or_default()
+                };
+                let authority_str = format!("{}.fileprovider", pkg_str);
+                let authority = match env.new_string(&authority_str) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_string authority 失败: {e}");
+                        return;
+                    }
+                };
+
+                // 3c. 调用 FileProvider.getUriForFile(context, authority, file)
+                let fp_class = match env.find_class("androidx/core/content/FileProvider") {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] find_class FileProvider 失败: {e}");
+                        return;
+                    }
+                };
+                let uri = match env.call_static_method(
+                    fp_class,
+                    "getUriForFile",
+                    "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
+                    &[JValue::Object(activity), JValue::Object(&authority), JValue::Object(&file_obj)],
+                ) {
+                    Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] getUriForFile 失败: {e}");
+                        return;
+                    }
+                };
+
+                // 3d. 创建 ACTION_VIEW Intent
+                let action = match env.new_string("android.intent.action.VIEW") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_string action 失败: {e}");
+                        return;
+                    }
+                };
+                let intent_class = match env.find_class("android/content/Intent") {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] find_class Intent 失败: {e}");
+                        return;
+                    }
+                };
+                let intent = match env.new_object(
+                    intent_class,
+                    &"(Ljava/lang/String;)V",
+                    &[JValue::Object(&action)],
+                ) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_object Intent 失败: {e}");
+                        return;
+                    }
+                };
+
+                // 3e. setDataAndType(uri, "application/vnd.android.package-archive")
+                let mime = match env.new_string("application/vnd.android.package-archive") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[BILI-UPDATE] new_string mime 失败: {e}");
+                        return;
+                    }
+                };
+                if let Err(e) = env.call_method(
+                    intent,
+                    "setDataAndType",
+                    "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
+                    &[JValue::Object(&uri), JValue::Object(&mime)],
+                ) {
+                    eprintln!("[BILI-UPDATE] setDataAndType 失败: {e}");
+                    return;
+                }
+
+                // 3f. addFlags(FLAG_GRANT_READ_URI_PERMISSION = 1)
+                if let Err(e) = env.call_method(
+                    intent,
+                    "addFlags",
+                    "(I)Landroid/content/Intent;",
+                    &[JValue::Int(1)],
+                ) {
+                    eprintln!("[BILI-UPDATE] addFlags 失败: {e}");
+                    return;
+                }
+
+                // 3g. startActivity(intent)
+                if let Err(e) = env.call_method(
+                    activity,
+                    "startActivity",
+                    "(Landroid/content/Intent;)V",
+                    &[JValue::Object(&intent)],
+                ) {
+                    eprintln!("[BILI-UPDATE] startActivity 失败: {e}");
+                }
+            });
+        })
+        .map_err(|e| format!("with_webview 派发失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 非 Android 平台的 stub（保证 invoke_handler 在所有平台编译通过）
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn download_and_install_apk(_app: tauri::AppHandle, _url: String) -> Result<(), String> {
+    Err("APK 安装仅在 Android 平台可用".into())
+}
+
+/// iOS：下载 IPA 并返回文件路径
+/// 前端拿到路径后用 @tauri-apps/plugin-opener 的 open() 触发"Open In"面板，
+/// 用户选择 Esign/Feather 等自签工具打开 IPA 进行覆盖安装。
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn download_and_open_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    // 1. 下载 IPA
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("下载 IPA 失败: {}", e))?;
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 IPA 数据失败: {}", e))?;
+
+    // 2. 保存到 app cache 目录
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+    let ipa_path = cache_dir.join("update.ipa");
+    std::fs::write(&ipa_path, &bytes).map_err(|e| format!("写入 IPA 文件失败: {}", e))?;
+
+    // 3. 返回文件路径，前端用 opener 打开触发"Open In"面板
+    Ok(ipa_path.to_string_lossy().to_string())
+}
+
+/// 非 iOS 平台的 stub
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+async fn download_and_open_ipa(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+    Err("IPA 安装仅在 iOS 平台可用".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // iOS：注册 webview-insets 插件，把 WKWebView 的 contentInsetAdjustmentBehavior 设为 .never，
-    // 关闭系统对 WebView 自动施加的安全区内边距，使 Web 内容真正铺满全屏（edge-to-edge），
-    // 此时 env(safe-area-inset-*) 才返回真实值 —— 竖屏直播视频才能扩展到状态栏/Home 指示区，
-    // 否则视频上下各露出一条黑边（本次顽固问题 #6 的根因）。
+    // ==================== 热更新插件初始化 ====================
+    // tauri-plugin-hot-update：三平台通用的前端资源 OTA（CodePush 风格）。
+    // 必须在任何窗口/webview 创建之前注册（FIRST），因为插件在 setup hook 中
+    // 执行 staged→booting 指针提升，需在 webview 加载资源前完成。
+    // 初始 enabled:false（暗部署模式），生成 minisign 密钥后改为 true 启用。
+    let mut context = tauri::generate_context!();
+    let hot_update = tauri_plugin_hot_update::install(&mut context);
+
     // builder 仅在移动端因插件注册需要 mut；桌面端不加允许属性会产生 unused_mut 警告。
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        // 热更新插件必须最先注册，确保 setup hook 在任何资源加载前执行
+        .plugin(tauri_plugin_hot_update::init(hot_update))
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -905,6 +1204,14 @@ pub fn run() {
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
         // 窗口初始隐藏，设置尺寸/位置后再 show()，避免先闪默认大小再变形。
         .setup(|app| {
+            // ==================== 桌面端：注册二进制更新器 ====================
+            // tauri-plugin-updater：仅桌面端（Windows/Linux/macOS），替换整个安装包。
+            // 移动端不支持（Android 需自定义 APK 下载+系统安装器，iOS 系统不允许）。
+            #[cfg(desktop)]
+            {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 // 仅桌面端调整窗口尺寸/位置（页面最大宽度来自 page-config.json，单一源头）。
                 // 移动端（iOS/Android）窗口天然全屏，绝不能 set_size/set_position：
@@ -976,7 +1283,10 @@ pub fn run() {
             close_activity_panel,
             open_real_activity_panel,
             close_real_activity_panel,
+            check_native_update,
+            download_and_install_apk,
+            download_and_open_ipa,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

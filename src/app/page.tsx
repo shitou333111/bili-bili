@@ -32,6 +32,16 @@ import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type Strea
 import RealActivityModal from "@/components/RealActivityModal";
 import RecommendedAnchors from "@/components/RecommendedAnchors";
 import WindowTitleBar from "@/components/WindowTitleBar";
+import {
+  getVersionDisplay,
+  checkForUpdates,
+  applyHotUpdate,
+  applyNativeUpdate,
+  notifyAppReady,
+  restartApp,
+  type UpdateCheckResult,
+  type VersionDisplay,
+} from "@/lib/updater";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
 async function closeApp() {
@@ -1003,6 +1013,103 @@ export default function HomePage() {
       setRebuildDbLoading(false);
     }
   }
+
+  // ==================== 应用更新 ====================
+  // 检查更新（热更新 + 原生更新并行）。点击"检查更新"按钮触发。
+  async function handleCheckUpdates() {
+    setUpdateChecking(true);
+    setUpdateError("");
+    setUpdateResult(null);
+    setUpdateToast("");
+    setCanRestart(false);
+    try {
+      const result = await checkForUpdates();
+      setUpdateResult(result);
+      if (result.recommended === "none") {
+        // 无可用更新：热更新和原生更新都无
+        const native = result.native;
+        if (native.currentVersion && native.currentVersion !== "0.0.0") {
+          setUpdateToast(`已是最新版本 V${native.currentVersion}`);
+        } else {
+          setUpdateToast("已是最新版本");
+        }
+      }
+    } catch (err: any) {
+      setUpdateError(`检查失败: ${err?.message || String(err)}`);
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  // 应用更新（按推荐类型：热更新优先，其次原生更新）
+  // onProgress 回调用于显示下载进度
+  async function handleApplyUpdate() {
+    if (!updateResult) return;
+    setUpdateApplying(true);
+    setUpdateError("");
+    setUpdateProgress(null);
+    setUpdateToast("");
+    setCanRestart(false);
+    try {
+      const { recommended, hot, native } = updateResult;
+      if (recommended === "hot" && hot.available) {
+        // 热更新：下载 + stage，下次冷启动生效
+        const r = await applyHotUpdate((p) => setUpdateProgress(p));
+        if (r.status === "staged" || r.status === "alreadyStaged") {
+          setUpdateToast(`更新已准备就绪（v${r.version || "?"}），重启 APP 后生效`);
+          setCanRestart(true);
+        } else if (r.status === "upToDate") {
+          setUpdateToast("已是最新版本");
+        } else if (r.status === "error") {
+          setUpdateError(r.error || "热更新失败");
+        } else {
+          // blacklisted / shellTooOld 等其他状态
+          setUpdateToast(`更新状态: ${r.status}`);
+        }
+      } else if (recommended === "native" && native.available) {
+        // 原生更新：平台特定
+        if (!native.downloadUrl && !__isDesktopForUpdater()) {
+          setUpdateError("缺少下载地址，无法更新");
+          return;
+        }
+        const r = await applyNativeUpdate(native.downloadUrl || "", (p) => setUpdateProgress(p));
+        if (r.status === "installing") {
+          // Windows: updater 自动安装+重启；Android: 系统安装器已弹出
+          setUpdateToast("正在安装，请稍候...");
+        } else if (r.status === "openIn") {
+          // iOS: Open In 面板已弹出，用户需选自签工具覆盖安装
+          setUpdateToast("IPA 已下载，请在弹出的面板中选择自签工具覆盖安装");
+        } else if (r.status === "needRestart") {
+          setUpdateToast("下载完成，请重启 APP 完成安装");
+          setCanRestart(true);
+        } else if (r.status === "error") {
+          setUpdateError(r.error || "原生更新失败");
+        }
+      }
+    } catch (err: any) {
+      setUpdateError(`更新失败: ${err?.message || String(err)}`);
+    } finally {
+      setUpdateApplying(false);
+      setUpdateProgress(null);
+    }
+  }
+
+  // 重启 APP（热更新暂存后调用，使新 bundle 在下次冷启动生效）
+  async function handleRestartApp() {
+    const ok = await restartApp();
+    if (!ok) {
+      // 移动端无 relaunch API，提示用户手动关闭再打开
+      setUpdateToast("请手动关闭 APP 后重新打开，新版本即可生效");
+      setCanRestart(false);
+    }
+  }
+
+  // 桌面端 updater 不需要 downloadUrl（从 latest.json 自取），其他平台需要
+  function __isDesktopForUpdater(): boolean {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent || "";
+    return /win/i.test(ua) || /mac/i.test(ua) || /linux/i.test(ua);
+  }
   // 复活曲截图页内容托管在网站服务器上（会变动），在 APP 内以 iframe 打开，
   // 保留应用外壳与返回按钮，服务器不可达时显示自绘错误面板（而非浏览器报错页）。
   function openScreenshotPage() {
@@ -1019,6 +1126,16 @@ export default function HomePage() {
   // 重建数据库确认弹窗
   const [showRebuildDbConfirm, setShowRebuildDbConfirm] = useState(false);
   const [rebuildDbLoading, setRebuildDbLoading] = useState(false);
+  // 版本显示（V1.0.0 (2026-08-18) 格式）+ 应用更新相关
+  const [versionDisplay, setVersionDisplay] = useState<VersionDisplay | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [updateApplying, setUpdateApplying] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<{ downloaded: number; total: number } | null>(null);
+  const [updateError, setUpdateError] = useState<string>("");
+  const [updateToast, setUpdateToast] = useState<string>("");
+  const [canRestart, setCanRestart] = useState(false);
+  const notifyAppReadyCalled = useRef(false);
 
   // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
   // 否则服务端渲染(false)与客户端首次渲染(true)不一致会触发 Hydration 报错，
@@ -1027,6 +1144,16 @@ export default function HomePage() {
     if (typeof window !== "undefined" && localStorage.getItem("bili_live_admin_used")) {
       setAdminUsed(true);
     }
+  }, []);
+
+  // 加载版本显示（V1.0.0 (2026-08-18) 格式）+ 通知热更新插件应用就绪。
+  // notifyAppReady 必须 per-launch 调用一次：提交当前 bundle 为 last-known-good，
+  // 否则下次启动会回滚。useRef 守卫避免 StrictMode Dev 双 mount 重复调用。
+  useEffect(() => {
+    if (notifyAppReadyCalled.current) return;
+    notifyAppReadyCalled.current = true;
+    getVersionDisplay().then(setVersionDisplay).catch(() => {});
+    notifyAppReady().catch(() => {});
   }, []);
 
   // 恢复上次成功的刷新时间（本地优先原则：静默后台同步完成后也会写入时间）
@@ -1315,18 +1442,19 @@ export default function HomePage() {
         return;
       }
 
+      if (snapshotData.message === "needs-relogin") {
+        // B站凭证失效（pay-record-client 检测到 code=-101/3/"未登录"时返回此消息）
+        // 这里不依赖 snapshotData.data（失效时无 data 字段），必须在 if (snapshotData.data) 之外判断
+        await handleAuthExpired();
+        setLoading(false);
+        return;
+      }
+
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
         // 数据已加载（无论本地缓存还是 B站 实时），不再是首次初始化
         setIsFirstTime(false);
-        // 根据 message 判断数据来源
-        if (snapshotData.message === "needs-relogin") {
-          await handleAuthExpired();
-          setLoading(false);
-          return;
-        } else {
-          setAuthError(null);
-        }
+        setAuthError(null);
       }
 
       // 有真实数据时获取统计
@@ -2292,7 +2420,13 @@ export default function HomePage() {
           mid={currentAccount?.mid ?? 0}
           uname={currentAccount?.uname ?? ""}
           isServerAccount={currentAccount?.source === "server"}
+          syncing={syncing}
+          syncLoading={loading}
+          lastRefreshTime={lastRefreshTime}
+          isLocalAccount={isLocalAccount}
           onFetchRequest={anchorRefreshRef}
+          onRefresh={handleRefresh}
+          showToast={showToast}
         />
       </div>
 
@@ -2302,6 +2436,91 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
+                {/* 检查更新卡片：检测热更新（前端 OTA）+ 原生包更新 */}
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={handleCheckUpdates}
+                      disabled={updateChecking || updateApplying}
+                      className="shrink-0 w-16 h-16 rounded-full bg-[#6366f1] flex items-center justify-center text-white shadow-md hover:bg-[#4f46e5] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {updateChecking ? <span className="animate-spin text-xl">↻</span> : <span className="text-2xl">⬇</span>}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-bold text-indigo-900">检查更新</h3>
+                      <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
+                        当前版本：{versionDisplay?.full || "开发版"}
+                      </p>
+                    </div>
+                  </div>
+                  {/* 发现新版本 */}
+                  {updateResult && updateResult.recommended !== "none" && !updateApplying && !updateToast && (
+                    <div className="mt-3 rounded-lg bg-white/60 p-3 border border-indigo-100">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-indigo-900">
+                            {updateResult.hot.available ? `发现热更新 v${updateResult.hot.version || ""}` : `发现新版本 V${updateResult.native.serverVersion || ""}`}
+                          </p>
+                          <p className="mt-0.5 text-xs text-black/50">
+                            {updateResult.hot.available
+                              ? "前端资源更新，下载后重启 APP 即可生效，无需重装"
+                              : updateResult.native.date
+                                ? `构建日期：${updateResult.native.date}`
+                                : "核心功能升级，需下载安装包"}
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleApplyUpdate}
+                          className="shrink-0 rounded-lg bg-[#6366f1] px-3 py-1.5 text-xs text-white font-semibold hover:bg-[#4f46e5] active:scale-95 transition"
+                        >
+                          立即更新
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {/* 下载进度 */}
+                  {updateProgress && updateProgress.total > 0 && (
+                    <div className="mt-3">
+                      <div className="h-2 rounded-full bg-indigo-100 overflow-hidden">
+                        <div
+                          className="h-full bg-[#6366f1] transition-all"
+                          style={{ width: `${Math.min(100, Math.round((updateProgress.downloaded / updateProgress.total) * 100))}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-indigo-800/75 text-center">
+                        下载中... {Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%
+                      </p>
+                    </div>
+                  )}
+                  {/* 更新应用中 */}
+                  {updateApplying && !updateProgress && (
+                    <div className="mt-3 flex items-center justify-center gap-2 text-xs text-indigo-800/75">
+                      <span className="animate-spin">↻</span>
+                      正在应用更新...
+                    </div>
+                  )}
+                  {/* 成功提示 */}
+                  {updateToast && !updateError && (
+                    <div className="mt-3 rounded-lg bg-green-50 border border-green-200 p-2.5 text-xs text-green-800 text-center">
+                      <p>{updateToast}</p>
+                      {canRestart && (
+                        <button
+                          onClick={handleRestartApp}
+                          className="mt-2 rounded-lg bg-[#6366f1] px-3 py-1.5 text-xs text-white font-semibold hover:bg-[#4f46e5] active:scale-95 transition"
+                        >
+                          立即重启
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {/* 错误提示 */}
+                  {updateError && (
+                    <div className="mt-3 rounded-lg bg-red-50 border border-red-200 p-2.5 text-xs text-red-700 text-center">
+                      {updateError}
+                    </div>
+                  )}
+                </div>
+
                 {/* 重建数据库卡片：只在有登录账号时显示 */}
                 {isLoggedIn && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4">
@@ -2499,9 +2718,9 @@ export default function HomePage() {
                     }
                   }}
                   className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"
-                  title={`版本：${process.env.NEXT_PUBLIC_BUILD_DATE || "开发版"}`}
+                  title={versionDisplay?.full || "开发版"}
                 >
-                  版本：{process.env.NEXT_PUBLIC_BUILD_DATE || "开发版"}
+                  版本：{versionDisplay?.full || "开发版"}
                 </button>
               </div>
             )}

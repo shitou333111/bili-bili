@@ -23,6 +23,13 @@ jni = "0.21"
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-ios-webview-insets = "=0.1.0"
 
+# 仅桌面端：官方二进制更新器（替换整个安装包），移动端不支持。
+# Android 需自定义 APK 下载+系统安装器方案（见 lib.rs download_and_install_apk）。
+# iOS 需自定义 IPA 下载+Open In 方案（见 lib.rs download_and_open_ipa）。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 [dependencies]
 tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
@@ -30,6 +37,9 @@ tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-pldownloader = "1.0.1"
+# 热更新（三平台通用）：前端资源 OTA，类似 CodePush，仅更新 JS/CSS/HTML。
+# 初始设置 enabled:false（暗部署），生成 minisign 密钥后改为 true 启用。
+tauri-plugin-hot-update = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

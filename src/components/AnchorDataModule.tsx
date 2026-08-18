@@ -223,7 +223,19 @@ const AnchorDataModule = memo(function AnchorDataModule({
   mid = 0,
   uname = "",
   isServerAccount = false,
+  /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
+  syncing = false,
+  /** 组件自身首次加载遮罩（true=显示"加载中..."全屏 spinner），与 syncing 解耦 */
+  syncLoading = false,
+  /** 页面级最后一次刷新时间（父组件维护，所有模块共享），按钮空闲时显示 */
+  lastRefreshTime = "",
+  /** 本机是否持有该账号的 B站 登录凭证；无凭证时按钮禁用 */
+  isLocalAccount = true,
   onFetchRequest = null,
+  /** 点击顶部绿色刷新按钮时触发（由父组件提供的统一刷新入口，含粉丝+主播+统计） */
+  onRefresh,
+  /** 轻量 toast 提示 */
+  showToast,
 }: {
   anchorName?: string;
   anchorFace?: string;
@@ -231,12 +243,23 @@ const AnchorDataModule = memo(function AnchorDataModule({
   uname?: string;
   /** 是否为服务器收集账号：本机无登录凭证，仅可查看；顶部显示提示横幅 */
   isServerAccount?: boolean;
+  /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
+  syncing?: boolean;
+  /** 组件自身首次加载遮罩（与 syncing 解耦，互不影响） */
+  syncLoading?: boolean;
+  /** 页面级最后一次刷新时间（父组件维护，所有模块共享） */
+  lastRefreshTime?: string;
+  /** 本机是否持有该账号的 B站 登录凭证；无凭证时按钮禁用 */
+  isLocalAccount?: boolean;
   /** 父级 ref：页面统一刷新时调用本组件 fetchData，使收益数据随页面一起更新 */
   onFetchRequest?: MutableRefObject<(() => Promise<void>) | null> | null;
+  /** 点击顶部绿色刷新按钮时触发（由父组件提供的统一刷新入口） */
+  onRefresh?: () => void;
+  /** toast 提示 */
+  showToast?: (msg: string) => void;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [lastRefreshTime, setLastRefreshTime] = useState<string>("");
   // 收益记录按月获取进度（首次拉取时展示进度条）
   const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "gift_screenshot" | "other">("revenue");
@@ -319,7 +342,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
     } finally {
       fetchingRef.current = false;
       setLoading(false);
-      setLastRefreshTime(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
     }
   }
 
@@ -536,8 +558,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && !stats && (
+      {/* Loading state：组件自身 stats 未加载（首次）+ 父组件 syncLoading（强制全屏遮罩场景）都显示 */}
+      {(loading || syncLoading) && !stats && (
         <div className="flex-1 flex items-center justify-center px-8 min-h-[55vh]">
           <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
@@ -586,16 +608,38 @@ const AnchorDataModule = memo(function AnchorDataModule({
                   </button>
                 ))}
               </div>
-              {/* 刷新按钮（右侧）：缺口弧形边框，与左侧按钮组同高，环形与时间同时显示（与粉丝页一致） */}
+              {/* 刷新按钮（右侧）：缺口弧形边框，按钮状态/行为与粉丝页完全一致
+                  - syncing=true → 三点动画（全局同步信号，粉丝/主播同时出现）
+                  - lastRefreshTime 存在 → 显示时间（父组件统一维护，粉丝/主播同值）
+                  - 否则 → "刷新" 字样
+                  - 非本机账号 + 非服务器账号 → 禁用并半透明（和粉丝页对称） */}
               <div className="shrink-0">
                 <button
-                  onClick={fetchData}
-                  disabled={loading}
-                  className="refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px]"
+                  onClick={() => {
+                    if (isServerAccount) {
+                      onRefresh?.();
+                      return;
+                    }
+                    if (!isLocalAccount) {
+                      showToast?.("非本机登录账号，没有登录凭证，无法更新数据");
+                      return;
+                    }
+                    onRefresh?.();
+                  }}
+                  disabled={syncing || loading || (!isLocalAccount && !isServerAccount)}
+                  className={`refresh-btn-arc relative flex items-center justify-center h-[34px] w-[34px] ${!isLocalAccount && !isServerAccount ? "opacity-40" : ""}`}
                 >
-                  {lastRefreshTime ? (
+                  {syncing ? (
+                    <span className="relative z-10 flex items-center gap-[2px] text-[#22c55e] select-none">
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "0ms" }} />
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "150ms" }} />
+                      <span className="dot-anim w-[3px] h-[3px] rounded-full bg-current" style={{ animationDelay: "300ms" }} />
+                    </span>
+                  ) : lastRefreshTime ? (
                     <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">{lastRefreshTime}</span>
-                  ) : null}
+                  ) : (
+                    <span className="relative z-10 text-[10px] leading-none font-medium text-[#22c55e] select-none">刷新</span>
+                  )}
                 </button>
               </div>
             </div>

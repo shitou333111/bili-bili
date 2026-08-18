@@ -31,6 +31,8 @@
   - [主播数据损坏的三层兜底保险](#主播数据损坏的三层兜底保险)
 - [本地开发与运行](#本地开发与运行)
 - [打包与部署](#打包与部署)
+  - [CI/CD 打包（GitHub Actions）](#cicd-打包github-actions)
+  - [应用更新（热更新 + 原生包更新）](#应用更新热更新--原生包更新)
 - [给未来自己的备忘](#给未来自己的备忘)
 
 ---
@@ -329,6 +331,7 @@ bili_live/
 核心组件 [AnchorDataModule.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/AnchorDataModule.tsx)：主播维度的收入统计、按主播筛选数据。
 
 ### 3. 帮助
+- **检查更新**：检测热更新（前端资源 OTA）和原生包更新，支持下载进度显示、一键应用、重启生效。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需登录凭证；服务器账号置灰）。
 - **复活区截图**：跳转到服务器托管的截图工具页。
 - **账号管理**：查看当前账号、切换本机账号、退出登录。
@@ -517,18 +520,122 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 
 两个 workflow：
 
-1. **[build-mobile.yml](file:///c:/Users/song/vscode_projects/bili_live/.github/workflows/build-mobile.yml)** — 打客户端安装包。
-   - 由 **commit message 关键字**触发：
+1. **[deploy.yml](file:///c:/Users/song/vscode_projects/bili_live/.github/workflows/deploy.yml)** — 统一 CI/CD（服务器部署 + 客户端打包 + 热更新 + 产物发布）。
+   - 由 **commit message 关键字**触发不同作业：
+     - `server` → 部署 Web 服务器（SSH 上传 + pm2 重启，原子版本管理）
      - `exe` → Windows EXE
-     - `apk` → Android APK
+     - `apk` → Android APK（含多窗口 Activity + FileProvider + 安装权限注入）
      - `ipa` → iOS IPA
+     - `hot` → 热更新包（前端资源 OTA，需配置签名密钥）
      - 含 `debug` → 打 Debug 包
-   - 例如 commit message 写 `"fix bug exe ipa"` 会同时打 Windows 和 iOS 包。
-   - 服务器地址通过 GitHub Secrets `NEXT_PUBLIC_SERVER_URL` 或手动 `workflow_dispatch` 传入。
+     - 含 `local` → 强制使用本地服务器地址 `http://192.168.1.2:3000`
+   - 例如 commit message 写 `"fix bug exe apk"` 会同时打 Windows + Android 包并发布到服务器。
+   - `publish-artifacts` 作业将各平台产物 + 热更新包发布到服务器 `/artifacts/` 目录，生成 `versions.json`（含原生版本号 + 各平台构建日期 + 下载地址）。
 
-2. **[deploy.yml](file:///c:/Users/song/vscode_projects/bili_live/.github/workflows/deploy.yml)** — 部署 Web 服务器。
-   - 触发：commit 含 `server` 关键字或手动触发。
-   - 构建 Next.js `standalone` 后通过 SSH/SCP 上传到服务器，用**符号链接 + 原子切换**做多版本发布，`.data/` 数据目录跨版本保留（`preserved`），保留最近 5 个版本。
+2. 服务器地址优先级：
+   - commit 含 `local` → `http://192.168.1.2:3000`
+   - `workflow_dispatch` 手动输入的 `server_url`
+   - GitHub Secrets `NEXT_PUBLIC_SERVER_URL`
+   - 默认值 `http://192.168.1.2:3000`
+
+### 应用更新（热更新 + 原生包更新）
+
+采用**两层更新策略**，版本显示格式为 `V1.0.0 (2026-08-18)`（原生版本 + 构建日期）。
+
+#### 第一层：热更新（前端资源 OTA）
+
+- **插件**：[tauri-plugin-hot-update](https://github.com/yanqianglu/tauri-plugin-hot-update)（三平台通用）
+- **原理**：CodePush 风格的 OTA 更新，仅替换 JS/CSS/HTML 前端资源，不触碰原生代码
+- **生效方式**：下载 + 验签 + 暂存后，**下次冷启动生效**（不中断当前使用）
+- **防砖机制**：三态指针（staged → booting → committed）+ 自动回滚。前端启动后调用 `notifyAppReady()` 确认存活，未确认的 bundle 会被黑名单并回退
+- **签名**：minisign 签名验证（**强制**，插件没有不验签模式），密钥列表支持轮换
+- **配置**：`tauri.conf.json` 的 `plugins.hot-update`（`enabled: true` 已启用，公钥已嵌入 `pubkeys` 数组）
+
+**热更新覆盖范围**（自动识别，无需手动指定）：
+
+| ✅ 可走热更新 | ❌ 必须发原生包 |
+|------|------|
+| 所有页面 HTML（`*.html`） | Rust 代码（`src-tauri/src/*.rs`） |
+| JS bundle（`_next/static/chunks/*`） | Tauri 配置（`tauri.conf.json`） |
+| CSS（`_next/static/css/*`） | Cargo 依赖（`Cargo.toml`） |
+| 静态资源（`public/` 复制到 `out/`） | Capabilities 权限文件 |
+| 任何 `src/` 或 `public/` 下的改动 | 新增 Tauri 命令 / Android Manifest / iOS Info.plist |
+
+> 判断规则：改动只涉及前端（`src/`、`public/`）→ commit message 含 `hot` 走热更新；改动涉及 Rust 或 Tauri 配置 → commit message 含 `exe apk ipa` 走原生包更新。两者可同时触发（如 `hot exe`）。
+
+#### 第二层：原生包更新（平台特定）
+
+| 平台 | 方案 | 生效方式 |
+|------|------|----------|
+| **Windows** | `tauri-plugin-updater` 官方插件 | 下载 + 安装 + 自动重启 |
+| **Android** | 自定义命令 `download_and_install_apk` | 下载 APK → FileProvider → ACTION_VIEW Intent → 系统安装器覆盖安装（数据保留） |
+| **iOS** | 自定义命令 `download_and_open_ipa` | 下载 IPA → Open In 面板 → 用户选自签工具（Esign/Feather）覆盖安装 |
+
+#### 实现位置
+
+| 文件 | 作用 |
+|------|------|
+| [src/lib/updater.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/updater.ts) | 统一更新模块：版本显示、检查更新、应用热更新/原生更新、重启 |
+| [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_and_install_apk` / `download_and_open_ipa` 命令 |
+| [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hot-update`（三平台）、`tauri-plugin-updater` + `tauri-plugin-process`（仅桌面端） |
+| [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hot-update:default` + 自定义命令权限 |
+| [src-tauri/capabilities/desktop.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/desktop.json) | 桌面端权限：`updater:default` + `process:allow-restart` |
+| [src/app/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/page.tsx) | 帮助页「检查更新」卡片：版本显示 + 检查 + 下载进度 + 应用 + 重启 |
+
+#### CI 热更新构建
+
+`build-hot-update` 作业在 `deploy.yml` 中：
+1. 构建前端 `out/` 目录（`npm run build:tauri`，触发 Next.js 静态导出）
+2. 用 `hot-update-sign` CLI 签名生成 `manifest.json` + `manifest.json.minisig` + `bundle-*.tar.gz`
+3. 发布到服务器 `/artifacts/webapp/`（对应 `tauri.conf.json` 的 `manifestUrl`）
+
+**版本号机制**：CI 用构建时间戳作 `version`（如 `20260818-153012`），单调递增。APP 维护 `maxVersionSeen` 水位线，**严格大于**才算新版本，既防降级也防重复应用。
+
+#### 必需的 GitHub Secrets
+
+| Secret | 说明 | 必填？ |
+|--------|------|:------:|
+| `HOT_UPDATE_SIGN_KEY` | base64 编码的 minisign 私钥（PowerShell：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("hot-update.key"))`） | ✅ |
+| `HOT_UPDATE_KEY_PASSWORD` | 私钥密码。**无密码私钥可不设此 Secret**——CI 里 `${{ secrets.HOT_UPDATE_KEY_PASSWORD }}` 求值为空字符串，按插件文档"use an empty value for unencrypted keys"处理直接签名 | ❌ |
+
+> 未配置 `HOT_UPDATE_SIGN_KEY` 时，`build-hot-update` 作业会跳过签名步骤，不影响原生包构建和发布。但热更新功能将完全失效（用户 APP 拉到 manifest 也无法验证签名）。
+
+#### 启用热更新（一次性设置）
+
+**前提**：本机已安装 [minisign](https://github.com/jedisct1/minisign)（Windows 推荐 `scoop install minisign`）。
+
+```powershell
+# 1. 在项目目录外生成密钥对（如 D:\keys\hot-update\）
+mkdir D:\keys\hot-update -Force
+cd D:\keys\hot-update
+minisign -G -p hot-update.pub -s hot-update.key
+# 会提示输入密码（两次输入一致）。可设可不设——
+#   设密码：双层保险（GitHub Secret 泄露 + 密码泄露才能用私钥）
+#   不设密码：CI 配置更简单，安全性略低
+
+# 2. 复制公钥 RW... 那行字符串，填入 tauri.conf.json 的 plugins.hot-update.pubkeys 数组
+#    并把 enabled 改为 true
+
+# 3. base64 编码私钥（复制到剪贴板）
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\keys\hot-update\hot-update.key")) | Set-Clipboard
+
+# 4. 在仓库 Settings → Secrets and variables → Actions 添加：
+#    HOT_UPDATE_SIGN_KEY     = 黏贴剪贴板内容
+#    HOT_UPDATE_KEY_PASSWORD = 密码（无密码可不设此 Secret）
+
+# 5. 备份私钥到至少两处（密码管理器 + 离线 USB）。私钥丢失将无法再发任何热更新。
+```
+
+`.gitignore` 已配置忽略 `*.key`、`hot-update.pub` 等文件，但**密钥文件最好放在项目目录外**，避免任何意外。
+
+设置完成后，commit message 含 `hot` 关键词推送即可触发 CI 构建签名发布。用户 APP 下次冷启动会自动检查到新版本，帮助页「检查更新」卡片显示「发现热更新 vX.X.X」，点「立即更新」下载，弹「立即重启」按钮，重启即生效。
+
+#### 密钥管理
+
+- **公钥**（`hot-update.pub`）：可公开，已嵌入 `tauri.conf.json`，commit 进仓库无妨。
+- **私钥**（`hot-update.key`）：**绝不能 commit**。`.gitignore` 已忽略，但仍建议放项目目录外。
+- **私钥丢失**：无法再发任何热更新。唯一恢复方式是推一个新原生包版本（用新密钥对的公钥替换 `pubkeys`），等所有用户升级到新原生包后才能切换到新密钥对。**强烈建议多份离线备份**。
+- **密钥轮换**：怀疑私钥泄露时，生成新密钥对 → 把新公钥**追加**到 `pubkeys` 数组（新旧并存）→ 用新私钥签名新 manifest → 推一个原生包让用户升级到含新公钥的版本 → 移除旧公钥。零停机切换。
 
 ---
 
@@ -546,3 +653,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 - **模拟器"礼物"选项卡数据源**：Tauri 客户端直连**直播间礼物面板 API**（`xlive/web-room/v1/giftPanel/roomGiftList?platform=pc&room_id=23915535`，无需登录）→ 本地 `roomGiftList.json`（与 gift-list/effects 同 TTL 12h 一起更新）；Web 走服务器代理 `/api/room-gift-list`。"礼物"选项卡 = `roomGiftList.gold_list`（原始顺序）+ `public/gift-extra-ids.json` 额外礼物（去重，详情从 giftConfig 联表）。**不要再依赖 `public/room-gift-list.json`**（旧接口 getRoomGiftList 已 404，该静态文件已删除）。
 - **竖屏直播流填满全屏**：模拟器背景对竖屏（高>宽）流用 `object-cover` 铺满整屏（含通知栏/底部安全区），横屏才用 `object-contain` + `top:100px` 按比例显示。改直播布局时注意区分两种情况。
 - **`.data/` 是核心数据**：Web 服务器升级时 `.data/` 必须保留（deploy.yml 已处理），丢了用户数据无法找回。
+- **应用更新两层策略**：热更新（tauri-plugin-hot-update，前端 OTA，三平台通用）+ 原生包更新（Windows 用 updater 插件，Android 用 APK 下载+系统安装器，iOS 用 IPA 下载+Open In 面板）。版本显示 `V1.0.0 (2026-08-18)`。热更新需配置 `HOT_UPDATE_SIGN_KEY` GitHub Secret。
+- **热更新已启用**：`tauri.conf.json` 的 `plugins.hot-update.enabled: true`，公钥已嵌入 `pubkeys` 数组。签名是强制的——插件没有"不验签"模式。私钥丢失将无法再发任何热更新，**必须多份离线备份**。无密码私钥可不设 `HOT_UPDATE_KEY_PASSWORD` Secret（CI 求值为空字符串自动处理）。
+- **热更新覆盖范围**：只改 `src/` 或 `public/` 下的前端代码可走热更新（commit message 含 `hot`）；改 Rust 或 Tauri 配置必须发原生包（commit message 含 `exe apk ipa`）。
+- **notifyAppReady 必须调用**：每次 APP 冷启动后调用一次 `notifyAppReady()`（page.tsx useEffect 中），否则 OTA bundle 会被判定为"启动失败"而自动回滚。
