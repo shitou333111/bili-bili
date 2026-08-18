@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-download-and-open-ipa"
+description = "Enables the download_and_open_ipa command without any pre-configured scope."
+commands.allow = ["download_and_open_ipa"]
+
+[[permission]]
+identifier = "deny-download-and-open-ipa"
+description = "Denies the download_and_open_ipa command without any pre-configured scope."
+commands.deny = ["download_and_open_ipa"]

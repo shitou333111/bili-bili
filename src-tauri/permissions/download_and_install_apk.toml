@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-download-and-install-apk"
+description = "Enables the download_and_install_apk command without any pre-configured scope."
+commands.allow = ["download_and_install_apk"]
+
+[[permission]]
+identifier = "deny-download-and-install-apk"
+description = "Denies the download_and_install_apk command without any pre-configured scope."
+commands.deny = ["download_and_install_apk"]

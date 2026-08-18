@@ -16,6 +16,9 @@
     "allow-close-activity-panel",
     "allow-open-real-activity-panel",
     "allow-close-real-activity-panel",
+    "allow-check-native-update",
+    "allow-download-and-install-apk",
+    "allow-download-and-open-ipa",
     {
       "identifier": "http:default",
       "allow": [

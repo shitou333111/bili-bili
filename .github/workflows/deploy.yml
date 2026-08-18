@@ -1007,6 +1007,21 @@ jobs:
             echo "versions.json:"
             cat "${ARTIFACTS_DIR}/versions.json"
 
+            # ---- 生成 tauri-plugin-updater 专用 latest.json ----
+            # Windows/macOS/Linux 桌面端原生更新走 tauri-plugin-updater，
+            # 它需要自己特定的 JSON 格式 {version, pub_date, url, signature}，
+            # 不同于我们的 versions.json（版本号+日期+下载地址）。
+            # signature 留空——tauri.conf.json 中 pubkey 为空，不校验签名。
+            if [ -n "${PICKED_EXE}" ]; then
+              EXE_BASENAME="$(basename "${PICKED_EXE}")"
+              EXE_URL="${{ env.SERVER_URL }}/artifacts/current_exe"
+              UPDATER_JSON="{\"version\":\"${APP_VERSION}\",\"pub_date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"url\":\"${EXE_URL}\",\"signature\":\"\"}"
+              mkdir -p "${ARTIFACTS_DIR}/updater"
+              echo "${UPDATER_JSON}" > "${ARTIFACTS_DIR}/updater/latest.json"
+              echo "updater/latest.json:"
+              cat "${ARTIFACTS_DIR}/updater/latest.json"
+            fi
+
             echo "发布完成 -> ${RELEASE_DIR}"
             ls -la "${RELEASE_DIR}"
             echo "artifacts 目录:"
