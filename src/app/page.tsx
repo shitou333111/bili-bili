@@ -2500,6 +2500,8 @@ export default function HomePage() {
     versionDisplay?.native && versionDisplay.native !== "0.0.0"
       ? formatVersionShort(versionDisplay.native)
       : "…";
+  // 当前版本完整显示（含日期小版本标记）："V1.2-20260816"
+  const updateCurrentFull = versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
   const updateLatest = updateResult?.native.available
     ? formatVersionShort(updateResult.native.serverVersion || "")
     : updateResult?.hot.available
@@ -2748,8 +2750,22 @@ export default function HomePage() {
               <>
               <div className="grid grid-cols-1 gap-3">
                 {/* 更新状态卡片：冷启动自动检查+自动下载，无需手动点击检查。
-                    按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败 */}
-                <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}>
+                    按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败。
+                    连续点击卡片 10 次触发显示"管理后台"入口（原版本号卡片连击功能迁移至此） */}
+                <div
+                  onClick={() => {
+                    const next = versionClickCount + 1;
+                    setVersionClickCount(next);
+                    if (next >= 10) {
+                      setVersionClickCount(0);
+                      // 十连击仅显示"管理后台"卡片，不再直接进入 admin。
+                      // 点击"管理后台"卡片才触发登录流程（首次弹密码框/非首次后台静默登录）。
+                      localStorage.setItem("bili_live_admin_used", "1");
+                      setAdminUsed(true);
+                    }
+                  }}
+                  className={`select-none rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}
+                >
                   <div className="flex items-center justify-between gap-3">
                     {/* 状态/操作按钮：圆形按钮，4 字文案分 2 行显示（绿=已是最新 不可点） */}
                     <button
@@ -2770,11 +2786,11 @@ export default function HomePage() {
                     <div className="min-w-0 text-right">
                       {updateHasUpdate ? (
                         <>
-                          <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 V{updateCurrent}</p>
+                          <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 {updateCurrentFull}</p>
                           <p className={`mt-0.5 text-xs ${updateCard.sub}`}>最新版本 V{updateLatest}</p>
                         </>
                       ) : (
-                        <p className={`text-sm font-semibold ${updateCard.title}`}>V{updateCurrent}</p>
+                        <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 {updateCurrentFull}</p>
                       )}
                     </div>
                   </div>
@@ -2847,9 +2863,9 @@ export default function HomePage() {
                       )}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-indigo-900">🔄 重建当前账号数据库</h3>
+                      <h3 className="text-sm font-bold text-indigo-900">重建当前账号数据库</h3>
                       <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
-                        点击重建此账号的数据库，相当于首次使用APP重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
+                        重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
                       </p>
                     </div>
                   </div>
@@ -3015,29 +3031,6 @@ export default function HomePage() {
                 )}
               </div>
               </>
-            )}
-
-            {/* 版本号卡片 - 显示构建日期，连续点击10次进入管理员页面 */}
-            {toolsPage === "home" && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  onClick={() => {
-                    const next = versionClickCount + 1;
-                    setVersionClickCount(next);
-                    if (next >= 10) {
-                      setVersionClickCount(0);
-                      // 十连击仅显示"管理后台"卡片，不再直接进入 admin。
-                      // 点击"管理后台"卡片才触发登录流程（首次弹密码框/非首次后台静默登录）。
-                      localStorage.setItem("bili_live_admin_used", "1");
-                      setAdminUsed(true);
-                    }
-                  }}
-                  className="text-xs text-black/20 hover:text-black/40 transition cursor-default select-none"
-                  title={versionDisplay?.full || "开发版"}
-                >
-                  版本：{versionDisplay?.full || "开发版"}
-                </button>
-              </div>
             )}
 
             {/* Admin 密码弹窗 */}
