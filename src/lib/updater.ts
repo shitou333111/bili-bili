@@ -10,13 +10,13 @@
  *    - Android: 自定义命令 download_apk/install_apk（下载 APK + 触发系统安装器）
  *    - iOS: 自定义命令 download_ipa + Open In 面板（交自签工具覆盖安装）
  *
- * 版本显示格式：V1.0.0 (2026-08-18)
- *   - V1.0.0：原生版本号（来自 tauri.conf.json 的 version，仅原生更新会变）
- *   - 2026-08-18：前端构建日期（来自 NEXT_PUBLIC_BUILD_DATE，热更新会变）
+ * 版本显示格式：V1.4-20260816
+ *   - V1.4：原生版本号（来自 tauri.conf.json 的 version，仅原生更新会变，两位显示）
+ *   - 20260816：前端构建日期（来自 NEXT_PUBLIC_BUILD_DATE，热更新会变，紧凑 8 位）
  *
  * 热更新 UX（与原生更新统一）：
- *   - 启动静默检查 + 静默下载（downloadUpdate，不激活）→ 卡片"前端更新已就绪"
- *   - 用户点"立即生效"→ activateUpdate() + location.reload()（无需重启进程）
+ *   - 冷启动：首页渲染前自动检查 + 一步下载并应用（applyUpdate）→ reload 立即生效（无需重启进程）
+ *   - 应用内：更新卡片按状态显示"点击刷新/点击重装"，一键应用
  *   - 防砖：每次启动 notifyReady() 确认当前版本可用，未确认则下次启动自动回滚
  */
 
@@ -116,8 +116,17 @@ export function formatVersionShort(v: string): string {
 }
 
 /**
+ * 构建日期紧凑显示："20260816-123456" → "20260816"、"2026-08-16" → "20260816"。
+ * 无日期信息时原样返回。
+ */
+function compactBuildDate(d: string): string {
+  const m = d.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
+  return m ? `${m[1]}${m[2]}${m[3]}` : d;
+}
+
+/**
  * 获取版本显示信息
- * - Tauri 环境：V1.4 (2026-08-18)（版本号两位显示，去掉末尾 .0）
+ * - Tauri 环境：V1.4-20260816（版本两位显示 + 紧凑日期，无括号）
  * - Web 开发：开发版
  */
 export async function getVersionDisplay(): Promise<VersionDisplay> {
@@ -129,13 +138,13 @@ export async function getVersionDisplay(): Promise<VersionDisplay> {
     const native = await getVersion();
     const date = BUILD_DATE;
     return {
-      full: `V${formatVersionShort(native)} (${date})`,
+      full: `V${formatVersionShort(native)}-${compactBuildDate(date)}`,
       native,
       date,
     };
   } catch {
     return {
-      full: `V${formatVersionShort("0.0.0")} (${BUILD_DATE})`,
+      full: `V${formatVersionShort("0.0.0")}-${compactBuildDate(BUILD_DATE)}`,
       native: "0.0.0",
       date: BUILD_DATE,
     };

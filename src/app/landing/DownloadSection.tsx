@@ -60,7 +60,7 @@ export default function DownloadSection() {
   const [showIosGuide, setShowIosGuide] = useState(false);
   // 下载次数用本地 state 承载：初始化从 /api/downloads 拉取，点击下载时乐观自增
   const [counts, setCounts] = useState<Record<string, number> | null>(null);
-  // 版本日期：从 versions.json 拉取
+  // 版本日期：从 versions.json 拉取（含顶层 version 原生版本号 + 各平台日期）
   const [dates, setDates] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -76,6 +76,12 @@ export default function DownloadSection() {
       .catch(() => {});
   }, []);
 
+  // 版本号两位显示："1.4.0" → "1.4"（与 APP 内一致）
+  const shortVersion = (v: string) => (v || "").replace(/\.0+$/, "");
+  // 版本+日期角标："V1.4-20260816"（无括号，避免误认为版本号与日期是同一信息）
+  const versionBadge = (platformId: string) =>
+    `V${shortVersion(dates.version || "")}-${(dates[platformId] || "").replace(/-/g, "")}`;
+
   return (
     <>
       {/* 三个下载卡片：flex 自适应换行，窄屏自动折行 */}
@@ -85,13 +91,13 @@ export default function DownloadSection() {
             key={p.id}
             className="group relative flex w-full max-w-[280px] flex-col items-center overflow-hidden rounded-3xl border border-[#ececec] bg-white px-2 pb-4 pt-6 text-center shadow-sm transition-all hover:-translate-y-1.5 hover:shadow-lg sm:w-[calc(50%-10px)] sm:max-w-none sm:flex-1 sm:px-5 sm:pb-6 sm:pt-7"
           >
-            {/* 构建日期角标：卡片右上角；无日期信息则不显示 */}
+            {/* 版本角标：卡片右上角（V1.4-20260816）；无日期信息则不显示 */}
             {dates[p.id] && (
               <span
                 className="absolute right-3 top-3 rounded-full px-2 py-0.5 text-[9px] font-medium text-white sm:right-4 sm:top-4 sm:px-2.5 sm:py-1 sm:text-[10px]"
                 style={{ background: p.color }}
               >
-                {dates[p.id].replace(/-/g, ".")}
+                {versionBadge(p.id)}
               </span>
             )}
             {/* 平台图标 */}
@@ -108,7 +114,7 @@ export default function DownloadSection() {
                 <button
                   type="button"
                   onClick={() => setShowIosGuide(true)}
-                  className="rounded-full border border-[#e3e3e3] bg-white px-1.5 py-0.5 text-[9px] font-medium text-[#6b6b6b] hover:bg-[#f5f5f5] sm:px-2 sm:text-[10px]"
+                  className="rounded-full bg-[#ef4444] px-1.5 py-0.5 text-[9px] font-medium text-white shadow-sm hover:bg-[#dc2626] sm:px-2 sm:text-[10px]"
                 >
                   安装指南
                 </button>

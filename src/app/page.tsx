@@ -2493,6 +2493,108 @@ export default function HomePage() {
     );
   }
 
+  // ===== 更新卡片状态派生 =====
+  // 冷启动自动检查+自动下载，无需手动点检查按钮。卡片颜色随状态变化：
+  // 绿=已是最新、黄=热更新、红=原生更新、灰=检查失败可重试。
+  const updateCurrent =
+    versionDisplay?.native && versionDisplay.native !== "0.0.0"
+      ? formatVersionShort(versionDisplay.native)
+      : "…";
+  const updateLatest = updateResult?.native.available
+    ? formatVersionShort(updateResult.native.serverVersion || "")
+    : updateResult?.hot.available
+    ? formatVersionShort(updateResult.hot.version || "")
+    : "";
+  const updateHasUpdate = !!(
+    updateResult?.native.available ||
+    (updateResult?.hot.available && !updateResult?.hot.shellTooOld)
+  );
+  const nativeDownloading =
+    !!updateResult?.native.available && nativeSilentDownloaded.kind === "downloading";
+  const nativeDownloadPct =
+    nativeSilentDownloaded.kind === "downloading" && nativeSilentDownloaded.total > 0
+      ? Math.min(100, Math.round((nativeSilentDownloaded.progress / nativeSilentDownloaded.total) * 100))
+      : 0;
+
+  let updateCard: {
+    bg: string;
+    border: string;
+    title: string;
+    sub: string;
+    button: string;
+    label: string;
+    action: (() => void) | null;
+    disabled: boolean;
+    note?: string;
+  };
+  if (updateResult?.native.available) {
+    updateCard = {
+      bg: "bg-red-50/70",
+      border: "border-red-200",
+      title: "text-red-900",
+      sub: "text-red-800/75",
+      button: "bg-[#ef4444] hover:bg-[#dc2626]",
+      label: nativeDownloading ? `下载中 ${nativeDownloadPct}%` : "点击重装",
+      action: handleApplyUpdate,
+      disabled: updateApplying || nativeDownloading,
+      note:
+        nativeSilentDownloaded.kind === "ready"
+          ? "安装包已下载完成，点击重装进入安装流程"
+          : "核心功能升级，需重新安装安装包",
+    };
+  } else if (updateResult?.hot.available && !updateResult.hot.shellTooOld) {
+    updateCard = {
+      bg: "bg-yellow-50/70",
+      border: "border-yellow-200",
+      title: "text-yellow-900",
+      sub: "text-yellow-800/75",
+      button: "bg-[#eab308] hover:bg-[#ca8a04]",
+      label: "点击刷新",
+      action: handleActivateHotUpdate,
+      disabled: updateApplying,
+      note: "前端资源更新，点击后自动刷新生效，无需重装",
+    };
+  } else if (updateResult === null) {
+    updateCard = {
+      bg: "bg-gray-50/70",
+      border: "border-gray-200",
+      title: "text-gray-900",
+      sub: "text-gray-700/75",
+      button: "bg-[#9ca3af] hover:bg-[#6b7280]",
+      label: updateChecking ? "正在检查" : "点击重试",
+      action: handleCheckUpdates,
+      disabled: updateChecking,
+      note: "自动检查未完成，可点击重试",
+    };
+  } else if (updateResult.native.checkFailed) {
+    updateCard = {
+      bg: "bg-gray-50/70",
+      border: "border-gray-200",
+      title: "text-gray-900",
+      sub: "text-gray-700/75",
+      button: "bg-[#9ca3af] hover:bg-[#6b7280]",
+      label: updateChecking ? "正在检查" : "点击重试",
+      action: handleCheckUpdates,
+      disabled: updateChecking,
+      note: `原生更新检查失败（${updateResult.native.error || "网络异常"}），请重试`,
+    };
+  } else {
+    // 已是最新（含 shellTooOld：有前端更新但需更高版本 APP，暂无可用操作）
+    updateCard = {
+      bg: "bg-green-50/70",
+      border: "border-green-200",
+      title: "text-green-900",
+      sub: "text-green-800/75",
+      button: "bg-[#22c55e] hover:bg-[#16a34a]",
+      label: "已是最新",
+      action: null,
+      disabled: false,
+      note: updateResult?.hot.shellTooOld
+        ? "检测到前端更新，但需要更高版本 APP 才能应用，请稍后再试"
+        : undefined,
+    };
+  }
+
   return (
     <main className="page-main flex flex-col min-h-0 bg-[#f5f5f5] text-[#1f1c17]">
       {/* PC 端自定义窗口标题栏（仅 Tauri 桌面环境显示）：含置顶 / 最小化 / 最大化 / 关闭 */}
@@ -2645,165 +2747,64 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
-                {/* 检查更新卡片：检测热更新（前端 OTA）+ 原生包更新（原生优先） */}
-                <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
-                  <div className="flex items-center gap-4">
+                {/* 更新状态卡片：冷启动自动检查+自动下载，无需手动点击检查。
+                    按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败 */}
+                <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    {/* 状态/操作按钮：圆形按钮，4 字文案分 2 行显示（绿=已是最新 不可点） */}
                     <button
-                      onClick={handleCheckUpdates}
-                      disabled={updateChecking || updateApplying}
-                      className="shrink-0 w-16 h-16 rounded-full bg-[#6366f1] flex items-center justify-center text-white shadow-md hover:bg-[#4f46e5] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={updateCard.action || undefined}
+                      disabled={updateCard.disabled}
+                      className={`shrink-0 h-16 w-16 rounded-full flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white transition ${updateCard.button} ${updateCard.action ? "active:scale-95" : "cursor-default"}`}
                     >
-                      {updateChecking ? <span className="animate-spin text-xl">↻</span> : <span className="text-2xl">⬇</span>}
+                      {updateCard.label.length === 4 ? (
+                        <>
+                          <span>{updateCard.label.slice(0, 2)}</span>
+                          <span>{updateCard.label.slice(2)}</span>
+                        </>
+                      ) : (
+                        updateCard.label
+                      )}
                     </button>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-indigo-900">✨ 检查更新</h3>
-                      <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
-                        当前版本：{versionDisplay?.full || "开发版"}
-                      </p>
+                    {/* 右侧版本信息：最新则只显示当前版本；有更新则显示当前+最新版本 */}
+                    <div className="min-w-0 text-right">
+                      {updateHasUpdate ? (
+                        <>
+                          <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 V{updateCurrent}</p>
+                          <p className={`mt-0.5 text-xs ${updateCard.sub}`}>最新版本 V{updateLatest}</p>
+                        </>
+                      ) : (
+                        <p className={`text-sm font-semibold ${updateCard.title}`}>V{updateCurrent}</p>
+                      )}
                     </div>
                   </div>
-                  {/* 原生更新静默下载中 / 已就绪：和热更新"立即生效"统一风格（琥珀色） */}
-                  {updateResult?.native.available && nativeSilentDownloaded.kind === "downloading" && !updateApplying && (
-                    <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold text-amber-900">
-                            ⬇️ 正在后台下载核心安装包 V{formatVersionShort(updateResult.native.serverVersion || "")}
-                          </p>
-                          <p className="mt-0.5 text-[11px] text-amber-800/75">
-                            下载完成后即可一键安装，不阻塞您使用
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-[11px] text-amber-800/75 font-mono">
-                          {nativeSilentDownloaded.total > 0
-                            ? `${Math.min(100, Math.round((nativeSilentDownloaded.progress / nativeSilentDownloaded.total) * 100))}%`
-                            : "预载中"}
-                        </div>
+                  {/* 状态说明 */}
+                  {updateCard.note && (
+                    <p className={`mt-2.5 text-xs leading-relaxed ${updateCard.sub}`}>{updateCard.note}</p>
+                  )}
+                  {/* 原生更新静默下载进度 */}
+                  {nativeDownloading && (
+                    <div className="mt-3">
+                      <div className="h-1.5 rounded-full bg-red-100 overflow-hidden">
+                        <div className="h-full bg-[#ef4444] transition-all" style={{ width: `${nativeDownloadPct}%` }} />
                       </div>
-                      <div className="mt-1.5 h-1.5 rounded-full bg-amber-100 overflow-hidden">
-                        <div
-                          className="h-full bg-amber-600 transition-all"
-                          style={{
-                            width: nativeSilentDownloaded.total > 0
-                              ? `${Math.min(100, Math.round((nativeSilentDownloaded.progress / nativeSilentDownloaded.total) * 100))}%`
-                              : "20%",
-                          }}
-                        />
-                      </div>
+                      <p className="mt-1 text-[11px] text-red-800/75 text-center">正在后台下载安装包 {nativeDownloadPct}%</p>
                     </div>
                   )}
-                  {updateResult?.native.available && nativeSilentDownloaded.kind === "ready" && !updateApplying && (
-                    <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-2.5 flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-amber-900">
-                          🔔 核心安装包已就绪 {nativeSilentDownloaded.version ? `(V${formatVersionShort(nativeSilentDownloaded.version)})` : ""}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-amber-800/75">
-                          已在后台下载完成，点击下方按钮开始安装
-                        </p>
-                      </div>
-                      <button
-                        onClick={handleApplyUpdate}
-                        className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white font-semibold hover:bg-amber-700 active:scale-95 transition"
-                      >
-                        立即安装
-                      </button>
-                    </div>
-                  )}
-
-                  {/* 发现新版本（原生优先） + shellTooOld 提示 */}
-                  {updateResult && !updateApplying && !updateToast && (
-                    <>
-                      {/* 有原生更新：优先推荐（核心底座）
-                          若正处于静默下载中 / 已就绪，卡片仍然展示但按钮文字改成"安装中/立即安装"以对齐 UX。 */}
-                      {updateResult.native.available &&
-                        nativeSilentDownloaded.kind !== "downloading" &&
-                        nativeSilentDownloaded.kind !== "ready" && (
-                        <div className="mt-3 rounded-lg bg-amber-50 p-3 border border-amber-200">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-amber-900">
-                                ⚠️ 发现核心版本更新 V{formatVersionShort(updateResult.native.serverVersion || "")}
-                              </p>
-                              <p className="mt-0.5 text-xs text-amber-800/80">
-                                {updateResult.native.date
-                                  ? `构建日期：${updateResult.native.date} · `
-                                  : ""}
-                                核心功能升级，需要下载安装包
-                                {updateResult.hot.available && !updateResult.hot.shellTooOld && (
-                                  <>，安装后还可应用前端热更新</>
-                                )}
-                              </p>
-                            </div>
-                            <button
-                              onClick={handleApplyUpdate}
-                              className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white font-semibold hover:bg-amber-700 active:scale-95 transition"
-                            >
-                              立即更新
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* 只有热更新（无原生更新） */}
-                      {!updateResult.native.available && updateResult.hot.available && !updateResult.hot.shellTooOld && (
-                        <div className="mt-3 rounded-lg bg-white/60 p-3 border border-indigo-100">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-indigo-900">
-                                发现热更新 v{formatVersionShort(updateResult.hot.version || "")}
-                              </p>
-                              <p className="mt-0.5 text-xs text-black/50">
-                                前端资源更新，下载后立即生效，无需重启，无需重装
-                              </p>
-                              {updateResult.native.checkFailed && (
-                                <p className="mt-1 text-xs text-amber-700">
-                                  注：原生更新检查失败（{updateResult.native.error || "网络错误"}），可能也有核心版本更新，建议稍后重试
-                                </p>
-                              )}
-                            </div>
-                            <button
-                              onClick={handleActivateHotUpdate}
-                              className="shrink-0 rounded-lg bg-[#6366f1] px-3 py-1.5 text-xs text-white font-semibold hover:bg-[#4f46e5] active:scale-95 transition"
-                            >
-                              立即生效
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* shellTooOld：热更新有新版本，但用户原生版本太低 */}
-                      {!updateResult.native.available && updateResult.hot.shellTooOld && (
-                        <div className="mt-3 rounded-lg bg-red-50 p-3 border border-red-200">
-                          <p className="text-sm font-semibold text-red-900">
-                            ⚠️ 发现前端热更新，但需要先升级 APP
-                          </p>
-                          <p className="mt-0.5 text-xs text-red-800/80">
-                            {updateResult.native.checkFailed
-                              ? `原生更新检查失败：${updateResult.native.error || "网络错误"}。请稍后重试检查，原生更新可用后即可应用热更新。`
-                              : "热更新要求更高的 APP 原生版本，但服务器上暂无可用原生更新。请稍后重试。"}
-                          </p>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {/* 下载进度 */}
+                  {/* 应用更新下载进度 */}
                   {updateProgress && updateProgress.total > 0 && (
                     <div className="mt-3">
-                      <div className="h-2 rounded-full bg-indigo-100 overflow-hidden">
-                        <div
-                          className="h-full bg-[#6366f1] transition-all"
-                          style={{ width: `${Math.min(100, Math.round((updateProgress.downloaded / updateProgress.total) * 100))}%` }}
-                        />
+                      <div className="h-1.5 rounded-full bg-black/10 overflow-hidden">
+                        <div className="h-full bg-[#6366f1] transition-all" style={{ width: `${Math.min(100, Math.round((updateProgress.downloaded / updateProgress.total) * 100))}%` }} />
                       </div>
-                      <p className="mt-1 text-xs text-indigo-800/75 text-center">
+                      <p className="mt-1 text-[11px] text-black/50 text-center">
                         下载中... {Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%
                       </p>
                     </div>
                   )}
                   {/* 更新应用中 */}
                   {updateApplying && !updateProgress && (
-                    <div className="mt-3 flex items-center justify-center gap-2 text-xs text-indigo-800/75">
+                    <div className="mt-3 flex items-center justify-center gap-2 text-xs text-black/50">
                       <span className="animate-spin">↻</span>
                       正在应用更新...
                     </div>
@@ -2832,17 +2833,22 @@ export default function HomePage() {
 
                 {/* 重建数据库卡片：只在有登录账号时显示 */}
                 {isLoggedIn && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4">
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4">
                     <button
                       onClick={() => setShowRebuildDbConfirm(true)}
-                      className="shrink-0 w-16 h-16 rounded-full bg-[#eab308] flex items-center justify-center text-sm font-semibold text-white shadow-md hover:bg-[#ca8a04] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="shrink-0 w-16 h-16 rounded-full bg-[#6366f1] flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white shadow-md hover:bg-[#4f46e5] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={rebuildDbLoading || syncing}
                     >
-                      {rebuildDbLoading ? <span className="animate-spin text-xl">↻</span> : "重建"}
+                      {rebuildDbLoading ? <span className="animate-spin text-xl">↻</span> : (
+                        <>
+                          <span>重建</span>
+                          <span>数据</span>
+                        </>
+                      )}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-amber-900">🔄 重建当前账号数据库</h3>
-                      <p className="mt-0.5 text-xs text-amber-800/75 leading-relaxed">
+                      <h3 className="text-sm font-bold text-indigo-900">🔄 重建当前账号数据库</h3>
+                      <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
                         点击重建此账号的数据库，相当于首次使用APP重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
                       </p>
                     </div>
@@ -3077,7 +3083,7 @@ export default function HomePage() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !rebuildDbLoading && setShowRebuildDbConfirm(false)}>
                 <div className="rounded-xl border border-black/10 bg-white p-5 shadow-xl w-[300px] mx-4" onClick={(e) => e.stopPropagation()}>
                   <div className="mb-4">
-                    <h3 className="text-base font-semibold text-amber-900 text-center">⚠️ 确认重建数据库？</h3>
+                    <h3 className="text-base font-semibold text-indigo-900 text-center">⚠️ 确认重建数据库？</h3>
                     <p className="mt-3 text-sm text-black/70 leading-relaxed">
                       删除本地保存的数据，重新从 B 站拉取全部数据，耗时较长。
                     </p>
@@ -3086,7 +3092,7 @@ export default function HomePage() {
                     <button
                       onClick={handleRebuildDatabase}
                       disabled={rebuildDbLoading}
-                      className="flex-1 rounded-lg bg-[#eab308] py-2.5 text-sm text-white font-semibold hover:bg-[#ca8a04] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 rounded-lg bg-[#6366f1] py-2.5 text-sm text-white font-semibold hover:bg-[#4f46e5] transition disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {rebuildDbLoading ? "删除中..." : "确认删除并重建"}
                     </button>
