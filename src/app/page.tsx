@@ -2461,7 +2461,7 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
-                {/* 检查更新卡片：检测热更新（前端 OTA）+ 原生包更新（原生优先） */}
+                {/* 检查更新卡片（v1.2.0 热更新测试）：检测热更新（前端 OTA）+ 原生包更新（原生优先） */}
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
                   <div className="flex items-center gap-4">
                     <button
@@ -2472,7 +2472,7 @@ export default function HomePage() {
                       {updateChecking ? <span className="animate-spin text-xl">↻</span> : <span className="text-2xl">⬇</span>}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-indigo-900">检查更新</h3>
+                      <h3 className="text-sm font-bold text-indigo-900">✨ 检查更新 v1.2</h3>
                       <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
                         当前版本：{versionDisplay?.full || "开发版"}
                       </p>
@@ -2608,9 +2608,9 @@ export default function HomePage() {
                       {rebuildDbLoading ? <span className="animate-spin text-xl">↻</span> : "重建"}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-amber-900">重建当前账号数据库</h3>
+                      <h3 className="text-sm font-bold text-amber-900">🔄 重建当前账号数据库</h3>
                       <p className="mt-0.5 text-xs text-amber-800/75 leading-relaxed">
-                        点击重建此账号的数据库，相当于首次使用APP重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
+                        点击重建此账号的数据库，相当于首次使用APP重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮 · 热更新 v1.2
                       </p>
                     </div>
                   </div>
