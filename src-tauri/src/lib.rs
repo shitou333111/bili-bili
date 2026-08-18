@@ -1083,7 +1083,7 @@ async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<
                     }
                 };
                 if let Err(e) = env.call_method(
-                    intent,
+                    &intent,
                     "setDataAndType",
                     "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
                     &[JValue::Object(&uri), JValue::Object(&mime)],
@@ -1094,7 +1094,7 @@ async fn download_and_install_apk(app: tauri::AppHandle, url: String) -> Result<
 
                 // 3f. addFlags(FLAG_GRANT_READ_URI_PERMISSION = 1)
                 if let Err(e) = env.call_method(
-                    intent,
+                    &intent,
                     "addFlags",
                     "(I)Landroid/content/Intent;",
                     &[JValue::Int(1)],

@@ -658,7 +658,22 @@ jobs:
       - name: Install Linux system dependencies (GTK/webkit/glib)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libglib2.0-dev libgobject-2.0-dev libgio-2.0-dev pkg-config
+          # Tauri v2 官方依赖清单（Ubuntu 24.04 noble）+ tauri-plugin-hot-update CLI
+          # 额外需要的 glib/gobject/gio -dev 包（提供 .pc 文件供 pkg-config 查找）。
+          # 注意：libglib2.0-dev 已依赖拉入 libgobject-2.0-dev 和 libgio-2.0-dev 的 .pc 文件。
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config \
+            libglib2.0-dev
 
       - name: Install hot-update-sign CLI
         run: cargo install tauri-plugin-hot-update --features cli
