@@ -193,16 +193,13 @@ export default function RecommendedAnchors() {
 
             <div className="p-5">
               <p className="text-sm text-black/75 leading-loose">
-                本软件开发过程中，使用了下面一部分主播的账号进行了测试，也有一些是常看的优秀主播，推荐给大家。
-              </p>
-              <p className="text-sm text-black/75 leading-loose mt-3">
-                萝卜白菜各有所爱，但可以保证人品性格都很好，绝对不捞。
+                本软件开发过程中，借了下面一部分主播的账号进行了测试，也有一些是常看的优秀主播，推荐给大家。萝卜白菜各有所爱，但可以保证人品性格都很好，绝对不捞。
               </p>
               <p className="text-sm text-black/75 leading-loose mt-3">
                 软件是免费的，但也希望能够得到认可和打赏。正好大家都是B站直播用户，打赏主播就是打赏本软件。有米的可以去刷点，没米的可以去加个灯牌点个关注。
               </p>
               <p className="text-sm text-black/75 leading-loose mt-3">
-                需要说明：这些主播对软件开发一窍不通，没有参与，甚至不知道这回事儿。所以有问题和意见不要去打扰她们，通过下面的反馈渠道进行有效反馈，谢谢💗
+                说明：这些主播没有参与软件开发，甚至不知道这回事儿。所以有意见不要去打扰她们，通过下面的渠道进行有效反馈，谢谢💗
               </p>
 
               <button

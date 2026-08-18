@@ -2786,11 +2786,11 @@ export default function HomePage() {
                     <div className="min-w-0 text-right">
                       {updateHasUpdate ? (
                         <>
-                          <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 {updateCurrentFull}</p>
+                          <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本： {updateCurrentFull}</p>
                           <p className={`mt-0.5 text-xs ${updateCard.sub}`}>最新版本 V{updateLatest}</p>
                         </>
                       ) : (
-                        <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本 {updateCurrentFull}</p>
+                        <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本： {updateCurrentFull}</p>
                       )}
                     </div>
                   </div>
