@@ -149,9 +149,14 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
     const { check } = await import("tauri-plugin-hot-update-api");
     const outcome = await check();
     // status: available | upToDate | blacklisted | shellTooOld | alreadyStaged
+    // 注意：CheckOutcome 在 "available" 分支下 version 嵌套在 manifest.version，
+    // 不是直接挂在 outcome 上；其他分支可能都没有 version 字段。
+    // 用 any 做兜底安全访问，避免类型不匹配导致构建报错。
+    const o = outcome as any;
+    const version: string | undefined = o?.manifest?.version || o?.version;
     return {
       available: outcome.status === "available",
-      version: outcome.version,
+      version,
     };
   } catch (e: any) {
     // 插件未启用（enabled:false 暗部署）或非 OTA bundle 时会返回 upToDate / 抛错
@@ -170,9 +175,10 @@ async function checkNativeUpdate(): Promise<NativeUpdateInfo> {
     });
 
     const platform = detectPlatform();
+    const platformKey = (platform === "web" ? "windows" : platform) as keyof VersionsJson;
     const serverVersion = versions.version || "";
     const date = (versions as Record<string, any>)[platform] as string || "";
-    const downloadUrlRaw = versions.downloads?.[platform] || "";
+    const downloadUrlRaw = (versions.downloads as Record<string, string | undefined> | undefined)?.[platformKey] || "";
     // Rust reqwest 需绝对 URL，相对路径用 serverApiUrl 补全服务器地址
     const downloadUrl = downloadUrlRaw.startsWith("http")
       ? downloadUrlRaw
@@ -221,7 +227,14 @@ export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdate
     }
     try {
       const outcome = await download();
-      return { status: outcome.status as HotUpdateApplyResult["status"], version: outcome.version };
+      // DownloadOutcome 的 version 可能在 outcome.manifest.version 或 outcome.version，
+      // 用 any 做兜底安全访问，避免类型不匹配。
+      const o = outcome as any;
+      const version: string | undefined = o?.manifest?.version || o?.version;
+      return {
+        status: outcome.status as HotUpdateApplyResult["status"],
+        version,
+      };
     } finally {
       unlisten?.();
     }
@@ -326,9 +339,11 @@ async function applyIosUpdate(url: string): Promise<NativeUpdateApplyResult> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const ipaPath = await invoke<string>("download_and_open_ipa", { url });
-    // 触发系统 "Open In" 面板，用户选择 Esign/Feather 等自签工具覆盖安装
-    const { open } = await import("@tauri-apps/plugin-opener");
-    await open(ipaPath);
+    // 触发系统 "Open In" 面板，用户选择 Esign/Feather 等自签工具覆盖安装。
+    // 注意：plugin-opener 的导出是 openPath（文件路径）与 openUrl（URL），不是 open。
+    // openPath(ipaPath) 不传第二个 openWith 参数 → 系统弹 "Open With" 面板。
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(ipaPath);
     return { status: "openIn" };
   } catch (e: any) {
     return { status: "error", error: String(e?.message || e) };
@@ -377,7 +392,16 @@ export async function currentBundle(): Promise<{
   if (!isTauri()) return null;
   try {
     const { currentBundle: query } = await import("tauri-plugin-hot-update-api");
-    return await query();
+    const result = await query();
+    // CurrentBundle 实际类型（source/seq/version 命名/值）可能与接口声明有细微差异，
+    // 做一次结构化兜底后再返回，避免构建期类型不匹配。
+    const r = result as any;
+    if (!r) return null;
+    return {
+      source: r.source as "ota" | "embedded",
+      seq: Number(r.seq) || 0,
+      version: typeof r.version === "string" ? r.version : undefined,
+    };
   } catch {
     return null;
   }
