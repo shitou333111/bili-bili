@@ -602,7 +602,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 
 | Secret | 说明 | 必填？ |
 |--------|------|:------:|
-| `HOT_UPDATE_SIGN_KEY` | base64 编码的 minisign 私钥（PowerShell：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("hot-update.key"))`）。CI 里 `base64 -d` 还原后交给 `tauri signer sign`。**无密码私钥不需要 `HOT_UPDATE_KEY_PASSWORD`** | ✅ |
+| `HOT_UPDATE_SIGN_KEY` | base64 编码的 minisign 私钥（PowerShell：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("hot-update.key"))`）。tauri-cli 的 `-k` 参数接收的就是这个 base64 字符串，CI 里直接传给 `-k`（**不要**先 `base64 -d`），并搭配 `-p ""`（空密码密钥仍需显式传空密码，否则 CI 无 stdin 会卡在密码提示）。**无密码私钥不需要 `HOT_UPDATE_KEY_PASSWORD`** | ✅ |
 
 > 未配置 `HOT_UPDATE_SIGN_KEY` 时，`build-hot-update` 作业会跳过签名步骤，不影响原生包构建和发布。但热更新功能将完全失效（用户 APP 拉到 manifest 也无法验证签名）。
 

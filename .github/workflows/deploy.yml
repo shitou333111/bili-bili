@@ -339,10 +339,10 @@ jobs:
         with:
           workspaces: "src-tauri"
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+      # 注：这里不需要装 libwebkit2gtk-4.1-dev / libappindicator3-dev / librsvg2-dev /
+      # patchelf / libssl-dev —— 那些是 Linux 桌面端构建依赖（GTK WebView、系统托盘、
+      # ELF rpath、OpenSSL）。APK 是 Android 交叉编译（Rust 用 rustls，图标输入是 PNG），
+      # ubuntu-latest 自带的工具已足够。删除后可省去 apt-get update + webkit 大包安装耗时。
 
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
@@ -666,7 +666,7 @@ jobs:
           NEXT_PUBLIC_BUILD_DATE: ${{ steps.ts.outputs.BUILD_TS }}
         run: npm run build:tauri
 
-      - name: Decode signing key
+      - name: Check signing key
         env:
           HOT_UPDATE_SIGN_KEY: ${{ secrets.HOT_UPDATE_SIGN_KEY }}
         run: |
@@ -674,13 +674,13 @@ jobs:
             echo "!! HOT_UPDATE_SIGN_KEY secret 未设置，跳过热更新签名"
             echo "HAS_KEY=false" >> "$GITHUB_ENV"
           else
-            echo "$HOT_UPDATE_SIGN_KEY" | base64 -d > /tmp/hot-update.key
-            chmod 600 /tmp/hot-update.key
             echo "HAS_KEY=true" >> "$GITHUB_ENV"
           fi
 
       - name: Sign hot update bundle
         if: env.HAS_KEY == 'true'
+        env:
+          HOT_UPDATE_SIGN_KEY: ${{ secrets.HOT_UPDATE_SIGN_KEY }}
         run: |
           set -e
           mkdir -p hot-update-release
@@ -697,9 +697,17 @@ jobs:
           # 1) 归档 out/ 为 tar.gz：根目录必须直接含 index.html（用 -C out .）
           tar -czf hot-update-release/frontend-${SEQUENCE}.tar.gz -C out .
           # 2) 用 minisign 私钥签名 → frontend-${SEQUENCE}.tar.gz.sig
-          npx @tauri-apps/cli signer sign hot-update-release/frontend-${SEQUENCE}.tar.gz -k /tmp/hot-update.key
+          #    注意 tauri-cli signer sign 的 -k 接收的是"base64 编码的 minisign secret key box"，
+          #    不是文件路径（读文件用 -f，也不接受明文 box）。
+          #    HOT_UPDATE_SIGN_KEY = base64(整个 hot-update.key 文件)，恰好就是这个格式，
+          #    所以直接传给 -k，无需先 base64 -d。
+          #    -p "" 必须带：minisign -G 空密码生成的密钥在 minisign-rs 里仍标记为"加密"，
+          #    不带 -p 会走交互式密码提示，而 GitHub Actions 没有 stdin，会永久挂起。
+          npx @tauri-apps/cli signer sign hot-update-release/frontend-${SEQUENCE}.tar.gz -k "$HOT_UPDATE_SIGN_KEY" -p ""
           # 3) 生成 hotswap.json manifest：
-          #    signature        = .sig 文件全文（minisign 原始格式，untrusted comment: 开头）
+          #    signature        = .sig 文件全文。tauri signer sign 写入的是
+          #                      base64(签名文本)，hotswap 插件 verify_signature 会先
+          #                      base64 解码再验（也兼容"untrusted comment:"开头的原文）
           #    url              = bundle 的绝对 HTTPS 地址（插件 require_https 强制校验非 HTTPS 拒绝）
           #    min_binary_version = 本次原生版本（semver，插件在 download 阶段客户端强制校验）
           #    bundle_size      = bundle 字节数（供前端按流量提示）
