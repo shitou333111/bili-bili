@@ -548,34 +548,6 @@ async function applyDesktopUpdate(onProgress?: ProgressCb): Promise<NativeUpdate
   }
 }
 
-/** Android：调用 download_and_install_apk 命令 */
-async function applyAndroidUpdate(url: string): Promise<NativeUpdateApplyResult> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("download_and_install_apk", { url });
-    // 命令返回 OK 后系统安装器已弹出，用户确认覆盖安装
-    return { status: "installing" };
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
-  }
-}
-
-/** iOS：下载 IPA + 触发 Open In 面板 */
-async function applyIosUpdate(url: string): Promise<NativeUpdateApplyResult> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const ipaPath = await invoke<string>("download_and_open_ipa", { url });
-    // 触发系统 "Open In" 面板，用户选择 Esign/Feather 等自签工具覆盖安装。
-    // 注意：plugin-opener 的导出是 openPath（文件路径）与 openUrl（URL），不是 open。
-    // openPath(ipaPath) 不传第二个 openWith 参数 → 系统弹 "Open With" 面板。
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(ipaPath);
-    return { status: "openIn" };
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
-  }
-}
-
 /**
  * 通知热更新插件：当前 bundle 已成功启动（hotswap notifyReady）
  * 每次 APP 冷启动后调用一次（在 app shell 挂载后即可）。

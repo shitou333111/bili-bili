@@ -981,7 +981,8 @@ async fn install_apk(app: tauri::AppHandle, apk_path: String) -> Result<(), Stri
                 }
 
                 // 3a. 创建 java.io.File 对象
-                let path_str = match env.new_string(apk_path.to_string_lossy().to_string()) {
+                // apk_path 参数类型是 String（JNIString 泛型 From<AsRef<str>>，直接传 &apk_path）
+                let path_str = match env.new_string(&apk_path) {
                     Ok(s) => s,
                     Err(e) => {
                         eprintln!("[BILI-UPDATE] new_string path 失败: {e}");
@@ -1206,7 +1207,9 @@ fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
                 Ok(s) => s,
                 Err(e) => { eprintln!("[BILI-RESTART] ALARM_SERVICE get 失败: {e}"); return; }
             };
-            let alarm_service = if alarm_service_jstr.is_null() {
+            // 显式标注 String：否则两个 .into()（JObject→JString、JavaStr→String）
+            // 在 unwrap_or_default 下会推断塌缩成 ()，编译失败
+            let alarm_service: String = if alarm_service_jstr.is_null() {
                 eprintln!("[BILI-RESTART] ALARM_SERVICE 为空");
                 return;
             } else {
@@ -1301,12 +1304,6 @@ fn restart_app(_app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 非 Android 平台的 APK 命令 stub（保证 invoke_handler 在所有平台编译通过）
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-async fn download_and_install_apk(_app: tauri::AppHandle, _url: String) -> Result<(), String> {
-    Err("APK 安装仅在 Android 平台可用".into())
-}
-
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn download_apk(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
@@ -1492,7 +1489,8 @@ pub fn run() {
             open_real_activity_panel,
             close_real_activity_panel,
             check_native_update,
-            download_and_install_apk,
+            // 注：download_and_install_apk 已拆分为 download_apk + install_apk，
+            // 且 Android 上不再有该函数（仅桌面端 stub），故不在此注册。
             download_apk,
             install_apk,
             download_and_open_ipa,
