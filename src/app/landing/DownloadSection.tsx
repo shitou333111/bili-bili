@@ -76,11 +76,9 @@ export default function DownloadSection() {
       .catch(() => {});
   }, []);
 
-  // 版本号两位显示："1.4.0" → "1.4"（与 APP 内一致）
-  const shortVersion = (v: string) => (v || "").replace(/\.0+$/, "");
-  // 版本+日期角标："V1.4-20260816"（无括号，避免误认为版本号与日期是同一信息）
+  // 版本+日期角标："V1.4.0-20260816"（完整三位版本号 + 紧凑日期，无括号，避免误认为版本号与日期是同一信息）
   const versionBadge = (platformId: string) =>
-    `V${shortVersion(dates.version || "")}-${(dates[platformId] || "").replace(/-/g, "")}`;
+    `V${dates.version || ""}-${(dates[platformId] || "").replace(/-/g, "")}`;
 
   return (
     <>

@@ -41,7 +41,6 @@ import {
   installDownloadedNative,
   notifyAppReady,
   restartApp,
-  formatVersionShort,
   type UpdateCheckResult,
   type VersionDisplay,
 } from "@/lib/updater";
@@ -1053,7 +1052,7 @@ export default function HomePage() {
           // 如果同时热更新也失败或无，提示用户重试
           setUpdateError(`原生更新检查失败：${native.error || "网络错误"}，请稍后重试`);
         } else if (native.currentVersion && native.currentVersion !== "0.0.0") {
-          setUpdateToast(`已是最新版本 V${formatVersionShort(native.currentVersion)}`);
+          setUpdateToast(`已是最新版本 V${native.currentVersion}`);
         } else {
           setUpdateToast("已是最新版本");
         }
@@ -1166,7 +1165,7 @@ export default function HomePage() {
       }
       setUpdateToast(
         r.version
-          ? `前端更新已生效（v${formatVersionShort(r.version)}），即将刷新页面`
+          ? `前端更新已生效（v${r.version}），即将刷新页面`
           : "前端更新已生效，即将刷新页面",
       );
       // asset provider 已切换，reload 立即加载新资源（无需重启进程）
@@ -2498,14 +2497,14 @@ export default function HomePage() {
   // 绿=已是最新、黄=热更新、红=原生更新、灰=检查失败可重试。
   const updateCurrent =
     versionDisplay?.native && versionDisplay.native !== "0.0.0"
-      ? formatVersionShort(versionDisplay.native)
+      ? versionDisplay.native
       : "…";
-  // 当前版本完整显示（含日期小版本标记）："V1.2-20260816"
+  // 当前版本完整显示（含日期小版本标记）："V1.2.0-20260816"
   const updateCurrentFull = versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
   const updateLatest = updateResult?.native.available
-    ? formatVersionShort(updateResult.native.serverVersion || "")
+    ? updateResult.native.serverVersion || ""
     : updateResult?.hot.available
-    ? formatVersionShort(updateResult.hot.version || "")
+    ? updateResult.hot.version || ""
     : "";
   const updateHasUpdate = !!(
     updateResult?.native.available ||
@@ -2865,7 +2864,7 @@ export default function HomePage() {
                     <div className="min-w-0 flex-1">
                       <h3 className="text-sm font-bold text-indigo-900">重建当前账号数据库</h3>
                       <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
-                        重新获取全部数据。只在数据严重不全时使用，如果只是正常更新近期数据，使用绿色环形按钮
+                        重新获取全部数据，只在数据严重不全时使用。如果只是正常更新近期数据，使用绿色环形按钮
                       </p>
                     </div>
                   </div>
