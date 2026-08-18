@@ -107,8 +107,17 @@ export function isDesktop(): boolean {
 }
 
 /**
+ * 版本号两位数显示：去掉末尾的 ".0"，如 "1.4.0" → "1.4"、"1.0.0" → "1.0"。
+ * 底层 semver（tauri.conf.json / hotswap manifest）仍保持三位，仅显示层简化。
+ */
+export function formatVersionShort(v: string): string {
+  if (!v) return v;
+  return v.replace(/\.0+$/, "");
+}
+
+/**
  * 获取版本显示信息
- * - Tauri 环境：V1.0.0 (2026-08-18)
+ * - Tauri 环境：V1.4 (2026-08-18)（版本号两位显示，去掉末尾 .0）
  * - Web 开发：开发版
  */
 export async function getVersionDisplay(): Promise<VersionDisplay> {
@@ -120,12 +129,16 @@ export async function getVersionDisplay(): Promise<VersionDisplay> {
     const native = await getVersion();
     const date = BUILD_DATE;
     return {
-      full: `V${native} (${date})`,
+      full: `V${formatVersionShort(native)} (${date})`,
       native,
       date,
     };
   } catch {
-    return { full: `V0.0.0 (${BUILD_DATE})`, native: "0.0.0", date: BUILD_DATE };
+    return {
+      full: `V${formatVersionShort("0.0.0")} (${BUILD_DATE})`,
+      native: "0.0.0",
+      date: BUILD_DATE,
+    };
   }
 }
 
@@ -293,63 +306,6 @@ export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdate
     } finally {
       unlisten?.();
     }
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
-  }
-}
-
-/** 热更新静默下载结果（hotswap：download 只下载不激活） */
-export interface HotDownloadResult {
-  status: "downloaded" | "error";
-  version?: string;
-  error?: string;
-}
-
-/**
- * 静默下载热更新（hotswap downloadUpdate，下载+校验但不激活）。
- * 下载完成后用户点"立即生效"才 activateUpdate() + reload，与原生更新
- * "静默下载 → 点按钮安装"的用户体验统一。
- * 需先调用过 checkUpdate（hotswap 的 download 依赖 pending manifest）。
- */
-export async function downloadHotUpdateSilently(onProgress?: ProgressCb): Promise<HotDownloadResult> {
-  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
-  try {
-    const { downloadUpdate, onDownloadProgress } = await import("tauri-plugin-hotswap-api");
-    let unlisten: (() => void) | null = null;
-    if (onProgress) {
-      unlisten = await onDownloadProgress((p) =>
-        onProgress({ downloaded: p.downloaded, total: p.total || 0 }),
-      );
-    }
-    try {
-      const version = await downloadUpdate();
-      return { status: "downloaded", version };
-    } finally {
-      unlisten?.();
-    }
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
-  }
-}
-
-/** 热更新激活结果（hotswap activateUpdate） */
-export interface HotActivateResult {
-  status: "activated" | "error";
-  version?: string;
-  error?: string;
-}
-
-/**
- * 激活已下载的热更新（hotswap activateUpdate）。
- * 激活后 live asset provider 立即切换到新 bundle，window.location.reload() 即生效。
- * 供"立即生效"按钮调用；需先 downloadHotUpdateSilently 下载过。
- */
-export async function activateHotUpdate(): Promise<HotActivateResult> {
-  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
-  try {
-    const { activateUpdate } = await import("tauri-plugin-hotswap-api");
-    const version = await activateUpdate();
-    return { status: "activated", version };
   } catch (e: any) {
     return { status: "error", error: String(e?.message || e) };
   }
@@ -561,50 +517,6 @@ export async function notifyAppReady(): Promise<void> {
     await notifyReady();
   } catch {
     // 静默失败：插件未启用或非 OTA bundle 时为 no-op
-  }
-}
-
-/**
- * 静默检查并下载热更新（不打扰用户，后台执行）。
- * - 检查和下载均静默，失败不抛错，返回结果供调用方判断。
- * - 需要先满足原生更新：有原生更新时不下载热更新（min-shell 不满足或命令/插件版本不匹配）。
- * - 下载完成后处于 "staged"（已下载待激活）状态，用户点"立即生效"才激活+reload。
- * - 若激活后崩溃未 notifyReady，下次启动自动回滚（防砖）。
- * - 已经下载过（staged）则直接返回，不重复下载。
- *
- * 调用时机：APP 启动后 useEffect 中调用（per-session 一次）。
- */
-export async function checkAndStageHotUpdateIfEligible(): Promise<
-  | { status: "none" }
-  | { status: "staged"; version: string }
-  | { status: "shellTooOld" }
-  | { status: "nativePending" }
-  | { status: "error" }
-> {
-  if (!isTauri()) return { status: "none" };
-  try {
-    const result = await checkForUpdates();
-
-    // 有原生更新优先：先装原生再谈热更新。静默模式下不提示，跳过。
-    if (result.native.available) {
-      return { status: "nativePending" };
-    }
-    // min_binary_version 不满足：不能应用热更新，跳过
-    if (result.hot.shellTooOld) {
-      return { status: "shellTooOld" };
-    }
-    if (!result.hot.available) {
-      return { status: "none" };
-    }
-    // 无原生更新、满足 min_binary_version、有热更新 → 后台静默下载（不激活）
-    // checkForUpdates 已调 checkUpdate 设置 pending manifest，download 可直接用。
-    const r = await downloadHotUpdateSilently();
-    if (r.status === "downloaded") {
-      return { status: "staged", version: r.version || "" };
-    }
-    return { status: "error" };
-  } catch {
-    return { status: "error" };
   }
 }
 
