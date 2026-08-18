@@ -1287,11 +1287,11 @@ fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
                 Ok(c) => c,
                 Err(e) => { eprintln!("[BILI-RESTART] find_class Process 失败: {e}"); return; }
             };
-            let my_pid = match env.call_static_method(proc_class, "myPid", "()I", &[]) {
+            let my_pid = match env.call_static_method(&proc_class, "myPid", "()I", &[]) {
                 Ok(v) => v.i().unwrap_or(0),
                 Err(e) => { eprintln!("[BILI-RESTART] myPid 失败: {e}"); return; }
             };
-            let _ = env.call_static_method(proc_class, "killProcess", "(I)V", &[JValue::Int(my_pid)]);
+            let _ = env.call_static_method(&proc_class, "killProcess", "(I)V", &[JValue::Int(my_pid)]);
         });
     }).map_err(|e| format!("with_webview 派发失败: {}", e))
 }
