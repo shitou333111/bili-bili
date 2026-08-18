@@ -32,9 +32,8 @@ tauri-plugin-process = "2"
 
 [dependencies]
 tauri = { version = "2", features = ["unstable"] }
-# native-tls: Windows 用 SChannel，避免 rustls-tls 的 TLS 指纹被 B站 API 403
 # unsafe-headers: 允许设置 Referer 等 header（B站 API 需要）
-tauri-plugin-http = { version = "2", features = ["unsafe-headers", "native-tls"] }
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
