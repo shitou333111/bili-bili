@@ -7,7 +7,7 @@
  *    window.location.reload() 立即生效（无需重启进程，iOS/Android 也可用中更新）。
  * 2. 原生包更新：替换整个安装包
  *    - Windows: tauri-plugin-updater 官方插件（下载+安装+自动重启）
- *    - Android: 自定义命令 download_apk/install_apk（下载 APK + 触发系统安装器）
+ *    - Android: 自定义命令 download_apk 下载 APK + tauri-plugin-android-installer 安装
  *    - iOS: 自定义命令 download_ipa + Open In 面板（交自签工具覆盖安装）
  *
  * 版本显示格式：V1.4.0-20260816
@@ -412,7 +412,7 @@ export async function downloadNativeSilently(
 /**
  * 安装已下载好的原生更新（用户点击按钮触发）
  * - 桌面端: 交给官方 updater.downloadAndInstall 一步到位
- * - Android: install_apk(path) 触发系统安装器
+ * - Android: tauri-plugin-android-installer 的 install(path) 触发系统安装器
  * - iOS: sharekit shareFile 弹出分享面板（"用其他应用打开"），选自签工具覆盖安装
  */
 export async function installDownloadedNative(
@@ -429,8 +429,22 @@ export async function installDownloadedNative(
   if (p === "android") {
     if (!filePath) return { status: "error", error: "APK 未下载" };
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("install_apk", { apkPath: filePath });
+      const { install, canInstall, requestInstallPermission } = await import(
+        "tauri-plugin-android-installer-api"
+      );
+      // Android 8+ 需先授予"安装未知来源应用"权限，否则系统安装器拉起后会被拦截。
+      // 未授予时 requestInstallPermission() 跳转系统设置，返回后再校验；
+      // 仍未授予则提示用户手动开启（不再笼统报"无法打开系统安装器"）。
+      if (!(await canInstall())) {
+        await requestInstallPermission();
+        if (!(await canInstall())) {
+          return {
+            status: "error",
+            error: "未授予安装未知来源应用的权限（请在 系统设置→应用→本应用→安装未知应用 中允许）",
+          };
+        }
+      }
+      await install(filePath);
       return { status: "installing" };
     } catch (e: any) {
       return { status: "error", error: String(e?.message || e) };

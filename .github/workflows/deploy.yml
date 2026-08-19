@@ -424,40 +424,8 @@ jobs:
             sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
           fi
 
-          # ==================== APK 自更新：FileProvider + 安装权限 ====================
-          # 自定义命令 download_and_install_apk（src-tauri/src/lib.rs）下载 APK 到 app cache 目录后，
-          # 通过 FileProvider 生成 content URI 并触发 ACTION_VIEW Intent 让系统安装器覆盖安装。
-          # 需要：
-          #   1. REQUEST_INSTALL_PACKAGES 权限（Android 8+ 安装未知来源 APK 必需）
-          #   2. FileProvider 注册（authority = ${applicationId}.fileprovider，与 Rust 代码一致）
-          #   3. file_paths.xml 资源（声明 cache-path 可被 FileProvider 共享）
-          RES_DIR="src-tauri/gen/android/app/src/main/res/xml"
-          mkdir -p "$RES_DIR"
-          cat > "$RES_DIR/file_paths.xml" <<'XMLEOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <paths>
-              <cache-path name="cache" path="." />
-          </paths>
-          XMLEOF
-
-          if ! grep -q 'REQUEST_INSTALL_PACKAGES' "$MANIFEST"; then
-            sed -i 's#</manifest>#\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n</manifest>#' "$MANIFEST"
-            echo "已添加 REQUEST_INSTALL_PACKAGES 权限"
-          else
-            echo "REQUEST_INSTALL_PACKAGES 权限已存在，跳过"
-          fi
-
-          if ! grep -q 'fileprovider' "$MANIFEST"; then
-            sed -i 's#</application>#\n    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" /></provider>\n  </application>#' "$MANIFEST"
-            echo "已注册 FileProvider"
-          else
-            echo "FileProvider 已存在，跳过"
-          fi
-
           echo "--- 注册的 Activity ---"
           grep -n 'activity android:name' "$MANIFEST"
-          echo "--- 注册的 Provider ---"
-          grep -n 'provider android:name' "$MANIFEST" || true
           echo "--- 新增 Kotlin 文件 ---"
           ls -la "$PKG_DIR"
 

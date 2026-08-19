@@ -2355,12 +2355,6 @@
           "markdownDescription": "Enables the fetch_json command without any pre-configured scope."
         },
         {
-          "description": "允许调用 install_apk 命令触发 Android 系统安装器（仅 Android）",
-          "type": "string",
-          "const": "allow-install-apk",
-          "markdownDescription": "允许调用 install_apk 命令触发 Android 系统安装器（仅 Android）"
-        },
-        {
           "description": "Enables the open_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-activity-panel",
@@ -2427,12 +2421,6 @@
           "markdownDescription": "Denies the fetch_json command without any pre-configured scope."
         },
         {
-          "description": "禁止调用 install_apk 命令",
-          "type": "string",
-          "const": "deny-install-apk",
-          "markdownDescription": "禁止调用 install_apk 命令"
-        },
-        {
           "description": "Denies the open_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-activity-panel",
@@ -2449,6 +2437,48 @@
           "type": "string",
           "const": "deny-restart-app",
           "markdownDescription": "禁止调用 restart_app 命令"
+        },
+        {
+          "description": "Allows installing APKs and managing the install-unknown-apps permission.\n#### This default permission set includes:\n\n- `allow-install`\n- `allow-can-install`\n- `allow-request-install-permission`",
+          "type": "string",
+          "const": "android-installer:default",
+          "markdownDescription": "Allows installing APKs and managing the install-unknown-apps permission.\n#### This default permission set includes:\n\n- `allow-install`\n- `allow-can-install`\n- `allow-request-install-permission`"
+        },
+        {
+          "description": "Enables the can_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:allow-can-install",
+          "markdownDescription": "Enables the can_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_install_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:allow-request-install-permission",
+          "markdownDescription": "Enables the request_install_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the can_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:deny-can-install",
+          "markdownDescription": "Denies the can_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_install_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "android-installer:deny-request-install-permission",
+          "markdownDescription": "Denies the request_install_permission command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

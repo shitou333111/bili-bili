@@ -244,6 +244,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-android-installer",
  "tauri-plugin-fs",
  "tauri-plugin-hotswap",
  "tauri-plugin-http",
@@ -4102,6 +4103,18 @@ dependencies = [
  "serde_json",
  "tauri-utils",
  "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-android-installer"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a4924be58035994aba1187bf8d303e8b6fb1564aca760cad176d2a233c9ceca"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

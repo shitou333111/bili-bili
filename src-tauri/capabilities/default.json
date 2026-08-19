@@ -19,7 +19,6 @@
     "allow-check-native-update",
     "allow-download-and-open-ipa",
     "allow-download-apk",
-    "allow-install-apk",
     "allow-download-ipa",
     "allow-restart-app",
     {
@@ -37,6 +36,7 @@
     "opener:default",
     "pldownloader:default",
     "sharekit:default",
-    "hotswap:default"
+    "hotswap:default",
+    "android-installer:default"
   ]
 }

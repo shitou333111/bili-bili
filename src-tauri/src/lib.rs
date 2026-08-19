@@ -928,7 +928,7 @@ async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Resul
 }
 
 /// Android：仅下载 APK 到 app cache 目录，返回文件路径
-/// 前端拿到路径后可调用 install_apk() 触发系统安装器。
+/// 前端拿到路径后交给 tauri-plugin-android-installer 的 install() 触发系统安装器。
 /// 拆分原因：支持"静默后台先下载，用户点击按钮再安装"的统一用户体验。
 #[cfg(target_os = "android")]
 #[tauri::command]
@@ -959,200 +959,6 @@ async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, Stri
     let apk_path = cache_dir.join("update.apk");
     std::fs::write(&apk_path, &bytes).map_err(|e| format!("写入 APK 文件失败: {}", e))?;
     Ok(apk_path.to_string_lossy().to_string())
-}
-
-/// 执行一段 JNI 代码，并在结束后清空可能遗留的 Java 异常。
-/// 手写 JNI 调用（call_method / startActivity / call_static_method 等）抛出 Java 异常时，
-/// 异常会"挂起"在当前 JNIEnv 上且不会自动清除；若带着 pending exception 从 native 回调返回，
-/// ART 会直接 abort 整个进程 → 应用闪退且前端无任何报错信息。
-/// 因此所有手写 JNI 的闭包体都应包在本函数里统一收尾。
-#[cfg(target_os = "android")]
-fn run_jni_safe<F>(env: &mut jni::JNIEnv, body: F)
-where
-    F: FnOnce(&mut jni::JNIEnv),
-{
-    body(&mut *env);
-    if env.exception_check().unwrap_or(false) {
-        eprintln!("[BILI-JNI] 捕获 Java 异常并清空（防止进程闪退）");
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
-    }
-}
-
-/// Android：调用系统安装器安装已下载好的 APK 文件
-/// 前端先调用 download_apk() 获取路径，再传入此函数触发安装器。
-/// 需 AndroidManifest 注册 FileProvider + REQUEST_INSTALL_PACKAGES 权限（CI 注入）
-#[cfg(target_os = "android")]
-#[tauri::command]
-async fn install_apk(app: tauri::AppHandle, apk_path: String) -> Result<(), String> {
-    use jni::objects::JValue;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    // 通过 JNI 触发系统安装器
-    let main_wv = app.get_webview("main").ok_or("找不到主 webview")?;
-    // JNI 闭包内无法向外返回错误，用原子标志记录系统安装器是否被成功拉起
-    let launched = std::sync::Arc::new(AtomicBool::new(false));
-    let launched_flag = launched.clone();
-
-    main_wv
-        .with_webview(move |platform_wv| {
-            platform_wv.jni_handle().exec(move |env, activity, _webview| {
-                if activity.is_null() {
-                    eprintln!("[BILI-UPDATE] activity 为空");
-                    return;
-                }
-                // 用 run_jni_safe 包裹：任何 JNI 调用抛出的 Java 异常都会在末尾统一清空，
-                // 否则 native 返回时 ART 直接中止进程（闪退且无报错）。——修复"重装闪退"
-                run_jni_safe(env, |env| {
-                    // 3a. 创建 java.io.File 对象
-                    // apk_path 参数类型是 String（JNIString 泛型 From<AsRef<str>>，直接传 &apk_path）
-                    let path_str = match env.new_string(&apk_path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_string path 失败: {e}");
-                            return;
-                        }
-                    };
-                    let file_class = match env.find_class("java/io/File") {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] find_class File 失败: {e}");
-                            return;
-                        }
-                    };
-                    let file_obj = match env.new_object(
-                        file_class,
-                        &"(Ljava/lang/String;)V",
-                        &[JValue::Object(&path_str)],
-                    ) {
-                        Ok(o) => o,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_object File 失败: {e}");
-                            return;
-                        }
-                    };
-
-                    // 3b. 获取包名并构造 FileProvider authority
-                    let pkg_obj = match env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[]) {
-                        Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] getPackageName 失败: {e}");
-                            return;
-                        }
-                    };
-                    let pkg_str: String = if pkg_obj.is_null() {
-                        eprintln!("[BILI-UPDATE] getPackageName 返回空");
-                        return;
-                    } else {
-                        env.get_string(&pkg_obj.into())
-                            .map(|s| s.into())
-                            .unwrap_or_default()
-                    };
-                    let authority_str = format!("{}.fileprovider", pkg_str);
-                    let authority = match env.new_string(&authority_str) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_string authority 失败: {e}");
-                            return;
-                        }
-                    };
-
-                    // 3c. 调用 FileProvider.getUriForFile(context, authority, file)
-                    let fp_class = match env.find_class("androidx/core/content/FileProvider") {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] find_class FileProvider 失败: {e}");
-                            return;
-                        }
-                    };
-                    let uri = match env.call_static_method(
-                        fp_class,
-                        "getUriForFile",
-                        "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
-                        &[JValue::Object(activity), JValue::Object(&authority), JValue::Object(&file_obj)],
-                    ) {
-                        Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] getUriForFile 失败: {e}");
-                            return;
-                        }
-                    };
-
-                    // 3d. 创建 ACTION_VIEW Intent
-                    let action = match env.new_string("android.intent.action.VIEW") {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_string action 失败: {e}");
-                            return;
-                        }
-                    };
-                    let intent_class = match env.find_class("android/content/Intent") {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] find_class Intent 失败: {e}");
-                            return;
-                        }
-                    };
-                    let intent = match env.new_object(
-                        intent_class,
-                        &"(Ljava/lang/String;)V",
-                        &[JValue::Object(&action)],
-                    ) {
-                        Ok(o) => o,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_object Intent 失败: {e}");
-                            return;
-                        }
-                    };
-
-                    // 3e. setDataAndType(uri, "application/vnd.android.package-archive")
-                    let mime = match env.new_string("application/vnd.android.package-archive") {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[BILI-UPDATE] new_string mime 失败: {e}");
-                            return;
-                        }
-                    };
-                    if let Err(e) = env.call_method(
-                        &intent,
-                        "setDataAndType",
-                        "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
-                        &[JValue::Object(&uri), JValue::Object(&mime)],
-                    ) {
-                        eprintln!("[BILI-UPDATE] setDataAndType 失败: {e}");
-                        return;
-                    }
-
-                    // 3f. addFlags(FLAG_GRANT_READ_URI_PERMISSION = 1)
-                    if let Err(e) = env.call_method(
-                        &intent,
-                        "addFlags",
-                        "(I)Landroid/content/Intent;",
-                        &[JValue::Int(1)],
-                    ) {
-                        eprintln!("[BILI-UPDATE] addFlags 失败: {e}");
-                        return;
-                    }
-
-                    // 3g. startActivity(intent)
-                    match env.call_method(
-                        activity,
-                        "startActivity",
-                        "(Landroid/content/Intent;)V",
-                        &[JValue::Object(&intent)],
-                    ) {
-                        Ok(_) => launched_flag.store(true, Ordering::SeqCst),
-                        Err(e) => eprintln!("[BILI-UPDATE] startActivity 失败: {e}"),
-                    }
-                });
-            });
-        })
-        .map_err(|e| format!("with_webview 派发失败: {}", e))?;
-
-    if !launched.load(Ordering::SeqCst) {
-        return Err("无法打开系统安装器，请确认系统允许安装未知来源应用".into());
-    }
-    Ok(())
 }
 
 /// Android：重启 APP
@@ -1332,17 +1138,11 @@ fn restart_app(_app: tauri::AppHandle) -> Result<(), String> {
     Err("restart_app 仅 Android 实现；桌面端用 process 插件，iOS 无 API".into())
 }
 
-/// 非 Android 平台的 APK 命令 stub（保证 invoke_handler 在所有平台编译通过）
+/// 非 Android 平台的 download_apk stub（保证 invoke_handler 在所有平台编译通过）
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 async fn download_apk(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
     Err("download_apk 仅在 Android 平台可用".into())
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-async fn install_apk(_app: tauri::AppHandle, _apk_path: String) -> Result<(), String> {
-    Err("install_apk 仅在 Android 平台可用".into())
 }
 
 /// iOS：仅下载 IPA 到 app cache 目录，返回文件路径
@@ -1434,6 +1234,13 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_ios_webview_insets::init());
     }
+    // Android：注册 APK 安装插件（替换手写 JNI 的 install_apk）。
+    // 自带 FileProvider + REQUEST_INSTALL_PACKAGES 权限（manifest 自动合并），
+    // 提供 install / canInstall / requestInstallPermission 命令。
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_android_installer::init());
+    }
 
     builder
         // 启动时调整主窗口：
@@ -1521,10 +1328,8 @@ pub fn run() {
             open_real_activity_panel,
             close_real_activity_panel,
             check_native_update,
-            // 注：download_and_install_apk 已拆分为 download_apk + install_apk，
-            // 且 Android 上不再有该函数（仅桌面端 stub），故不在此注册。
+            // 安装 APK 由 tauri-plugin-android-installer 插件处理（不再注册自定义命令）。
             download_apk,
-            install_apk,
             download_and_open_ipa,
             download_ipa,
             restart_app,

@@ -38,7 +38,8 @@
     "react-dom": "19.2.4",
     "recharts": "^3.9.2",
     "tauri-plugin-hotswap-api": "^0.0.4",
-    "tauri-plugin-pldownloader-api": "^1.0.1"
+    "tauri-plugin-pldownloader-api": "^1.0.1",
+    "tauri-plugin-android-installer-api": "^0.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -573,7 +573,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 | 平台 | 方案 | 生效方式 |
 |------|------|----------|
 | **Windows** | `tauri-plugin-updater` 官方插件 | 下载 + 安装 + 自动重启 |
-| **Android** | 自定义命令 `download_and_install_apk` | 下载 APK → FileProvider → ACTION_VIEW Intent → 系统安装器覆盖安装（数据保留） |
+| **Android** | 自定义命令 `download_apk` 下载 + `tauri-plugin-android-installer` 安装 | 下载 APK → 插件自带 FileProvider 共享 → 系统安装器覆盖安装（数据保留） |
 | **iOS** | 自定义命令 `download_and_open_ipa` + `tauri-plugin-sharekit` | 下载 IPA → shareFile 分享面板（"用其他应用打开"）→ 用户选自签工具（Esign/Feather）覆盖安装 |
 
 #### 实现位置
@@ -581,9 +581,9 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 | 文件 | 作用 |
 |------|------|
 | [src/lib/updater.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/updater.ts) | 统一更新模块：版本显示、检查更新、应用热更新/原生更新、重启 |
-| [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_and_install_apk` / `download_and_open_ipa` 命令 |
-| [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hotswap`（三平台）、`tauri-plugin-updater` + `tauri-plugin-process`（仅桌面端） |
-| [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hotswap:default` + 自定义命令权限 |
+| [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_apk` / `download_and_open_ipa` 命令 + 注册 `tauri-plugin-android-installer` |
+| [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hotswap`（三平台）、`tauri-plugin-updater` + `tauri-plugin-process`（仅桌面端）、`tauri-plugin-android-installer`（仅 Android） |
+| [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hotswap:default` + `android-installer:default` + 自定义命令权限 |
 | [src-tauri/capabilities/desktop.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/desktop.json) | 桌面端权限：`updater:default` + `process:allow-restart` |
 | [src/app/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/page.tsx) | 帮助页「检查更新」卡片：版本显示 + 检查 + 下载进度 + 应用 + 重启 |
 

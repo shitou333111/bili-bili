@@ -24,7 +24,7 @@ jni = "0.21"
 tauri-plugin-ios-webview-insets = "=0.1.0"
 
 # 仅桌面端：官方二进制更新器（替换整个安装包），移动端不支持。
-# Android 需自定义 APK 下载+系统安装器方案（见 lib.rs download_and_install_apk）。
+# Android 需自定义 APK 下载（download_apk）+ tauri-plugin-android-installer 安装。
 # iOS 需自定义 IPA 下载+Open In 方案（见 lib.rs download_and_open_ipa）。
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
@@ -38,6 +38,13 @@ tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-pldownloader = "1.0.1"
+# APK 安装插件（Android 功能）：替换手写 JNI 的 install_apk 实现。
+# 插件自带 FileProvider + REQUEST_INSTALL_PACKAGES 权限（manifest 自动合并），
+# 提供 install / canInstall / requestInstallPermission 命令。
+# 须作为全局依赖声明：否则 Windows/iOS 构建时 tauri-build 不认识
+# android-installer:default 权限，capabilities 校验报错。桌面/iOS 端插件内部为
+# no-op stub，仅 Android 生效（功能上仍是"仅安卓平台"）。
+tauri-plugin-android-installer = "0.1"
 # 分享插件（iOS/Android/macOS/Windows）：iOS 端用 UIActivityViewController 弹出分享面板，
 # 把已下载的 IPA 文件交给自签工具（Esign/Feather）覆盖安装（替代 opener 的 UIApplication.open，
 # 后者无法处理 IPA 格式，报"格式不正确"）。
