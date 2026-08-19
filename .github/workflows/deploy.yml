@@ -864,7 +864,12 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: publish/*
-          target: /tmp/bili_live-artifacts
+          # 每次 run 用独立的 staging 目录（BUILD_TS 唯一）：
+          # scp-action 只增量覆盖、不清理目标目录，固定目录会让上一次 run 的
+          # 旧产物残留在服务器 /tmp 里，被后续 release 目录 cp -a 带入，
+          # 导致"未构建的平台"被误判为已构建（current_* 指向含旧包的目录），
+          # versions.json 上报新版本号但实际下载的是旧包（iOS 死循环更新的根源）。
+          target: /tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}
           overwrite: true
           strip_components: 1
           timeout: 120s
@@ -879,7 +884,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: publish/*
-          target: /tmp/bili_live-artifacts
+          target: /tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}
           overwrite: true
           strip_components: 1
           timeout: 120s
@@ -901,12 +906,14 @@ jobs:
             TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
             ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
             APP_VERSION="${{ env.APP_VERSION }}"
+            # 本次 run 的独立 staging 目录（与 scp target 一致）：避免旧 run 残留产物污染
+            STAGING_DIR="/tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}"
             # release 目录名带版本号：release-<版本>-<日期>-<时间>
             # 版本号+日期都从目录名解析（见下方 extract_meta），保证 versions.json 里
             # 每平台版本号与它实际指向的安装包一一对应。
             RELEASE_DIR="${ARTIFACTS_DIR}/release-${APP_VERSION}-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
-            cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            cp -a "${STAGING_DIR}/." "${RELEASE_DIR}/"
             # ==================== 热更新包发布到 webapp 目录 ====================
             # hotswap.json（manifest）+ frontend-<seq>.tar.gz（bundle）
             # 客户端从 ${ARTIFACTS_DIR}/webapp/hotswap.json 拉取热更新清单
@@ -1077,12 +1084,14 @@ jobs:
             TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
             ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
             APP_VERSION="${{ env.APP_VERSION }}"
+            # 本次 run 的独立 staging 目录（与 scp target 一致）：避免旧 run 残留产物污染
+            STAGING_DIR="/tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}"
             # release 目录名带版本号：release-<版本>-<日期>-<时间>
             # 版本号+日期都从目录名解析（见下方 extract_meta），保证 versions.json 里
             # 每平台版本号与它实际指向的安装包一一对应。
             RELEASE_DIR="${ARTIFACTS_DIR}/release-${APP_VERSION}-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
-            cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
+            cp -a "${STAGING_DIR}/." "${RELEASE_DIR}/"
             if [ -d "${RELEASE_DIR}/webapp" ]; then
               mkdir -p "${ARTIFACTS_DIR}/webapp"
               cp -a "${RELEASE_DIR}/webapp/." "${ARTIFACTS_DIR}/webapp/"
