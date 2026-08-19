@@ -1231,20 +1231,6 @@ async fn download_ipa(app: tauri::AppHandle, url: String, version: Option<String
     Ok(ipa_path.to_string_lossy().to_string())
 }
 
-/// iOS：download_and_open_ipa = download_ipa 保持兼容（不破坏旧调用）
-#[cfg(target_os = "ios")]
-#[tauri::command]
-async fn download_and_open_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
-    download_ipa(app, url).await
-}
-
-/// 非 iOS 平台的 stub
-#[cfg(not(target_os = "ios"))]
-#[tauri::command]
-async fn download_and_open_ipa(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
-    Err("IPA 安装仅在 iOS 平台可用".into())
-}
-
 #[cfg(not(target_os = "ios"))]
 #[tauri::command]
 async fn download_ipa(_app: tauri::AppHandle, _url: String, _version: Option<String>) -> Result<String, String> {
@@ -1381,7 +1367,6 @@ pub fn run() {
             check_native_update,
             // 安装 APK 由 tauri-plugin-android-installer 插件处理（不再注册自定义命令）。
             download_apk,
-            download_and_open_ipa,
             download_ipa,
             restart_app,
         ])

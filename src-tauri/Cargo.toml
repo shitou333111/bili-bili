@@ -25,7 +25,7 @@ tauri-plugin-ios-webview-insets = "=0.1.0"
 
 # 仅桌面端：官方二进制更新器（替换整个安装包），移动端不支持。
 # Android 需自定义 APK 下载（download_apk）+ tauri-plugin-android-installer 安装。
-# iOS 需自定义 IPA 下载+Open In 方案（见 lib.rs download_and_open_ipa）。
+# iOS 需自定义 IPA 下载（download_ipa）+ tauri-plugin-sharekit 分享面板。
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

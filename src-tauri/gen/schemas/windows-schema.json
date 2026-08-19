@@ -2331,12 +2331,6 @@
           "markdownDescription": "Enables the debug_acl command without any pre-configured scope."
         },
         {
-          "description": "Enables the download_and_open_ipa command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-download-and-open-ipa",
-          "markdownDescription": "Enables the download_and_open_ipa command without any pre-configured scope."
-        },
-        {
           "description": "允许调用 download_apk 命令下载 APK 文件到本地缓存（仅 Android）",
           "type": "string",
           "const": "allow-download-apk",
@@ -2395,12 +2389,6 @@
           "type": "string",
           "const": "deny-debug-acl",
           "markdownDescription": "Denies the debug_acl command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the download_and_open_ipa command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-download-and-open-ipa",
-          "markdownDescription": "Denies the download_and_open_ipa command without any pre-configured scope."
         },
         {
           "description": "禁止调用 download_apk 命令",

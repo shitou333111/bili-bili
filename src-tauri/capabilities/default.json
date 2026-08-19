@@ -17,7 +17,6 @@
     "allow-open-real-activity-panel",
     "allow-close-real-activity-panel",
     "allow-check-native-update",
-    "allow-download-and-open-ipa",
     "allow-download-apk",
     "allow-download-ipa",
     "allow-restart-app",
