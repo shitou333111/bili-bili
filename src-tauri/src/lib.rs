@@ -961,6 +961,24 @@ async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, Stri
     Ok(apk_path.to_string_lossy().to_string())
 }
 
+/// 执行一段 JNI 代码，并在结束后清空可能遗留的 Java 异常。
+/// 手写 JNI 调用（call_method / startActivity / call_static_method 等）抛出 Java 异常时，
+/// 异常会"挂起"在当前 JNIEnv 上且不会自动清除；若带着 pending exception 从 native 回调返回，
+/// ART 会直接 abort 整个进程 → 应用闪退且前端无任何报错信息。
+/// 因此所有手写 JNI 的闭包体都应包在本函数里统一收尾。
+#[cfg(target_os = "android")]
+fn run_jni_safe<F>(env: &mut jni::JNIEnv, body: F)
+where
+    F: FnOnce(&jni::JNIEnv),
+{
+    body(env);
+    if env.exception_check().unwrap_or(false) {
+        eprintln!("[BILI-JNI] 捕获 Java 异常并清空（防止进程闪退）");
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+    }
+}
+
 /// Android：调用系统安装器安装已下载好的 APK 文件
 /// 前端先调用 download_apk() 获取路径，再传入此函数触发安装器。
 /// 需 AndroidManifest 注册 FileProvider + REQUEST_INSTALL_PACKAGES 权限（CI 注入）
@@ -968,9 +986,13 @@ async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, Stri
 #[tauri::command]
 async fn install_apk(app: tauri::AppHandle, apk_path: String) -> Result<(), String> {
     use jni::objects::JValue;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     // 通过 JNI 触发系统安装器
     let main_wv = app.get_webview("main").ok_or("找不到主 webview")?;
+    // JNI 闭包内无法向外返回错误，用原子标志记录系统安装器是否被成功拉起
+    let launched = std::sync::Arc::new(AtomicBool::new(false));
+    let launched_flag = launched.clone();
 
     main_wv
         .with_webview(move |platform_wv| {
@@ -979,150 +1001,157 @@ async fn install_apk(app: tauri::AppHandle, apk_path: String) -> Result<(), Stri
                     eprintln!("[BILI-UPDATE] activity 为空");
                     return;
                 }
+                // 用 run_jni_safe 包裹：任何 JNI 调用抛出的 Java 异常都会在末尾统一清空，
+                // 否则 native 返回时 ART 直接中止进程（闪退且无报错）。——修复"重装闪退"
+                run_jni_safe(env, |env| {
+                    // 3a. 创建 java.io.File 对象
+                    // apk_path 参数类型是 String（JNIString 泛型 From<AsRef<str>>，直接传 &apk_path）
+                    let path_str = match env.new_string(&apk_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_string path 失败: {e}");
+                            return;
+                        }
+                    };
+                    let file_class = match env.find_class("java/io/File") {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] find_class File 失败: {e}");
+                            return;
+                        }
+                    };
+                    let file_obj = match env.new_object(
+                        file_class,
+                        &"(Ljava/lang/String;)V",
+                        &[JValue::Object(&path_str)],
+                    ) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_object File 失败: {e}");
+                            return;
+                        }
+                    };
 
-                // 3a. 创建 java.io.File 对象
-                // apk_path 参数类型是 String（JNIString 泛型 From<AsRef<str>>，直接传 &apk_path）
-                let path_str = match env.new_string(&apk_path) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_string path 失败: {e}");
+                    // 3b. 获取包名并构造 FileProvider authority
+                    let pkg_obj = match env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[]) {
+                        Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] getPackageName 失败: {e}");
+                            return;
+                        }
+                    };
+                    let pkg_str: String = if pkg_obj.is_null() {
+                        eprintln!("[BILI-UPDATE] getPackageName 返回空");
                         return;
-                    }
-                };
-                let file_class = match env.find_class("java/io/File") {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] find_class File 失败: {e}");
-                        return;
-                    }
-                };
-                let file_obj = match env.new_object(
-                    file_class,
-                    &"(Ljava/lang/String;)V",
-                    &[JValue::Object(&path_str)],
-                ) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_object File 失败: {e}");
-                        return;
-                    }
-                };
+                    } else {
+                        env.get_string(&pkg_obj.into())
+                            .map(|s| s.into())
+                            .unwrap_or_default()
+                    };
+                    let authority_str = format!("{}.fileprovider", pkg_str);
+                    let authority = match env.new_string(&authority_str) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_string authority 失败: {e}");
+                            return;
+                        }
+                    };
 
-                // 3b. 获取包名并构造 FileProvider authority
-                let pkg_obj = match env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[]) {
-                    Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] getPackageName 失败: {e}");
-                        return;
-                    }
-                };
-                let pkg_str: String = if pkg_obj.is_null() {
-                    eprintln!("[BILI-UPDATE] getPackageName 返回空");
-                    return;
-                } else {
-                    env.get_string(&pkg_obj.into())
-                        .map(|s| s.into())
-                        .unwrap_or_default()
-                };
-                let authority_str = format!("{}.fileprovider", pkg_str);
-                let authority = match env.new_string(&authority_str) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_string authority 失败: {e}");
-                        return;
-                    }
-                };
+                    // 3c. 调用 FileProvider.getUriForFile(context, authority, file)
+                    let fp_class = match env.find_class("androidx/core/content/FileProvider") {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] find_class FileProvider 失败: {e}");
+                            return;
+                        }
+                    };
+                    let uri = match env.call_static_method(
+                        fp_class,
+                        "getUriForFile",
+                        "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
+                        &[JValue::Object(activity), JValue::Object(&authority), JValue::Object(&file_obj)],
+                    ) {
+                        Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] getUriForFile 失败: {e}");
+                            return;
+                        }
+                    };
 
-                // 3c. 调用 FileProvider.getUriForFile(context, authority, file)
-                let fp_class = match env.find_class("androidx/core/content/FileProvider") {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] find_class FileProvider 失败: {e}");
-                        return;
-                    }
-                };
-                let uri = match env.call_static_method(
-                    fp_class,
-                    "getUriForFile",
-                    "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
-                    &[JValue::Object(activity), JValue::Object(&authority), JValue::Object(&file_obj)],
-                ) {
-                    Ok(v) => v.l().unwrap_or(jni::objects::JObject::null()),
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] getUriForFile 失败: {e}");
-                        return;
-                    }
-                };
+                    // 3d. 创建 ACTION_VIEW Intent
+                    let action = match env.new_string("android.intent.action.VIEW") {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_string action 失败: {e}");
+                            return;
+                        }
+                    };
+                    let intent_class = match env.find_class("android/content/Intent") {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] find_class Intent 失败: {e}");
+                            return;
+                        }
+                    };
+                    let intent = match env.new_object(
+                        intent_class,
+                        &"(Ljava/lang/String;)V",
+                        &[JValue::Object(&action)],
+                    ) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_object Intent 失败: {e}");
+                            return;
+                        }
+                    };
 
-                // 3d. 创建 ACTION_VIEW Intent
-                let action = match env.new_string("android.intent.action.VIEW") {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_string action 失败: {e}");
+                    // 3e. setDataAndType(uri, "application/vnd.android.package-archive")
+                    let mime = match env.new_string("application/vnd.android.package-archive") {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[BILI-UPDATE] new_string mime 失败: {e}");
+                            return;
+                        }
+                    };
+                    if let Err(e) = env.call_method(
+                        &intent,
+                        "setDataAndType",
+                        "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
+                        &[JValue::Object(&uri), JValue::Object(&mime)],
+                    ) {
+                        eprintln!("[BILI-UPDATE] setDataAndType 失败: {e}");
                         return;
                     }
-                };
-                let intent_class = match env.find_class("android/content/Intent") {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] find_class Intent 失败: {e}");
-                        return;
-                    }
-                };
-                let intent = match env.new_object(
-                    intent_class,
-                    &"(Ljava/lang/String;)V",
-                    &[JValue::Object(&action)],
-                ) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_object Intent 失败: {e}");
-                        return;
-                    }
-                };
 
-                // 3e. setDataAndType(uri, "application/vnd.android.package-archive")
-                let mime = match env.new_string("application/vnd.android.package-archive") {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[BILI-UPDATE] new_string mime 失败: {e}");
+                    // 3f. addFlags(FLAG_GRANT_READ_URI_PERMISSION = 1)
+                    if let Err(e) = env.call_method(
+                        &intent,
+                        "addFlags",
+                        "(I)Landroid/content/Intent;",
+                        &[JValue::Int(1)],
+                    ) {
+                        eprintln!("[BILI-UPDATE] addFlags 失败: {e}");
                         return;
                     }
-                };
-                if let Err(e) = env.call_method(
-                    &intent,
-                    "setDataAndType",
-                    "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;",
-                    &[JValue::Object(&uri), JValue::Object(&mime)],
-                ) {
-                    eprintln!("[BILI-UPDATE] setDataAndType 失败: {e}");
-                    return;
-                }
 
-                // 3f. addFlags(FLAG_GRANT_READ_URI_PERMISSION = 1)
-                if let Err(e) = env.call_method(
-                    &intent,
-                    "addFlags",
-                    "(I)Landroid/content/Intent;",
-                    &[JValue::Int(1)],
-                ) {
-                    eprintln!("[BILI-UPDATE] addFlags 失败: {e}");
-                    return;
-                }
-
-                // 3g. startActivity(intent)
-                if let Err(e) = env.call_method(
-                    activity,
-                    "startActivity",
-                    "(Landroid/content/Intent;)V",
-                    &[JValue::Object(&intent)],
-                ) {
-                    eprintln!("[BILI-UPDATE] startActivity 失败: {e}");
-                }
+                    // 3g. startActivity(intent)
+                    match env.call_method(
+                        activity,
+                        "startActivity",
+                        "(Landroid/content/Intent;)V",
+                        &[JValue::Object(&intent)],
+                    ) {
+                        Ok(_) => launched_flag.store(true, Ordering::SeqCst),
+                        Err(e) => eprintln!("[BILI-UPDATE] startActivity 失败: {e}"),
+                    }
+                });
             });
         })
         .map_err(|e| format!("with_webview 派发失败: {}", e))?;
 
+    if !launched.load(Ordering::SeqCst) {
+        return Err("无法打开系统安装器，请确认系统允许安装未知来源应用".into());
+    }
     Ok(())
 }
 

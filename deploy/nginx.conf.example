@@ -50,8 +50,18 @@ server {
     # current_* 是 CI 维护的软链，指向 release-<时间戳>/ 里最新安装包，nginx 默认跟随软链。
     location /artifacts/ {
         alias YOUR_SSH_TARGET_DIR/artifacts/;
-        # 强制以附件下载，避免浏览器直接预览
-        add_header Content-Disposition "attachment";
+        # 强制以附件下载，避免浏览器直接预览。
+        # 关键：必须带 filename，否则 Android 下载管理器（真机/模拟器行为一致）拿不到扩展名，
+        # 会把安装包存成 current_apk.bin。
+        # 文件名由前端下载链接的参数传入（单一来源，见 DownloadSection.tsx）：
+        #   ?fn=        ASCII 兜底名（如 Bgua.apk）——保证 .apk/.exe/.ipa 扩展名正确
+        #   ?filename=  RFC 5987 UTF-8 中文名（如 B瓜.apk）——现代浏览器优先采用 filename*
+        # 直接访问不带参数的 current_* 链接时，兜底用 Bgua.apk。
+        set $dl_name $arg_fn;
+        if ($dl_name = "") { set $dl_name "Bgua.apk"; }
+        set $dl_utf8 $arg_filename;
+        if ($dl_utf8 = "") { set $dl_utf8 $dl_name; }
+        add_header Content-Disposition "attachment; filename=$dl_name; filename*=UTF-8''$dl_utf8";
     }
 
     # ---- 2) 其余全部请求（含 Next.js 静态资源 /_next/ 等）----

@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 // ==================== 站点配置（单一来源） ====================
 // 安装包下载根路径：nginx 将 /artifacts/ 映射到服务器 ${SSH_TARGET_DIR}/artifacts/ 目录。
 // 三个 current_* 符号链接由 CI 自动指向各平台最新安装包。
-// 下载文件名由 <a download="B瓜.xxx"> 指定，与 URL 上的 current_* 符号链接名无关。
+// 下载文件名通过 URL 查询参数传给 nginx（Content-Disposition filename）：
+//   ?fn=       ASCII 兜底名（Bgua.xxx）——Android 下载管理器靠它拿到正确扩展名，避免存成 .bin
+//   ?filename= RFC 5987 UTF-8 中文名（B瓜.xxx）——现代浏览器（桌面 + Android）优先采用
+// <a download="B瓜.xxx"> 仅桌面浏览器参考，Android 系统下载管理器会忽略该属性。
 const DOWNLOAD_BASE = "https://bili-bili.icu/artifacts";
 // 版本日期清单：CI 发布时写入服务器 artifacts 目录，浏览器实时拉取
 const VERSIONS_URL = `${DOWNLOAD_BASE}/versions.json`;
@@ -17,6 +20,7 @@ const platforms = [
     name: "Windows",
     fileType: "EXE",
     fileName: "B瓜.exe",
+    asciiName: "Bgua.exe",
     href: `${DOWNLOAD_BASE}/current_exe`,
     color: "#2563eb",
     softBg: "#eef4ff",
@@ -31,6 +35,7 @@ const platforms = [
     name: "Android",
     fileType: "APK",
     fileName: "B瓜.apk",
+    asciiName: "Bgua.apk",
     href: `${DOWNLOAD_BASE}/current_apk`,
     color: "#16a34a",
     softBg: "#ecfdf3",
@@ -45,6 +50,7 @@ const platforms = [
     name: "iOS",
     fileType: "IPA",
     fileName: "B瓜.ipa",
+    asciiName: "Bgua.ipa",
     href: `${DOWNLOAD_BASE}/current_ipa`,
     color: "#7873f5",
     softBg: "#f4f1ff",
@@ -60,14 +66,14 @@ export default function DownloadSection() {
   const [showIosGuide, setShowIosGuide] = useState(false);
   // 下载次数用本地 state 承载：初始化从 /api/downloads 拉取，点击下载时乐观自增
   const [counts, setCounts] = useState<Record<string, number> | null>(null);
-  // 版本日期：从 versions.json 拉取（含顶层 version 原生版本号 + 各平台日期）
-  const [dates, setDates] = useState<Record<string, string>>({});
+  // 版本日期：从 versions.json 拉取（version 为每平台版本号对象 + 各平台日期）
+  const [dates, setDates] = useState<Record<string, any>>({});
 
   useEffect(() => {
     // 拉取版本日期
     fetch(VERSIONS_URL)
       .then((r) => (r.ok ? r.json() : {}))
-      .then((data) => setDates(data as Record<string, string>))
+      .then((data) => setDates(data as Record<string, any>))
       .catch(() => {});
     // 拉取下载计数
     fetch("/api/downloads")
@@ -76,9 +82,13 @@ export default function DownloadSection() {
       .catch(() => {});
   }, []);
 
-  // 版本+日期角标："V1.4.0-20260816"（完整三位版本号 + 紧凑日期，无括号，避免误认为版本号与日期是同一信息）
-  const versionBadge = (platformId: string) =>
-    `V${dates.version || ""}-${(dates[platformId] || "").replace(/-/g, "")}`;
+  // 版本+日期角标："V1.4.0-20260816"（完整三位版本号 + 紧凑日期，无括号，避免误认为版本号与日期是同一信息）。
+  // 版本号按平台取（versions.json 的 version 是每平台对象）：某平台未构建时显示旧版本号+旧日期，与实际包一致。
+  const versionBadge = (platformId: string) => {
+    const ver = (dates.version as Record<string, string> | undefined)?.[platformId] || "";
+    const date = (dates[platformId] || "").replace(/-/g, "");
+    return `V${ver}-${date}`;
+  };
 
   return (
     <>
@@ -120,7 +130,7 @@ export default function DownloadSection() {
             </div>
             {/* 下载按钮：统一灰色、尺寸较小；点击时乐观自增计数并上报一次下载 */}
             <a
-              href={p.href}
+              href={`${p.href}?fn=${p.asciiName}&filename=${encodeURIComponent(p.fileName)}`}
               download={p.fileName}
               onClick={() => {
                 setCounts((prev) =>

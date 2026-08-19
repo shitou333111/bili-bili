@@ -71,7 +71,8 @@ export interface VersionDisplay {
 
 /** versions.json 结构（由 CI publish-artifacts 生成） */
 interface VersionsJson {
-  version?: string;
+  /** 每平台版本号（未构建平台无此键，随旧包保留旧版本） */
+  version?: Record<string, string>;
   windows?: string;
   android?: string;
   ios?: string;
@@ -241,7 +242,8 @@ async function checkNativeUpdate(): Promise<NativeUpdateInfo> {
 
     const platform = detectPlatform();
     const platformKey = (platform === "web" ? "windows" : platform) as keyof VersionsJson;
-    const serverVersion = versions.version || "";
+    // 版本号按平台独立：某平台未构建时取不到新版本 → 不误报更新（与它实际安装包一致）
+    const serverVersion = versions.version?.[platformKey] || "";
     const date = (versions as Record<string, any>)[platform] as string || "";
     const downloadUrlRaw = (versions.downloads as Record<string, string | undefined> | undefined)?.[platformKey] || "";
     // Rust reqwest 需绝对 URL，相对路径用 serverApiUrl 补全服务器地址

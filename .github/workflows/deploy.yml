@@ -767,11 +767,13 @@ jobs:
 
   # ==================== 发布客户端产物到服务器 ====================
   # 将 exe/apk/ipa 三种平台产物按构建时间打包发布到服务器：
-  #   ${TARGET_DIR}/artifacts/release-<构建时间戳>/  -> 本次 run 的所有平台产物（归组）
+  #   ${TARGET_DIR}/artifacts/release-<版本>-<构建时间戳>/  -> 本次 run 的所有平台产物（归组）
   #   ${TARGET_DIR}/artifacts/current_exe            -> 指向最新 exe
   #   ${TARGET_DIR}/artifacts/current_apk            -> 指向最新 apk
   #   ${TARGET_DIR}/artifacts/current_ipa            -> 指向最新 ipa
-  #   ${TARGET_DIR}/artifacts/versions.json          -> 各平台当前版本构建日期（供 landing 页角标显示）
+  #   ${TARGET_DIR}/artifacts/versions.json          -> 每平台版本号+构建日期（供 landing 页角标 + App 内更新检查）
+  # release 目录名带版本号：versions.json 按平台解析各自 current_* 实际指向的目录，
+  # 未构建的平台保留旧版本号+旧日期，保证"显示的版本号"与"实际安装包"一一对应。
   # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
   # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 10 个。
   publish-artifacts:
@@ -923,7 +925,11 @@ jobs:
             set -e
             TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
             ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
-            RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
+            APP_VERSION="${{ env.APP_VERSION }}"
+            # release 目录名带版本号：release-<版本>-<日期>-<时间>
+            # 版本号+日期都从目录名解析（见下方 extract_meta），保证 versions.json 里
+            # 每平台版本号与它实际指向的安装包一一对应。
+            RELEASE_DIR="${ARTIFACTS_DIR}/release-${APP_VERSION}-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
             # ==================== 热更新包发布到 webapp 目录 ====================
@@ -973,39 +979,58 @@ jobs:
               ln -sfn "${PICKED_IPA}" "${ARTIFACTS_DIR}/current_ipa"
             fi
 
-            # ---- 生成各平台当前版本日期 versions.json（供 landing 页显示构建日期）----
-            # 日期从 current_* 链接指向的实际安装包所在 release-<日期>-<时间> 目录名中提取，
-            # 只取日期部分（YYYY-MM-DD，不含时间）。每次发布都从 current 链接实时解析，
-            # 因此本次未更新的平台仍会保留旧版本日期。
-            extract_date() {
+            # ---- 生成各平台当前版本+日期 versions.json（供 landing 页显示 + App 内更新检查）----
+            # 版本号和日期都从 current_* 链接指向的实际安装包所在 release-<版本>-<日期>-<时间>
+            # 目录名中提取。每次发布都从 current 链接实时解析，因此本次未构建的平台
+            # 会保留旧版本号+旧日期，与其实际指向的安装包一一对应，避免"版本号与包不一致"。
+            extract_meta() {
               local link="$1"
-              local target rel
+              local target rel ver rest
               target="$(readlink -f "${link}" 2>/dev/null || true)"
               [ -z "${target}" ] && return 1
               rel="${target#*release-}"
-              case "${rel}" in
+              ver="${rel%%-*}"
+              rest="${rel#*-}"
+              case "${rest}" in
                 [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*)
-                  echo "${rel:0:4}-${rel:4:2}-${rel:6:2}"
+                  echo "${ver}|${rest:0:4}-${rest:4:2}-${rest:6:2}"
                   return 0
                   ;;
               esac
               return 1
             }
-            W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
-            A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
-            I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
-            APP_VERSION="${{ env.APP_VERSION }}"
-            # versions.json：原生版本号 + 各平台构建日期 + 下载地址（相对路径）
-            # 客户端用 serverApiUrl() 补全为绝对 URL 传给 Rust reqwest 下载
-            VJSON="{\n"
+            W_META="$(extract_meta "${ARTIFACTS_DIR}/current_exe")" || true
+            A_META="$(extract_meta "${ARTIFACTS_DIR}/current_apk")" || true
+            I_META="$(extract_meta "${ARTIFACTS_DIR}/current_ipa")" || true
+            W_VER="${W_META%%|*}"; W_DATE="${W_META#*|}"
+            A_VER="${A_META%%|*}"; A_DATE="${A_META#*|}"
+            I_VER="${I_META%%|*}"; I_DATE="${I_META#*|}"
+            # version 对象独立构建（避免尾逗号）：仅写入有版本号的平台
+            VER_OBJ=""
             VSEP=""
+            add_ver_p() {
+              local key="$1" val="$2"
+              [ -z "${val}" ] && return 0
+              VER_OBJ="${VER_OBJ}${VSEP}    \"${key}\": \"${val}\""
+              VSEP=",\n"
+            }
+            add_ver_p "windows" "${W_VER}"
+            add_ver_p "android" "${A_VER}"
+            add_ver_p "ios" "${I_VER}"
+            # versions.json：version 每平台对象 + 顶层各平台日期 + downloads（相对路径）
+            VJSON="{\n"
+            VJSON="${VJSON}  \"version\": {\n"
+            if [ -n "${VER_OBJ}" ]; then
+              VJSON="${VJSON}${VER_OBJ}\n"
+            fi
+            VJSON="${VJSON}  }\n"
+            VSEP=",\n"
             add_ver() {
               local key="$1" val="$2"
               [ -z "${val}" ] && return 0
               VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
               VSEP=",\n"
             }
-            add_ver "version" "${APP_VERSION}"
             add_ver "windows" "${W_DATE}"
             add_ver "android" "${A_DATE}"
             add_ver "ios" "${I_DATE}"
@@ -1021,8 +1046,8 @@ jobs:
             add_dl "windows" "current_exe"
             add_dl "android" "current_apk"
             add_dl "ios" "current_ipa"
-            VJSON="${VJSON}\n  }"
-            VJSON="${VJSON}\n}"
+            VJSON="${VJSON}\n  }\n"
+            VJSON="${VJSON}}\n"
             printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
             echo "versions.json:"
             cat "${ARTIFACTS_DIR}/versions.json"
@@ -1076,7 +1101,11 @@ jobs:
             set -e
             TARGET_DIR="${{ secrets.SSH_TARGET_DIR }}"
             ARTIFACTS_DIR="${TARGET_DIR}/artifacts"
-            RELEASE_DIR="${ARTIFACTS_DIR}/release-${{ steps.ts.outputs.BUILD_TS }}"
+            APP_VERSION="${{ env.APP_VERSION }}"
+            # release 目录名带版本号：release-<版本>-<日期>-<时间>
+            # 版本号+日期都从目录名解析（见下方 extract_meta），保证 versions.json 里
+            # 每平台版本号与它实际指向的安装包一一对应。
+            RELEASE_DIR="${ARTIFACTS_DIR}/release-${APP_VERSION}-${{ steps.ts.outputs.BUILD_TS }}"
             mkdir -p "${ARTIFACTS_DIR}" "${RELEASE_DIR}"
             cp -a /tmp/bili_live-artifacts/. "${RELEASE_DIR}/"
             if [ -d "${RELEASE_DIR}/webapp" ]; then
@@ -1101,24 +1130,28 @@ jobs:
             if [ -n "${PICKED_EXE}" ]; then ln -sfn "${PICKED_EXE}" "${ARTIFACTS_DIR}/current_exe"; fi
             if [ -n "${PICKED_APK}" ]; then ln -sfn "${PICKED_APK}" "${ARTIFACTS_DIR}/current_apk"; fi
             if [ -n "${PICKED_IPA}" ]; then ln -sfn "${PICKED_IPA}" "${ARTIFACTS_DIR}/current_ipa"; fi
-            extract_date() {
+            extract_meta() {
               local link="$1"
-              local target rel
+              local target rel ver rest
               target="$(readlink -f "${link}" 2>/dev/null || true)"
               [ -z "${target}" ] && return 1
               rel="${target#*release-}"
-              case "${rel}" in
+              ver="${rel%%-*}"
+              rest="${rel#*-}"
+              case "${rest}" in
                 [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*)
-                  echo "${rel:0:4}-${rel:4:2}-${rel:6:2}"
+                  echo "${ver}|${rest:0:4}-${rest:4:2}-${rest:6:2}"
                   return 0
                   ;;
               esac
               return 1
             }
-            W_DATE="$(extract_date "${ARTIFACTS_DIR}/current_exe")" || true
-            A_DATE="$(extract_date "${ARTIFACTS_DIR}/current_apk")" || true
-            I_DATE="$(extract_date "${ARTIFACTS_DIR}/current_ipa")" || true
-            APP_VERSION="${{ env.APP_VERSION }}"
+            W_META="$(extract_meta "${ARTIFACTS_DIR}/current_exe")" || true
+            A_META="$(extract_meta "${ARTIFACTS_DIR}/current_apk")" || true
+            I_META="$(extract_meta "${ARTIFACTS_DIR}/current_ipa")" || true
+            W_VER="${W_META%%|*}"; W_DATE="${W_META#*|}"
+            A_VER="${A_META%%|*}"; A_DATE="${A_META#*|}"
+            I_VER="${I_META%%|*}"; I_DATE="${I_META#*|}"
             VJSON="{\n"
             VSEP=""
             add_ver() {
@@ -1127,7 +1160,13 @@ jobs:
               VJSON="${VJSON}${VSEP}  \"${key}\": \"${val}\""
               VSEP=",\n"
             }
-            add_ver "version" "${APP_VERSION}"
+            VJSON="${VJSON}  \"version\": {\n"
+            VSEP=""
+            add_ver "windows" "${W_VER}"
+            add_ver "android" "${A_VER}"
+            add_ver "ios" "${I_VER}"
+            VJSON="${VJSON}${VSEP}  }\n"
+            VSEP=",\n"
             add_ver "windows" "${W_DATE}"
             add_ver "android" "${A_DATE}"
             add_ver "ios" "${I_DATE}"
@@ -1142,8 +1181,8 @@ jobs:
             add_dl "windows" "current_exe"
             add_dl "android" "current_apk"
             add_dl "ios" "current_ipa"
-            VJSON="${VJSON}\n  }"
-            VJSON="${VJSON}\n}"
+            VJSON="${VJSON}\n  }\n"
+            VJSON="${VJSON}}\n"
             printf '%b' "${VJSON}" > "${ARTIFACTS_DIR}/versions.json"
             PROTECTED=""
             for link in current_exe current_apk current_ipa; do
