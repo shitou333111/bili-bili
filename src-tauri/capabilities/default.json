@@ -35,7 +35,10 @@
     "fs:allow-appdata-meta-recursive",
     "store:default",
     "opener:default",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPCACHE/update.ipa" }]
+    },
     "pldownloader:default",
     "hotswap:default"
   ]

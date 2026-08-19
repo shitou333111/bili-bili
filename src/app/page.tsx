@@ -41,6 +41,7 @@ import {
   installDownloadedNative,
   notifyAppReady,
   restartApp,
+  compactBuildDate,
   type UpdateCheckResult,
   type VersionDisplay,
 } from "@/lib/updater";
@@ -2501,10 +2502,12 @@ export default function HomePage() {
       : "…";
   // 当前版本完整显示（含日期小版本标记）："V1.2.0-20260816"
   const updateCurrentFull = versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
-  const updateLatest = updateResult?.native.available
-    ? updateResult.native.serverVersion || ""
-    : updateResult?.hot.available
-    ? updateResult.hot.version || ""
+  // 最新版本完整显示（与当前版本格式一致：版本号+紧凑日期；热更新带 ota 序号）
+  const nativeLatestDate = compactBuildDate(updateResult?.native.date || "");
+  const updateLatestFull = updateResult?.native.available
+    ? `V${updateResult.native.serverVersion || ""}${nativeLatestDate ? `-${nativeLatestDate}` : ""}`
+    : updateResult?.hot.available && !updateResult?.hot.shellTooOld
+    ? `V${updateResult.hot.version || ""}`
     : "";
   const updateHasUpdate = !!(
     updateResult?.native.available ||
@@ -2781,22 +2784,22 @@ export default function HomePage() {
                         updateCard.label
                       )}
                     </button>
-                    {/* 右侧版本信息：最新则只显示当前版本；有更新则显示当前+最新版本 */}
-                    <div className="min-w-0 text-right">
+                    {/* 右侧信息区：版本信息 + 状态说明，在自身区域内居中 */}
+                    <div className="min-w-0 flex-1 text-center">
                       {updateHasUpdate ? (
                         <>
                           <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本： {updateCurrentFull}</p>
-                          <p className={`mt-0.5 text-xs ${updateCard.sub}`}>最新版本 V{updateLatest}</p>
+                          <p className={`mt-0.5 text-sm font-semibold ${updateCard.title}`}>最新版本： {updateLatestFull}</p>
                         </>
                       ) : (
                         <p className={`text-sm font-semibold ${updateCard.title}`}>当前版本： {updateCurrentFull}</p>
                       )}
+                      {/* 状态说明（与版本信息同区域，保持原字体） */}
+                      {updateCard.note && (
+                        <p className={`mt-1 text-xs leading-relaxed ${updateCard.sub}`}>{updateCard.note}</p>
+                      )}
                     </div>
                   </div>
-                  {/* 状态说明 */}
-                  {updateCard.note && (
-                    <p className={`mt-2.5 text-xs leading-relaxed ${updateCard.sub}`}>{updateCard.note}</p>
-                  )}
                   {/* 原生更新静默下载进度 */}
                   {nativeDownloading && (
                     <div className="mt-3">

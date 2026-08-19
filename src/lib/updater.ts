@@ -110,7 +110,7 @@ export function isDesktop(): boolean {
  * 构建日期紧凑显示："20260816-123456" → "20260816"、"2026-08-16" → "20260816"。
  * 无日期信息时原样返回。
  */
-function compactBuildDate(d: string): string {
+export function compactBuildDate(d: string): string {
   const m = d.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
   return m ? `${m[1]}${m[2]}${m[3]}` : d;
 }
