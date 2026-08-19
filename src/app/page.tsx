@@ -1104,6 +1104,8 @@ export default function HomePage() {
           setUpdateToast("正在安装，请稍候...");
         } else if (r.status === "openIn") {
           setUpdateToast("请在弹出的面板中选择自签工具覆盖安装");
+        } else if (r.status === "cancelled") {
+          // iOS 用户取消了分享面板，非错误，静默返回
         } else if (r.status === "error") {
           setUpdateError(r.error || "安装失败");
         }
@@ -1125,6 +1127,8 @@ export default function HomePage() {
       } else if (r.status === "openIn") {
         // iOS: Open In 面板已弹出，用户需选自签工具覆盖安装
         setUpdateToast("IPA 已下载，请在弹出的面板中选择自签工具覆盖安装");
+      } else if (r.status === "cancelled") {
+        // iOS 用户取消了分享面板，非错误，静默返回
       } else if (r.status === "needRestart") {
         setUpdateToast("下载完成，请重启 APP 完成安装");
         setCanRestart(true);

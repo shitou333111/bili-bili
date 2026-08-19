@@ -38,6 +38,10 @@ tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-pldownloader = "1.0.1"
+# 分享插件（iOS/Android/macOS/Windows）：iOS 端用 UIActivityViewController 弹出分享面板，
+# 把已下载的 IPA 文件交给自签工具（Esign/Feather）覆盖安装（替代 opener 的 UIApplication.open，
+# 后者无法处理 IPA 格式，报"格式不正确"）。
+tauri-plugin-sharekit = "0.3"
 # 热更新（三平台通用）：前端资源 OTA，类似 CodePush，仅更新 JS/CSS/HTML。
 # tauri-plugin-hotswap：运行时替换 asset provider，apply/activate 后
 # window.location.reload() 立即生效（无需重启进程，iOS/Android 均可）。

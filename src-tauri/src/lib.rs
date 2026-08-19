@@ -1393,7 +1393,10 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_pldownloader::init());
+        .plugin(tauri_plugin_pldownloader::init())
+        // 分享插件：iOS 端 shareFile 用 UIActivityViewController 弹出分享面板，
+        // 把 IPA 交给自签工具覆盖安装（opener 的 UIApplication.open 处理不了 IPA）。
+        .plugin(tauri_plugin_sharekit::init());
     // iOS：注册 webview-insets 插件，把 WKWebView 的 contentInsetAdjustmentBehavior 设为 .never，
     // 关闭系统对 WebView 自动施加的安全区内边距，使 Web 内容真正铺满全屏（edge-to-edge），
     // 此时 env(safe-area-inset-*) 才返回真实值 —— 竖屏直播视频才能扩展到状态栏/Home 指示区，

@@ -327,9 +327,10 @@ export interface NativeUpdateApplyResult {
    * installing: 正在安装（Windows updater 自动安装+重启；Android 系统安装器已弹出）
    * openIn: 已触发 Open In 面板（iOS，用户需选自签工具覆盖安装）
    * needRestart: 下载完成需手动重启（保留位，当前未使用）
+   * cancelled: 用户取消了分享面板（iOS，非错误）
    * error: 失败
    */
-  status: "installing" | "openIn" | "needRestart" | "error";
+  status: "installing" | "openIn" | "needRestart" | "cancelled" | "error";
   error?: string;
 }
 
@@ -397,7 +398,7 @@ export async function downloadNativeSilently(
  * 安装已下载好的原生更新（用户点击按钮触发）
  * - 桌面端: 交给官方 updater.downloadAndInstall 一步到位
  * - Android: install_apk(path) 触发系统安装器
- * - iOS: openPath(path) 触发 "Open In" 面板
+ * - iOS: sharekit shareFile 弹出分享面板（"用其他应用打开"），选自签工具覆盖安装
  */
 export async function installDownloadedNative(
   platform: "windows" | "macos" | "linux" | "android" | "ios" | undefined,
@@ -423,11 +424,19 @@ export async function installDownloadedNative(
   if (p === "ios") {
     if (!filePath) return { status: "error", error: "IPA 未下载" };
     try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(filePath);
+      // sharekit 的 iOS shareFile 用 UIActivityViewController 弹出分享面板，
+      // 系统会列出能打开 .ipa 的应用（Esign/Feather），交给它们覆盖安装。
+      // 注意：不能用 opener 的 openPath（底层 UIApplication.open 处理不了 IPA，报"格式不正确"）。
+      const { shareFile } = await import("@choochmeque/tauri-plugin-sharekit-api");
+      // sharekit 要求 file:// URL；download_ipa 返回的是纯路径，需拼接。
+      const fileUrl = filePath.startsWith("file://") ? filePath : `file://${filePath}`;
+      await shareFile(fileUrl, { title: "update.ipa" });
       return { status: "openIn" };
     } catch (e: any) {
-      return { status: "error", error: String(e?.message || e) };
+      const msg = String(e?.message || e);
+      // 用户主动取消分享面板不算错误
+      if (/cancel/i.test(msg)) return { status: "cancelled" };
+      return { status: "error", error: msg };
     }
   }
   return { status: "error", error: `不支持的平台: ${p}` };

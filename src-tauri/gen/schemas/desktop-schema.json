@@ -6579,6 +6579,36 @@
           "markdownDescription": "Denies the restart command without any pre-configured scope."
         },
         {
+          "description": "This permission set configures which\nshare features are by default exposed.\n\n#### Granted Permissions\n\nIt allows acccess to all share commands.\n\n\n#### This default permission set includes:\n\n- `allow-share-text`\n- `allow-share-file`",
+          "type": "string",
+          "const": "sharekit:default",
+          "markdownDescription": "This permission set configures which\nshare features are by default exposed.\n\n#### Granted Permissions\n\nIt allows acccess to all share commands.\n\n\n#### This default permission set includes:\n\n- `allow-share-text`\n- `allow-share-file`"
+        },
+        {
+          "description": "Enables the share_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "sharekit:allow-share-file",
+          "markdownDescription": "Enables the share_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the share_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "sharekit:allow-share-text",
+          "markdownDescription": "Enables the share_text command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the share_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "sharekit:deny-share-file",
+          "markdownDescription": "Denies the share_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the share_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "sharekit:deny-share-text",
+          "markdownDescription": "Denies the share_text command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures what kind of\noperations are available from the store plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-load`\n- `allow-get-store`\n- `allow-set`\n- `allow-get`\n- `allow-has`\n- `allow-delete`\n- `allow-clear`\n- `allow-reset`\n- `allow-keys`\n- `allow-values`\n- `allow-entries`\n- `allow-length`\n- `allow-reload`\n- `allow-save`",
           "type": "string",
           "const": "store:default",

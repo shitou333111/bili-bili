@@ -574,7 +574,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 |------|------|----------|
 | **Windows** | `tauri-plugin-updater` 官方插件 | 下载 + 安装 + 自动重启 |
 | **Android** | 自定义命令 `download_and_install_apk` | 下载 APK → FileProvider → ACTION_VIEW Intent → 系统安装器覆盖安装（数据保留） |
-| **iOS** | 自定义命令 `download_and_open_ipa` | 下载 IPA → Open In 面板 → 用户选自签工具（Esign/Feather）覆盖安装 |
+| **iOS** | 自定义命令 `download_and_open_ipa` + `tauri-plugin-sharekit` | 下载 IPA → shareFile 分享面板（"用其他应用打开"）→ 用户选自签工具（Esign/Feather）覆盖安装 |
 
 #### 实现位置
 

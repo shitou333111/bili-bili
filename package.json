@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@carrotsearch/foamtree": "3.6.1",
+    "@choochmeque/tauri-plugin-sharekit-api": "^0.3.1",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/cli": "^2.11.4",
     "@tauri-apps/plugin-fs": "^2.5.1",
