@@ -64,7 +64,7 @@ export default function WindowTitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="fixed inset-x-0 top-0 z-[99999] flex select-none items-center border-b border-black/10 bg-[#1A7F37] text-white"
+      className="fixed inset-x-0 top-0 z-[99999] flex select-none items-center border-b border-white/10 bg-[#262626] text-white"
       style={{ height: DESKTOP_TITLEBAR_H }}
     >
       {/* 左侧：应用图标 + 标题（可拖拽区域） */}

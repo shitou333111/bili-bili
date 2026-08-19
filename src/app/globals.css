@@ -64,9 +64,14 @@ body {
   font-feature-settings: "tnum" 1;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+/* 必须放入 @layer base：Tailwind 工具类位于 @layer utilities，
+   未分层的 a{color:inherit} 会覆盖 .text-white 等工具类，
+   导致深色按钮上 <Link> 文字颜色继承为深色而不可见 */
+@layer base {
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 ::selection {

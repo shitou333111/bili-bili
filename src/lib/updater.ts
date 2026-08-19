@@ -355,11 +355,13 @@ export interface NativeUpdateApplyResult {
  *   返回 status="updaterAvailable"，点击安装时交给官方 downloadAndInstall（一步到位）。
  * - Android: 后台静默下载 APK 到 cache，返回路径
  * - iOS: 后台静默下载 IPA 到 cache，返回路径
+ * @param version 服务端版本号（用于版本化缓存：同版本已下载过则复用本地缓存，避免重复下载）
  * @param onProgress 进度回调（大文件下载时显示百分比）
  */
 export async function downloadNativeSilently(
   downloadUrl: string,
   onProgress?: ProgressCb,
+  version?: string,
 ): Promise<NativeDownloadResult> {
   if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
   if (!downloadUrl) return { status: "error", error: "缺少下载地址" };
@@ -393,11 +395,11 @@ export async function downloadNativeSilently(
       } catch { /* ignore */ }
 
       if (platform === "android") {
-        const path = await invoke<string>("download_apk", { url: downloadUrl });
+        const path = await invoke<string>("download_apk", { url: downloadUrl, version });
         return { status: "downloaded", filePath: path, platform: "android" };
       }
       if (platform === "ios") {
-        const path = await invoke<string>("download_ipa", { url: downloadUrl });
+        const path = await invoke<string>("download_ipa", { url: downloadUrl, version });
         return { status: "downloaded", filePath: path, platform: "ios" };
       }
       return { status: "error", error: `不支持的平台: ${platform}` };
@@ -480,6 +482,7 @@ export async function installDownloadedNative(
 export async function applyNativeUpdate(
   downloadUrl: string,
   onProgress?: ProgressCb,
+  version?: string,
 ): Promise<NativeUpdateApplyResult> {
   if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
   if (!downloadUrl) return { status: "error", error: "缺少下载地址" };
@@ -489,12 +492,12 @@ export async function applyNativeUpdate(
     return applyDesktopUpdate(onProgress);
   }
   if (platform === "android") {
-    const d = await downloadNativeSilently(downloadUrl, onProgress);
+    const d = await downloadNativeSilently(downloadUrl, onProgress, version);
     if (d.status !== "downloaded") return { status: "error", error: d.error || "下载 APK 失败" };
     return installDownloadedNative("android", d.filePath);
   }
   if (platform === "ios") {
-    const d = await downloadNativeSilently(downloadUrl, onProgress);
+    const d = await downloadNativeSilently(downloadUrl, onProgress, version);
     if (d.status !== "downloaded") return { status: "error", error: d.error || "下载 IPA 失败" };
     return installDownloadedNative("ios", d.filePath);
   }

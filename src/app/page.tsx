@@ -1117,7 +1117,7 @@ export default function HomePage() {
         setUpdateError("缺少下载地址，无法更新");
         return;
       }
-      const r = await applyNativeUpdate(native.downloadUrl || "", (p) => setUpdateProgress(p));
+      const r = await applyNativeUpdate(native.downloadUrl || "", (p) => setUpdateProgress(p), native.serverVersion || "");
       if (r.status === "installing") {
         // Windows: updater 自动安装+重启；Android: 系统安装器已弹出
         setUpdateToast(
@@ -1307,7 +1307,7 @@ export default function HomePage() {
                   ? { kind: "downloading", progress: p.downloaded, total: p.total }
                   : s,
               );
-            })
+            }, result.native.serverVersion || "")
               .then((dr) => {
                 if (dr.status === "downloaded" && dr.platform && dr.filePath) {
                   setNativeSilentDownloaded({
@@ -1489,14 +1489,23 @@ export default function HomePage() {
     setSyncing(true);
     setLoading(false);
     try {
-      await loadCachedQuick();
+      const hasActiveSession = await loadCachedQuick();
+      // 本地有 sid 残留但实际会话已不存在（如用户删除/清空了数据文件夹后重启）：
+      // 视为首次使用，清除残留 sid 并跳转扫码登录页，避免一直卡在"加载中"
+      if (!hasActiveSession) {
+        localStorage.removeItem("bili_live_sid");
+        setIsFirstTime(true);
+        setApiLoggedIn(false);
+        window.location.href = pageUrl("/login");
+        return;
+      }
       await fetchData(true); // background：仅刷新按钮动画，无阻塞遮罩
     } finally {
       setSyncing(false);
     }
   }
 
-  /** 快速加载本地缓存（不发 B站），用于本地优先的即时显示 */
+  /** 快速加载本地缓存（不发 B站），用于本地优先的即时显示。返回是否存在活动会话 */
   async function loadCachedQuick() {
     try {
       const [accountsRes, snapshotRes, statusRes] = await Promise.all([
@@ -1530,8 +1539,11 @@ export default function HomePage() {
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
       }
+      // 是否存在活动会话（会话被删除/数据文件夹被清除时返回 false）
+      return Boolean(statusData.data?.loggedIn && statusData.data?.sid);
     } catch {
-      // 忽略，fetchData 会处理
+      // 忽略，fetchData 会处理；出错时保守按"有会话"处理，避免误跳登录
+      return true;
     }
   }
 

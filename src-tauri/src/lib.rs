@@ -927,12 +927,48 @@ async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Resul
     }))
 }
 
+/// 清理 app cache 中的旧原生更新安装包，仅保留当前版本文件。
+/// - 匹配旧格式 `update.<ext>` 与版本化格式 `update-<version>.<ext>`
+/// - keep 为 None 时清理全部；为 Some 时保留该文件（当前下载目标）
+fn cleanup_native_update_cache(cache_dir: &std::path::Path, ext: &str, keep: Option<&str>) {
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_legacy = name == format!("update.{}", ext);
+            let is_versioned = name.starts_with("update-") && name.ends_with(&format!(".{}", ext));
+            if (is_legacy || is_versioned) && Some(name.as_str()) != keep {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 /// Android：仅下载 APK 到 app cache 目录，返回文件路径
 /// 前端拿到路径后交给 tauri-plugin-android-installer 的 install() 触发系统安装器。
 /// 拆分原因：支持"静默后台先下载，用户点击按钮再安装"的统一用户体验。
+/// 缓存策略：按版本号命名（update-<version>.apk），同版本已存在则直接复用，避免每次检查重复下载。
 #[cfg(target_os = "android")]
 #[tauri::command]
-async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, String> {
+async fn download_apk(app: tauri::AppHandle, url: String, version: Option<String>) -> Result<String, String> {
+    // 0. 准备缓存目录
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+
+    // 版本化文件名：同版本复用本地缓存，避免每次检查更新重复下载
+    let file_name = match version.as_deref() {
+        Some(v) if !v.trim().is_empty() => format!("update-{}.apk", v.trim()),
+        _ => "update.apk".to_string(),
+    };
+    let apk_path = cache_dir.join(&file_name);
+
+    // 已有同版本缓存（非空文件）→ 直接复用，跳过重复下载
+    if apk_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(apk_path.to_string_lossy().to_string());
+    }
+
     // 1. 下载 APK
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -951,13 +987,11 @@ async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, Stri
         .map_err(|e| format!("读取 APK 数据失败: {}", e))?;
 
     // 2. 保存到 app cache 目录
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
-    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
-    let apk_path = cache_dir.join("update.apk");
     std::fs::write(&apk_path, &bytes).map_err(|e| format!("写入 APK 文件失败: {}", e))?;
+
+    // 3. 清理旧版本缓存（仅保留当前版本，含旧格式 update.apk）
+    cleanup_native_update_cache(&cache_dir, "apk", Some(&file_name));
+
     Ok(apk_path.to_string_lossy().to_string())
 }
 
@@ -1141,16 +1175,36 @@ fn restart_app(_app: tauri::AppHandle) -> Result<(), String> {
 /// 非 Android 平台的 download_apk stub（保证 invoke_handler 在所有平台编译通过）
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-async fn download_apk(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+async fn download_apk(_app: tauri::AppHandle, _url: String, _version: Option<String>) -> Result<String, String> {
     Err("download_apk 仅在 Android 平台可用".into())
 }
 
 /// iOS：仅下载 IPA 到 app cache 目录，返回文件路径
 /// 前端拿到路径后可再次调用或直接用 openPath 触发"Open In"面板。
 /// 拆分与 download_apk 相同的目的：静默下载，用户点击按钮再打开面板。
+/// 缓存策略：按版本号命名（update-<version>.ipa），同版本已存在则直接复用，避免重复下载。
 #[cfg(target_os = "ios")]
 #[tauri::command]
-async fn download_ipa(app: tauri::AppHandle, url: String) -> Result<String, String> {
+async fn download_ipa(app: tauri::AppHandle, url: String, version: Option<String>) -> Result<String, String> {
+    // 0. 准备缓存目录
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+
+    // 版本化文件名：同版本复用本地缓存，避免每次检查更新重复下载
+    let file_name = match version.as_deref() {
+        Some(v) if !v.trim().is_empty() => format!("update-{}.ipa", v.trim()),
+        _ => "update.ipa".to_string(),
+    };
+    let ipa_path = cache_dir.join(&file_name);
+
+    // 已有同版本缓存（非空文件）→ 直接复用，跳过重复下载
+    if ipa_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(ipa_path.to_string_lossy().to_string());
+    }
+
     // 1. 下载 IPA
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -1169,13 +1223,10 @@ async fn download_ipa(app: tauri::AppHandle, url: String) -> Result<String, Stri
         .map_err(|e| format!("读取 IPA 数据失败: {}", e))?;
 
     // 2. 保存到 app cache 目录
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
-    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
-    let ipa_path = cache_dir.join("update.ipa");
     std::fs::write(&ipa_path, &bytes).map_err(|e| format!("写入 IPA 文件失败: {}", e))?;
+
+    // 3. 清理旧版本缓存（仅保留当前版本，含旧格式 update.ipa）
+    cleanup_native_update_cache(&cache_dir, "ipa", Some(&file_name));
 
     Ok(ipa_path.to_string_lossy().to_string())
 }
@@ -1196,7 +1247,7 @@ async fn download_and_open_ipa(_app: tauri::AppHandle, _url: String) -> Result<S
 
 #[cfg(not(target_os = "ios"))]
 #[tauri::command]
-async fn download_ipa(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+async fn download_ipa(_app: tauri::AppHandle, _url: String, _version: Option<String>) -> Result<String, String> {
     Err("download_ipa 仅在 iOS 平台可用".into())
 }
 

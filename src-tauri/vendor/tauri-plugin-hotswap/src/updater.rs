@@ -157,6 +157,26 @@ pub(crate) async fn download_and_extract<R: Runtime>(
 
     let version_dir = base_dir.join(format!("seq-{}", manifest.sequence));
 
+    // 缓存复用：同一 sequence 已下载并解压完成（存在 hotswap-meta.json 且 sequence 匹配）
+    // → 直接复用本地缓存，避免每次检查更新重复下载相同版本。
+    if let Some(meta) = read_meta(&version_dir) {
+        if meta.sequence == manifest.sequence {
+            log::info!(
+                "[hotswap] Seq {} (v{}) already downloaded, reusing local cache.",
+                manifest.sequence,
+                manifest.version
+            );
+            emit_lifecycle(
+                app,
+                "cache-hit",
+                Some(&manifest.version),
+                Some(manifest.sequence),
+                None,
+            );
+            return Ok(version_dir);
+        }
+    }
+
     emit_lifecycle(
         app,
         "download-start",
