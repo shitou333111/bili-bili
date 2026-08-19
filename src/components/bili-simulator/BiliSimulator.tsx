@@ -19,7 +19,7 @@ import type { StreamerInfo } from "./liveStream";
 const COMBO_TIMEOUT = 5000; // 5秒连击窗口
 const QUICK_GIFT_ID = 33988; // 人气票
 
-export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBack: () => void; userName?: string; streamerInfo?: StreamerInfo | null }) {
+export default function BiliSimulator({ onBack, userName, userFace, streamerInfo }: { onBack: () => void; userName?: string; userFace?: string; streamerInfo?: StreamerInfo | null }) {
   const [giftPanelOpen, setGiftPanelOpen] = useState(false);
   const [currentGift, setCurrentGift] = useState<Gift | null>(null);
   const [comboGift, setComboGift] = useState<Gift | null>(null);
@@ -759,6 +759,7 @@ export default function BiliSimulator({ onBack, userName, streamerInfo }: { onBa
           stackIndex={arr.length - 1 - idx}
           evicting={n.evicting}
           userName={userName}
+          userFace={userFace}
           isPanelOpen={giftPanelOpen}
           isAnimating={!!playingEffect}
           onDismiss={() => dismissNotice(n.uid)}

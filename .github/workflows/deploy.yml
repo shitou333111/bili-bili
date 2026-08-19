@@ -709,6 +709,8 @@ jobs:
         if: env.HAS_KEY == 'true'
         env:
           HOT_UPDATE_SIGN_KEY: ${{ secrets.HOT_UPDATE_SIGN_KEY }}
+          # 构建时间戳（YYYYMMDD-HHMMSS），拼进热更新显示版本号
+          BUILD_TS: ${{ steps.ts.outputs.BUILD_TS }}
         run: |
           set -e
           mkdir -p hot-update-release
@@ -741,8 +743,13 @@ jobs:
           #    bundle_size      = bundle 字节数（供前端按流量提示）
           SIGNATURE=$(cat hot-update-release/frontend-${SEQUENCE}.tar.gz.sig)
           SIZE=$(stat -c%s hot-update-release/frontend-${SEQUENCE}.tar.gz)
+          # version：仅显示用（插件排序只看 sequence）。格式符合 semver：
+          #   MAJOR.MINOR.PATCH-YYYYMMDD.HHMMSS（时间戳中 '-' 需替换为 '.'，
+          #   否则 prerelease 段含 '-' 不合法，hot-update-sign 会报错）。
+          # 前端显示时解析为 "V1.3.4-20260819"（见 updater.ts formatHotUpdateVersion）。
+          VERSION_TS="${BUILD_TS//-/.}"
           jq -n \
-            --arg version "${NATIVE_VERSION}-ota.${SEQUENCE}" \
+            --arg version "${NATIVE_VERSION}-${VERSION_TS}" \
             --argjson sequence "${SEQUENCE}" \
             --arg min_binary_version "${NATIVE_VERSION}" \
             --arg url "${{ env.SERVER_URL }}/artifacts/webapp/frontend-${SEQUENCE}.tar.gz" \

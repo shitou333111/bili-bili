@@ -7,6 +7,7 @@ interface ComboNotificationProps {
   gift: Gift;
   count: number;
   userName?: string;
+  userFace?: string;
   isPanelOpen?: boolean;
   isAnimating?: boolean;
   stackIndex?: number;
@@ -35,6 +36,7 @@ export default function ComboNotification({
   gift,
   count,
   userName = "我",
+  userFace = "",
   isPanelOpen = false,
   isAnimating = false,
   stackIndex = 0,
@@ -136,11 +138,15 @@ export default function ComboNotification({
           }}
         />
 
-        {/* 头像 */}
+        {/* 头像 - 优先显示当前登录账号头像（仅引用头像/昵称，不涉及实际送礼）；未登录时显示占位 */}
         <div className="relative z-10 w-6 h-6 rounded-full overflow-hidden border-2 border-white/30 ml-0.5 shrink-0">
-          <div className="w-full h-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center">
-            <span className="text-white text-[10px]">📺</span>
-          </div>
+          {userFace ? (
+            <img src={userFace} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-pink-400 to-purple-500 flex items-center justify-center">
+              <span className="text-white text-[10px]">📺</span>
+            </div>
+          )}
         </div>
 
         {/* 昵称和投喂文字 */}

@@ -4131,8 +4131,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-hotswap"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3550b0b6727104637a12c6c1c5270714d4a8d935de3b2b71a5fe5a111d7ffc5"
 dependencies = [
  "base64 0.22.1",
  "dirs",

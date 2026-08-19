@@ -50,3 +50,9 @@ tauri-plugin-hotswap = "0.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# 本地 vendor 的 tauri-plugin-hotswap：修复 Android 热更新目录路径（identifier 含 '-'，
+# 而 Android 包名将其替换为 '_'，原插件硬编码 /data/data/<identifier>/ 指向不存在目录，
+# 导致 apply 时 create_dir_all 报 EACCES 13 "I/O ERROR: Permission denied"）。
+[patch.crates-io]
+tauri-plugin-hotswap = { path = "vendor/tauri-plugin-hotswap" }

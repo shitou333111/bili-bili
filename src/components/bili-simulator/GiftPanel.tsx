@@ -314,11 +314,11 @@ export default function GiftPanel({
                               </div>
                             </div>
 
-                            {/* 礼物名称行 - 固定高度；选中时该位置改为显示礼物价值电池数 */}
+                            {/* 礼物名称行 - 固定高度；选中时该位置改为显示礼物编号 gift_id（不改礼物名称） */}
                             <div className="w-full px-1 h-[16px] flex items-center justify-center">
                               {isSelected ? (
                                 <span className="text-[10px] text-[#FFD700] leading-none whitespace-nowrap">
-                                  {formatPrice(gift.price)}
+                                  {gift.id}
                                 </span>
                               ) : (
                                 <span className="text-[10px] text-white/80 truncate leading-none">

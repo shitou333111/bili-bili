@@ -117,6 +117,19 @@ export function compactBuildDate(d: string): string {
 }
 
 /**
+ * 热更新版本显示格式化（与原生版本格式统一："V1.3.4-20260819"）。
+ * 热更新 manifest.version 是 semver 预发布号（version 仅显示用，排序看 sequence）：
+ *   - 新格式 1.3.4-20260819.123456 → "V1.3.4-20260819"
+ *   - 旧格式 1.3.4-ota.75（历史包）→ 退化为 "V1.3.4"
+ */
+export function formatHotUpdateVersion(v: string): string {
+  const m = v.match(/^(\d+\.\d+\.\d+)-(\d{4})(\d{2})(\d{2})(?:\.|$)/);
+  if (m) return `V${m[1]}-${m[2]}${m[3]}${m[4]}`;
+  const base = v.split("-")[0];
+  return base ? `V${base}` : "";
+}
+
+/**
  * 获取版本显示信息
  * - Tauri 环境：V1.4.0-20260816（完整三位版本号 + 紧凑日期，无括号）
  * - Web 开发：开发版

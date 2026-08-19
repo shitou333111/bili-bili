@@ -42,6 +42,7 @@ import {
   notifyAppReady,
   restartApp,
   compactBuildDate,
+  formatHotUpdateVersion,
   type UpdateCheckResult,
   type VersionDisplay,
 } from "@/lib/updater";
@@ -1170,7 +1171,7 @@ export default function HomePage() {
       }
       setUpdateToast(
         r.version
-          ? `前端更新已生效（v${r.version}），即将刷新页面`
+          ? `前端更新已生效（${formatHotUpdateVersion(r.version)}），即将刷新页面`
           : "前端更新已生效，即将刷新页面",
       );
       // asset provider 已切换，reload 立即加载新资源（无需重启进程）
@@ -2511,7 +2512,7 @@ export default function HomePage() {
   const updateLatestFull = updateResult?.native.available
     ? `V${updateResult.native.serverVersion || ""}${nativeLatestDate ? `-${nativeLatestDate}` : ""}`
     : updateResult?.hot.available && !updateResult?.hot.shellTooOld
-    ? `V${updateResult.hot.version || ""}`
+    ? formatHotUpdateVersion(updateResult.hot.version || "")
     : "";
   const updateHasUpdate = !!(
     updateResult?.native.available ||
@@ -3541,6 +3542,7 @@ export default function HomePage() {
         <BiliSimulator
           onBack={() => setSimulatorOpen(false)}
           userName={currentAccount?.uname ?? currentAccount?.mid?.toString() ?? "我"}
+          userFace={fixImageUrl(currentAccount?.face ?? "")}
           streamerInfo={currentStreamer}
         />
       )}
