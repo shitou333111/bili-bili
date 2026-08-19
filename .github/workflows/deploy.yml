@@ -458,26 +458,26 @@ jobs:
             sleep 20
           done
 
-      # Debug 包已用 debug keystore 自动签名；仅 Release 包需要手动签名
-      - name: Sign APK with debug keystore
+      # 固定签名密钥：仓库内置 src-tauri/keystore/release.p12（PKCS12）。
+      # 原因：以前每次 CI 在全新 runner 上用 keytool 随机生成 debug keystore，
+      # 导致每次发布 APK 签名不同 → 更新安装报"签名冲突"（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+      # 现在所有 Release 构建都用同一把 key 签名，更新可正常覆盖安装。
+      # 注意：Debug 包（IS_DEBUG=true）仍走 Gradle 默认 debug keystore，仅供内部测试，
+      #       与 Release 包签名不同，无法互相覆盖升级。
+      - name: Sign APK with release keystore
         if: env.IS_DEBUG != 'true'
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            mkdir -p "$HOME/.android"
-            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
-              -storepass android -alias androiddebugkey -keypass android \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
+          KS="src-tauri/keystore/release.p12"
+          [ -f "$KS" ] || { echo "!! 缺少固定签名密钥 $KS"; exit 1; }
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
           echo "Signing APK: $APK"
           "$ANDROID_HOME/build-tools/34.0.0/zipalign" -f 4 "$APK" "$APK.aligned"
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
-            --ks "$HOME/.android/debug.keystore" \
-            --ks-pass pass:android --key-pass pass:android \
-            --ks-key-alias androiddebugkey \
+            --ks "$KS" --ks-type pkcs12 \
+            --ks-pass pass:bili-live --key-pass pass:bili-live \
+            --ks-key-alias bili \
             --out "$APK" "$APK.aligned"
           rm -f "$APK.aligned"
           echo "Signed APK ready: $APK"

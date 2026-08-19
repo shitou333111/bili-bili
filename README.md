@@ -576,6 +576,8 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 | **Android** | 自定义命令 `download_apk` 下载 + `tauri-plugin-android-installer` 安装 | 下载 APK → 插件自带 FileProvider 共享 → 系统安装器覆盖安装（数据保留） |
 | **iOS** | 自定义命令 `download_and_open_ipa` + `tauri-plugin-sharekit` | 下载 IPA → shareFile 分享面板（"用其他应用打开"）→ 用户选自签工具（Esign/Feather）覆盖安装 |
 
+> **Android 固定签名密钥**：CI 使用仓库内置的 `src-tauri/keystore/release.p12`（PKCS12，alias `bili`，密码 `bili-live`）签名所有 Release APK。切勿改动/删除该密钥，否则已安装用户更新会报"签名冲突"（INSTALL_FAILED_UPDATE_INCOMPATIBLE），只能卸载重装。Debug 包仍用 Gradle 默认 debug keystore，仅内部测试，与 Release 包签名不同。
+
 #### 实现位置
 
 | 文件 | 作用 |
@@ -584,6 +586,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 | [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_apk` / `download_and_open_ipa` 命令 + 注册 `tauri-plugin-android-installer` |
 | [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hotswap`（三平台）、`tauri-plugin-updater` + `tauri-plugin-process`（仅桌面端）、`tauri-plugin-android-installer`（仅 Android） |
 | [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hotswap:default` + `android-installer:default` + 自定义命令权限 |
+| [src-tauri/keystore/release.p12](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/keystore/release.p12) | Android Release 固定签名密钥（PKCS12） |
 | [src-tauri/capabilities/desktop.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/desktop.json) | 桌面端权限：`updater:default` + `process:allow-restart` |
 | [src/app/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/page.tsx) | 帮助页「检查更新」卡片：版本显示 + 检查 + 下载进度 + 应用 + 重启 |
 
