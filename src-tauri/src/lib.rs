@@ -969,9 +969,9 @@ async fn download_apk(app: tauri::AppHandle, url: String) -> Result<String, Stri
 #[cfg(target_os = "android")]
 fn run_jni_safe<F>(env: &mut jni::JNIEnv, body: F)
 where
-    F: FnOnce(&jni::JNIEnv),
+    F: FnOnce(&mut jni::JNIEnv),
 {
-    body(env);
+    body(&mut *env);
     if env.exception_check().unwrap_or(false) {
         eprintln!("[BILI-JNI] 捕获 Java 异常并清空（防止进程闪退）");
         let _ = env.exception_describe();
