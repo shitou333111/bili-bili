@@ -51,7 +51,7 @@
       "max_retained_versions": 2
     },
     "updater": {
-      "pubkey": "",
+      "pubkey": "RWT4TcdT0ohMSmvTKHCFHRkIL4yWy5B+8/xmuTOcJAogwLmTm+AuWKW3",
       "endpoints": [
         "https://bili-bili.icu/artifacts/updater/latest.json"
       ]

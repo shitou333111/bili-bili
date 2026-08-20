@@ -793,6 +793,8 @@ jobs:
 
       - name: Prepare publish files
         id: prepare
+        env:
+          HOT_UPDATE_SIGN_KEY: ${{ secrets.HOT_UPDATE_SIGN_KEY }}
         run: |
           set -e
           mkdir -p publish
@@ -837,6 +839,20 @@ jobs:
           if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" publish/; fi
           if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" publish/; fi
           if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" publish/; fi
+          # 为 Windows EXE 签名（tauri-plugin-updater 每次下载后都会强制验签，无法关闭）：
+          #   - 复用热更新同一把 minisign 私钥（HOT_UPDATE_SIGN_KEY），
+          #     latest.json 的 signature 字段需填写 base64 签名文本。
+          #   - tauri signer sign 生成 <exe>.sig，其内容就是 base64(签名文本)，
+          #     与 tauri-cli 打印的 "Public signature:" 一致，正是 updater 需要的格式。
+          #   - 服务器端生成 latest.json 时读取该 .sig 内容填入 signature。
+          if [ -n "${EXE}" ] && [ -n "${HOT_UPDATE_SIGN_KEY}" ]; then
+            echo "为 Windows EXE 签名..."
+            EXE_PUBLISH="publish/$(basename "${EXE}")"
+            npx --yes @tauri-apps/cli@2.11.4 signer sign "${EXE_PUBLISH}" -k "$HOT_UPDATE_SIGN_KEY" -p ""
+            ls -la "${EXE_PUBLISH}.sig"
+          else
+            echo "跳过 EXE 签名（无 EXE 或 HOT_UPDATE_SIGN_KEY 未配置）"
+          fi
           # 热更新包（hotswap.json + frontend-<seq>.tar.gz）
           if [ -d "artifacts-dl/bili-live-hot-update" ]; then
             mkdir -p publish/webapp
@@ -1038,11 +1054,20 @@ jobs:
             # Windows/macOS/Linux 桌面端原生更新走 tauri-plugin-updater，
             # 它需要自己特定的 JSON 格式 {version, pub_date, url, signature}，
             # 不同于我们的 versions.json（版本号+日期+下载地址）。
-            # signature 留空——tauri.conf.json 中 pubkey 为空，不校验签名。
+            # signature = CI 签名时生成的 <exe>.sig 内容（base64 签名文本）。
+            # 注意：tauri-plugin-updater 每次下载后都会强制验签，signature/pubkey
+            # 不能留空，否则报 "Invalid encoding in minisign data"。
             if [ -n "${PICKED_EXE}" ]; then
               EXE_BASENAME="$(basename "${PICKED_EXE}")"
               EXE_URL="${{ env.SERVER_URL }}/artifacts/current_exe"
-              UPDATER_JSON="{\"version\":\"${APP_VERSION}\",\"pub_date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"url\":\"${EXE_URL}\",\"signature\":\"\"}"
+              # 同目录下 CI 上传的 <exe>.sig（tauri signer sign 生成）
+              EXE_SIG="$(cat "${PICKED_EXE}.sig" 2>/dev/null || echo "")"
+              if [ -n "${EXE_SIG}" ]; then
+                echo "EXE 签名已读取（${#EXE_SIG} 字符）"
+              else
+                echo "!! 警告：未找到 ${PICKED_EXE}.sig，latest.json 无签名，updater 将报 Invalid encoding"
+              fi
+              UPDATER_JSON="{\"version\":\"${APP_VERSION}\",\"pub_date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"url\":\"${EXE_URL}\",\"signature\":\"${EXE_SIG}\"}"
               mkdir -p "${ARTIFACTS_DIR}/updater"
               echo "${UPDATER_JSON}" > "${ARTIFACTS_DIR}/updater/latest.json"
               echo "updater/latest.json:"
