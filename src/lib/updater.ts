@@ -6,7 +6,8 @@
  *    仅更新 JS/CSS/HTML。运行时替换 asset provider，apply/activate 后
  *    window.location.reload() 立即生效（无需重启进程，iOS/Android 也可用中更新）。
  * 2. 原生包更新：替换整个安装包
- *    - Windows: tauri-plugin-updater 官方插件（下载+安装+自动重启）
+ *    - Windows: 自定义命令 download_exe 静默下载新版本 + apply_in_place_update 原地替换
+ *      （绿色单文件免安装方案的持久化更新；官方 updater 只支持 NSIS/MSI，裸 exe 更新会"假成功"）
  *    - Android: 自定义命令 download_apk 下载 APK + tauri-plugin-android-installer 安装
  *    - iOS: 自定义命令 download_ipa + Open In 面板（交自签工具覆盖安装）
  *
@@ -329,7 +330,7 @@ export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdate
 /** 原生更新静默下载结果 */
 export interface NativeDownloadResult {
   status: "downloaded" | "downloading" | "error" | "updaterAvailable";
-  /** Android/iOS: 本地文件路径；Windows: 空（官方 updater 自己管） */
+  /** Windows/Android/iOS: 本地文件路径；macOS/Linux: 空（官方 updater 自己管） */
   filePath?: string;
   /** 当前平台 */
   platform?: "windows" | "macos" | "linux" | "android" | "ios";
@@ -351,7 +352,8 @@ export interface NativeUpdateApplyResult {
 
 /**
  * 静默下载原生更新安装包（统一体验：先后台下，再点按钮安装）
- * - Windows/macOS/Linux: 官方 updater 插件自行管理下载过程，此处不实际下载，
+ * - Windows: 自定义 download_exe 后台静默下载新版本 exe 到当前文件夹（应用目录，版本化命名复用）
+ * - macOS/Linux: 官方 updater 插件自行管理下载过程，此处不实际下载，
  *   返回 status="updaterAvailable"，点击安装时交给官方 downloadAndInstall（一步到位）。
  * - Android: 后台静默下载 APK 到 cache，返回路径
  * - iOS: 后台静默下载 IPA 到 cache，返回路径
@@ -367,7 +369,18 @@ export async function downloadNativeSilently(
   if (!downloadUrl) return { status: "error", error: "缺少下载地址" };
 
   const platform = detectPlatform();
-  if (platform === "windows" || platform === "macos" || platform === "linux") {
+  if (platform === "windows") {
+    // Windows：自定义原地替换更新。后台静默下载新版本 exe（版本化缓存，同版本复用），
+    // 点击安装时交给 apply_in_place_update 原地替换并重启。
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      const path = await invoke<string>("download_exe", { url: downloadUrl, version });
+      return { status: "downloaded", filePath: path, platform: "windows" };
+    } catch (e: any) {
+      return { status: "error", error: String(e?.message || e) };
+    }
+  }
+  if (platform === "macos" || platform === "linux") {
     // 桌面端：官方 updater 的 check 已经暴露了 contentLength 等元信息，
     // 但 download 与 install 是绑定的 downloadAndInstall。这里不做预下载，
     // 直接返回 updaterAvailable，点击安装时一步到位。
@@ -413,7 +426,8 @@ export async function downloadNativeSilently(
 
 /**
  * 安装已下载好的原生更新（用户点击按钮触发）
- * - 桌面端: 交给官方 updater.downloadAndInstall 一步到位
+ * - Windows: 自定义 apply_in_place_update 原地替换（复制自身做 helper → 退出进程 → 替换 → 重启）
+ * - macOS/Linux: 交给官方 updater.downloadAndInstall 一步到位
  * - Android: tauri-plugin-android-installer 的 install(path) 触发系统安装器
  * - iOS: sharekit shareFile 弹出分享面板（"用其他应用打开"），选自签工具覆盖安装
  */
@@ -425,7 +439,28 @@ export async function installDownloadedNative(
   if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
 
   const p = platform || detectPlatform();
-  if (p === "windows" || p === "macos" || p === "linux") {
+  if (p === "windows") {
+    // Windows：自定义原地替换更新（绿色单文件免安装的持久化更新）。
+    // 命令内部会把当前 exe 复制到临时目录做 helper 并立即退出进程；
+    // helper 等待本进程退出后，把旧版本重命名为 <原名>-旧版本-<版本>.exe 保留，
+    // 用新 exe 原地替换当前 exe 并重启新版本。
+    if (!filePath) return { status: "error", error: "新版本未下载" };
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      // 旧版本号用于备份命名：<原名>-旧版本-<当前版本>.exe
+      let oldVersion = "0.0.0";
+      try {
+        const v = await getVersionDisplay();
+        if (v?.native) oldVersion = v.native;
+      } catch { /* 取不到就用占位版本号 */ }
+      await invoke("apply_in_place_update", { newExePath: filePath, oldVersion });
+      // 正常情况下进程已退出，不会执行到这里
+      return { status: "installing" };
+    } catch (e: any) {
+      return { status: "error", error: String(e?.message || e) };
+    }
+  }
+  if (p === "macos" || p === "linux") {
     return applyDesktopUpdate(onProgress);
   }
   if (p === "android") {
@@ -475,7 +510,8 @@ export async function installDownloadedNative(
 
 /**
  * 应用原生更新（保留一键旧接口，兼容代码；内部流程与新两步一致）
- * - Windows: tauri-plugin-updater 下载+安装+自动重启
+ * - Windows: 下载新版本 exe + 原地替换（apply_in_place_update）
+ * - macOS/Linux: tauri-plugin-updater 下载+安装+自动重启
  * - Android: 下载 APK + 触发系统安装器
  * - iOS: 下载 IPA + 触发 Open In 面板
  */
@@ -488,7 +524,13 @@ export async function applyNativeUpdate(
   if (!downloadUrl) return { status: "error", error: "缺少下载地址" };
 
   const platform = detectPlatform();
-  if (platform === "windows" || platform === "macos" || platform === "linux") {
+  if (platform === "windows") {
+    // Windows：静默下载新版本 → 原地替换安装
+    const d = await downloadNativeSilently(downloadUrl, onProgress, version);
+    if (d.status !== "downloaded") return { status: "error", error: d.error || "下载新版本失败" };
+    return installDownloadedNative("windows", d.filePath);
+  }
+  if (platform === "macos" || platform === "linux") {
     return applyDesktopUpdate(onProgress);
   }
   if (platform === "android") {
@@ -505,9 +547,9 @@ export async function applyNativeUpdate(
 }
 
 /**
- * 桌面端（Windows/macOS/Linux）：用官方 tauri-plugin-updater
+ * macOS/Linux：用官方 tauri-plugin-updater
  * 从 updater endpoints（tauri.conf.json 配置的 latest.json）拉取更新信息，
- * 自动下载 + 安装 + 重启。
+ * 自动下载 + 安装 + 重启。（Windows 已改用自定义原地替换更新，不经过此函数）
  */
 async function applyDesktopUpdate(onProgress?: ProgressCb): Promise<NativeUpdateApplyResult> {
   try {

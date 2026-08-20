@@ -30,6 +30,11 @@ tauri-plugin-ios-webview-insets = "=0.1.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
+# 仅 Windows：原地替换更新（绿色单文件免安装方案的持久化更新）。
+# 用 OpenProcess/WaitForSingleObject 等待旧进程退出，之后才能替换被锁定的 exe 文件。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dependencies]
 tauri = { version = "2", features = ["unstable"] }
 # unsafe-headers: 允许设置 Referer 等 header（B站 API 需要）

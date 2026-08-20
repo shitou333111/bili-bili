@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-download-exe"
+description = "允许调用 download_exe 命令下载新版本 EXE 到本地缓存（仅 Windows）"
+commands.allow = ["download_exe"]
+
+[[permission]]
+identifier = "deny-download-exe"
+description = "禁止调用 download_exe 命令"
+commands.deny = ["download_exe"]

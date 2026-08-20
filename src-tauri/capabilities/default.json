@@ -19,6 +19,8 @@
     "allow-check-native-update",
     "allow-download-apk",
     "allow-download-ipa",
+    "allow-download-exe",
+    "allow-apply-in-place-update",
     "allow-restart-app",
     {
       "identifier": "http:default",

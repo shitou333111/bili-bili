@@ -1,0 +1,10 @@
+﻿cargo :     Checking bili-live v1.0.0 (C:\Users\song\vscode_projects\bili_live\
+src-tauri)
+At line:1 char:5
++ & { cargo check 2>&1 | Out-File -Encoding utf8 cargo_check_out.txt; G ...
++     ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking bi...live\src-tauri) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.57s

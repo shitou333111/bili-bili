@@ -2307,6 +2307,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "允许调用 apply_in_place_update 命令原地替换更新 EXE（仅 Windows）",
+          "type": "string",
+          "const": "allow-apply-in-place-update",
+          "markdownDescription": "允许调用 apply_in_place_update 命令原地替换更新 EXE（仅 Windows）"
+        },
+        {
           "description": "Enables the check_native_update command without any pre-configured scope.",
           "type": "string",
           "const": "allow-check-native-update",
@@ -2335,6 +2341,12 @@
           "type": "string",
           "const": "allow-download-apk",
           "markdownDescription": "允许调用 download_apk 命令下载 APK 文件到本地缓存（仅 Android）"
+        },
+        {
+          "description": "允许调用 download_exe 命令下载新版本 EXE 到本地缓存（仅 Windows）",
+          "type": "string",
+          "const": "allow-download-exe",
+          "markdownDescription": "允许调用 download_exe 命令下载新版本 EXE 到本地缓存（仅 Windows）"
         },
         {
           "description": "允许调用 download_ipa 命令下载 IPA 文件到本地缓存（仅 iOS）",
@@ -2367,6 +2379,12 @@
           "markdownDescription": "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）"
         },
         {
+          "description": "禁止调用 apply_in_place_update 命令",
+          "type": "string",
+          "const": "deny-apply-in-place-update",
+          "markdownDescription": "禁止调用 apply_in_place_update 命令"
+        },
+        {
           "description": "Denies the check_native_update command without any pre-configured scope.",
           "type": "string",
           "const": "deny-check-native-update",
@@ -2395,6 +2413,12 @@
           "type": "string",
           "const": "deny-download-apk",
           "markdownDescription": "禁止调用 download_apk 命令"
+        },
+        {
+          "description": "禁止调用 download_exe 命令",
+          "type": "string",
+          "const": "deny-download-exe",
+          "markdownDescription": "禁止调用 download_exe 命令"
         },
         {
           "description": "禁止调用 download_ipa 命令",

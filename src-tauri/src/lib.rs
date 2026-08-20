@@ -930,6 +930,8 @@ async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Resul
 /// 清理 app cache 中的旧原生更新安装包，仅保留当前版本文件。
 /// - 匹配旧格式 `update.<ext>` 与版本化格式 `update-<version>.<ext>`
 /// - keep 为 None 时清理全部；为 Some 时保留该文件（当前下载目标）
+/// 仅 Android/iOS 使用（Windows 改走当前文件夹下载，不经过 cache）
+#[cfg(any(target_os = "android", target_os = "ios"))]
 fn cleanup_native_update_cache(cache_dir: &std::path::Path, ext: &str, keep: Option<&str>) {
     if let Ok(entries) = std::fs::read_dir(cache_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
@@ -1237,8 +1239,210 @@ async fn download_ipa(_app: tauri::AppHandle, _url: String, _version: Option<Str
     Err("download_ipa 仅在 iOS 平台可用".into())
 }
 
+/// Windows：仅下载新版本 EXE 到当前文件夹（应用所在目录），返回文件路径。
+/// 与 Android download_apk 同模式：静默后台先下载，用户点击按钮再原地替换安装。
+/// 不经过缓存目录：新版本与正式 exe 同目录，替换时同目录 rename 原子可靠；
+/// 文件名为 <原名>-新版本-<版本>.exe，同版本已存在则复用，避免重复下载。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn download_exe(_app: tauri::AppHandle, url: String, version: Option<String>) -> Result<String, String> {
+    // 0. 目标 EXE（用户启动的绿色单文件）所在目录 = 当前文件夹
+    let target = std::env::current_exe().map_err(|e| format!("获取当前 exe 路径失败: {}", e))?;
+    let target_dir = target
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir);
+
+    // 版本化临时文件名：<原名>-新版本-<版本>.exe，与正式 exe 同目录（与旧版本备份命名风格统一）
+    let exe_stem = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bili-live")
+        .to_string();
+    let file_name = match version.as_deref() {
+        Some(v) if !v.trim().is_empty() => format!("{}-新版本-{}.exe", exe_stem, v.trim()),
+        _ => format!("{}-新版本.exe", exe_stem),
+    };
+    let exe_path = target_dir.join(&file_name);
+
+    // 已有同版本文件（非空）→ 直接复用，跳过重复下载
+    if exe_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(exe_path.to_string_lossy().to_string());
+    }
+
+    // 1. 下载新版本 EXE
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("下载新版本失败: {}", e))?;
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取新版本数据失败: {}", e))?;
+
+    // 2. 写入当前文件夹（应用目录需可写，原地替换同样要求）
+    std::fs::write(&exe_path, &bytes)
+        .map_err(|e| format!("写入新版本文件失败（请确认应用所在文件夹可写）: {}", e))?;
+
+    Ok(exe_path.to_string_lossy().to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn download_exe(_app: tauri::AppHandle, _url: String, _version: Option<String>) -> Result<String, String> {
+    Err("download_exe 仅在 Windows 平台可用".into())
+}
+
+/// Windows：原地替换更新（绿色单文件免安装方案的持久化更新）。
+///
+/// 背景：官方 tauri-plugin-updater 只支持 NSIS/MSI 安装包，裸 exe 更新会"假成功"——
+/// 新 exe 被从临时目录直接运行，关闭后消失，旧 exe 原封不动。此命令解决该问题。
+///
+/// 更新策略：不经过缓存目录，直接在应用所在文件夹完成——
+///   · 新版本文件 <原名>-新版本-<版本>.exe 与正式 exe 同目录（download_exe 已下载）
+///   · 旧版本重命名为 <原名>-旧版本-<版本>.exe 保留，用户可随时找回/回退
+///   · 新版本 rename 为正式名，重启即生效
+///
+/// 流程：
+///  1. 把当前运行中的 exe 复制一份到 %TEMP% 作为 helper（正在运行的 exe 可被复制）
+///  2. 以 --in-place-update <new_exe> <target_exe> <parent_pid> <old_version> 启动 helper
+///  3. 立即退出当前进程，释放 exe 文件锁
+///  4. helper 等待当前进程退出 → 旧版本改名保留 → 用新 exe 替换原 exe → 重启新版本
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn apply_in_place_update(new_exe_path: String, old_version: String) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let current = std::env::current_exe().map_err(|e| format!("获取当前 exe 路径失败: {}", e))?;
+    let new_exe = PathBuf::from(&new_exe_path);
+    if !new_exe.is_file() {
+        return Err(format!("新版本文件不存在: {}", new_exe_path));
+    }
+    if current.canonicalize().ok() == new_exe.canonicalize().ok() {
+        return Err("新版本文件与当前文件相同".into());
+    }
+
+    // helper 放临时目录（独立副本，可自由操作被锁的原 exe）
+    let exe_stem = current
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bili-live")
+        .to_string();
+    let helper_dir = std::env::temp_dir().join(format!("{}-updater-{}", exe_stem, std::process::id()));
+    std::fs::create_dir_all(&helper_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    let helper = helper_dir.join(format!("{}-updater.exe", exe_stem));
+    std::fs::copy(&current, &helper).map_err(|e| format!("复制更新器失败: {}", e))?;
+
+    std::process::Command::new(&helper)
+        .arg("--in-place-update")
+        .arg(&new_exe)
+        .arg(&current)
+        .arg(std::process::id().to_string())
+        .arg(&old_version)
+        .spawn()
+        .map_err(|e| format!("启动更新器失败: {}", e))?;
+
+    // 当前进程立即退出，释放 exe 文件锁，helper 等待退出后替换
+    std::process::exit(0);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn apply_in_place_update(_new_exe_path: String, _old_version: String) -> Result<(), String> {
+    Err("apply_in_place_update 仅在 Windows 平台可用；macOS/Linux 使用官方 updater".into())
+}
+
+/// Windows：原地替换更新 helper 主逻辑。
+/// 由旧进程复制自身到 %TEMP% 后以
+/// --in-place-update <new_exe> <target_exe> <parent_pid> <old_version> 启动。
+/// 等待旧进程退出 → 旧版本重命名为 <原名>-旧版本-<版本>.exe 保留 → 新版本替换 → 重启新版本。
+#[cfg(target_os = "windows")]
+fn run_in_place_update() -> i32 {
+    use std::path::PathBuf;
+    use std::process::Command;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    // windows-sys 0.61 中 SYNCHRONIZE 定义在 Win32::Storage::FileSystem（0x00100000），
+    // 这里直接本地定义，避免引入额外的 feature 与跨模块常量导入。
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) != Some("--in-place-update") {
+        return 1;
+    }
+    let (Some(new_exe), Some(target), Some(pid_str), Some(old_version)) =
+        (args.get(2), args.get(3), args.get(4), args.get(5))
+    else {
+        return 1;
+    };
+    let new_exe = PathBuf::from(new_exe);
+    let target = PathBuf::from(target);
+    let Ok(parent_pid) = pid_str.parse::<u32>() else { return 1 };
+
+    // 1. 等待原进程完全退出（释放 target exe 文件锁）
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, parent_pid);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, 0xFFFFFFFF); // INFINITE
+            CloseHandle(handle);
+        }
+    }
+
+    // 2. 旧版本重命名保留：<原名>-旧版本-<版本>.exe（与应用同目录，用户可找回/回退）
+    //    与 target 同目录 rename，保证原子成功；同名备份残留时先清理避免覆盖失败。
+    let stem = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bili-live");
+    let backup = target.with_file_name(format!("{}-旧版本-{}.exe", stem, old_version));
+    if backup.exists() {
+        let _ = std::fs::remove_file(&backup);
+    }
+    if let Err(e) = std::fs::rename(&target, &backup) {
+        eprintln!("[BILI-UPDATE] 重命名旧版本失败: {e}");
+        let _ = Command::new(&target).spawn(); // 尽力重启旧版本
+        return 3;
+    }
+
+    // 3. 新版本替换为正式名（与应用同目录，rename 原子成功）
+    if let Err(e) = std::fs::rename(&new_exe, &target) {
+        eprintln!("[BILI-UPDATE] 替换 exe 失败: {e}");
+        // 恢复旧版本，避免用户"打不开应用"
+        let _ = std::fs::rename(&backup, &target);
+        let _ = Command::new(&target).spawn();
+        return 4;
+    }
+
+    // 4. 重启新版本（helper 为独立进程，自身退出后新版本继续运行）
+    if let Err(e) = Command::new(&target).spawn() {
+        eprintln!("[BILI-UPDATE] 重启失败: {e}");
+        return 5;
+    }
+
+    0
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ==================== Windows 原地替换更新 helper ====================
+    // 若以 --in-place-update 参数启动，说明是更新 helper（由旧进程复制自身到 %TEMP% 后拉起）：
+    // 等待旧进程退出 → 替换 exe → 重启。执行完直接退出，不启动 GUI、不闪窗口。
+    #[cfg(target_os = "windows")]
+    if std::env::args().any(|a| a == "--in-place-update") {
+        let code = run_in_place_update();
+        std::process::exit(code);
+    }
+
     // ==================== 热更新插件初始化 ====================
     // tauri-plugin-hotswap：三平台通用的前端资源 OTA（CodePush 风格）。
     // 与 hot-update 不同：hotswap 在启动时用 Context::set_assets() 替换 embedded
@@ -1368,6 +1572,8 @@ pub fn run() {
             // 安装 APK 由 tauri-plugin-android-installer 插件处理（不再注册自定义命令）。
             download_apk,
             download_ipa,
+            download_exe,
+            apply_in_place_update,
             restart_app,
         ])
         .run(context)

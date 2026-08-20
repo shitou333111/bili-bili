@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-apply-in-place-update"
+description = "允许调用 apply_in_place_update 命令原地替换更新 EXE（仅 Windows）"
+commands.allow = ["apply_in_place_update"]
+
+[[permission]]
+identifier = "deny-apply-in-place-update"
+description = "禁止调用 apply_in_place_update 命令"
+commands.deny = ["apply_in_place_update"]

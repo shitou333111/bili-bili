@@ -255,6 +255,7 @@ dependencies = [
  "tauri-plugin-sharekit",
  "tauri-plugin-store",
  "tauri-plugin-updater",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
