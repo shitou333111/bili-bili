@@ -755,7 +755,7 @@ jobs:
   # release 目录名带版本号：versions.json 按平台解析各自 current_* 实际指向的目录，
   # 未构建的平台保留旧版本号+旧日期，保证"显示的版本号"与"实际安装包"一一对应。
   # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
-  # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 10 个。
+  # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 5 个。
   publish-artifacts:
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot')) }}
     needs: [build-exe, build-apk, build-ipa, build-hot-update]
@@ -841,9 +841,19 @@ jobs:
             find artifacts-dl -type f -name '*.ipa' || true
           }
           IPA="$(IPA_CANDIDATES | awk '!seen[$0]++' | pick_first || true)"
-          if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" publish/; fi
-          if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" publish/; fi
-          if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" publish/; fi
+          # 统一安装包文件名：release → B瓜.<ext>，debug → B瓜-debug.<ext>
+          # 依据实际选中的文件判断构建类型：路径/文件名含 debug 即 debug 包，否则为 release
+          package_name() {
+            local src="$1" ext="$2"
+            if printf '%s' "${src}" | grep -qi 'debug'; then
+              echo "B瓜-debug.${ext}"
+            else
+              echo "B瓜.${ext}"
+            fi
+          }
+          if [ -n "${EXE}" ]; then echo "EXE 选中: ${EXE}"; cp "${EXE}" "publish/$(package_name "${EXE}" exe)"; fi
+          if [ -n "${APK}" ]; then echo "APK 选中: ${APK}"; cp "${APK}" "publish/$(package_name "${APK}" apk)"; fi
+          if [ -n "${IPA}" ]; then echo "IPA 选中: ${IPA}"; cp "${IPA}" "publish/$(package_name "${IPA}" ipa)"; fi
           # 热更新包（hotswap.json + frontend-<seq>.tar.gz）
           if [ -d "artifacts-dl/bili-live-hot-update" ]; then
             mkdir -p publish/webapp
@@ -1045,9 +1055,9 @@ jobs:
             ls -la "${RELEASE_DIR}"
             echo "artifacts 目录:"
             ls -la "${ARTIFACTS_DIR}"
-            # 清理旧版本，保留最近 10 个，但不能删 current_* 链接指向的 release 目录。
+            # 清理旧版本，保留最近 5 个，但不能删 current_* 链接指向的 release 目录。
             # 场景：某次只构建 exe 没构建 apk，current_apk 仍指向旧 release，
-            # 若该 release 因排序落在 11 名以后被清理，链接就断了。
+            # 若该 release 因排序落在 6 名以后被清理，链接就断了。
             PROTECTED=""
             for link in current_exe current_apk current_ipa; do
               target="$(readlink "${ARTIFACTS_DIR}/${link}" 2>/dev/null || true)"
@@ -1055,7 +1065,7 @@ jobs:
             done
             # 同时保护 webapp 目录不被清理
             PROTECTED="${PROTECTED} ${ARTIFACTS_DIR}/webapp"
-            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
+            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +6 | while IFS= read -r dir; do
               case "${PROTECTED}" in
                 *"${dir}"*) echo "保留（current 链接指向）: ${dir}"; continue ;;
               esac
@@ -1166,7 +1176,7 @@ jobs:
               [ -n "$target" ] && PROTECTED="${PROTECTED} ${target%/*}"
             done
             PROTECTED="${PROTECTED} ${ARTIFACTS_DIR}/webapp"
-            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +11 | while IFS= read -r dir; do
+            ls -1dt "${ARTIFACTS_DIR}"/release-* 2>/dev/null | tail -n +6 | while IFS= read -r dir; do
               case "${PROTECTED}" in
                 *"${dir}"*) continue ;;
               esac
