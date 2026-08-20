@@ -229,21 +229,59 @@ export const tauriPlatform: Platform = {
     }
 
     if (Object.keys(toSend).length === 0) {
-      console.log(`[Upload] ${uname}(uid:${mid}) 所有文件均未变化，跳过上传`);
+      // 绝对静默：文件无变化时不打任何日志，直接跳过
       return;
     }
 
-    // 加密整个 payload（隐藏 uid_<mid> 目录结构、文件名与内容）后再上传，
-    // 服务器用同一密钥解密后按原有方案落盘。抓包者只能看到密文。
+    // 分批加密+上传：重建数据库等场景下 toSend 可能非常大（所有文件全量重传），
+    // 一次性对整个 payload 做 AES-256-GCM 加密会长时间占满主线程（CPU/内存暴涨）且
+    // 超过单请求超时导致"Request cancelled"。按大小分批后逐批加密上传：
+    //  - 每批加密数据量小，主线程不会被长时间阻塞
+    //  - 每批 15s 超时足够，避免误杀
+    // 服务器 /api/upload 本身就是"增量只写本次携带的文件"，分批多次 POST 等价于一次全量 POST。
     const { encryptUploadPayload } = await import("../upload-crypto");
-    const enc = await encryptUploadPayload({ mid, uname, files: toSend });
-    await tauriFetch(`${SERVER_BASE_URL}/api/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enc }),
-    });
+    const BATCH_BYTES = 1_000_000; // 每批约 1MB 明文
+    const batches: Record<string, string>[] = [];
+    let cur: Record<string, string> = {};
+    let curBytes = 0;
+    for (const [name, content] of Object.entries(toSend)) {
+      const bytes = new TextEncoder().encode(content).length;
+      if (curBytes > 0 && curBytes + bytes > BATCH_BYTES) {
+        batches.push(cur);
+        cur = {};
+        curBytes = 0;
+      }
+      cur[name] = content;
+      curBytes += bytes;
+    }
+    if (Object.keys(cur).length > 0) batches.push(cur);
 
-    // 上传成功后才更新哈希，下次据此判断哪些文件有变化
+    for (const batch of batches) {
+      // 加密整个 batch（隐藏 uid_<mid> 目录结构、文件名与内容）后再上传，
+      // 服务器用同一密钥解密后按原方案落盘。抓包者只能看到密文。
+      const enc = await encryptUploadPayload({ mid, uname, files: batch });
+      // 每批带超时（AbortController），避免 /api/upload 挂起时永久 pending、
+      // 导致 finishRefresh→fetchData 不返回、绿按钮一直转且控制台无任何输出。
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      let resp: Response;
+      try {
+        resp = await tauriFetch(`${SERVER_BASE_URL}/api/upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enc }),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!resp.ok) {
+        // 绝对静默：上传失败不落哈希（下次重传），不打印任何日志、不阻塞整体流程
+        return;
+      }
+    }
+
+    // 全部批次上传成功后才更新哈希，下次据此判断哪些文件有变化
     const next = { ...userPrev };
     for (const [name, content] of Object.entries(toSend)) next[name] = contentHash(content);
     prev[String(mid)] = next;
@@ -252,10 +290,18 @@ export const tauriPlatform: Platform = {
 
   async fetchRemoteUserData(mid: number, uname: string): Promise<Record<string, string>> {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    const resp = await tauriFetch(
-      `${SERVER_BASE_URL}/api/upload?mid=${mid}&uname=${encodeURIComponent(uname)}`,
-      { method: "GET", headers: { "Accept": "application/json" } },
-    );
+    // 下载服务器数据也带超时，避免挂起
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    let resp: Response;
+    try {
+      resp = await tauriFetch(
+        `${SERVER_BASE_URL}/api/upload?mid=${mid}&uname=${encodeURIComponent(uname)}`,
+        { method: "GET", headers: { "Accept": "application/json" }, signal: ctrl.signal },
+      );
+    } finally {
+      clearTimeout(timer);
+    }
     const data = await resp.json() as { code: number; data?: { files?: Record<string, string> } };
     return data.code === 0 ? (data.data?.files ?? {}) : {};
   },

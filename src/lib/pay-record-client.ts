@@ -68,7 +68,9 @@ type PayRecordSnapshot = {
 
 const DEFAULT_APP_KEY = "1d8b6e7d45233436";
 const DEFAULT_APP_SECRET = "560c52ccd288fed045859ed18bffd973";
-const PAGE_SIZE = 20;
+// 每页请求条数：B站上限 50（实测 page_size=100 也只会返回 50 条/页）。
+// 设 50 即为接口能返回的最大值，总请求数约为 20/页 的 1/2.5。
+const PAGE_SIZE = 50;
 const MAX_PAGES = 1000;
 const REQUEST_RETRY_COUNT = 3;
 const REQUEST_BACKOFF_MS = 500;

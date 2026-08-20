@@ -7,6 +7,7 @@ import { getBlindBoxCardBg, HISTORICAL_PNL_BG } from "@/lib/layout";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import PieTooltip from "@/components/PieTooltip";
 import Dropdown from "@/components/Dropdown";
+import InfoHint from "@/components/InfoHint";
 
 // ===== Type definitions =====
 type Snapshot = {
@@ -381,7 +382,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
         {/* 服务器账号顶部提示：本机无登录凭证，仅可查看；刷新从服务器重载 */}
         {isServerAccount && (
           <div className="mb-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-800 text-xs leading-relaxed">
-            这是服务器收集账号，本机无登录凭证，数据仅可查看。点击右上角刷新将从服务器重新加载该账号数据并覆盖本地缓存。
+            服务器账号，无登录凭证，仅可查看，刷新重载
           </div>
         )}
         {/* L3 Tab bar - segmented control, sticky at top, 整体居中 */}
@@ -441,7 +442,11 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
               {/* Row 0: Date range */}
               {snapshot.records.length > 0 && (() => {
                 const sorted = [...snapshot.records].sort((a, b) => a.timestamp - b.timestamp);
-                return <div className="text-xs text-black/40 mb-3">统计范围: {formatDateShort(formatTimestamp(sorted[0].timestamp))} - {formatDateShort(formatTimestamp(sorted[sorted.length - 1].timestamp))}</div>;
+                return (
+                  <div className="text-xs text-black/40 mb-3 flex items-center gap-1">
+                    统计范围<InfoHint text="最长只有最近1年记录" />: {formatDateShort(formatTimestamp(sorted[0].timestamp))} - {formatDateShort(formatTimestamp(sorted[sorted.length - 1].timestamp))}
+                  </div>
+                );
               })()}
 
               {/* Row 1: Summary stats cards */}
@@ -486,7 +491,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   <div className="mt-1 text-xl font-semibold">{overviewAnchors.length}</div>
                   {/* Tooltip */}
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-black/85 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] text-center leading-relaxed">
-                    点击查看主播消费分布图<br/>此操作耗时约3分钟，频繁访问会限流，建议访问一次后保存图片
+                    点击查看主播消费分布图<br/>建议访问一次后保存图片
                     <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/85"></div>
                   </div>
                 </div>
@@ -1097,7 +1102,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
 
               <div className={`mt-4 rounded-xl border border-black/10 ${HISTORICAL_PNL_BG} p-2 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
                 <div className="flex items-center justify-between">
-                  <div className="textsm font-bold uppercase tracking-[0.15em] text-black/70">历史总盈亏</div>
+                  <div className="flex items-center gap-1 textsm font-bold uppercase tracking-[0.15em] text-black/70">历史总盈亏<InfoHint text="最长只有最近1年记录" /></div>
                   {/* 调试按钮已隐藏，保留调试代码 */}
                   {/* <button
                     onClick={() => setShowHistoricalDebug(!showHistoricalDebug)}
@@ -1234,7 +1239,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
               {/* Card 1: 天选/红包礼物统计 */}
               <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                 <div className="flex items-center gap-2 mb-3">
-                  <h3 className="text-base font-bold tracking-tight">天选&红包礼物</h3>
+                  <h3 className="text-base font-bold tracking-tight">天选&红包</h3>
                   {otherStats.giftStats.hasLuckyTitle && (
                     <span
                       className="inline-flex items-center gap-1 rounded-full border border-yellow-400 bg-yellow-50 px-2 py-0.5 text-xs font-medium cursor-help"
@@ -1310,7 +1315,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
               {/* Card 2: 送礼天数统计 */}
               <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                 <div className="flex items-center gap-2 mb-3">
-                  <h3 className="text-base font-bold tracking-tight">送礼天数</h3>
+                  <h3 className="text-base font-bold tracking-tight inline-flex items-center gap-1">送礼天数<InfoHint text="最长只有最近1年记录" /></h3>
                   {(otherStats.dayStats.maxConsecutiveDays >= 100 || otherStats.dayStats.maxDaysInYear >= 300) && (
                     <span
                       className="inline-flex items-center gap-1 rounded-full border border-orange-400 bg-orange-50 px-2 py-0.5 text-xs font-medium cursor-help"

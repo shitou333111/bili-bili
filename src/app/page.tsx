@@ -1073,7 +1073,7 @@ export default function HomePage() {
   //   · 热更新   = 冷启动自动应用，或"立即生效"一步下载+激活+刷新（无需重启）
   async function handleApplyUpdate() {
     if (!updateResult) return;
-    // 原生更新涉及手动安装（Android=系统安装器、iOS=Open In 自签工具、桌面=官方 updater），
+    // 原生更新涉及手动安装（Android=系统安装器、iOS=Open In 自签工具、Windows=原地替换），
     // 点击后先弹防砖确认弹窗，提示失败时的回退方案，再执行安装。
     if (updateResult.recommended === "native" || nativeSilentDownloaded.kind === "ready") {
       setShowNativeConfirm(true);
@@ -1113,13 +1113,13 @@ export default function HomePage() {
         return;
       }
       // 未静默下载 → 一步下载+安装
-      if (!native.downloadUrl && !__isDesktopForUpdater()) {
+      if (!native.downloadUrl) {
         setUpdateError("缺少下载地址，无法更新");
         return;
       }
-      const r = await applyNativeUpdate(native.downloadUrl || "", (p) => setUpdateProgress(p), native.serverVersion || "");
+      const r = await applyNativeUpdate(native.downloadUrl, (p) => setUpdateProgress(p), native.serverVersion || "");
       if (r.status === "installing") {
-        // Windows: updater 自动安装+重启；Android: 系统安装器已弹出
+        // Windows: 原地替换+自动重启；Android: 系统安装器已弹出
         setUpdateToast(
           hot.available && !hot.shellTooOld
             ? "原生更新安装完成后，请重新检查更新以应用前端热更新"
@@ -1130,9 +1130,6 @@ export default function HomePage() {
         setUpdateToast("IPA 已下载，请在弹出的面板中选择自签工具覆盖安装");
       } else if (r.status === "cancelled") {
         // iOS 用户取消了分享面板，非错误，静默返回
-      } else if (r.status === "needRestart") {
-        setUpdateToast("下载完成，请重启 APP 完成安装");
-        setCanRestart(true);
       } else if (r.status === "error") {
         setUpdateError(r.error || "原生更新失败");
       }
@@ -1149,6 +1146,11 @@ export default function HomePage() {
   // 无需重启进程（iOS/Android 同样生效）。
   async function handleActivateHotUpdate() {
     if (!updateResult) return;
+    // 热更新已在后台激活完毕（冷启动后台已 applyHotUpdate），仅需刷新加载新资源
+    if (hotUpdateReady) {
+      window.location.reload();
+      return;
+    }
     // shellTooOld 保护：热更新有新版本但原生版本太低时，不应用
     if (updateResult.hot.shellTooOld) {
       setUpdateError(
@@ -1186,8 +1188,8 @@ export default function HomePage() {
     }
   }
 
-  // 重启 APP（仅原生更新兜底：桌面端 updater 安装完成 relaunch；Android 冷拉起）。
-  // 热更新已改为 activate + reload（无需重启），不经过此函数。
+  // 重启 APP（仅原生更新兜底：Android 冷拉起；iOS 无 API 需手动重开）。
+  // Windows 原地替换由 helper 自动重启；热更新已改为 activate + reload（无需重启）。
   async function handleRestartApp() {
     const ok = await restartApp();
     if (!ok) {
@@ -1197,12 +1199,6 @@ export default function HomePage() {
     }
   }
 
-  // 桌面端 updater 不需要 downloadUrl（从 latest.json 自取），其他平台需要
-  function __isDesktopForUpdater(): boolean {
-    if (typeof navigator === "undefined") return false;
-    const ua = navigator.userAgent || "";
-    return /win/i.test(ua) || /mac/i.test(ua) || /linux/i.test(ua);
-  }
   // 复活曲截图页内容托管在网站服务器上（会变动），在 APP 内以 iframe 打开，
   // 保留应用外壳与返回按钮，服务器不可达时显示自绘错误面板（而非浏览器报错页）。
   function openScreenshotPage() {
@@ -1240,16 +1236,15 @@ export default function HomePage() {
     | {
         kind: "ready";
         filePath: string;
-        platform: "windows" | "macos" | "linux" | "android" | "ios";
+        platform: "windows" | "android" | "ios";
         version: string;
       }
     | { kind: "error"; msg: string }
   >({ kind: "none" });
   const notifyAppReadyCalled = useRef(false);
-  /** 冷启动更新门：首页渲染前先完成热更新检查/应用，避免旧资源闪现后再刷新。
-   *  初始 false（服务端/客户端一致，不触发 Hydration 报错），由冷启动 effect 放行。 */
-  const [coldStartUpdateDone, setColdStartUpdateDone] = useState(false);
-  const [coldStartUpdateMsg, setColdStartUpdateMsg] = useState("");
+  /** 冷启动热更新已后台激活（asset provider 已切换，待用户点击刷新生效）。
+   *  首页不阻塞：检查/下载/激活均在后台静默完成，完成后显示顶部提示条引导点击刷新。 */
+  const [hotUpdateReady, setHotUpdateReady] = useState(false);
   const coldStartUpdateCalled = useRef(false);
   /** 原生更新防砖确认弹窗：点击安装前提示失败回退方案 */
   const [showNativeConfirm, setShowNativeConfirm] = useState(false);
@@ -1283,73 +1278,51 @@ export default function HomePage() {
     if (coldStartUpdateCalled.current) return;
     coldStartUpdateCalled.current = true;
     (async () => {
-      // Web/开发模式：无需更新门，直接放行首页
-      if (!isTauri()) {
-        setColdStartUpdateDone(true);
-        return;
-      }
+      // Web/开发模式：无热更新/原生更新机制，跳过后台更新检查
+      if (!isTauri()) return;
       try {
-        setColdStartUpdateMsg("正在检查更新...");
+        // 后台静默检查更新：不阻塞首页渲染（结果驱动更新卡片显示）
         const result = await withTimeout(checkForUpdates(), 10000);
         setUpdateResult(result);
 
-        // 原生更新静默下载：有原生更新则后台下载安装包（Android/iOS），
+        // 原生更新静默下载：有原生更新则后台下载安装包（Windows=exe、Android=apk、iOS=ipa），
         // 下载完成后卡片变为"安装包已就绪 · 立即安装"，不阻塞首页显示。
-        if (result.native.available) {
-          const desktop =
-            typeof navigator !== "undefined" &&
-            /(win|mac|linux)/i.test(navigator.userAgent || "");
-          if (result.native.downloadUrl || desktop) {
-            setNativeSilentDownloaded({ kind: "downloading", progress: 0, total: 0 });
-            downloadNativeSilently(result.native.downloadUrl || "", (p) => {
-              setNativeSilentDownloaded((s) =>
-                s.kind === "downloading"
-                  ? { kind: "downloading", progress: p.downloaded, total: p.total }
-                  : s,
-              );
-            }, result.native.serverVersion || "")
-              .then((dr) => {
-                if (dr.status === "downloaded" && dr.platform && dr.filePath) {
-                  setNativeSilentDownloaded({
-                    kind: "ready",
-                    filePath: dr.filePath,
-                    platform: dr.platform,
-                    version: result.native.serverVersion || "",
-                  });
-                } else if (dr.status === "updaterAvailable" && dr.platform) {
-                  // 桌面端：官方 updater 没有预下载阶段，直接当"ready"用，
-                  // 点击"立即安装"时走官方 downloadAndInstall。
-                  setNativeSilentDownloaded({
-                    kind: "ready",
-                    filePath: undefined as any,
-                    platform: dr.platform,
-                    version: result.native.serverVersion || "",
-                  });
-                } else {
-                  setNativeSilentDownloaded({ kind: "error", msg: dr.error || "下载失败" });
-                }
-              })
-              .catch(() => setNativeSilentDownloaded({ kind: "error", msg: "下载失败" }));
-          }
+        if (result.native.available && result.native.downloadUrl) {
+          setNativeSilentDownloaded({ kind: "downloading", progress: 0, total: 0 });
+          downloadNativeSilently(result.native.downloadUrl, (p) => {
+            setNativeSilentDownloaded((s) =>
+              s.kind === "downloading"
+                ? { kind: "downloading", progress: p.downloaded, total: p.total }
+                : s,
+            );
+          }, result.native.serverVersion || "")
+            .then((dr) => {
+              if (dr.status === "downloaded" && dr.platform && dr.filePath) {
+                setNativeSilentDownloaded({
+                  kind: "ready",
+                  filePath: dr.filePath,
+                  platform: dr.platform,
+                  version: result.native.serverVersion || "",
+                });
+              } else {
+                setNativeSilentDownloaded({ kind: "error", msg: dr.error || "下载失败" });
+              }
+            })
+            .catch(() => setNativeSilentDownloaded({ kind: "error", msg: "下载失败" }));
         }
 
-        // 热更新冷启动自动应用：无原生更新等待 + 满足 min-shell + 有热更新
+        // 热更新后台准备：无原生更新等待 + 满足 min-shell + 有热更新时，
+        // 后台静默下载并激活（asset provider 已切换，当前页面仍是旧资源），
+        // 完成后顶部显示提示条，用户点击"立即生效"才刷新 —— 不阻塞首屏、不自动打断操作。
         if (!result.native.available && result.hot.available && !result.hot.shellTooOld) {
-          setColdStartUpdateMsg("发现前端更新，正在下载并应用...");
           const r = await withTimeout(applyHotUpdate(), 60000);
           if (r.status === "applied") {
-            setColdStartUpdateMsg("更新已就绪，正在切换新版本...");
-            // asset provider 已切换，reload 立即加载新资源（无需重启进程）。
-            // 不放开首页门，等待 reload 后由新版本展示首页。
-            setTimeout(() => window.location.reload(), 400);
-            return;
+            setHotUpdateReady(true);
           }
         }
       } catch {
         // 检查失败/超时：首页照常显示，用户可通过"检查更新"卡片手动重试
       }
-      setColdStartUpdateMsg("");
-      setColdStartUpdateDone(true);
     })();
   }, []);
 
@@ -1661,9 +1634,10 @@ export default function HomePage() {
 
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
-        // 数据已加载（无论本地缓存还是 B站 实时），不再是首次初始化
-        setIsFirstTime(false);
         setAuthError(null);
+        // 注意：这里不再提前 setIsFirstTime(false)。
+        // 首次/重建初始化时，全屏遮罩需要延续到主播收益拉取完成，
+        // 因此统一在 fetchData 的 finally 中关闭（见下方 finally）。
       }
 
       // 有真实数据时获取统计
@@ -1683,6 +1657,9 @@ export default function HomePage() {
     } finally {
       setLoading(false);
       setFetchProgress(null);
+      // 首次/重建初始化：消费记录 + 主播收益全部拉取完成后才关闭全屏遮罩
+      // （主播收益在 source==="real" 分支经 finishRefresh→anchorRefreshRef 同步 await 完成）
+      setIsFirstTime(false);
     }
   }
 
@@ -2504,22 +2481,8 @@ export default function HomePage() {
     : activeModule === "screenshot" ? "help"
     : "pending";
 
-  // 冷启动更新门：首页渲染前先检查并应用热更新（先更新切换再显示首页，无闪烁）。
-  // 仅依赖状态（初始 false，服务端/客户端一致），避免 Hydration 报错；
-  // Web/开发模式由 effect 立即放行，几乎不感知。
-  if (!coldStartUpdateDone) {
-    return (
-      <main className="page-main flex flex-col min-h-0 bg-[#f5f5f5] text-[#1f1c17]">
-        <WindowTitleBar />
-        <div className="flex-1 flex items-center justify-center px-6">
-          <div className="text-center">
-            <div className="w-10 h-10 border-[3px] border-[#1f1c17] border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-            <p className="text-sm font-medium text-black/60">{coldStartUpdateMsg || "正在启动..."}</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  // 冷启动不再阻塞首页：更新检查/下载/热更新激活均在后台静默完成
+  // （见冷启动 effect），完成后通过顶部提示条引导用户点击刷新生效。
 
   // ===== 更新卡片状态派生 =====
   // 冷启动自动检查+自动下载，无需手动点检查按钮。卡片颜色随状态变化：
@@ -2570,9 +2533,10 @@ export default function HomePage() {
       action: handleApplyUpdate,
       disabled: updateApplying || nativeDownloading,
       note:
-        nativeSilentDownloaded.kind === "ready"
+        nativeSilentDownloaded.kind === "ready" &&
+        (nativeSilentDownloaded.platform === "android" || nativeSilentDownloaded.platform === "ios")
           ? "安装包已下载完成，点击重装进入安装流程"
-          : "核心功能升级，需重新安装安装包",
+          : "点击后自动下载安装包并安装，完成后自动重启",
     };
   } else if (updateResult?.hot.available && !updateResult.hot.shellTooOld) {
     updateCard = {
@@ -2584,7 +2548,9 @@ export default function HomePage() {
       label: "点击刷新",
       action: handleActivateHotUpdate,
       disabled: updateApplying,
-      note: "前端资源更新，点击后自动刷新生效，无需重装",
+      note: hotUpdateReady
+        ? "新内容已下载完成，点击立即刷新生效"
+        : "前端资源更新，点击后自动刷新生效，无需重装",
     };
   } else if (updateResult === null) {
     updateCard = {
@@ -2631,6 +2597,20 @@ export default function HomePage() {
     <main className="page-main flex flex-col min-h-0 bg-[#f5f5f5] text-[#1f1c17]">
       {/* PC 端自定义窗口标题栏（仅 Tauri 桌面环境显示）：含置顶 / 最小化 / 最大化 / 关闭 */}
       <WindowTitleBar />
+      {/* 热更新已就绪提示条：冷启动后台已下载+激活新内容（页面仍是旧资源），点击立即刷新生效。
+          不自动刷新，避免打断用户当前操作 */}
+      {hotUpdateReady && (
+        <div className="px-3 pt-2">
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full flex items-center gap-2.5 rounded-xl bg-yellow-50 border border-yellow-200 px-3.5 py-2.5 text-left shadow-[0_8px_30px_rgba(202,138,4,0.15)]"
+          >
+            <span className="shrink-0 h-6 w-6 rounded-full bg-[#eab308] flex items-center justify-center text-white text-sm">↻</span>
+            <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效</span>
+            <span className="shrink-0 text-xs font-semibold text-yellow-800">立即生效 →</span>
+          </button>
+        </div>
+      )}
       {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden relative pb-24 page-scroll-area" style={{ overscrollBehavior: "none" }}>
 
@@ -2770,6 +2750,7 @@ export default function HomePage() {
           onFetchRequest={anchorRefreshRef}
           onRefresh={handleRefresh}
           showToast={showToast}
+          onFetchProgress={(p) => setFetchProgress(p)}
         />
       </div>
 

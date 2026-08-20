@@ -23,21 +23,46 @@ fn is_login_url(url: &str) -> bool {
     false
 }
 
+/// 全局复用单个 reqwest Client（连接池/TLS 会话跨请求复用，避免每请求重建握手）。
+/// 各命令的超时通过 tokio::time::timeout 单独控制，不影响连接池复用。
+/// 并发安全：reqwest::Client 是 Arc<inner>，可被多个命令并发使用。
+fn shared_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+                .build()
+                .expect("构建全局 HTTP 客户端失败")
+        })
+        .clone()
+}
+
+/// 为 Future 包裹超时，返回 Err(String)（reqwest Client 本身无 per-request timeout，
+/// 需在各命令层按业务需要设置超时）
+async fn with_timeout<T, F>(secs: u64, fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
+        Ok(inner) => inner,
+        Err(_) => Err(format!("请求超时（{}s）", secs)),
+    }
+}
+
 #[tauri::command]
 async fn fetch_json(url: String) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(false)
-        .build()
-        .map_err(|e| format!("reqwest client build error: {}", e))?;
-
-    let resp = client
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
-        .header("Referer", "https://live.bilibili.com/")
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+    // 复用全局 client（连接池/TLS 复用）；B站 API 请求需 Referer，单独设置
+    let resp = with_timeout(30, async {
+        shared_client()
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36")
+            .header("Referer", "https://live.bilibili.com/")
+            .send()
+            .await
+            .map_err(|e| format!("请求失败: {}", e))
+    })
+    .await?;
 
     let status = resp.status();
     let body = resp
@@ -884,21 +909,18 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
 /// 和各平台日期。本地版本号从 app.package_info() 获取（tauri.conf.json 的 version）。
 #[tauri::command]
 async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
-
-    let resp = client
-        .get(format!("{}/artifacts/versions.json", server_url))
-        .send()
-        .await
-        .map_err(|e| format!("请求版本信息失败: {}", e))?;
-
-    let versions: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析版本信息失败: {}", e))?;
+    // 复用全局 client（连接池复用），10s 超时
+    let versions: Value = with_timeout(10, async {
+        let resp = shared_client()
+            .get(format!("{}/artifacts/versions.json", server_url))
+            .send()
+            .await
+            .map_err(|e| format!("请求版本信息失败: {}", e))?;
+        resp.json()
+            .await
+            .map_err(|e| format!("解析版本信息失败: {}", e))
+    })
+    .await?;
 
     let server_version = versions
         .get("version")
@@ -913,8 +935,6 @@ async fn check_native_update(app: tauri::AppHandle, server_url: String) -> Resul
     let platform = "android";
     #[cfg(target_os = "ios")]
     let platform = "ios";
-    #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "ios")))]
-    let platform = "unknown";
 
     let date = versions.get(platform).and_then(|v| v.as_str()).unwrap_or("");
 
@@ -971,22 +991,26 @@ async fn download_apk(app: tauri::AppHandle, url: String, version: Option<String
         return Ok(apk_path.to_string_lossy().to_string());
     }
 
-    // 1. 下载 APK
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
+    // 1. 下载 APK（复用全局 client；600s 整体超时）
+    let (status, bytes) = with_timeout(600, async {
+        let resp = shared_client()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("下载 APK 失败: {}", e))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取 APK 数据失败: {}", e))?;
+        Ok((status, bytes))
+    })
+    .await?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("下载 APK 失败: {}", e))?;
-
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("读取 APK 数据失败: {}", e))?;
+    // 保存前校验 HTTP 状态（下载失败时不写入损坏文件）
+    if !status.is_success() {
+        return Err(format!("下载 APK 失败: HTTP {}", status.as_u16()));
+    }
 
     // 2. 保存到 app cache 目录
     std::fs::write(&apk_path, &bytes).map_err(|e| format!("写入 APK 文件失败: {}", e))?;
@@ -1207,22 +1231,26 @@ async fn download_ipa(app: tauri::AppHandle, url: String, version: Option<String
         return Ok(ipa_path.to_string_lossy().to_string());
     }
 
-    // 1. 下载 IPA
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
+    // 1. 下载 IPA（复用全局 client；600s 整体超时）
+    let (status, bytes) = with_timeout(600, async {
+        let resp = shared_client()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("下载 IPA 失败: {}", e))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取 IPA 数据失败: {}", e))?;
+        Ok((status, bytes))
+    })
+    .await?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("下载 IPA 失败: {}", e))?;
-
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("读取 IPA 数据失败: {}", e))?;
+    // 保存前校验 HTTP 状态（下载失败时不写入损坏文件）
+    if !status.is_success() {
+        return Err(format!("下载 IPA 失败: HTTP {}", status.as_u16()));
+    }
 
     // 2. 保存到 app cache 目录
     std::fs::write(&ipa_path, &bytes).map_err(|e| format!("写入 IPA 文件失败: {}", e))?;
@@ -1270,22 +1298,26 @@ async fn download_exe(_app: tauri::AppHandle, url: String, version: Option<Strin
         return Ok(exe_path.to_string_lossy().to_string());
     }
 
-    // 1. 下载新版本 EXE
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
+    // 1. 下载新版本 EXE（复用全局 client；600s 整体超时）
+    let (status, bytes) = with_timeout(600, async {
+        let resp = shared_client()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("下载新版本失败: {}", e))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取新版本数据失败: {}", e))?;
+        Ok((status, bytes))
+    })
+    .await?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("下载新版本失败: {}", e))?;
-
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("读取新版本数据失败: {}", e))?;
+    // 保存前校验 HTTP 状态（下载失败时不写入损坏文件）
+    if !status.is_success() {
+        return Err(format!("下载新版本失败: HTTP {}", status.as_u16()));
+    }
 
     // 2. 写入当前文件夹（应用目录需可写，原地替换同样要求）
     std::fs::write(&exe_path, &bytes)
@@ -1356,7 +1388,7 @@ fn apply_in_place_update(new_exe_path: String, old_version: String) -> Result<()
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn apply_in_place_update(_new_exe_path: String, _old_version: String) -> Result<(), String> {
-    Err("apply_in_place_update 仅在 Windows 平台可用；macOS/Linux 使用官方 updater".into())
+    Err("apply_in_place_update 仅在 Windows 平台可用".into())
 }
 
 /// Windows：原地替换更新 helper 主逻辑。
@@ -1489,20 +1521,13 @@ pub fn run() {
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
         // 窗口初始隐藏，设置尺寸/位置后再 show()，避免先闪默认大小再变形。
         .setup(|app| {
-            // ==================== 桌面端：注册二进制更新器 ====================
-            // tauri-plugin-updater：仅桌面端（Windows/Linux/macOS），替换整个安装包。
-            // 移动端不支持（Android 需自定义 APK 下载+系统安装器，iOS 系统不允许）。
-            #[cfg(desktop)]
-            {
-                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
-                app.handle().plugin(tauri_plugin_process::init())?;
-            }
             if let Some(window) = app.get_webview_window("main") {
                 // 仅桌面端调整窗口尺寸/位置（页面最大宽度来自 page-config.json，单一源头）。
                 // 移动端（iOS/Android）窗口天然全屏，绝不能 set_size/set_position：
                 // iOS 上 set_size(600)+居中会把 WebView 向左偏移 (屏宽-600)/2，
                 // 产生"左侧约 103px 触摸死区"（命中区不覆盖，渲染无错位）——见诊断记录。
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                // 桌面端仅支持 Windows（不支持 macOS/Linux）。
+                #[cfg(windows)]
                 {
                     let page_max_width: f64 = {
                         let raw = include_str!("../../src/lib/page-config.json");

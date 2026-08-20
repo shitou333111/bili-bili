@@ -236,8 +236,8 @@ export async function uploadAllUserData(platform: Platform): Promise<void> {
     // 2) 全局盲盒信息
     Object.assign(files, await collectBlindBoxInfoUploads(platform));
     await platform.uploadUserData(session.mid, session.uname, files);
-  } catch (e) {
-    console.warn("[Upload] 统一上传失败:", e instanceof Error ? e.message : String(e));
+  } catch {
+    // 绝对静默：统一上传失败不打印任何日志，静默吞掉
   }
 }
 

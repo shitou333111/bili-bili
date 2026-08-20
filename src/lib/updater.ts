@@ -21,10 +21,20 @@
  *   - 防砖：每次启动 notifyReady() 确认当前版本可用，未确认则下次启动自动回滚
  */
 
-import { isTauri, serverFetch, serverApiUrl } from "./server-api";
+import { isTauri, isTauriProduction, serverFetch, serverApiUrl } from "./server-api";
 
 /** 构建日期（CI 注入，本地开发取当前日期） */
 const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";
+
+/**
+ * 内置前端资源对应的热更新序号（sequence）。
+ * CI 构建时注入（NEXT_PUBLIC_BUILD_SEQ = github.run_number，与热更新包同一 SEQUENCE）。
+ * 原生包内置资源 = 该 sequence 对应的源码，服务器 sequence 不高于此值即视为"已含最新内容"。
+ * 用于修复：hotswap 插件本地无热更新缓存时 current_sequence=0，只要服务器发布过
+ * 任何热更新就会误报（新装/刚更新的原生包必然中招，所有平台一致）。
+ * 本地开发无注入 → 0（不抑制任何热更新，仅 dev 场景，无影响）。
+ */
+const BUILTIN_HOTSWAP_SEQUENCE = Number(process.env.NEXT_PUBLIC_BUILD_SEQ) || 0;
 
 /** 服务器基础地址（用于拉取 versions.json） */
 const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
@@ -77,35 +87,23 @@ interface VersionsJson {
   windows?: string;
   android?: string;
   ios?: string;
-  macos?: string;
-  linux?: string;
   downloads?: {
     windows?: string;
     android?: string;
     ios?: string;
-    macos?: string;
-    linux?: string;
   };
 }
 
-/** 检测当前平台 */
-export function detectPlatform(): "windows" | "android" | "ios" | "macos" | "linux" | "web" {
+/** 检测当前平台（仅支持 Windows / Android / iOS / Web） */
+export function detectPlatform(): "windows" | "android" | "ios" | "web" {
   if (!isTauri()) return "web";
   if (typeof navigator !== "undefined") {
     const ua = navigator.userAgent || "";
     if (/android/i.test(ua)) return "android";
     if (/iphone|ipad|ipod/i.test(ua)) return "ios";
     if (/win/i.test(ua)) return "windows";
-    if (/mac/i.test(ua)) return "macos";
-    if (/linux/i.test(ua)) return "linux";
   }
   return "web";
-}
-
-/** 是否桌面端（用 tauri-plugin-updater） */
-export function isDesktop(): boolean {
-  const p = detectPlatform();
-  return p === "windows" || p === "macos" || p === "linux";
 }
 
 /**
@@ -169,6 +167,18 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     };
   }
 
+  // Tauri 开发模式（tauri dev，走 Next dev server）：不执行更新检查。
+  // dev server 上没有生产 Nginx 托管的 /artifacts/（versions.json / hotswap.json），
+  // 请求会 404 返回 HTML 页 → JSON.parse 失败 → 误报"原生更新检查失败"。
+  // 更新检查仅对生产构建有意义，dev 直接返回"无更新"，UI 显示"已是最新"。
+  if (!isTauriProduction()) {
+    return {
+      hot: { available: false },
+      native: { available: false, currentVersion: "0.0.0" },
+      recommended: "none",
+    };
+  }
+
   const [hot, native] = await Promise.all([
     checkHotUpdate(),
     checkNativeUpdate(),
@@ -213,9 +223,24 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
     //   2. sequence 门：manifest.sequence <= 当前 sequence → 无更新
     // 因此 shellTooOld 无法从 checkUpdate 直接判断，需自己拉 hotswap.json
     // 比对 min_binary_version 与当前原生版本。
+
+    // 内置资源抑制门：原生包与热更新包在 CI 同一次 run 构建、sequence 相同
+    // （NEXT_PUBLIC_BUILD_SEQ = run_number = 热更新 manifest 的 sequence）。
+    // 插件本地无缓存时 current_sequence=0，只要服务器发布过热更新就误报"有更新"；
+    // 服务器 sequence 不高于本次内置 sequence → 原生包已内建该内容，视为无更新。
+    let available = result.available;
+    if (
+      available &&
+      typeof result.sequence === "number" &&
+      BUILTIN_HOTSWAP_SEQUENCE > 0 &&
+      result.sequence <= BUILTIN_HOTSWAP_SEQUENCE
+    ) {
+      available = false;
+    }
+
     let shellTooOld = false;
     let version: string | undefined = result.version || undefined;
-    if (!result.available) {
+    if (!available) {
       try {
         const manifest = await serverFetch<{
           version?: string;
@@ -233,7 +258,7 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
       }
     }
     return {
-      available: result.available,
+      available,
       version,
       sequence: result.sequence || undefined,
       shellTooOld,
@@ -329,32 +354,29 @@ export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdate
 
 /** 原生更新静默下载结果 */
 export interface NativeDownloadResult {
-  status: "downloaded" | "downloading" | "error" | "updaterAvailable";
-  /** Windows/Android/iOS: 本地文件路径；macOS/Linux: 空（官方 updater 自己管） */
+  status: "downloaded" | "downloading" | "error";
+  /** 本地文件路径 */
   filePath?: string;
   /** 当前平台 */
-  platform?: "windows" | "macos" | "linux" | "android" | "ios";
+  platform?: "windows" | "android" | "ios";
   error?: string;
 }
 
 /** 原生更新应用结果 */
 export interface NativeUpdateApplyResult {
   /**
-   * installing: 正在安装（Windows updater 自动安装+重启；Android 系统安装器已弹出）
+   * installing: 正在安装（Windows 原地替换自动重启；Android 系统安装器已弹出）
    * openIn: 已触发 Open In 面板（iOS，用户需选自签工具覆盖安装）
-   * needRestart: 下载完成需手动重启（保留位，当前未使用）
    * cancelled: 用户取消了分享面板（iOS，非错误）
    * error: 失败
    */
-  status: "installing" | "openIn" | "needRestart" | "cancelled" | "error";
+  status: "installing" | "openIn" | "cancelled" | "error";
   error?: string;
 }
 
 /**
  * 静默下载原生更新安装包（统一体验：先后台下，再点按钮安装）
  * - Windows: 自定义 download_exe 后台静默下载新版本 exe 到当前文件夹（应用目录，版本化命名复用）
- * - macOS/Linux: 官方 updater 插件自行管理下载过程，此处不实际下载，
- *   返回 status="updaterAvailable"，点击安装时交给官方 downloadAndInstall（一步到位）。
  * - Android: 后台静默下载 APK 到 cache，返回路径
  * - iOS: 后台静默下载 IPA 到 cache，返回路径
  * @param version 服务端版本号（用于版本化缓存：同版本已下载过则复用本地缓存，避免重复下载）
@@ -370,7 +392,7 @@ export async function downloadNativeSilently(
 
   const platform = detectPlatform();
   if (platform === "windows") {
-    // Windows：自定义原地替换更新。后台静默下载新版本 exe（版本化缓存，同版本复用），
+    // Windows：自定义原地替换更新。后台静默下载新版本 exe（版本化命名，同版本复用），
     // 点击安装时交给 apply_in_place_update 原地替换并重启。
     const { invoke } = await import("@tauri-apps/api/core");
     try {
@@ -379,12 +401,6 @@ export async function downloadNativeSilently(
     } catch (e: any) {
       return { status: "error", error: String(e?.message || e) };
     }
-  }
-  if (platform === "macos" || platform === "linux") {
-    // 桌面端：官方 updater 的 check 已经暴露了 contentLength 等元信息，
-    // 但 download 与 install 是绑定的 downloadAndInstall。这里不做预下载，
-    // 直接返回 updaterAvailable，点击安装时一步到位。
-    return { status: "updaterAvailable", platform: platform as NativeDownloadResult["platform"] };
   }
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -427,12 +443,11 @@ export async function downloadNativeSilently(
 /**
  * 安装已下载好的原生更新（用户点击按钮触发）
  * - Windows: 自定义 apply_in_place_update 原地替换（复制自身做 helper → 退出进程 → 替换 → 重启）
- * - macOS/Linux: 交给官方 updater.downloadAndInstall 一步到位
  * - Android: tauri-plugin-android-installer 的 install(path) 触发系统安装器
  * - iOS: sharekit shareFile 弹出分享面板（"用其他应用打开"），选自签工具覆盖安装
  */
 export async function installDownloadedNative(
-  platform: "windows" | "macos" | "linux" | "android" | "ios" | undefined,
+  platform: "windows" | "android" | "ios" | undefined,
   filePath: string | undefined,
   onProgress?: ProgressCb,
 ): Promise<NativeUpdateApplyResult> {
@@ -459,9 +474,6 @@ export async function installDownloadedNative(
     } catch (e: any) {
       return { status: "error", error: String(e?.message || e) };
     }
-  }
-  if (p === "macos" || p === "linux") {
-    return applyDesktopUpdate(onProgress);
   }
   if (p === "android") {
     if (!filePath) return { status: "error", error: "APK 未下载" };
@@ -511,7 +523,6 @@ export async function installDownloadedNative(
 /**
  * 应用原生更新（保留一键旧接口，兼容代码；内部流程与新两步一致）
  * - Windows: 下载新版本 exe + 原地替换（apply_in_place_update）
- * - macOS/Linux: tauri-plugin-updater 下载+安装+自动重启
  * - Android: 下载 APK + 触发系统安装器
  * - iOS: 下载 IPA + 触发 Open In 面板
  */
@@ -530,9 +541,6 @@ export async function applyNativeUpdate(
     if (d.status !== "downloaded") return { status: "error", error: d.error || "下载新版本失败" };
     return installDownloadedNative("windows", d.filePath);
   }
-  if (platform === "macos" || platform === "linux") {
-    return applyDesktopUpdate(onProgress);
-  }
   if (platform === "android") {
     const d = await downloadNativeSilently(downloadUrl, onProgress, version);
     if (d.status !== "downloaded") return { status: "error", error: d.error || "下载 APK 失败" };
@@ -544,47 +552,6 @@ export async function applyNativeUpdate(
     return installDownloadedNative("ios", d.filePath);
   }
   return { status: "error", error: `不支持的平台: ${platform}` };
-}
-
-/**
- * macOS/Linux：用官方 tauri-plugin-updater
- * 从 updater endpoints（tauri.conf.json 配置的 latest.json）拉取更新信息，
- * 自动下载 + 安装 + 重启。（Windows 已改用自定义原地替换更新，不经过此函数）
- */
-async function applyDesktopUpdate(onProgress?: ProgressCb): Promise<NativeUpdateApplyResult> {
-  try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
-    if (!update) return { status: "error", error: "无可用更新" };
-
-    let total = 0;
-    let downloaded = 0;
-    await update.downloadAndInstall((event) => {
-      switch (event.event) {
-        case "Started":
-          total = event.data.contentLength || 0;
-          break;
-        case "Progress":
-          downloaded += event.data.chunkLength;
-          onProgress?.({ downloaded, total });
-          break;
-        case "Finished":
-          break;
-      }
-    });
-
-    // updater 插件安装完成后自动调用 relaunch（需 tauri-plugin-process）
-    try {
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
-    } catch {
-      // process 插件不可用时，提示用户手动重启
-      return { status: "needRestart" };
-    }
-    return { status: "installing" };
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
-  }
 }
 
 /**
@@ -605,21 +572,12 @@ export async function notifyAppReady(): Promise<void> {
 
 /**
  * 重启 APP。热更新改用 activate + reload 后，此函数仅剩原生更新场景兜底：
- * - 桌面端 Windows updater 安装完成后 relaunch()（也用于 needRestart 兜底）
  * - Android：Rust restart_app（AlarmManager + killProcess）冷拉起
  * - iOS：无等价 API，返回 false 提示用户手动重开
+ * - Windows：原地替换更新由 helper 自动重启，不经过此函数
  */
 export async function restartApp(): Promise<boolean> {
   if (!isTauri()) return false;
-  if (isDesktop()) {
-    try {
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
-      return true;
-    } catch {
-      return false;
-    }
-  }
   const p = detectPlatform();
   if (p === "android") {
     try {

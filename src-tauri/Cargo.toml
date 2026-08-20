@@ -23,13 +23,6 @@ jni = "0.21"
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-ios-webview-insets = "=0.1.0"
 
-# 仅桌面端：官方二进制更新器（替换整个安装包），移动端不支持。
-# Android 需自定义 APK 下载（download_apk）+ tauri-plugin-android-installer 安装。
-# iOS 需自定义 IPA 下载（download_ipa）+ tauri-plugin-sharekit 分享面板。
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-
 # 仅 Windows：原地替换更新（绿色单文件免安装方案的持久化更新）。
 # 用 OpenProcess/WaitForSingleObject 等待旧进程退出，之后才能替换被锁定的 exe 文件。
 [target.'cfg(windows)'.dependencies]
@@ -61,6 +54,8 @@ tauri-plugin-sharekit = "0.3"
 tauri-plugin-hotswap = "0.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# tokio：with_timeout 用的 tokio::time::timeout（各命令请求超时，配合全局 reqwest Client 复用）
+tokio = { version = "1", features = ["time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # 本地 vendor 的 tauri-plugin-hotswap：修复 Android 热更新目录路径（identifier 含 '-'，

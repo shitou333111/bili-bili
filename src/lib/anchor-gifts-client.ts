@@ -102,7 +102,7 @@ const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 // 月度并行度：1=串行，>1 时批内多个月份并行拉取（注意：多个月同时翻页会增加 412 限流风险）
-const MONTH_CONCURRENCY = 10;
+const MONTH_CONCURRENCY = 12;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
@@ -111,11 +111,13 @@ const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStre
  * 动态并发池：同时最多跑 concurrency 个任务，任一任务完成即启动下一个任务，
  * 让并发槽位始终饱和（替代"批式并行"——批内完成后才开下一批，存在空闲等待）。
  * 结果按下标顺序返回，供调用方按原顺序处理。
+ * onTaskDone：每个任务完成时立即回调（index, item, result），用于拉取过程中的实时进度上报。
  */
 async function runWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
+  onTaskDone?: (index: number, item: T, result: R) => void,
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let cursor = 0;
@@ -124,6 +126,7 @@ async function runWithConcurrency<T, R>(
       const i = cursor++;
       if (i >= items.length) return;
       results[i] = await fn(items[i]);
+      onTaskDone?.(i, items[i], results[i]);
     }
   }
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
@@ -579,9 +582,16 @@ export async function fetchAnchorGifts(
       console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月, 并发度=${MONTH_CONCURRENCY}`);
 
       const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
-      const totalChunks = chunks.length;
-      // 第一个有数据的月份下标；进度只从该月起算（前导无数据月份仅显示"探测中"）
-      let firstDataCi = -1;
+
+      // 进度分母 = 有效月份总数（page0 探测出的有数据月份），而非全部 36 个自然月：
+      // 重建/首次登录时若按 36 显示，进度条会错误显示"3年36个月"的总月数。
+      // probeMonthHasData 在每月 page0 探测完成时即时上报（page0 很快），
+      // 因此 validTotal 会先于翻页完成稳定下来；validDone 为已完成全部翻页的有效月份数。
+      let validTotal = 0;
+      let validDone = 0;
+      const probeMonthHasData = (hasData: boolean) => {
+        if (hasData) validTotal++;
+      };
 
       // 单个月份 chunk 处理：拉取该月所有页，返回结果（不修改全局状态，并行安全）
       async function processChunk(
@@ -649,6 +659,8 @@ export async function fetchAnchorGifts(
         }
 
         const totalPages = firstPage.data?.total_page ?? 0;
+        // 探测结果即时上报：有数据的月份计入进度分母，空数据月份不计
+        probeMonthHasData(firstPage.code === 0 && totalPages > 0);
         if (totalPages === 0) {
           return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false };
         }
@@ -701,9 +713,32 @@ export async function fetchAnchorGifts(
 
       // 动态并发池：任一任务完成即启动下一个任务，让并发槽位始终饱和
       // （原批式并行需等整批 10 个全部完成才开下一批，存在空闲等待）。
-      const chunkResults = await runWithConcurrency(chunks, MONTH_CONCURRENCY, (chunk) => processChunk(chunk));
+      // onTaskDone：每个月份 chunk 完成时立即上报进度（拉取过程中动态更新进度条），
+      // 而不是等全部完成后再一次性上报。
+      const chunkResults = await runWithConcurrency(
+        chunks,
+        MONTH_CONCURRENCY,
+        (chunk) => processChunk(chunk),
+        (i, chunk, result) => {
+          if (!result.hasData) {
+            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
+            return;
+          }
+          validDone++;
+          // 分母用已探测出的有效月份数（page0 探测很快，翻页完成时通常已稳定）。
+          // 若某有效月份提前完成导致 ratio>1，钳制到 1，避免进度条溢出。
+          const denom = Math.max(1, validTotal);
+          onProgress?.({
+            text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${validDone}/${denom}）`,
+            ratio: Math.min(1, validDone / denom),
+            current: validDone,
+            total: denom,
+          });
+        },
+      );
 
-      // 结果按月份顺序串行处理（去重/进度/中断逻辑依赖有序结果，且避免竞态）
+      // 结果按月份顺序串行处理（去重/中断逻辑依赖有序结果，且避免竞态）。
+      // 进度已在 onTaskDone 实时上报，此处不再重复上报。
       let interrupted = false;
       for (let ci = 0; ci < chunkResults.length && !interrupted; ci++) {
         const chunk = chunks[ci];
@@ -736,19 +771,8 @@ export async function fetchAnchorGifts(
           }
 
           if (!result.hasData) {
-            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
             continue;
           }
-
-          if (firstDataCi === -1) firstDataCi = ci;
-          const dataTotal = totalChunks - firstDataCi;
-          const dataDone = ci - firstDataCi + 1;
-          onProgress?.({
-            text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${dataDone}/${dataTotal}）`,
-            ratio: dataDone / dataTotal,
-            current: dataDone,
-            total: dataTotal,
-          });
 
           // 去重并合并（串行，避免竞态）
           for (const r of result.records) {

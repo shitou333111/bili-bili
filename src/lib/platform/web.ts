@@ -168,14 +168,36 @@ export const webPlatform: Platform = {
   },
 
   async uploadUserData(mid: number, uname: string, files: Record<string, string>): Promise<void> {
-    // 加密整个 payload（隐藏目录结构、文件名与内容）后再上传，服务器解密后落盘
+    // 分批加密+上传：重建数据库等场景下 files 可能非常大（全量重传），
+    // 一次性对整个 payload 做 AES-256-GCM 加密会长时间占满浏览器主线程（CPU/内存暴涨）。
+    // 按大小分批后逐批加密上传，避免卡死页面。服务器 /api/upload 为"增量只写本次携带的文件"，
+    // 分批多次 POST 等价于一次全量 POST。
     const { encryptUploadPayload } = await import("../upload-crypto");
-    const enc = await encryptUploadPayload({ mid, uname, files });
-    await fetch("/api/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enc }),
-    });
+    const BATCH_BYTES = 1_000_000; // 每批约 1MB 明文
+    const batches: Record<string, string>[] = [];
+    let cur: Record<string, string> = {};
+    let curBytes = 0;
+    for (const [name, content] of Object.entries(files)) {
+      const bytes = new TextEncoder().encode(content).length;
+      if (curBytes > 0 && curBytes + bytes > BATCH_BYTES) {
+        batches.push(cur);
+        cur = {};
+        curBytes = 0;
+      }
+      cur[name] = content;
+      curBytes += bytes;
+    }
+    if (Object.keys(cur).length > 0) batches.push(cur);
+
+    for (const batch of batches) {
+      // 加密整个 batch（隐藏目录结构、文件名与内容）后再上传，服务器解密后落盘
+      const enc = await encryptUploadPayload({ mid, uname, files: batch });
+      await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enc }),
+      });
+    }
   },
 
   async fetchRemoteUserData(mid: number, uname: string): Promise<Record<string, string>> {

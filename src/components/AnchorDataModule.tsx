@@ -17,6 +17,7 @@ import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import Dropdown from "@/components/Dropdown";
+import InfoHint from "@/components/InfoHint";
 
 type AnchorGiftRecord = {
   uid: number;
@@ -236,6 +237,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onRefresh,
   /** 轻量 toast 提示 */
   showToast,
+  /** 收益拉取进度上报（透传给父级全屏遮罩：首次初始化时遮罩全程显示"获取主播收益"进度） */
+  onFetchProgress = undefined,
 }: {
   anchorName?: string;
   anchorFace?: string;
@@ -257,6 +260,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onRefresh?: () => void;
   /** toast 提示 */
   showToast?: (msg: string) => void;
+  /** 收益拉取进度上报（透传给父级全屏遮罩） */
+  onFetchProgress?: (p: { text: string; ratio?: number } | null) => void;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -299,6 +304,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
     setLoading(true);
     setAuthError(null);
     setFetchProgress(null);
+    // 统一起始提示：模块内部遮罩与父级全屏遮罩都立即显示"正在获取主播收益..."
+    // （dataFetch 只在实际拉取月份时有进度回调，前置一个起始提示避免只显示"加载中"）
+    const startHint = { text: "正在获取主播收益...", ratio: undefined } as const;
+    setFetchProgress(startHint);
+    onFetchProgress?.(startHint);
     // 重置盲盒筛选条件
     setBlindBoxDateFilter("all");
     setBlindBoxFanFilter("");
@@ -310,7 +320,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
       } catch {
         // Web 模式下 getPlatform 可能抛错，忽略，走 stats.giftSummary 已带图标即可
       }
-      const res = await dataFetch("/api/anchor/gifts", { cache: "no-store" }, (p) => setFetchProgress({ text: p.text, ratio: p.ratio }));
+      const res = await dataFetch("/api/anchor/gifts", { cache: "no-store" }, (p) => {
+        // 模块内进度条 + 透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
+        setFetchProgress({ text: p.text, ratio: p.ratio });
+        onFetchProgress?.({ text: p.text, ratio: p.ratio });
+      });
       const data = await res.json();
       if (data.message === "needs-relogin") {
         setAuthError("B站登录已失效，请重新扫码登录。");
@@ -559,14 +573,14 @@ const AnchorDataModule = memo(function AnchorDataModule({
       )}
 
       {/* Loading state：组件自身 stats 未加载（首次）+ 父组件 syncLoading（强制全屏遮罩场景）都显示 */}
+      {/* fetchData() 开头已设置统一起始提示（"正在获取主播收益..."），后续由月份进度回调更新，
+          因此这里不再重复写死的"加载中..."文字，全部统一走 fetchProgress 提示 */}
       {(loading || syncLoading) && !stats && (
         <div className="flex-1 flex items-center justify-center px-8 min-h-[55vh]">
           <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-sm text-black/45">加载中...</p>
-            <p className="text-xs text-black/30">首次加载需要几分钟，请耐心等待</p>
-            {fetchProgress && (
-              <div className="w-full mt-1">
+            {fetchProgress ? (
+              <div className="w-full">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
                   <div
                     className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
@@ -575,6 +589,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
                 </div>
                 <p className="mt-2 text-xs text-black/55 text-center">{fetchProgress.text}</p>
               </div>
+            ) : (
+              <p className="text-sm text-black/45">加载中...</p>
             )}
           </div>
         </div>
@@ -587,7 +603,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
             {/* 服务器账号顶部提示：本机无登录凭证，仅可查看；刷新从服务器重载（与主页同一位置/样式） */}
             {isServerAccount && (
               <div className="mb-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-800 text-xs leading-relaxed">
-                这是服务器收集账号，本机无登录凭证，数据仅可查看。点击右上角刷新将从服务器重新加载该账号数据并覆盖本地缓存。
+                服务器账号，无登录凭证，仅可查看，刷新重载
               </div>
             )}
             {/* Tab bar - segmented control, sticky at top, 整体居中 */}
@@ -649,8 +665,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
               {activeTab === "revenue" && (
                 <article className="rounded-xl border border-black/10 bg-white/80 p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] overflow-visible">
                   {stats.dateRange && (
-                    <div className="text-xs text-black/40 mb-3">
-                      统计范围: {stats.dateRange.start.replace(/-/g, ".")} - {stats.dateRange.end.replace(/-/g, ".")}
+                    <div className="text-xs text-black/40 mb-3 flex items-center gap-1">
+                      统计范围<InfoHint text="最长只有最近3年记录" />: {stats.dateRange.start.replace(/-/g, ".")} - {stats.dateRange.end.replace(/-/g, ".")}
                     </div>
                   )}
 
@@ -1039,10 +1055,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                 <img src={bb.img || BLIND_BOX_CONFIG.icons[bb.gift_id]} alt="" className="w-6 h-6 rounded" />
                               )}
                               <span className="font-semibold text-sm truncate max-w-[80px]">{bb.name.slice(0, 6)}{bb.name.length > 6 ? "..." : ""}</span>
-                              <span className="ml-auto text-xs text-black/65">
+                              <span className="ml-auto text-xs text-black/65 inline-flex items-center gap-1">
                                 {bb.dateRange
                                   ? `${bb.dateRange.start.replace(/-/g, ".")} - ${bb.dateRange.end.replace(/-/g, ".")}`
                                   : "无数据"}
+                                <InfoHint align="right" text="最长只有最近3年记录" />
                               </span>
                             </div>
 
@@ -1175,7 +1192,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                 <div className="space-y-4">
                   {/* 活跃天数统计 */}
                   <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-                    <h3 className="text-base font-bold tracking-tight mb-3">活跃天数</h3>
+                    <h3 className="text-base font-bold tracking-tight mb-3 inline-flex items-center gap-1">活跃天数<InfoHint text="最长只有最近3年记录" /></h3>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
                         <div className="text-xs text-black/70">收礼总天数</div>

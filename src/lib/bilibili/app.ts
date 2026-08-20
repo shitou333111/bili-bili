@@ -65,7 +65,7 @@ function buildPayRecordUrl(session: AuthSession, nextId?: number) {
     device: "android",
     disable_rcmd: "0",
     mobi_app: "android",
-    page_size: "20",
+    page_size: "50", // B站上限 50（实测 page_size=100 也只返回 50 条/页）
     platform: "android",
     s_locale: "zh-Hans_CN",
     statistics: JSON.stringify({ appId: 1, platform: 3, version: "8.87.0", abtest: "" }),
@@ -100,13 +100,13 @@ export async function fetchRealPayRecordSnapshot(
     throw new Error("SESSDATA 不能为空");
   }
 
-  const PAGE_SIZE = 20;
   const MAX_PAGES = 1000;
   const allRecords: PayRecordItem[] = [];
   let nextId: number | undefined = _nextId;
   let prevNextId: number | undefined;
   let month = "";
   let pageCount = 0;
+  let actualPageSize = 0; // 首页实际返回条数：作为"每页容量"基准，避免 B站 忽略 page_size 时误判末页
   const seenIds = new Set<number>();
 
   // 自动翻页，直到没有更多记录
@@ -135,6 +135,9 @@ export async function fetchRealPayRecordSnapshot(
       console.log(`[PayRecord] 第${pageCount}页返回空列表，停止翻页`);
       break;
     }
+
+    // 以首页实际返回条数作为每页容量基准（B站可能不遵循 page_size 参数，按默认20返回）
+    if (actualPageSize === 0) actualPageSize = list.length;
 
     // 检查是否有新记录（去重），并按回溯时间窗口停止翻页
     let newCount = 0;
@@ -175,9 +178,9 @@ export async function fetchRealPayRecordSnapshot(
       break;
     }
 
-    // 如果返回记录数少于 page_size，说明是最后一页
-    if (list.length < PAGE_SIZE) {
-      console.log(`[PayRecord] 本页不足${PAGE_SIZE}条，已到最后一页`);
+    // 如果返回记录数少于每页实际容量，说明是最后一页
+    if (list.length < actualPageSize) {
+      console.log(`[PayRecord] 本页不足${actualPageSize}条，已到最后一页`);
       break;
     }
   } while (nextId && nextId > 0);

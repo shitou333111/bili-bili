@@ -2,7 +2,7 @@
 
 一个用于查看和分析自己在 Bilibili 直播中消费记录（送礼物、开盲盒、合成活动等）的工具。
 
-它既可以作为**网站**在浏览器里使用，也可以打包成 **Windows / macOS 桌面应用**、**Android / iOS 手机应用**。支持扫码登录 B站 账号后，自动抓取并长期保存你的消费数据，按多种维度统计，还能一键生成分享图片。
+它既可以作为**网站**在浏览器里使用，也可以打包成 **Windows 桌面应用**、**Android / iOS 手机应用**。支持扫码登录 B站 账号后，自动抓取并长期保存你的消费数据，按多种维度统计，还能一键生成分享图片。
 
 > 产品名「B瓜」在 `src-tauri/tauri.conf.json` 中定义（`productName`）。
 
@@ -49,7 +49,7 @@
 - **复活区截图工具**：托管在网站服务器上的工具页面，帮助直播多人局投屏复活曲倒计时、解决医药费争议。
 - **B站 直播送礼模拟器**：内置"神豪模式"模拟器——输入主播UID可加载**真实直播流**作为背景（竖屏流自动填满全屏），所有礼物随便送（含大礼物特效、连击、横幅通知），还有"山海工坊"合成活动可玩。礼物面板的"礼物"选项卡数据来自直播间礼物面板 API（roomGiftList，12h 缓存自动更新）。
 - **管理后台（admin）**：网站管理员可管理用户、配置盲盒/活动、模拟登录等。
-- **跨平台**：Web、Windows、macOS、Android、iOS 一套代码。
+- **跨平台**：Web、Windows、Android、iOS 一套代码。
 
 ---
 
@@ -59,7 +59,7 @@
 |------|------|
 | 前端框架 | **Next.js 16**（App Router）+ **React 19** |
 | 样式 | **Tailwind CSS 4** |
-| 原生桌面/移动 | **Tauri 2**（Rust），Windows/macOS/Android/iOS |
+| 原生桌面/移动 | **Tauri 2**（Rust），Windows/Android/iOS（不支持 macOS/Linux） |
 | 图表 | **Recharts**（普通柱状/饼图）、**d3 系列**（voronoi/treemap 气泡图）、**FoamTree** |
 | 图片生成 | **html-to-image**（把 DOM 转成 PNG 分享图） |
 | 二维码 | **qrcode**（扫码登录） |
@@ -394,7 +394,7 @@ bili_live/
 
 - 用 `SafeAreaStyler` + CSS 变量处理 iOS 顶部安全区（刘海屏）。
 - 底部悬浮托盘（毛玻璃胶囊）固定定位，注意 `z-index` 与 `isolation: isolate` 防止被覆盖。
-- **曾踩过的坑**：在 iOS 上对窗口 `set_size`/`set_position` 会导致 WebView 偏移，产生"左侧触摸死区"（约 103px 区域点击无效）。**修复方式**：移动端跳过窗口尺寸/位置设置，保持全屏（见 [lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) 中的 `#[cfg(not(any(target_os = "ios", target_os = "android")))]`）。
+- **曾踩过的坑**：在 iOS 上对窗口 `set_size`/`set_position` 会导致 WebView 偏移，产生"左侧触摸死区"（约 103px 区域点击无效）。**修复方式**：移动端跳过窗口尺寸/位置设置，保持全屏（桌面仅 Windows，见 [lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) 中的 `#[cfg(windows)]`）。
 - 生成分享图时，隐藏的卡片用 `position:absolute; left:-9999px` 移出视口（而非 `display:none`），保证 `html-to-image` 能正确截图。
 
 ### 6. 增量上传到服务器（内容哈希）
@@ -465,6 +465,8 @@ Tauri 的图标由 `cargo tauri icon <源图>` 生成。CI 打包时若**不指�
 | **第二步：后台静默增量同步** | `fetchData(true)`：后台跑上面「绿色按钮」同样的 1-4 全流程，增量拉取 B站 最新数据，完成后用新数据覆盖 state。 | ❌ 只有绿色按钮的环形小点动画，界面不遮罩。 | B站 API + 本地 JSON 合并 |
 
 首次使用（完全无本地数据）时因为第一步读不到任何内容，会直接走第二步并显示一个较长时间的加载遮罩。
+
+**首次初始化遮罩覆盖全程**：首次登录拉取时全屏遮罩**全程保持**——先显示「正在获取消费记录」进度条，消费记录完成后**继续显示**，接着展示「正在获取主播收益」及按月进度条（收益模块通过 `onFetchProgress` 回调把进度上报给父级遮罩，见 [AnchorDataModule.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/AnchorDataModule.tsx)），全部拉取完成（含统计重算、统一上传）后才关闭遮罩进入首页。
 
 ### 主播数据损坏的三层兜底保险
 
@@ -550,6 +552,7 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
   1. 启动静默检查 `checkUpdate()` + 后台静默下载 `downloadUpdate()`（下载 + minisign 验签 + 解压，**不激活**）
   2. 用户点「立即生效」→ `activateUpdate()` 原子切换 asset provider → `window.location.reload()` 立即加载新资源
   - **无需重启进程，iOS/Android 同样支持使用中更新**（相对旧 hot-update 冷启动方案的核心改进）
+- **冷启动不阻塞首页**：启动**秒开首页**，更新检查 / 原生包静默下载 / 热更新激活全部在后台进行；热更新准备好后顶部弹出黄色提示条「新内容已准备就绪，点击立即生效」，**点击才刷新**，不打断操作（修复"每次打开都要先看检查更新页面、等待很久"问题）
 - **防砖机制**：每次启动调用 `notifyReady()` 把当前 bundle 标记为 last-known-good；`confirmation_policy: single_launch` 下，若激活的 bundle 未被确认（如启动即崩溃），下次启动自动回滚到上一个已确认版本（`rollback_policy: latest_confirmed`）
 - **签名**：minisign 验签**强制**（下载后、解压前校验，插件无免验签模式），签名全文内嵌在 manifest 的 `signature` 字段
 - **版本/排序**：manifest 的 `sequence` 是**唯一排序依据**（单调递增，CI 用 `github.run_number`）；`version` 仅用于显示（如 `1.2.0-ota.42`），不做比较
@@ -568,13 +571,17 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 
 > 判断规则：改动只涉及前端（`src/`、`public/`）→ commit message 含 `hot` 走热更新；改动涉及 Rust 或 Tauri 配置 → commit message 含 `exe apk ipa` 走原生包更新。两者可同时触发（如 `hot exe`）。
 
-#### 第二层：原生包更新（平台特定）
+#### 第二层：原生包更新（平台特定，仅 Windows / Android / iOS，不支持 macOS/Linux）
 
 | 平台 | 方案 | 生效方式 |
 |------|------|----------|
-| **Windows** | `tauri-plugin-updater` 官方插件 | 下载 + 安装 + 自动重启 |
+| **Windows** | 自定义命令 `download_exe` 下载 + `apply_in_place_update` 原地替换（绿色单文件免安装方案，不依赖官方 updater） | 新版本后台静默下载到 **exe 同目录**（`原名-新版本-版本号.exe`，同版本复用）→ 点击安装时复制自身到临时目录做 helper → 进程退出 → helper 用新版本**原地替换** exe 并自动重启 → 旧版本保留为 `原名-旧版本-版本号.exe` 可随时找回/回退 |
 | **Android** | 自定义命令 `download_apk` 下载 + `tauri-plugin-android-installer` 安装 | 下载 APK → 插件自带 FileProvider 共享 → 系统安装器覆盖安装（数据保留） |
 | **iOS** | 自定义命令 `download_ipa` 下载 + `tauri-plugin-sharekit` | 下载 IPA → shareFile 分享面板（"用其他应用打开"）→ 用户选自签工具（Esign/Feather）覆盖安装 |
+
+> **Windows 为何自定义原地替换**：官方 `tauri-plugin-updater` 只支持 NSIS/MSI 安装包；对裸 EXE 更新时它把新版本放到临时目录运行，关闭后临时文件被删——"更新完关闭后新版本消失，只剩旧 exe"。原地替换则直接把新版本写入用户原来的 exe 路径，关闭再打开仍是新版本，且旧版本以清晰命名留在旁边。
+>
+> **原生包不再误报热更新**：热更新与原生包在 CI **同一次 run** 构建、共享同一个 `sequence`（`github.run_number`）。原生包内置的 `NEXT_PUBLIC_BUILD_SEQ` 记录本次 sequence，前端检查热更新时若服务器 `sequence ≤ 内置 sequence` 即视为"原生包已内建该内容"，不再误报"找到热更新"（修复"刚更新完原生包仍提示热更新"问题）。
 
 > **Android 固定签名密钥**：CI 使用仓库内置的 `src-tauri/keystore/release.p12`（PKCS12，alias `bili`，密码 `bili-live`）签名所有 Release APK。切勿改动/删除该密钥，否则已安装用户更新会报"签名冲突"（INSTALL_FAILED_UPDATE_INCOMPATIBLE），只能卸载重装。Debug 包仍用 Gradle 默认 debug keystore，仅内部测试，与 Release 包签名不同。
 
@@ -583,12 +590,11 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 | 文件 | 作用 |
 |------|------|
 | [src/lib/updater.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/updater.ts) | 统一更新模块：版本显示、检查更新、应用热更新/原生更新、重启 |
-| [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_apk` / `download_ipa` 命令 + 注册 `tauri-plugin-android-installer` |
-| [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hotswap`（三平台）、`tauri-plugin-updater` + `tauri-plugin-process`（仅桌面端）、`tauri-plugin-android-installer`（仅 Android） |
-| [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hotswap:default` + `android-installer:default` + 自定义命令权限 |
+| [src-tauri/src/lib.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/lib.rs) | Rust 侧：热更新插件初始化、`check_native_update` / `download_apk` / `download_ipa` / `download_exe` / `apply_in_place_update`（Windows 原地替换）命令 + 注册 `tauri-plugin-android-installer` |
+| [src-tauri/Cargo.toml](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/Cargo.toml) | 依赖：`tauri-plugin-hotswap`（三平台）、`windows-sys`（仅 Windows，原地替换用 OpenProcess/WaitForSingleObject 等待旧进程退出）、`tauri-plugin-android-installer`（仅 Android） |
+| [src-tauri/capabilities/default.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/default.json) | 权限：`hotswap:default` + `android-installer:default` + 自定义命令权限（含 `allow-download-exe` / `allow-apply-in-place-update`） |
 | [src-tauri/keystore/release.p12](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/keystore/release.p12) | Android Release 固定签名密钥（PKCS12） |
-| [src-tauri/capabilities/desktop.json](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/capabilities/desktop.json) | 桌面端权限：`updater:default` + `process:allow-restart` |
-| [src/app/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/page.tsx) | 帮助页「检查更新」卡片：版本显示 + 检查 + 下载进度 + 应用 + 重启 |
+| [src/app/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/page.tsx) | 帮助页「检查更新」卡片：版本显示 + 检查 + 下载进度 + 应用 + 重启；冷启动后台静默检查（首页不被更新检查阻塞） |
 
 #### CI 热更新构建
 
@@ -600,6 +606,8 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
 5. 发布到服务器 `/artifacts/webapp/`（`tauri.conf.json` 的 `plugins.hotswap.endpoint` 指向此处的 `hotswap.json`）
 
 **版本号机制**：`sequence` 用 `github.run_number`（单调递增，hotswap 唯一排序依据）；`version` 拼成 `1.0.0-ota.<seq>` 仅用于显示。客户端不设水位线——hotswap 插件内部用 `sequence > current` 判断，严格避免重复应用与降级。
+
+**原生包内置 sequence 抑制误报**：热更新判断门槛（`sequence > current`）中，`current` 只来自本地热更新缓存（新装原生包时无缓存 = 0），导致"刚装/刚更新原生包就误报找到热更新"。修复：CI 在 `deploy.yml` 顶层 env 注入 `NEXT_PUBLIC_BUILD_SEQ=${{ github.run_number }}`，原生包内置资源记住自己的 sequence；前端 [checkHotUpdate](file:///c:/Users/song/vscode_projects/bili_live/src/lib/updater.ts) 中若 `服务器 sequence ≤ 内置 sequence` 则视为"原生包已内建该内容"，抑制误报（本地开发未注入时为 0，不影响判断）。
 
 #### 必需的 GitHub Secrets
 
@@ -661,7 +669,8 @@ minisign -G -p hot-update.pub -s hot-update.key
 - **模拟器"礼物"选项卡数据源**：Tauri 客户端直连**直播间礼物面板 API**（`xlive/web-room/v1/giftPanel/roomGiftList?platform=pc&room_id=23915535`，无需登录）→ 本地 `roomGiftList.json`（与 gift-list/effects 同 TTL 12h 一起更新）；Web 走服务器代理 `/api/room-gift-list`。"礼物"选项卡 = `roomGiftList.gold_list`（原始顺序）+ `public/gift-extra-ids.json` 额外礼物（去重，详情从 giftConfig 联表）。**不要再依赖 `public/room-gift-list.json`**（旧接口 getRoomGiftList 已 404，该静态文件已删除）。
 - **竖屏直播流填满全屏**：模拟器背景对竖屏（高>宽）流用 `object-cover` 铺满整屏（含通知栏/底部安全区），横屏才用 `object-contain` + `top:100px` 按比例显示。改直播布局时注意区分两种情况。
 - **`.data/` 是核心数据**：Web 服务器升级时 `.data/` 必须保留（deploy.yml 已处理），丢了用户数据无法找回。
-- **应用更新两层策略**：热更新（tauri-plugin-hotswap，前端 OTA，三平台通用，`activate + reload` 即时生效无需重启）+ 原生包更新（Windows 用 updater 插件，Android 用 APK 下载+系统安装器，iOS 用 IPA 下载+Open In 面板）。版本显示 `V1.0.0 (2026-08-18)`。热更新需配置 `HOT_UPDATE_SIGN_KEY` GitHub Secret。
+- **应用更新两层策略**：热更新（tauri-plugin-hotswap，前端 OTA，三平台通用，`activate + reload` 即时生效无需重启，冷启动秒开首页不阻塞、后台静默 + 顶部提示条手动刷新）+ 原生包更新（Windows 用自定义原地替换 `download_exe` + `apply_in_place_update`，Android 用 APK 下载+系统安装器，iOS 用 IPA 下载+Open In 面板；**不支持 macOS/Linux，勿再加回官方 updater/桌面依赖**）。版本显示 `V1.0.0 (2026-08-18)`。热更新需配置 `HOT_UPDATE_SIGN_KEY` GitHub Secret。
+- **原生包内置 sequence 抑制热更新误报**：新装/刚更新原生包后仍提示"找到热更新"的根因是热更新插件的 `current` 只读本地缓存（新包无缓存=0）。修复靠 `NEXT_PUBLIC_BUILD_SEQ`（CI 注入 `github.run_number`）+ 前端 `checkHotUpdate` 的 `sequence ≤ 内置` 抑制门。改这两处时注意保持同步。
 - **热更新已启用**：`tauri.conf.json` 的 `plugins.hotswap` 已配置（`endpoint` + `pubkey` + `require_https` + 各类 policy）。签名是强制的——hotswap 没有"不验签"模式。私钥丢失将无法再发任何热更新，**必须多份离线备份**。无密码私钥只需 `HOT_UPDATE_SIGN_KEY` 一个 Secret。
 - **热更新覆盖范围**：只改 `src/` 或 `public/` 下的前端代码可走热更新（commit message 含 `hot`）；改 Rust 或 Tauri 配置必须发原生包（commit message 含 `exe apk ipa`）。
 - **notifyAppReady 必须调用**：每次 APP 冷启动后调用一次 `notifyAppReady()`（page.tsx useEffect 中），否则 OTA bundle 会被判定为"启动失败"而自动回滚。
