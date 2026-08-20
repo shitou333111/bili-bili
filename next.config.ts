@@ -28,6 +28,12 @@ const nextConfig: NextConfig = {
   images: isTauri ? { unoptimized: true } : undefined,
   // 开发模式下需要配置 assetPrefix 以支持 Tauri 加载资源
   assetPrefix: isTauri && !isProd ? `http://${internalHost}:3000` : undefined,
+  // 上传大文件（如 pay-records.json 可超 10MB）：提高 proxy 对请求体的缓冲上限，
+  // 否则 "Request body exceeded 10MB" 截断导致 formData/JSON 解析失败。
+  // 密文为 Base64（比明文大 ~33%），需留足余量。
+  experimental: {
+    proxyClientMaxBodySize: "100mb",
+  },
   // 服务器端环境变量（Tauri 客户端通过 platform 层获取）
   env: {
     NEXT_PUBLIC_SERVER_URL: process.env.NEXT_PUBLIC_SERVER_URL || "",

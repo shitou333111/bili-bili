@@ -233,16 +233,14 @@ export const tauriPlatform: Platform = {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("mid", String(mid));
-    formData.append("uname", uname);
-    for (const [filename, content] of Object.entries(toSend)) {
-      const blob = new Blob([content], { type: "application/json" });
-      formData.append("files", blob, filename);
-    }
+    // 加密整个 payload（隐藏 uid_<mid> 目录结构、文件名与内容）后再上传，
+    // 服务器用同一密钥解密后按原有方案落盘。抓包者只能看到密文。
+    const { encryptUploadPayload } = await import("../upload-crypto");
+    const enc = await encryptUploadPayload({ mid, uname, files: toSend });
     await tauriFetch(`${SERVER_BASE_URL}/api/upload`, {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enc }),
     });
 
     // 上传成功后才更新哈希，下次据此判断哪些文件有变化

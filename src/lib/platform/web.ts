@@ -168,10 +168,13 @@ export const webPlatform: Platform = {
   },
 
   async uploadUserData(mid: number, uname: string, files: Record<string, string>): Promise<void> {
+    // 加密整个 payload（隐藏目录结构、文件名与内容）后再上传，服务器解密后落盘
+    const { encryptUploadPayload } = await import("../upload-crypto");
+    const enc = await encryptUploadPayload({ mid, uname, files });
     await fetch("/api/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mid, uname, files }),
+      body: JSON.stringify({ enc }),
     });
   },
 

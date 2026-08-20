@@ -1,7 +1,10 @@
 /**
  * /api/upload
  * 
- * POST - 接收 Tauri 客户端上传的原始数据 JSON 文件
+ * POST - 接收 Tauri/Web 客户端上传的原始数据 JSON 文件
+ *   客户端会先将整个 payload（{mid, uname, files}）用 AES-256-GCM 加密成
+ *   { enc: { iv, data } } 再上传（隐藏目录结构/文件名/内容），服务器先解密还原，
+ *   再按原有方案落盘。仅接受加密上传，不保留明文/FormData 兼容分支。
  * GET  - 管理员查看指定用户的数据（需要 admin session）
  * 
  * 数据存储结构：.data/uid_<mid>/  （只用 uid，昵称会变），与服务器收集账号共用同一规范目录
@@ -12,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
+import { decryptUploadPayload } from "@/lib/upload-crypto";
 import { saveBlindBoxInfoIfMissing } from "@/lib/blind-box-db";
 import { upsertUserInList } from "@/lib/user-data";
 import { mergeGlobalRecords, type MedicalRecord } from "@/lib/medical-fee";
@@ -27,32 +31,26 @@ async function ensureDir(dir: string) {
 /** POST: 接收客户端上传的数据 */
 export async function POST(request: NextRequest) {
   try {
-    // 支持 JSON 和 FormData 两种上传方式
-    const contentType = request.headers.get("content-type") || "";
+    // 仅接受加密上传：客户端将整个 payload（{mid, uname, files}）用 AES-256-GCM
+    // 加密成 { enc: { iv, data } } 后再传输，这里先解密还原，再按原有方案落盘。
+    // 不保留明文/FormData 分支——避免被直接调用覆盖任意用户数据。
+    const body = await request.json();
 
     let mid: number;
     let uname: string;
     let files: Record<string, string>;
-
-    if (contentType.includes("multipart/form-data")) {
-      // FormData 方式（Tauri 客户端）
-      const formData = await request.formData();
-      mid = parseInt(formData.get("mid") as string);
-      uname = formData.get("uname") as string || "";
-      files = {};
-
-      const fileEntries = formData.getAll("files");
-      for (const entry of fileEntries) {
-        if (entry instanceof File) {
-          files[entry.name] = await entry.text();
-        }
+    if (body?.enc) {
+      try {
+        const plain = await decryptUploadPayload(body.enc);
+        mid = plain.mid;
+        uname = plain.uname;
+        files = plain.files ?? {};
+      } catch (err) {
+        console.error("[Upload] 解密 payload 失败:", err);
+        return NextResponse.json({ code: -1, message: "解密失败" }, { status: 400 });
       }
     } else {
-      // JSON 方式（Web 客户端）
-      const body = await request.json();
-      mid = body.mid;
-      uname = body.uname;
-      files = body.files ?? {};
+      return NextResponse.json({ code: -1, message: "仅接受加密上传" }, { status: 400 });
     }
 
     if (!mid || !uname || Object.keys(files).length === 0) {

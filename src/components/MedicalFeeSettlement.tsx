@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { serverApiUrl, serverFetch } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
+import { encryptUploadPayload } from "@/lib/upload-crypto";
 import { fetchMedicalRoomId, fetchMedicalUniversal, fetchMedicalUname } from "@/lib/medical-client";
 import { showToast } from "@/lib/toast";
 
@@ -467,14 +468,16 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
   const uploadRecords = useCallback(async (records: LocalRecord[]) => {
     try {
       const op = operatorRef.current;
+      // 与统一上传一致：整个 payload 加密后再传（服务器仅接受加密上传）
+      const enc = await encryptUploadPayload({
+        mid: op.uid,
+        uname: op.uname,
+        files: { "medical-fee-records.json": JSON.stringify(records) },
+      });
       await serverFetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mid: op.uid,
-          uname: op.uname,
-          files: { "medical-fee-records.json": JSON.stringify(records) },
-        }),
+        body: JSON.stringify({ enc }),
       });
     } catch {
       // 忽略

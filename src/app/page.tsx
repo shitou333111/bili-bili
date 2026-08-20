@@ -2090,10 +2090,21 @@ export default function HomePage() {
     setAuthError(null);
     try {
       const platform = await getPlatform();
-      const res = await fetch(`${serverApiUrl("/api/server-data")}?mid=${currentAccount.mid}`, { cache: "no-store" });
+      // 服务器账号数据属于敏感数据，仅管理员可读取：
+      // 携带本地已保存的 admin_sid（管理员在管理后台登录后写入 localStorage），
+      // 服务器通过 getAdminSid 校验，跨源（Tauri）下 query 参数可正常传递。
+      const adminSid = typeof window !== "undefined" ? localStorage.getItem("bili_live_admin_sid") : null;
+      const res = await fetch(
+        `${serverApiUrl("/api/server-data")}?mid=${currentAccount.mid}&admin_sid=${encodeURIComponent(adminSid ?? "")}`,
+        { cache: "no-store" },
+      );
       const data = await res.json();
-      if (data.code !== 0) {
-        setAuthError("从服务器重新加载失败: " + (data.message || "未知错误"));
+      if (!res.ok || data.code !== 0) {
+        setAuthError(
+          res.status === 403
+            ? "无权限读取服务器数据：请先在管理后台登录后再试。"
+            : "从服务器重新加载失败: " + (data.message || "未知错误"),
+        );
         return;
       }
       const files = data.data?.files ?? {};

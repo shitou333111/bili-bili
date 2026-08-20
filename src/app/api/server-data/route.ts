@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
+import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -10,9 +11,16 @@ export const dynamic = "force-dynamic";
  * 供主页“服务器账号（source=server）”的刷新按钮使用：从自建服务器拉取该账号的数据文件，
  * 客户端据此覆盖本机 uid_<mid> 本地缓存，实现“从服务器重新加载数据”。
  *
- * 与 /api/upload 的 GET 读取同一数据源，但不需要管理员权限（属于普通用户数据查看流程）。
+ * 数据属于敏感信息，仅管理员可读取（与 /api/upload 的 GET 同一鉴权口径）：
+ * 客户端携带 admin_sid（query 参数或 X-Admin-Sid 头），未通过校验返回 403，
+ * 防止第三方仅凭 uid 枚举读取任意用户数据。
  */
 export async function GET(request: NextRequest) {
+  const isAdmin = await validateAdminSession(getAdminSid(request));
+  if (!isAdmin) {
+    return NextResponse.json({ code: -1, message: "无权限" }, { status: 403 });
+  }
+
   const mid = parseInt(request.nextUrl.searchParams.get("mid") || "0");
   if (!mid) {
     return NextResponse.json({ code: -1, message: "missing mid" }, { status: 400 });

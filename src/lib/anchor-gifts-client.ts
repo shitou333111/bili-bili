@@ -95,17 +95,41 @@ export type AnchorGiftsResult = {
 // ==================== 常量 ====================
 
 // 正常翻页之间的请求间隔；B 站反爬阈值实测 ~ 1 次/秒，400ms 留有余量
-const REQUEST_INTERVAL_MS = 100;
+const REQUEST_INTERVAL_MS = 0;
 // 遇到 412 限流冷却后恢复阶段的请求间隔（更保守）
 const SLOW_REQUEST_INTERVAL_MS = 1500;
 const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
 const RATE_LIMIT_COOLDOWN_MS = 30_000;
 // 月度并行度：1=串行，>1 时批内多个月份并行拉取（注意：多个月同时翻页会增加 412 限流风险）
-const MONTH_CONCURRENCY = 4;
+const MONTH_CONCURRENCY = 10;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
+
+/**
+ * 动态并发池：同时最多跑 concurrency 个任务，任一任务完成即启动下一个任务，
+ * 让并发槽位始终饱和（替代"批式并行"——批内完成后才开下一批，存在空闲等待）。
+ * 结果按下标顺序返回，供调用方按原顺序处理。
+ */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 // ==================== 日期工具 ====================
 
@@ -591,6 +615,9 @@ export async function fetchAnchorGifts(
             }
             if (result.code === 1301000) {
               console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 数据已过期，跳过`);
+              // 关键修复：1301000 是 B站 的正常响应（该月数据已过期），必须赋值 firstPage，
+              // 否则下方 !firstPage 会把该月误判为 page0Failed，导致 end_date 被推进并永久跳过该月及更早的历史数据。
+              firstPage = result;
               break;
             }
             await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
@@ -672,19 +699,15 @@ export async function fetchAnchorGifts(
         return { records, totalPages, hasData: true, yesterdayReady, interrupted, page0Failed: false };
       }
 
-      // 按并行度分批拉取，批内并行、批间串行
+      // 动态并发池：任一任务完成即启动下一个任务，让并发槽位始终饱和
+      // （原批式并行需等整批 10 个全部完成才开下一批，存在空闲等待）。
+      const chunkResults = await runWithConcurrency(chunks, MONTH_CONCURRENCY, (chunk) => processChunk(chunk));
+
+      // 结果按月份顺序串行处理（去重/进度/中断逻辑依赖有序结果，且避免竞态）
       let interrupted = false;
-      for (let batchStart = 0; batchStart < chunks.length; batchStart += MONTH_CONCURRENCY) {
-        if (interrupted) break;
-        const batchEnd = Math.min(batchStart + MONTH_CONCURRENCY, chunks.length);
-        const batch = chunks.slice(batchStart, batchEnd);
-
-        const results = await Promise.all(batch.map((chunk) => processChunk(chunk)));
-
-        for (let i = 0; i < results.length; i++) {
-          const ci = batchStart + i;
-          const chunk = batch[i];
-          const result = results[i];
+      for (let ci = 0; ci < chunkResults.length && !interrupted; ci++) {
+        const chunk = chunks[ci];
+        const result = chunkResults[ci];
 
           if (result.yesterdayReady !== undefined) {
             yesterdayApiReady = result.yesterdayReady;
@@ -751,7 +774,6 @@ export async function fetchAnchorGifts(
             interrupted = true;
             break;
           }
-        }
       }
 
       // 仅当未发生中断/失败时才推进 end_date 到昨天。
