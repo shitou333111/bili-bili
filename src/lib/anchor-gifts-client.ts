@@ -583,19 +583,26 @@ export async function fetchAnchorGifts(
 
       const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
 
-      // 进度分母 = 有效月份总数（page0 探测出的有数据月份），而非全部 36 个自然月：
-      // 重建/首次登录时若按 36 显示，进度条会错误显示"3年36个月"的总月数。
-      // probeMonthHasData 在每月 page0 探测完成时即时上报（page0 很快），
-      // 因此 validTotal 会先于翻页完成稳定下来；validDone 为已完成全部翻页的有效月份数。
-      let validTotal = 0;
-      let validDone = 0;
-      const probeMonthHasData = (hasData: boolean) => {
-        if (hasData) validTotal++;
+      // 进度分母 = 首个有数据月份 → 当前时间 的月数（一开始探测出来后就固定），
+      // 而非全部 36 个自然月，也不是边获取边增长的探测值。
+      // page0 探测（36 个月各 1 个请求，很快）全部完成后，
+      // 用首个有数据月份下标 firstDataIndex 确定最终分母 totalValidMonths，之后不再变化。
+      let probedCount = 0;
+      let firstDataIndex = -1; // 按时间顺序第一个有数据的月份下标
+      let totalValidMonths = -1; // 固定分母；-1 表示探测未完成
+      let validDone = 0; // 已完成全部翻页的有效月份数
+      const probeMonthHasData = (index: number, hasData: boolean) => {
+        probedCount++;
+        if (hasData && (firstDataIndex === -1 || index < firstDataIndex)) firstDataIndex = index;
+        if (probedCount >= chunks.length) {
+          totalValidMonths = firstDataIndex === -1 ? 0 : chunks.length - firstDataIndex;
+        }
       };
 
       // 单个月份 chunk 处理：拉取该月所有页，返回结果（不修改全局状态，并行安全）
       async function processChunk(
         chunk: { start: string; end: string },
+        index: number,
       ): Promise<{
         records: BiliGiftRecord[];
         totalPages: number;
@@ -648,6 +655,9 @@ export async function fetchAnchorGifts(
           console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page 0 获取完全失败，标记为 page0Failed`);
           return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: true };
         }
+        // 探测：page0 确定该月是否有数据（1301000 数据过期也属无数据）。
+        // 所有月份探测完成后，用首个有数据月份固定进度分母。
+        probeMonthHasData(index, firstPage.code === 0 && (firstPage.data?.total_page ?? 0) > 0);
         // code=1301000 表示该月数据已过期，属于 B站正常响应，不是失败
         if (firstPage.code === 1301000) {
           return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: false };
@@ -659,8 +669,6 @@ export async function fetchAnchorGifts(
         }
 
         const totalPages = firstPage.data?.total_page ?? 0;
-        // 探测结果即时上报：有数据的月份计入进度分母，空数据月份不计
-        probeMonthHasData(firstPage.code === 0 && totalPages > 0);
         if (totalPages === 0) {
           return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false };
         }
@@ -716,23 +724,26 @@ export async function fetchAnchorGifts(
       // onTaskDone：每个月份 chunk 完成时立即上报进度（拉取过程中动态更新进度条），
       // 而不是等全部完成后再一次性上报。
       const chunkResults = await runWithConcurrency(
-        chunks,
+        chunks.map((chunk, index) => ({ chunk, index })),
         MONTH_CONCURRENCY,
-        (chunk) => processChunk(chunk),
-        (i, chunk, result) => {
+        ({ chunk, index }) => processChunk(chunk, index),
+        (i, item, result) => {
           if (!result.hasData) {
             onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
             return;
           }
           validDone++;
-          // 分母用已探测出的有效月份数（page0 探测很快，翻页完成时通常已稳定）。
-          // 若某有效月份提前完成导致 ratio>1，钳制到 1，避免进度条溢出。
-          const denom = Math.max(1, validTotal);
+          // 探测尚未完成（极端情况，通常 page0 探测先于翻页完成）时维持"探测中"，
+          // 避免分母漂移；探测完成后分母固定为 totalValidMonths。
+          if (totalValidMonths < 0) {
+            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
+            return;
+          }
           onProgress?.({
-            text: `正在获取收益记录 ${chunk.start.slice(0, 6)}（${validDone}/${denom}）`,
-            ratio: Math.min(1, validDone / denom),
+            text: `正在获取收益记录 ${item.chunk.start.slice(0, 6)}（${validDone}/${totalValidMonths}）`,
+            ratio: validDone / totalValidMonths,
             current: validDone,
-            total: denom,
+            total: totalValidMonths,
           });
         },
       );
