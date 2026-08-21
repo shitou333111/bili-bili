@@ -221,7 +221,7 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
     // 诊断日志：直接打印插件返回的原始结果，便于排查"有热更新但识别不到"
     console.log(
       "[HotUpdate] checkUpdate 原始返回:",
-      { available: result.available, sequence: result.sequence, version: result.version, error: result.error },
+      { available: result.available, sequence: result.sequence, version: result.version, notes: result.notes },
       `内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}${BUILTIN_HOTSWAP_SEQUENCE > 0 ? "（服务器 sequence 需大于此值才会提示）" : "（未注入，不抑制任何热更新）"}`,
     );
     // checkUpdate() 内部已做两道门（见插件 updater.rs check_update）：
