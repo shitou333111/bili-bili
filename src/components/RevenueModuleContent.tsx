@@ -190,6 +190,12 @@ type OtherStats = {
     maxDaysInYearRange: { start: string; end: string };
   }>;
   dateRange: { start: string; end: string } | null;
+  antiKill: {
+    totalBattery: number;
+    noSpendDays: number;
+    over1000Days: number;
+    value: number;
+  };
 };
 
 type MonthlyData = {
@@ -296,6 +302,195 @@ interface RevenueModuleContentProps {
   formatProfit: (coins: number) => string;
 }
 
+// ==================== 防氪记录 ====================
+
+// 防氪文案轮播：循环提示理性消费，隐显效果复制 landing 页（淡入→停留→淡出→下一句）
+const ANTI_KILL_SLOGANS = [
+  "你自己额生活都过不好，还妄想拯救别人",
+  "你是真的想乐于助人，还是想得到认同",
+  "你是讨好型人格吗？",
+  "你是不是必须要靠花钱刷礼物才能得到女人的认可？",
+  "取悦别人，填补不了你内心的空虚",
+  "换算一下其他消费，直播刷礼物真的很贵！",
+  "一个游乐园就相当于给自己或家人换一部新手机",
+  "1个心动就是一杯奶茶",
+  "2个心动就是一顿外卖",
+  "3个心动盲盒就是一个超大的西瓜",
+  "5个心动就是一个榴莲",
+  "20个心动就能买一部3A游戏",
+  "50连心动，",
+  "100连心动，可以去看一场演唱会",
+  "200连心动，可以来一场自由行",
+  "理性消费...你真的能理性吗？",
+  "你家人知道你刷这么多吗？",
+  "如果你觉得是对的，为什么不敢告诉家人？",
+  "陪你茶米油盐的是家人，所以如果是主播",
+];
+
+const ANTI_KILL_FADE_MS = 800;
+const ANTI_KILL_HOLD_MS = 2400;
+const ANTI_KILL_PAUSE_MS = 300;
+
+// 霓虹色板：与 landing 页一致，循环取色（无绿色，绿色在浅色背景上易看不清）
+const ANTI_KILL_NEON = ["#ff2d78", "#00d9ff", "#b967ff", "#ff5722", "#ff9800", "#ff3d81", "#7c4dff"];
+
+/** 防氪值满分彩虹渐变 */
+const ANTI_KILL_RAINBOW = "linear-gradient(135deg,#ff2d78 0%,#ff9800 20%,#facc15 40%,#22c55e 60%,#38bdf8 80%,#7c4dff 100%)";
+
+/** 防氪值分级：彩虹(满分) / 绿(游刃有余) / 黄(再接再厉) / 红(从头开始) */
+function antiKillTier(value: number): { label: string; color: string } {
+  if (value >= 10000) return { label: "已臻化境", color: "rainbow" };
+  if (value >= 8000) return { label: "游刃有余", color: "#22c55e" }; // 绿
+  if (value >= 6000) return { label: "再接再厉", color: "#eab308" }; // 黄
+  return { label: "从头开始", color: "#ef4444" }; // 红
+}
+
+/** 防氪值圆形按钮背景：满分为彩虹渐变，其次绿/黄/红 */
+function antiKillButtonBg(value: number): string {
+  const tier = antiKillTier(value);
+  return tier.color === "rainbow" ? ANTI_KILL_RAINBOW : tier.color;
+}
+
+/** 防氪文案轮播组件：淡入→停留→淡出→下一句，效果完全复制 landing 页 SloganRotator */
+function AntiKillRotator() {
+  const [index, setIndex] = React.useState(0);
+  const [visible, setVisible] = React.useState(true);
+
+  React.useEffect(() => {
+    const inTimer = setTimeout(() => setVisible(true), 40);
+    const outTimer = setTimeout(() => setVisible(false), ANTI_KILL_FADE_MS + ANTI_KILL_HOLD_MS);
+    const nextTimer = setTimeout(
+      () => setIndex((i) => (i + 1) % ANTI_KILL_SLOGANS.length),
+      ANTI_KILL_FADE_MS + ANTI_KILL_HOLD_MS + ANTI_KILL_FADE_MS + ANTI_KILL_PAUSE_MS,
+    );
+    return () => {
+      clearTimeout(inTimer);
+      clearTimeout(outTimer);
+      clearTimeout(nextTimer);
+    };
+  }, [index]);
+
+  const color = ANTI_KILL_NEON[index % ANTI_KILL_NEON.length];
+
+  return (
+    <div className="relative flex min-h-12 items-center justify-center overflow-hidden">
+      {/* 背景霓虹光晕：居中椭圆光晕，中心聚焦，外缘快速淡出（与 landing 页一致） */}
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[24rem] max-w-[92%] -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
+        style={{
+          background: `radial-gradient(ellipse 50% 50% at center, ${color}59 0%, ${color}59 88%, transparent 100%)`,
+          opacity: visible ? 1 : 0,
+          transition: `opacity ${ANTI_KILL_FADE_MS}ms ease`,
+        }}
+        aria-hidden="true"
+      />
+      {/* 文案：霓虹色纯色，光晕轻微，保证清晰易读 */}
+      <p
+        className="relative px-2 text-center text-[13px] font-semibold leading-snug sm:text-sm"
+        style={{
+          color,
+          textShadow: "0 0 2px rgba(0,0,0,0.05)",
+          opacity: visible ? 1 : 0,
+          transform: visible ? "translateY(0)" : "translateY(6px)",
+          filter: visible ? "blur(0)" : "blur(2px)",
+          transition: `opacity ${ANTI_KILL_FADE_MS}ms ease, transform ${ANTI_KILL_FADE_MS}ms ease, filter ${ANTI_KILL_FADE_MS}ms ease`,
+        }}
+      >
+        {ANTI_KILL_SLOGANS[index]}
+      </p>
+    </div>
+  );
+}
+
+/** 波浪层：填充底色制造波浪边界，水平平移形成湖水荡漾 */
+function AntiKillWave({
+  d,
+  duration,
+  delay,
+  base,
+}: {
+  d: string;
+  duration: number;
+  delay: number;
+  base: string;
+}) {
+  return (
+    <svg
+      className="absolute left-0 h-[12px] w-[200%]"
+      style={{
+        top: "-6px",
+        animation: `anti-kill-wave-x ${duration}s linear infinite`,
+        animationDelay: `${delay}s`,
+      }}
+      viewBox="0 0 200 12"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path d={d} fill={base} />
+    </svg>
+  );
+}
+
+/** 防氪值圆形按钮：按分数比例填充水面 + 波浪荡漾动画 + 分级文字 */
+function AntiKillWaterButton({
+  value,
+  onToggle,
+  btnRef,
+}: {
+  value: number;
+  onToggle: () => void;
+  btnRef?: React.Ref<HTMLButtonElement>;
+}) {
+  const tier = antiKillTier(value);
+  const ratio = Math.max(0, Math.min(1, value / 10000));
+  const base = "#f3eff6"; // 按钮底色（波浪用同色制造缺口）
+  return (
+    <button
+      ref={btnRef}
+      type="button"
+      onClick={onToggle}
+      className="relative h-28 w-28 overflow-hidden rounded-full border border-black/10 shadow-lg transition-transform active:scale-95"
+      style={{ background: base }}
+      aria-label="防氪记录说明"
+    >
+      {/* 水面：按分数占比从底部填充 */}
+      <div
+        className="absolute inset-x-0 bottom-0"
+        style={{ height: `${Math.round(ratio * 100)}%`, background: antiKillButtonBg(value) }}
+      >
+        {/* 双层波浪：不同速度/相位/幅度叠加，产生轻轻荡漾的湖面 */}
+        <AntiKillWave
+          d="M0,0 L200,0 L200,6 C195.83,6 191.67,9 187.5,9 C183.33,9 179.17,6 175,6 C170.83,6 166.67,3 162.5,3 C158.33,3 154.17,6 150,6 C145.83,6 141.67,9 137.5,9 C133.33,9 129.17,6 125,6 C120.83,6 116.67,3 112.5,3 C108.33,3 104.17,6 100,6 C95.83,6 91.67,9 87.5,9 C83.33,9 79.17,6 75,6 C70.83,6 66.67,3 62.5,3 C58.33,3 54.17,6 50,6 C45.83,6 41.67,9 37.5,9 C33.33,9 29.17,6 25,6 C20.83,6 16.67,3 12.5,3 C8.33,3 4.17,6 0,6 Z"
+          duration={5}
+          delay={0}
+          base={base}
+        />
+        <AntiKillWave
+          d="M0,0 L200,0 L200,6 C191.67,6 183.33,8 175,8 C166.67,8 158.33,6 150,6 C141.67,6 133.33,4 125,4 C116.67,4 108.33,6 100,6 C91.67,6 83.33,8 75,8 C66.67,8 58.33,6 50,6 C41.67,6 33.33,4 25,4 C16.67,4 8.33,6 0,6 Z"
+          duration={8}
+          delay={-2.5}
+          base={base}
+        />
+      </div>
+      {/* 中央文字：黑色，任意水位下保持可读 */}
+      <span className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-0.5 text-black">
+        <span className="text-2xl font-bold leading-none">{value}</span>
+        <span className="text-base font-bold leading-none">{tier.label}</span>
+      </span>
+    </button>
+  );
+}
+
+/** 缩小版分级按钮（提示框内使用） */
+function AntiKillMiniButton({ color }: { color: string }) {
+  return (
+    <span
+      className="h-5 w-5 shrink-0 rounded-full border border-black/10 shadow-sm"
+      style={{ background: color === "rainbow" ? ANTI_KILL_RAINBOW : color }}
+    />
+  );
+}
+
 function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   const {
     snapshot,
@@ -363,6 +558,51 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     fixImageUrl,
     formatProfit,
   } = props;
+
+  // 防氪记录轻提示：标题按钮只弹说明文案，圆形按钮只弹分级说明+消费数据；
+  // 点击页面其他区域或超时自动消失
+  const [showAntiKillDesc, setShowAntiKillDesc] = React.useState(false);
+  const [showAntiKillStats, setShowAntiKillStats] = React.useState(false);
+  const antiKillTipTimer = React.useRef<number | null>(null);
+  const antiKillDescRef = React.useRef<HTMLDivElement>(null);
+  const antiKillStatsRef = React.useRef<HTMLDivElement>(null);
+  const antiKillHintBtnRef = React.useRef<HTMLButtonElement>(null);
+  const antiKillCircleBtnRef = React.useRef<HTMLButtonElement>(null);
+
+  const toggleAntiKillTip = (kind: "desc" | "stats") => {
+    const willOpen = kind === "desc" ? !showAntiKillDesc : !showAntiKillStats;
+    if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
+    setShowAntiKillDesc(kind === "desc" ? willOpen : false);
+    setShowAntiKillStats(kind === "stats" ? willOpen : false);
+    if (willOpen) {
+      antiKillTipTimer.current = window.setTimeout(() => {
+        setShowAntiKillDesc(false);
+        setShowAntiKillStats(false);
+      }, 12000);
+    }
+  };
+
+  React.useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        antiKillDescRef.current?.contains(target) ||
+        antiKillStatsRef.current?.contains(target) ||
+        antiKillHintBtnRef.current?.contains(target) ||
+        antiKillCircleBtnRef.current?.contains(target)
+      ) {
+        return;
+      }
+      if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
+      setShowAntiKillDesc(false);
+      setShowAntiKillStats(false);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
+    };
+  }, []);
 
   return (
     <>
@@ -1236,6 +1476,86 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           {/* 其他数据 tab */}
           {activeTab === "other" && otherStats && (
             <div className="space-y-4">
+              {/* Card 0: 防氪记录 */}
+              <article className="relative z-10 rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                <div className="relative flex items-center gap-2 mb-3">
+                  <h3 className="text-base font-bold tracking-tight">防氪记录·理性消费</h3>
+                  <button
+                    ref={antiKillHintBtnRef}
+                    type="button"
+                    onClick={() => toggleAntiKillTip("desc")}
+                    className="flex h-4 w-4 items-center justify-center rounded-full bg-black/10 text-[10px] text-black/40 transition-colors hover:bg-black/20 hover:text-black/60 cursor-pointer"
+                    title="点击查看说明"
+                    aria-label="防氪记录说明"
+                  >
+                    ?
+                  </button>
+                  <span className="ml-auto text-xs text-black/40">最近30天</span>
+
+                  {/* 标题提示：仅一段说明文案，点击页面其他区域或超时自动消失 */}
+                  {showAntiKillDesc && (
+                    <div
+                      ref={antiKillDescRef}
+                      className="absolute right-0 top-full z-50 mt-2 w-[320px] max-w-full rounded-xl border border-black/10 bg-white/95 p-4 text-xs leading-relaxed text-black/70 shadow-[0_16px_48px_rgba(31,28,23,0.16)] backdrop-blur"
+                      style={{ animation: "anti-kill-tip-in 0.25s ease" }}
+                    >
+                      <p>
+                        只针对没钱但又对氪金欲罢不能的朋友，就像青少年氪金游戏一样，直播刷钱也是有瘾的。可能只是小部分人，普通用户用不到，神豪更是可以无视。其实如果有钱，直播刷礼物还是挺爽的，我遇到的很多主播和大佬都是很好的人。我并不反对直播消费，只是反对像自己这样没钱硬刷。严重时，这种成瘾行为，甚至会发展成心理障碍，让我们共同克服🤝希望每个用户给每个主播刷的礼物都是理性下的情绪价值买单，而不是上头后的冲动消费。
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <AntiKillRotator />
+                <div className="relative my-4 flex justify-center">
+                  <AntiKillWaterButton
+                    value={otherStats.antiKill.value}
+                    onToggle={() => toggleAntiKillTip("stats")}
+                    btnRef={antiKillCircleBtnRef}
+                  />
+                  {/* 圆形按钮提示：仅分级说明 + 30天消费数据，点击页面其他区域或超时自动消失 */}
+                  {showAntiKillStats && (
+                    <div className="absolute left-1/2 top-full z-50 mt-2 w-[320px] max-w-full -translate-x-1/2">
+                      <div
+                        ref={antiKillStatsRef}
+                        className="space-y-3 rounded-xl border border-black/10 bg-white/95 p-4 text-xs leading-relaxed text-black/70 shadow-[0_16px_48px_rgba(31,28,23,0.16)] backdrop-blur"
+                        style={{ animation: "anti-kill-tip-in 0.25s ease" }}
+                      >
+                        <div className="space-y-1.5 rounded-lg bg-[#f5f0f7] p-3">
+                          <div className="font-semibold text-black/80">满分10000分，消费会扣分</div>
+                          <div className="flex items-center gap-2">
+                            <AntiKillMiniButton color="rainbow" />
+                            <span>满分！没有任何消费</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <AntiKillMiniButton color="#22c55e" />
+                            <span>&gt; 8000分</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <AntiKillMiniButton color="#eab308" />
+                            <span>&gt; 6000分</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <AntiKillMiniButton color="#ef4444" />
+                            <span>&lt; 6000分</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 rounded-lg border border-black/10 bg-[#f5f0f7] p-3">
+                          <div>
+                            30天内共消费 <b className="text-black/80">{otherStats.antiKill.totalBattery.toLocaleString()}</b> 电池
+                          </div>
+                          <div>
+                            有 <b className="text-black/80">{otherStats.antiKill.noSpendDays}</b> 天没有消费
+                          </div>
+                          <div>
+                            有 <b className="text-black/80">{otherStats.antiKill.over1000Days}</b> 天消费超过1000电池
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </article>
+
               {/* Card 1: 天选/红包礼物统计 */}
               <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                 <div className="flex items-center gap-2 mb-3">

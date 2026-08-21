@@ -218,6 +218,12 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
   try {
     const { checkUpdate } = await import("tauri-plugin-hotswap-api");
     const result = await checkUpdate();
+    // 诊断日志：直接打印插件返回的原始结果，便于排查"有热更新但识别不到"
+    console.log(
+      "[HotUpdate] checkUpdate 原始返回:",
+      { available: result.available, sequence: result.sequence, version: result.version, error: result.error },
+      `内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}${BUILTIN_HOTSWAP_SEQUENCE > 0 ? "（服务器 sequence 需大于此值才会提示）" : "（未注入，不抑制任何热更新）"}`,
+    );
     // checkUpdate() 内部已做两道门（见插件 updater.rs check_update）：
     //   1. min_binary_version 门：当前原生版本 < manifest.min_binary_version → 跳过（available=false，不暴露原因）
     //   2. sequence 门：manifest.sequence <= 当前 sequence → 无更新

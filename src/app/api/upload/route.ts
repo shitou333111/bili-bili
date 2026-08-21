@@ -30,11 +30,17 @@ async function ensureDir(dir: string) {
 
 /** POST: 接收客户端上传的数据 */
 export async function POST(request: NextRequest) {
+  const t0 = Date.now();
+  // 诊断日志：确认请求是否到达路由、content-length 是否完整（排查大请求体被框架层截断）
+  console.log(`[Upload] POST 收到请求，content-length=${request.headers.get("content-length") ?? "未知"}`);
   try {
     // 仅接受加密上传：客户端将整个 payload（{mid, uname, files}）用 AES-256-GCM
     // 加密成 { enc: { iv, data } } 后再传输，这里先解密还原，再按原有方案落盘。
     // 不保留明文/FormData 分支——避免被直接调用覆盖任意用户数据。
     const body = await request.json();
+    console.log(
+      `[Upload] request.json 解析成功，body ${(JSON.stringify(body).length / 1024 / 1024).toFixed(1)} MB，耗时 ${Date.now() - t0} ms`,
+    );
 
     let mid: number;
     let uname: string;

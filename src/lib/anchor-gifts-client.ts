@@ -28,6 +28,9 @@ import {
   extractCookieValue,
 } from "./bilibili/cookie-refresh-client";
 
+// B站 礼物流水接口每页返回条数（客户端不传 page_size，使用 B站 默认 50）
+const PAGE_SIZE = 50;
+
 // ==================== 类型定义（与 API route 保持一致） ====================
 
 type BiliGiftRecord = {
@@ -342,7 +345,10 @@ async function saveRecordsWithMeta(
       {
         last_fetch: meta.last_fetch ?? getBeijingTime(),
         end_date: meta.end_date,
-        total_page: meta.total_page,
+        // total_page 由存储记录数确定性推导：旧逻辑"每次刷新累加 fetchedNewPages"
+        // 即使无新数据也会让 total_page 持续增长（fetchedNewPages≈有数据的月份数），
+        // 导致文件每次刷新都变 → 增量上传失效、几十 MB 全量重传。
+        total_page: Math.ceil(records.length / PAGE_SIZE),
         total_count: records.length,
         records,
       },
@@ -1093,7 +1099,7 @@ export async function fetchAnchorGifts(
       totalHamster,
       totalRmb: totalHamster / 100,
       totalCount: filteredRecords.length,
-      totalPage: (meta?.total_page ?? 0) + fetchedNewPages,
+      totalPage: Math.ceil(allRecords.length / PAGE_SIZE),
       giftTypes: giftMap.size,
       fanCount: fanMap.size,
       monthlyData,

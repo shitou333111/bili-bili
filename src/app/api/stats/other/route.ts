@@ -53,7 +53,51 @@ type OtherStatsResponse = {
   dayStats: DayStats;
   roomStats: RoomStat[];
   dateRange: { start: string; end: string } | null;
+  antiKill: AntiKillStats;
 };
+
+/** 防氪记录统计：只追踪最近 30 天消费，提醒用户理性消费 */
+type AntiKillStats = {
+  totalBattery: number; // 近30天真实消费电池（不封顶）
+  noSpendDays: number; // 30 天内未消费的天数
+  over1000Days: number; // 30 天内单日消费超过 1000 电池的天数
+  value: number; // 防氪值：10000 - 近30天累计封顶电池（单日超 1000 按 1000 计），最低为 0
+};
+
+/** 计算防氪记录（records 需为已剔除"已退回"的记录） */
+function computeAntiKill(records: RawGiftRecord[]): AntiKillStats {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const WINDOW_DAYS = 30;
+  const CAP_PER_DAY = 1000;
+  const FULL_SCORE = 10000;
+  const cutoff = Date.now() - WINDOW_DAYS * DAY_MS;
+
+  const dayMap = new Map<string, number>();
+  let totalBattery = 0;
+  for (const r of records) {
+    if (!r.timestamp) continue;
+    if (r.timestamp * 1000 < cutoff) continue; // 不在最近 30 天内
+    const coins = Number((r.pay_coin || r.coin || "0").replace(/,/g, "")) || 0;
+    if (coins <= 0) continue;
+    const date = getDateStr(r.timestamp);
+    dayMap.set(date, (dayMap.get(date) || 0) + coins);
+    totalBattery += coins;
+  }
+
+  let over1000Days = 0;
+  let cappedSum = 0;
+  for (const daily of dayMap.values()) {
+    if (daily > CAP_PER_DAY) over1000Days++;
+    cappedSum += Math.min(daily, CAP_PER_DAY);
+  }
+
+  return {
+    totalBattery,
+    noSpendDays: WINDOW_DAYS - dayMap.size,
+    over1000Days,
+    value: Math.max(0, FULL_SCORE - cappedSum),
+  };
+}
 
 /** 计算最长连续天数和起止日期 */
 function calcMaxConsecutive(sortedDates: string[]): { max: number; start: string; end: string } {
@@ -179,6 +223,7 @@ export async function GET(request: Request) {
         dayStats: { totalDays: 0, maxConsecutiveDays: 0, maxConsecutiveStart: "", maxConsecutiveEnd: "", maxDaysInYear: 0, maxDaysInYearRange: { start: "", end: "" } },
         roomStats: [],
         dateRange: null,
+        antiKill: computeAntiKill([]),
       };
       return NextResponse.json<ApiResponse<OtherStatsResponse>>(
         { code: 0, message: "empty", data: empty },
@@ -284,7 +329,7 @@ export async function GET(request: Request) {
       ? { start: allSortedDates[0], end: allSortedDates[allSortedDates.length - 1] }
       : null;
 
-    const data: OtherStatsResponse = { giftStats: { gifts, totalCount, totalValue, hasLuckyTitle }, dayStats, roomStats, dateRange };
+    const data: OtherStatsResponse = { giftStats: { gifts, totalCount, totalValue, hasLuckyTitle }, dayStats, roomStats, dateRange, antiKill: computeAntiKill(allRecords) };
 
     return NextResponse.json<ApiResponse<OtherStatsResponse>>(
       { code: 0, message: "ok", data },

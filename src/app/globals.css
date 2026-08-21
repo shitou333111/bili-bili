@@ -259,6 +259,18 @@ body {
   animation: progress-slide 1.4s infinite ease-in-out;
 }
 
+/* 防氪记录圆形按钮：湖面波浪水平平移（宽 200%，平移 -50% 无缝循环） */
+@keyframes anti-kill-wave-x {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* 防氪记录说明轻提示：淡入 */
+@keyframes anti-kill-tip-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ===== 模态框下载/关闭按钮统一样式（胶囊状、紧凑、点击动效） ===== */
 .modal-action-btn {
   display: inline-flex;

@@ -17,7 +17,7 @@ const VERSIONS_URL = `${DOWNLOAD_BASE}/versions.json`;
 const platforms = [
   {
     id: "windows",
-    name: "Windows",
+    name: "电脑",
     fileType: "EXE",
     fileName: "B瓜.exe",
     asciiName: "Bgua.exe",
@@ -32,7 +32,7 @@ const platforms = [
   },
   {
     id: "android",
-    name: "Android",
+    name: "安卓手机",
     fileType: "APK",
     fileName: "B瓜.apk",
     asciiName: "Bgua.apk",
@@ -47,7 +47,7 @@ const platforms = [
   },
   {
     id: "ios",
-    name: "iOS",
+    name: "苹果手机",
     fileType: "IPA",
     fileName: "B瓜.ipa",
     asciiName: "Bgua.ipa",

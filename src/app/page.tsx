@@ -263,6 +263,12 @@ type OtherStats = {
     maxDaysInYearRange: { start: string; end: string };
   }>;
   dateRange: { start: string; end: string } | null;
+  antiKill: {
+    totalBattery: number;
+    noSpendDays: number;
+    over1000Days: number;
+    value: number;
+  };
 };
 
 type MonthlyData = {
@@ -1580,7 +1586,9 @@ export default function HomePage() {
     }
     try {
       const platform = await getPlatform();
-      await uploadAllUserData(platform);
+      // 上传改为后台静默执行（不 await）：备份上传不应阻塞刷新流程，
+      // 避免大文件上传（如 32MB 的 pay-records.json）期间绿按钮长时间处于"刷新中"
+      uploadAllUserData(platform);
     } catch {
       // 上传失败不影响本地展示
     }

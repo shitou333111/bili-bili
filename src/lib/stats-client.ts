@@ -217,8 +217,18 @@ async function writeSpecialGiftDb(platform: Platform, mid: number, db: SpecialGi
  * 若全部未变则直接跳过（不发请求），从而避免频繁刷新时重复上传旧数据。
  * 仅本机登录账号（source !== "server"）上传；服务器账号无 B站 凭证仅查看，不上传。
  * 说明：礼物图标/目录改由各客户端直连 B站 giftConfig API 获取，不再上传共享 gift-db。
+ * 注意：上传是后台备份，不应阻塞刷新流程；调用方（如 finishRefresh）无需 await 它。
  */
+let _uploadChain: Promise<void> = Promise.resolve();
+
 export async function uploadAllUserData(platform: Platform): Promise<void> {
+  // 串行排队：快速连续刷新时避免并发上传造成的 upload-state.json 读写竞争与重复上传
+  const run = () => doUploadAllUserData(platform);
+  _uploadChain = _uploadChain.then(run, run);
+  return _uploadChain;
+}
+
+async function doUploadAllUserData(platform: Platform): Promise<void> {
   try {
     const state = await platform.getSessionState();
     const session = state.sessions.find((s) => s.sid === state.currentSid);
@@ -2220,7 +2230,51 @@ type OtherStatsResponse = {
   dayStats: DayStats;
   roomStats: RoomStat[];
   dateRange: { start: string; end: string } | null;
+  antiKill: AntiKillStats;
 };
+
+/** 防氪记录统计：只追踪最近 30 天消费，提醒用户理性消费 */
+type AntiKillStats = {
+  totalBattery: number; // 近30天真实消费电池（不封顶）
+  noSpendDays: number; // 30 天内未消费的天数
+  over1000Days: number; // 30 天内单日消费超过 1000 电池的天数
+  value: number; // 防氪值：10000 - 近30天累计封顶电池（单日超 1000 按 1000 计），最低为 0
+};
+
+/** 计算防氪记录（records 需为已剔除"已退回"的记录） */
+function computeAntiKill(records: RawGiftRecord[]): AntiKillStats {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const WINDOW_DAYS = 30;
+  const CAP_PER_DAY = 1000;
+  const FULL_SCORE = 10000;
+  const cutoff = Date.now() - WINDOW_DAYS * DAY_MS;
+
+  const dayMap = new Map<string, number>();
+  let totalBattery = 0;
+  for (const r of records) {
+    if (!r.timestamp) continue;
+    if (r.timestamp * 1000 < cutoff) continue; // 不在最近 30 天内
+    const coins = Number((r.pay_coin || r.coin || "0").replace(/,/g, "")) || 0;
+    if (coins <= 0) continue;
+    const date = getDateStr(r.timestamp);
+    dayMap.set(date, (dayMap.get(date) || 0) + coins);
+    totalBattery += coins;
+  }
+
+  let over1000Days = 0;
+  let cappedSum = 0;
+  for (const daily of dayMap.values()) {
+    if (daily > CAP_PER_DAY) over1000Days++;
+    cappedSum += Math.min(daily, CAP_PER_DAY);
+  }
+
+  return {
+    totalBattery,
+    noSpendDays: WINDOW_DAYS - dayMap.size,
+    over1000Days,
+    value: Math.max(0, FULL_SCORE - cappedSum),
+  };
+}
 
 function calcMaxConsecutive(sortedDates: string[]): { max: number; start: string; end: string } {
   if (sortedDates.length === 0) return { max: 0, start: "", end: "" };
@@ -2321,6 +2375,7 @@ export async function fetchOtherStats(
         },
         roomStats: [],
         dateRange: null,
+        antiKill: computeAntiKill([]),
       };
       return { code: 0, message: "empty", data: empty };
     }
@@ -2419,6 +2474,7 @@ export async function fetchOtherStats(
       dayStats,
       roomStats,
       dateRange,
+      antiKill: computeAntiKill(allRecords),
     };
     return { code: 0, message: "ok", data };
   } catch (err) {

@@ -50,6 +50,29 @@ function contentHash(s: string): string {
   return h1.toString(16) + h2.toString(16) + "-" + s.length.toString(16);
 }
 
+/**
+ * 易变元数据字段：仅记录"最近导出/拉取时间"，不影响数据本身。
+ * 这些字段在每次刷新时都会重新写入（如 pay-records/盲盒/合成记录的 exportedAt、
+ * 盲盒信息的 updated_at、主播礼物的 last_fetch），若参与哈希比较会导致
+ * "数据没变但文件每次都要重传"（33MB 全量重加密+重传 → 绿按钮长时间转、主线程卡顿）。
+ */
+const VOLATILE_META_KEYS = ["exportedAt", "updated_at", "last_fetch", "updatedAt"];
+
+/** 稳定内容哈希：剔除易变元数据时间戳后再哈希，用于增量上传判断"数据是否有实质变化" */
+function stableContentHash(content: string): string {
+  try {
+    const obj = JSON.parse(content);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      const copy: Record<string, unknown> = { ...obj };
+      for (const k of VOLATILE_META_KEYS) delete copy[k];
+      return contentHash(JSON.stringify(copy));
+    }
+  } catch {
+    // 非 JSON 文件（或无法解析）按原样哈希
+  }
+  return contentHash(content);
+}
+
 export const tauriPlatform: Platform = {
   name: "tauri",
   isNative: true,
@@ -222,14 +245,24 @@ export const tauriPlatform: Platform = {
     try { prev = JSON.parse(await readTextFile(statePath)); } catch { /* 首次无记录 */ }
     const userPrev = prev[String(mid)] ?? {};
 
+    // 诊断日志（仅 console，不影响 UI）：确认上传阶段是不是慢/卡顿的瓶颈
+    const totalBytes = Object.values(files).reduce((s, c) => s + new TextEncoder().encode(c).length, 0);
+    console.log(
+      `[Upload] 开始：待检查文件 ${Object.keys(files).length} 个，共 ${(totalBytes / 1024 / 1024).toFixed(2)} MB`,
+    );
+
+    const tHash0 = performance.now();
     const toSend: Record<string, string> = {};
     for (const [name, content] of Object.entries(files)) {
-      const h = contentHash(content);
+      const h = stableContentHash(content);
       if (userPrev[name] !== h) toSend[name] = content;
     }
+    const hashMs = performance.now() - tHash0;
+    console.log(`[Upload] contentHash 比较耗时 ${hashMs.toFixed(0)} ms，需上传 ${Object.keys(toSend).length} 个文件`);
 
     if (Object.keys(toSend).length === 0) {
-      // 绝对静默：文件无变化时不打任何日志，直接跳过
+      // 无变化文件，直接跳过（保留一行日志便于观察是否每次都误判为有变化）
+      console.log("[Upload] 无变化文件，跳过上传");
       return;
     }
 
@@ -256,15 +289,41 @@ export const tauriPlatform: Platform = {
     }
     if (Object.keys(cur).length > 0) batches.push(cur);
 
-    for (const batch of batches) {
+    // 诊断日志：打印每批字节数，确认是否存在"单个大文件独占一个巨型批次"导致主线程长时间阻塞
+    console.log(
+      `[Upload] 分 ${batches.length} 批，各批明文字节 [${batches
+        .map((b) => Object.values(b).reduce((s, c) => s + new TextEncoder().encode(c).length, 0))
+        .join(", ")}]`,
+    );
+
+    const tTotal0 = performance.now();
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const batchBytes = Object.values(batch).reduce((s, c) => s + new TextEncoder().encode(c).length, 0);
+      // 诊断日志：加密前先打印，若此条出现而"批次完成"未出现，则卡点在加密或上传
+      console.log(`[Upload] 批次 ${bi + 1}/${batches.length} 开始：明文 ${(batchBytes / 1024).toFixed(1)} KB`);
       // 加密整个 batch（隐藏 uid_<mid> 目录结构、文件名与内容）后再上传，
       // 服务器用同一密钥解密后按原方案落盘。抓包者只能看到密文。
-      const enc = await encryptUploadPayload({ mid, uname, files: batch });
+      const tEnc0 = performance.now();
+      let enc: { iv: string; data: string };
+      try {
+        enc = await encryptUploadPayload({ mid, uname, files: batch });
+      } catch (err) {
+        // 诊断日志：加密异常不再静默吞掉，便于定位（正常不应发生）
+        console.log(`[Upload] 批次 ${bi + 1}/${batches.length} 加密失败：${String(err)}`);
+        return;
+      }
+      const encMs = performance.now() - tEnc0;
       // 每批带超时（AbortController），避免 /api/upload 挂起时永久 pending、
       // 导致 finishRefresh→fetchData 不返回、绿按钮一直转且控制台无任何输出。
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
+      const timer = setTimeout(() => ctrl.abort(), 60000);
       let resp: Response;
+      const tUp0 = performance.now();
+      // 诊断日志：请求体大小 + 请求开始，若此条出现而"上传完成/异常"未出现，则卡在请求或服务端
+      console.log(
+        `[Upload] 批次 ${bi + 1}/${batches.length} 开始上传请求：请求体约 ${((enc.data.length + 64) / 1024 / 1024).toFixed(1)} MB → ${SERVER_BASE_URL}/api/upload`,
+      );
       try {
         resp = await tauriFetch(`${SERVER_BASE_URL}/api/upload`, {
           method: "POST",
@@ -272,18 +331,27 @@ export const tauriPlatform: Platform = {
           body: JSON.stringify({ enc }),
           signal: ctrl.signal,
         });
+      } catch (err) {
+        // 诊断日志：请求失败/超时中止不再静默吞掉，便于定位（真实原因可能是 44MB 超时或服务端无响应）
+        console.log(`[Upload] 批次 ${bi + 1}/${batches.length} 上传请求异常/超时：${String(err)}`);
+        return;
       } finally {
         clearTimeout(timer);
       }
+      const upMs = performance.now() - tUp0;
+      console.log(
+        `[Upload] 批次 ${bi + 1}/${batches.length}：明文 ${(batchBytes / 1024).toFixed(1)} KB，加密 ${encMs.toFixed(0)} ms，上传 ${upMs.toFixed(0)} ms，HTTP ${resp.status}`,
+      );
       if (!resp.ok) {
         // 绝对静默：上传失败不落哈希（下次重传），不打印任何日志、不阻塞整体流程
         return;
       }
     }
+    console.log(`[Upload] 全部批次完成，总耗时 ${(performance.now() - tTotal0).toFixed(0)} ms`);
 
     // 全部批次上传成功后才更新哈希，下次据此判断哪些文件有变化
     const next = { ...userPrev };
-    for (const [name, content] of Object.entries(toSend)) next[name] = contentHash(content);
+    for (const [name, content] of Object.entries(toSend)) next[name] = stableContentHash(content);
     prev[String(mid)] = next;
     try { await writeTextFile(statePath, JSON.stringify(prev)); } catch { /* ignore */ }
   },
