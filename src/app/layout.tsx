@@ -1,19 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import ToastHost from "@/components/ToastHost";
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
-const jetBrainsMono = JetBrains_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+// 字体改用系统字体栈（不再依赖 next/font/google 构建期从 Google CDN 拉取，
+// 离线/桌面 Tauri 环境更稳定）。见 globals.css 中 --font-sans/--font-mono 的定义。
 
 export const metadata: Metadata = {
   title: "Bili Live Revenue Viewer",
@@ -41,7 +33,7 @@ export default function RootLayout({
   return (
     <html
         lang="zh-CN"
-        className={`${inter.variable} ${jetBrainsMono.variable} h-full antialiased`}
+        className="h-full antialiased"
         suppressHydrationWarning
       >
       <body className="min-h-full flex flex-col">

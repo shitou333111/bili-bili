@@ -1024,6 +1024,7 @@ function MergedPlayer({
 
     const drawLoop = () => {
       raf = requestAnimationFrame(drawLoop);
+      let fadeA = 0; // 跨 run 过渡遮罩 alpha：drawLoop 顶层声明，供下方 seek 计算与最上层遮罩绘制共享
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (!canvas || !ctx) return;
@@ -1129,7 +1130,7 @@ function MergedPlayer({
         // - 不同礼物(相隔>20s)被拆成多个 run，run 间用 EXT-X-DISCONTINUITY 衔接，片段携带源 PTS，
         //   hls.js 在该交接处常卡在上一 run 最后一帧、无法自动续播 → 主动 seek 到下一 run 起点并 startLoad。
         // - 同时在段尾把画面淡出(黑)、跳段后淡入，消除切换的突兀感。fadeA 供最上层遮罩绘制使用。
-        let fadeA = 0;
+        fadeA = 0;
         if (videoReady && !live.paused && !needsRecoveryRef.current) {
           let curRi = -1;
           for (let i = 0; i < plan.runs.length; i++) {

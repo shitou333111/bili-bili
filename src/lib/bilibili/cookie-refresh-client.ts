@@ -164,6 +164,7 @@ type CookieRefreshResponse = {
   code: number;
   message: string;
   data?: {
+    status?: number;
     cookie_info?: {
       cookies: Array<{ name: string; value: string }>;
     };
@@ -250,7 +251,7 @@ export async function refreshBiliCookieClient(
     let newCookies: string[] = [];
     try {
       newCookies = (
-        refreshResponse.getSetCookie() || []
+        refreshResponse.headers.getSetCookie?.() || []
       ).map((c) => c.split(";")[0]);
     } catch {
       newCookies = [];
@@ -278,7 +279,7 @@ export async function refreshBiliCookieClient(
           : [`SESSDATA=${session.biliSessdata}`];
       let rawSetCookie: string[] = [];
       try {
-        rawSetCookie = refreshResponse.getSetCookie?.() ?? [];
+        rawSetCookie = refreshResponse.headers.getSetCookie?.() ?? [];
       } catch {
         rawSetCookie = [];
       }
