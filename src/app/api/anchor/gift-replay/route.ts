@@ -38,6 +38,7 @@ type GiftRecord = {
   gift_count: number;
   gift_value: number;
   gift_icon: string;
+  uid?: number;
 };
 
 // B站 API 返回类型（仅声明用到的字段）
