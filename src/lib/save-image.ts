@@ -41,6 +41,9 @@ function detectMime(fileName: string): string {
     jpeg: "image/jpeg",
     webp: "image/webp",
     gif: "image/gif",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    mov: "video/quicktime",
   };
   return map[ext] || "image/png";
 }
@@ -95,4 +98,38 @@ export async function saveMobileOrDownload(dataUrl: string, filename: string): P
 /** 判断当前设备是否为 Tauri 移动端（供调用方决定走相册保存路径） */
 export function isTauriMobile(): boolean {
   return isMobileTauri();
+}
+
+/**
+ * 保存视频到相册（移动端 Tauri 插件）/ 桌面直接下载。
+ * 与图片保存同机制：移动端走 tauri-plugin-pldownloader（iOS/Android 写入系统相册），
+ * 桌面/Web 用 <a download> 下载。
+ * @returns "ok" 已保存；"fallback" 保存未成功（调用方可提示用户）
+ */
+export async function saveVideoFile(buffer: ArrayBuffer, fileName: string, mimeType: string): Promise<"ok" | "fallback"> {
+  if (!isMobileTauri()) {
+    const blob = new Blob([buffer], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = fileName;
+    link.href = url;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast("视频已保存");
+    return "ok";
+  }
+  try {
+    const res = await saveFilePublicFromBuffer({
+      data: buffer,
+      fileName,
+      mimeType,
+    });
+    if (res && (res.uri || res.path)) {
+      showToast("视频已保存到相册");
+      return "ok";
+    }
+  } catch (err) {
+    console.error("[saveVideoFile] 保存失败:", err);
+  }
+  return "fallback";
 }

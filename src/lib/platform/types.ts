@@ -40,7 +40,13 @@ export interface Platform {
   /** 发起 B站 API 请求（带 UA/Referer 等头） */
   fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T>;
   /** 发起原始 HTTP 请求（用于获取 Set-Cookie 等） */
-  fetchRaw(url: string, cookie?: string): Promise<RawResponse>;
+  fetchRaw(
+    url: string,
+    cookie?: string,
+    options?: { method?: "GET" | "POST"; body?: string },
+  ): Promise<RawResponse>;
+  /** 下载二进制内容（用于直播录屏 2s 片段等，Tauri 下经插件绕过 CORS） */
+  fetchArrayBuffer(url: string, cookie?: string): Promise<ArrayBuffer>;
   /** 获取 B站 buvid3 访客 Cookie */
   getBuvidCookie(): Promise<string>;
 

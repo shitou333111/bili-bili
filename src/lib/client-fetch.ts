@@ -104,6 +104,10 @@ async function dispatchNative(
       const fan = query.get("fan") ?? "";
       return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, onProgress }));
     }
+    case "/api/anchor/gift-replay": {
+      const { fetchGiftReplay } = await import("./gift-replay-client");
+      return jsonResponse(await fetchGiftReplay(platform, query.get("action") ?? "list", query));
+    }
     case "/api/stats/synthesis": {
       const { fetchSynthesisStats } = await import("./stats-client");
       return jsonResponse(await fetchSynthesisStats(platform));

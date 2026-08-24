@@ -66,10 +66,21 @@ export const webPlatform: Platform = {
     return (await response.json()) as T;
   },
 
-  async fetchRaw(url: string, cookie?: string): Promise<RawResponse> {
+  async fetchRaw(
+    url: string,
+    cookie?: string,
+    options?: { method?: "GET" | "POST"; body?: string },
+  ): Promise<RawResponse> {
     const headers = new Headers(BILIBILI_WEB_HEADERS);
     if (cookie) headers.set("Cookie", cookie);
-    const response = await fetch(url, { headers, cache: "no-store", redirect: "follow" });
+    if (options?.body) headers.set("Content-Type", "application/x-www-form-urlencoded");
+    const response = await fetch(url, {
+      headers,
+      cache: "no-store",
+      redirect: "follow",
+      method: options?.method ?? "GET",
+      body: options?.body,
+    });
     return {
       ok: response.ok,
       status: response.status,
@@ -85,6 +96,16 @@ export const webPlatform: Platform = {
         },
       },
     };
+  },
+
+  async fetchArrayBuffer(url: string, cookie?: string): Promise<ArrayBuffer> {
+    const headers = new Headers(BILIBILI_WEB_HEADERS);
+    if (cookie) headers.set("Cookie", cookie);
+    const response = await fetch(url, { headers, cache: "no-store", redirect: "follow" });
+    if (!response.ok) {
+      throw new Error(`二进制下载失败 HTTP ${response.status}`);
+    }
+    return await response.arrayBuffer();
   },
 
   async getBuvidCookie(): Promise<string> {

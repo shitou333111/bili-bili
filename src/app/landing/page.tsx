@@ -83,7 +83,7 @@ export default function LandingPage() {
 
         {/* ============ 下载安装包（在使用指南上方） ============ */}
         <section id="download" className="mx-auto mt-12 max-w-4xl scroll-mt-8 sm:mt-16">
-          <h2 className="text-center text-2xl font-semibold sm:text-3xl">下载安装</h2>
+          <h2 className="text-center text-2xl font-semibold sm:text-3xl">选择你的设备下载使用</h2>
           <DownloadSection />
         </section>
 

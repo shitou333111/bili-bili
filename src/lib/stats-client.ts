@@ -2270,7 +2270,7 @@ function computeAntiKill(records: RawGiftRecord[]): AntiKillStats {
 
   return {
     totalBattery,
-    noSpendDays: WINDOW_DAYS - dayMap.size,
+    noSpendDays: Math.max(0, WINDOW_DAYS - dayMap.size),
     over1000Days,
     value: Math.max(0, FULL_SCORE - cappedSum),
   };

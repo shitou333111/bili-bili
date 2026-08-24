@@ -175,6 +175,9 @@ export default function DownloadSection() {
             <h3 className="text-lg font-semibold">iOS 安装指南</h3>
             <div className="mt-4 space-y-3 text-sm leading-6 text-[#4a4a4a]">
               <p>
+                经过和一些女主播的交流，实际的建议是：下面教程不用看，直接让直播间大哥看教程操作一遍，然后教你🤣
+              </p>
+              <p>
                 苹果手机安装比较麻烦，因为系统限制，很难安装官方商店之外的APP。最简单的方法是，先购买一个签名证书，安装好签名软件，再安装 ipa 包。
                 某宝搜索“ipa签名”，随便花几块钱买一个，店家有详细的使用教程。
               </p>

@@ -1599,6 +1599,9 @@ export default function GiftScreenshotPanel({
 
   return (
     <div className="space-y-4">
+      {/* 标题（与礼物录屏标题样式一致） */}
+      <h3 className="text-sm font-bold tracking-tight">礼物截图</h3>
+
       {/* Toast */}
       {showToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] bg-black/85 text-white px-4 py-2 rounded-lg text-sm shadow-lg transition-opacity">

@@ -823,8 +823,8 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
       {/* 底部栏 - 绝对定位，Android 平台额外上移避开虚拟导航栏 */}
       <div className="absolute bottom-0 inset-x-0 z-30 px-3 pb-1.5 pt-1.5" style={{ paddingBottom: isAndroid ? "24px" : "var(--safe-bottom, 0px)" }}>
         <div className="flex items-center gap-2">
-          {/* 聊天输入框 */}
-          <div className="flex-1 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center px-3.5">
+          {/* 聊天输入框（底色与主播badge一致） */}
+          <div className="flex-1 h-10 backdrop-blur-sm rounded-full flex items-center px-3.5" style={{ backgroundColor: "rgba(119, 108, 112, 0.5)" }}>
             <span className="text-white/50 text-xs">弹幕支持下～</span>
             <button className="ml-auto">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="#FFD700">
@@ -842,7 +842,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
               onClick={handleQuickGiftClick}
               className="w-10 h-10 shrink-0 relative flex items-center justify-center"
             >
-              <div className="absolute inset-0 rounded-full bg-white/15" />
+              <div className="absolute inset-0 rounded-full" style={{ backgroundColor: "rgba(119, 108, 112, 0.5)" }} />
               <img
                 src={quickGift.img}
                 alt={quickGift.name}
@@ -857,7 +857,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
             onClick={toggleGiftPanel}
             className="w-10 h-10 shrink-0 flex items-center justify-center relative"
           >
-            <div className="absolute inset-0 rounded-full bg-white/15" />
+            <div className="absolute inset-0 rounded-full" style={{ backgroundColor: "rgba(119, 108, 112, 0.5)" }} />
             <img
               src="/gift-icon.webp"
               alt="礼物"

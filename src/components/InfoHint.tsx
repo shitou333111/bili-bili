@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * 行内提示图标（?）：点击后显示浅色小弹层说明（macOS 风格浅底黑字）。
  * align="right" 用于右侧对齐（ml-auto）的场景，弹层向左展开避免超出屏幕/卡片。
+ * 点击页面其他任意区域自动收起。
  */
 export default function InfoHint({
   text,
@@ -14,8 +15,21 @@ export default function InfoHint({
   align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+
+  // 点击组件外部区域时收起（按钮自身的 toggle 在 onClick 里处理）
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [open]);
+
   return (
-    <span className="relative inline-flex shrink-0">
+    <span ref={rootRef} className="relative inline-flex shrink-0">
       <button
         type="button"
         onClick={() => setOpen(!open)}

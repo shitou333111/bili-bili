@@ -373,12 +373,12 @@ function AntiKillRotator() {
   const color = ANTI_KILL_NEON[index % ANTI_KILL_NEON.length];
 
   return (
-    <div className="relative flex min-h-12 items-center justify-center overflow-hidden">
-      {/* 背景霓虹光晕：居中椭圆光晕，中心聚焦，外缘快速淡出（与 landing 页一致） */}
+    <div className="relative flex min-h-12 items-center justify-center">
+      {/* 背景霓虹光晕：椭圆形光晕，中心聚焦，上下窄左右宽，外缘平滑淡出 */}
       <div
-        className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[24rem] max-w-[92%] -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
+        className="pointer-events-none absolute left-1/2 top-1/2 h-6 w-80 max-w-[95%] -translate-x-1/2 -translate-y-1/2 rounded-full blur-md"
         style={{
-          background: `radial-gradient(ellipse 50% 50% at center, ${color}59 0%, ${color}59 88%, transparent 100%)`,
+          background: `radial-gradient(ellipse 50% 12% at center, ${color}ff 0%, ${color}d9 50%, transparent 100%)`,
           opacity: visible ? 1 : 0,
           transition: `opacity ${ANTI_KILL_FADE_MS}ms ease`,
         }}
@@ -491,6 +491,42 @@ function AntiKillMiniButton({ color }: { color: string }) {
   );
 }
 
+/** 天选之子徽章：点击徽章本身弹出说明，点击其他区域收起 */
+function LuckyBadge() {
+  const [open, setOpen] = React.useState(false);
+  const rootRef = React.useRef<HTMLSpanElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [open]);
+
+  return (
+    <span ref={rootRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 rounded-full border border-yellow-400 bg-yellow-50 px-2 py-0.5 text-xs font-medium cursor-pointer transition hover:bg-yellow-100"
+        title="点击查看说明"
+        aria-label="天选之子说明"
+      >
+        <span>🎯</span>
+        <span className="text-yellow-700">天选之子</span>
+      </button>
+      {open && (
+        <span className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs leading-relaxed text-black/70 shadow-lg">
+          天选或红包中过水晶球以上礼物🎉
+        </span>
+      )}
+    </span>
+  );
+}
+
 function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   const {
     snapshot,
@@ -560,10 +596,9 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   } = props;
 
   // 防氪记录轻提示：标题按钮只弹说明文案，圆形按钮只弹分级说明+消费数据；
-  // 点击页面其他区域或超时自动消失
+  // 点击页面其他区域自动消失（无定时自动关闭）
   const [showAntiKillDesc, setShowAntiKillDesc] = React.useState(false);
   const [showAntiKillStats, setShowAntiKillStats] = React.useState(false);
-  const antiKillTipTimer = React.useRef<number | null>(null);
   const antiKillDescRef = React.useRef<HTMLDivElement>(null);
   const antiKillStatsRef = React.useRef<HTMLDivElement>(null);
   const antiKillHintBtnRef = React.useRef<HTMLButtonElement>(null);
@@ -571,15 +606,8 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
 
   const toggleAntiKillTip = (kind: "desc" | "stats") => {
     const willOpen = kind === "desc" ? !showAntiKillDesc : !showAntiKillStats;
-    if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
     setShowAntiKillDesc(kind === "desc" ? willOpen : false);
     setShowAntiKillStats(kind === "stats" ? willOpen : false);
-    if (willOpen) {
-      antiKillTipTimer.current = window.setTimeout(() => {
-        setShowAntiKillDesc(false);
-        setShowAntiKillStats(false);
-      }, 12000);
-    }
   };
 
   React.useEffect(() => {
@@ -593,15 +621,11 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
       ) {
         return;
       }
-      if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
       setShowAntiKillDesc(false);
       setShowAntiKillStats(false);
     };
     document.addEventListener("click", onDocClick);
-    return () => {
-      document.removeEventListener("click", onDocClick);
-      if (antiKillTipTimer.current) window.clearTimeout(antiKillTipTimer.current);
-    };
+    return () => document.removeEventListener("click", onDocClick);
   }, []);
 
   return (
@@ -721,19 +745,13 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   <div className="mt-1 text-xl font-semibold">{giftTypeCount}</div>
                 </div>
                 <div
-                  className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3 cursor-pointer hover:shadow-md transition-shadow relative group"
+                  className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3 cursor-pointer hover:shadow-md transition-shadow"
                   onClick={openAnchorBubbleChart}
                 >
-                  <div className="text-xs text-black/45 flex items-center gap-1">
+                  <div className="text-xs text-black/45">
                     主播数
-                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-black/10 text-[10px] text-black/50 cursor-help">?</span>
                   </div>
                   <div className="mt-1 text-xl font-semibold">{overviewAnchors.length}</div>
-                  {/* Tooltip */}
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-black/85 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] text-center leading-relaxed">
-                    点击查看主播消费分布图<br/>建议访问一次后保存图片
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/85"></div>
-                  </div>
                 </div>
               </div>
 
@@ -1169,10 +1187,11 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                               <span className="text-sm leading-none">👻</span>
                             </button>
                           )}
-                          <span className="ml-auto text-xs text-black/65">
+                          <span className="ml-auto flex items-center gap-1 text-xs text-black/65">
                             {stat.dateRange
                               ? `${stat.dateRange.start.split(" ")[0].replace(/-/g, ".")} - ${stat.dateRange.end.split(" ")[0].replace(/-/g, ".")}`
                               : "无数据"}
+                            <InfoHint text="只显示最近2个月数据" align="right" />
                           </span>
                         </div>
 
@@ -1560,15 +1579,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
               <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="text-base font-bold tracking-tight">天选&红包</h3>
-                  {otherStats.giftStats.hasLuckyTitle && (
-                    <span
-                      className="inline-flex items-center gap-1 rounded-full border border-yellow-400 bg-yellow-50 px-2 py-0.5 text-xs font-medium cursor-help"
-                      title="天选或红包中过水晶球以上礼物🎉"
-                    >
-                      <span>🎯</span>
-                      <span className="text-yellow-700">天选之子</span>
-                    </span>
-                  )}
+                  {otherStats.giftStats.hasLuckyTitle && <LuckyBadge />}
                   {otherStats.dateRange && (
                     <span className="ml-auto text-xs text-black/40">
                       {otherStats.dateRange.start.replace(/-/g, ".")} - {otherStats.dateRange.end.replace(/-/g, ".")}
@@ -1583,12 +1594,9 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                         <div className="text-lg font-semibold">{otherStats.giftStats.gifts.length}</div>
                       </div>
                       <div className="rounded-lg border border-black/10 bg-[#f5f0f7] p-2 text-center">
-                        <div className="text-[10px] text-black/45 flex items-center justify-center gap-0.5">
+                        <div className="text-[10px] text-black/45 flex items-center justify-center gap-1">
                           总数量
-                          <span
-                            className="w-3 h-3 rounded-full bg-black/10 text-black/40 text-[8px] flex items-center justify-center cursor-help"
-                            title="如果自己发出的红包有剩余礼物，会返还到自己包裹，也会算进去，但天选是准确的"
-                          >?</span>
+                          <InfoHint text="如果自己发出的红包有剩余礼物，会返还到自己包裹，也会算进去，但天选是准确的" />
                         </div>
                         <div className="text-lg font-semibold">{otherStats.giftStats.totalCount}</div>
                       </div>
@@ -1637,15 +1645,19 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="text-base font-bold tracking-tight inline-flex items-center gap-1">送礼天数<InfoHint text="最长只有最近1年记录" /></h3>
                   {(otherStats.dayStats.maxConsecutiveDays >= 100 || otherStats.dayStats.maxDaysInYear >= 300) && (
-                    <span
-                      className="inline-flex items-center gap-1 rounded-full border border-orange-400 bg-orange-50 px-2 py-0.5 text-xs font-medium cursor-help"
-                      title={otherStats.dayStats.maxConsecutiveDays >= 100
-                        ? `${otherStats.dayStats.maxConsecutiveStart.replace(/-/g, ".")} - ${otherStats.dayStats.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${otherStats.dayStats.maxConsecutiveDays} 天送礼，一天不刷浑身难受🎉`
-                        : `${otherStats.dayStats.maxDaysInYearRange.start.replace(/-/g, ".")} - ${otherStats.dayStats.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${otherStats.dayStats.maxDaysInYear} 天活跃🎉`}
-                    >
-                      <span>🏠</span>
-                      <span className="text-orange-700">住在直播间</span>
-                    </span>
+                    <>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-orange-400 bg-orange-50 px-2 py-0.5 text-xs font-medium">
+                        <span>🏠</span>
+                        <span className="text-orange-700">住在直播间</span>
+                      </span>
+                      <InfoHint
+                        text={
+                          otherStats.dayStats.maxConsecutiveDays >= 100
+                            ? `${otherStats.dayStats.maxConsecutiveStart.replace(/-/g, ".")} - ${otherStats.dayStats.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${otherStats.dayStats.maxConsecutiveDays} 天送礼，一天不刷浑身难受🎉`
+                            : `${otherStats.dayStats.maxDaysInYearRange.start.replace(/-/g, ".")} - ${otherStats.dayStats.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${otherStats.dayStats.maxDaysInYear} 天活跃🎉`
+                        }
+                      />
+                    </>
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -1677,15 +1689,19 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-medium">{room.rname}</span>
                               {hasGuardTitle && (
-                                <span
-                                  className="inline-flex items-center gap-0.5 rounded-full border border-pink-400 bg-pink-50 px-1.5 py-0.5 text-[10px] font-medium cursor-help"
-                                  title={room.maxConsecutiveDays >= 30
-                                    ? `${room.maxConsecutiveStart.replace(/-/g, ".")} - ${room.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${room.maxConsecutiveDays} 天对TA送礼🎉`
-                                    : `${room.maxDaysInYearRange.start.replace(/-/g, ".")} - ${room.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${room.maxDaysInYear} 天对TA送礼🎉`}
-                                >
-                                  <span>🛡️</span>
-                                  <span className="text-pink-700">爱的守护</span>
-                                </span>
+                                <>
+                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-pink-400 bg-pink-50 px-1.5 py-0.5 text-[10px] font-medium">
+                                    <span>🛡️</span>
+                                    <span className="text-pink-700">爱的守护</span>
+                                  </span>
+                                  <InfoHint
+                                    text={
+                                      room.maxConsecutiveDays >= 30
+                                        ? `${room.maxConsecutiveStart.replace(/-/g, ".")} - ${room.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${room.maxConsecutiveDays} 天对TA送礼🎉`
+                                        : `${room.maxDaysInYearRange.start.replace(/-/g, ".")} - ${room.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${room.maxDaysInYear} 天对TA送礼🎉`
+                                    }
+                                  />
+                                </>
                               )}
                             </div>
                             <span className="text-xs text-black/45">{room.totalDays} 天</span>

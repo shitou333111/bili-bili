@@ -57,11 +57,18 @@ server {
         #   ?fn=        ASCII 兜底名（如 Bgua.apk）——保证 .apk/.exe/.ipa 扩展名正确
         #   ?filename=  RFC 5987 UTF-8 中文名（如 B瓜.apk）——现代浏览器优先采用 filename*
         # 直接访问不带参数的 current_* 链接时，兜底用 Bgua.apk。
-        set $dl_name $arg_fn;
-        if ($dl_name = "") { set $dl_name "Bgua.apk"; }
+        set $dl_ascii $arg_fn;
+        if ($dl_ascii = "") { set $dl_ascii "Bgua.apk"; }
         set $dl_utf8 $arg_filename;
-        if ($dl_utf8 = "") { set $dl_utf8 $dl_name; }
-        add_header Content-Disposition "attachment; filename=$dl_name; filename*=UTF-8''$dl_utf8";
+        if ($dl_utf8 = "") { set $dl_utf8 $dl_ascii; }
+        # Android 下载管理器对"同时存在 filename= 与 filename*="的 Content-Disposition
+        # 解析有 bug：会把 * 当非法字符替换为 _，并把两个参数拼接，
+        # 导致下载文件名变成 "Bgua.apk; filename_=UTF-8''B瓜.apk" 的混乱名称。
+        # 修复：Android 只下发单个普通 filename=（UTF-8 中文名，扩展名正确），
+        # 其余浏览器才下发 RFC 5987 中文名（filename*），filename= 作 ASCII 兜底。
+        set $cd "attachment; filename*=UTF-8''$dl_utf8; filename=\"$dl_ascii\"";
+        if ($http_user_agent ~* "Android") { set $cd "attachment; filename=\"$dl_utf8\""; }
+        add_header Content-Disposition $cd;
     }
 
     # ---- 2) 其余全部请求（含 Next.js 静态资源 /_next/ 等）----

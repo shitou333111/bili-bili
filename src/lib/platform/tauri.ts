@@ -97,14 +97,20 @@ export const tauriPlatform: Platform = {
     return (await response.json()) as T;
   },
 
-  async fetchRaw(url: string, cookie?: string): Promise<RawResponse> {
+  async fetchRaw(
+    url: string,
+    cookie?: string,
+    options?: { method?: "GET" | "POST"; body?: string },
+  ): Promise<RawResponse> {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
     const headers: Record<string, string> = { ...BILIBILI_WEB_HEADERS };
     if (cookie) headers["Cookie"] = cookie;
+    if (options?.body) headers["Content-Type"] = "application/x-www-form-urlencoded";
 
     const response = await tauriFetch(url, {
-      method: "GET",
+      method: options?.method ?? "GET",
       headers,
+      body: options?.body,
     });
 
     // Tauri HTTP plugin 返回的 Response 已暴露 set-cookie 响应头（见 plugin-http dist-js）
@@ -127,6 +133,21 @@ export const tauriPlatform: Platform = {
         },
       },
     };
+  },
+
+  async fetchArrayBuffer(url: string, cookie?: string): Promise<ArrayBuffer> {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    const headers: Record<string, string> = {
+      "User-Agent": BILIBILI_WEB_UA,
+      "Referer": "https://live.bilibili.com/",
+      "Origin": "https://live.bilibili.com",
+    };
+    if (cookie) headers["Cookie"] = cookie;
+    const response = await tauriFetch(url, { method: "GET", headers });
+    if (!response.ok) {
+      throw new Error(`二进制下载失败 HTTP ${response.status}`);
+    }
+    return await response.arrayBuffer();
   },
 
   async getBuvidCookie(): Promise<string> {

@@ -13,6 +13,7 @@ import { ensureGiftCatalogLoaded } from "@/lib/gift-catalog-client";
 import { getPlatform } from "@/lib/platform";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
+import GiftReplayPanel from "@/components/GiftReplayPanel";
 import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
@@ -684,19 +685,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       <div className="mt-1 text-xl font-semibold">{stats.giftTypes}</div>
                     </div>
                     <div
-                      className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3 cursor-pointer hover:shadow-md transition-shadow relative group"
+                      className="rounded-lg border border-black/10 bg-[#f5f0f7] p-3 cursor-pointer hover:shadow-md transition-shadow"
                       onClick={openFanBubbleChart}
                     >
-                      <div className="text-xs text-black/45 flex items-center gap-1">
+                      <div className="text-xs text-black/45">
                         送礼粉丝
-                        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-black/10 text-[10px] text-black/50 cursor-help">?</span>
                       </div>
                       <div className="mt-1 text-xl font-semibold">{stats.fanCount}</div>
-                      {/* Tooltip */}
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 px-3 py-2 bg-black/85 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] text-center leading-relaxed">
-                        点击查看粉丝贡献分布图<br/>频繁访问会限流，建议访问一次后保存图片
-                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black/85"></div>
-                      </div>
                     </div>
                   </div>
 
@@ -1176,15 +1171,25 @@ const AnchorDataModule = memo(function AnchorDataModule({
 
               {/* 礼物截图 tab */}
               {activeTab === "gift_screenshot" && (
-                <GiftScreenshotPanel
-                  records={stats.records}
-                  anchorName={anchorName}
-                  anchorFace={anchorFace}
-                  fanFaces={fanFaces}
-                  yesterdayAvailable={yesterdayAvailable}
-                  mid={mid}
-                  uname={uname}
-                />
+                <div className="space-y-6">
+                  {/* 礼物录屏（新功能，置于截图上方） */}
+                  <GiftReplayPanel
+                    anchorName={anchorName}
+                    anchorFace={anchorFace}
+                    anchorUid={mid}
+                  />
+                  {/* 分割线：区分录屏与截图两个功能模块 */}
+                  <div className="border-t-2 border-dashed border-black/15" />
+                  <GiftScreenshotPanel
+                    records={stats.records}
+                    anchorName={anchorName}
+                    anchorFace={anchorFace}
+                    fanFaces={fanFaces}
+                    yesterdayAvailable={yesterdayAvailable}
+                    mid={mid}
+                    uname={uname}
+                  />
+                </div>
               )}
 
               {/* 其他数据 tab */}

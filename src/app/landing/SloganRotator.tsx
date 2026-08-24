@@ -44,7 +44,8 @@ const NEON = [
   "#7c4dff", // 蓝紫
 ];
 
-const PER_SLIDE_MS = 5000; // 单张基础停留时长
+const PER_SLIDE_MS = 8000; // 单张基础停留时长
+const SPEED_MS = 900; // 划动动画时长（更长更顺滑）
 
 /** 按当前每屏张数设置自动播放停留：单张 × 每屏张数 */
 function applyAutoplayDelay(swiper: SwiperType) {
@@ -57,6 +58,7 @@ export default function SloganRotator() {
     <div className="mt-8 w-full sm:mt-12">
       <Swiper
         modules={[Autoplay]}
+        speed={SPEED_MS}
         slidesPerView={1}
         slidesPerGroup={1}
         spaceBetween={16}
@@ -80,10 +82,10 @@ export default function SloganRotator() {
           const color = NEON[i % NEON.length]; // 每张独立取色
           return (
             <SwiperSlide key={i} className="!h-auto">
-              <div className="relative flex h-full w-full flex-col items-center gap-3 px-2 pt-6 pb-4">
+              <div className="relative flex h-full w-full flex-col items-center px-2 pt-6 pb-4">
                 {/* 文字在上 */}
                 <span
-                  className="flex min-h-10 w-full items-start justify-center px-1 text-center text-sm font-semibold leading-snug sm:text-base"
+                  className="flex min-h-10 w-full items-start justify-center px-1 text-center text-[17px] font-semibold leading-snug sm:text-[17px]"
                   style={{ color }}
                 >
                   {text}

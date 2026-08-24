@@ -1787,7 +1787,7 @@ export default function HomePage() {
       value: a.coins,
       face: isSelfAnchor(a) ? selfFace : (anchorFaces[a.ruid] || ""),
     }));
-    setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像...\n首次加载需要等待几分钟，请耐心等待" });
+    setBubbleChartData({ items: initialItems, title: "消费主播分布", loading: true, loadingText: "正在获取主播头像...请耐心等待" });
 
     // 找出还没有头像的uid（只针对top300）
     const missingUids = topAnchors.filter(a => !anchorFaces[a.ruid]).map(a => a.ruid);
@@ -2891,7 +2891,7 @@ export default function HomePage() {
                 )}
                 {[
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
-                  { icon: "🏅", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
+                  { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
                   { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false },
                 ].map((tool) => {
@@ -2919,7 +2919,11 @@ export default function HomePage() {
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <span className={`text-3xl ${disabled ? "grayscale opacity-50" : ""}`}>{tool.icon}</span>
+                      {tool.icon.endsWith(".png") ? (
+                        <img src={tool.icon} alt={tool.title} className={`h-9 w-9 object-contain ${disabled ? "grayscale opacity-50" : ""}`} />
+                      ) : (
+                        <span className={`text-3xl ${disabled ? "grayscale opacity-50" : ""}`}>{tool.icon}</span>
+                      )}
                       <div>
                         <h3 className="text-base font-bold">{tool.title}</h3>
                         <p className="mt-0.5 text-xs text-black/45">{tool.desc}</p>
