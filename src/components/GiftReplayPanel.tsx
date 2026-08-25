@@ -17,7 +17,9 @@ import { dataFetch } from "@/lib/client-fetch";
 import { getPlatform } from "@/lib/platform";
 import { ensureGiftCatalogLoaded, getGiftList } from "@/lib/gift-catalog-client";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
-import { saveVideoFile } from "@/lib/save-image";
+import { saveVideoFile, saveVideoFileFromPath, isTauriMobile } from "@/lib/save-image";
+import { open, remove, type FileHandle } from "@tauri-apps/plugin-fs";
+import { appDataDir, join } from "@tauri-apps/api/path";
 import { showToast } from "@/lib/toast";
 import Dropdown from "@/components/Dropdown";
 
@@ -766,18 +768,31 @@ function MergedPlayer({
   // 画布内绘制用的头像 / 礼物图标（crossOrigin 保持画布干净，录制视频时一起被录进去）
   const faceRef = useRef<HTMLImageElement | null>(null);
   const giftIconRef = useRef<HTMLImageElement | null>(null);
+  // 底部/顶部 chrome 预渲染离屏画布：每帧只贴同一位图，杜绝该区域逐帧像素波动
+  // （半透明圆+图标逐帧重绘/动图）导致编码器把它当动态区域、视频体积暴涨。
+  const chromeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chromeVersionRef = useRef(0);
+  const chromeRenderedVersionRef = useRef(-1);
+  const bumpChrome = () => {
+    chromeVersionRef.current++;
+  };
   useEffect(() => {
     const faceImg = new Image();
     if (anchorFace) {
       faceImg.crossOrigin = "anonymous";
       faceImg.onload = () => {
         faceRef.current = faceImg;
+        bumpChrome();
       };
       faceImg.src = anchorFace;
     }
     const giftImg = new Image();
+    giftImg.crossOrigin = "anonymous";
     giftImg.onload = () => {
+      // 礼物图标按钮保持静态：不再把动图 webp 挂到 DOM 让它逐帧播放，
+      // 否则画布（与被录制的视频）里该区域每帧都不同，导致视频体积明显变大。
       giftIconRef.current = giftImg;
+      bumpChrome();
     };
     giftImg.src = "/gift-icon.webp";
     return () => {
@@ -785,6 +800,20 @@ function MergedPlayer({
       giftImg.onload = null;
     };
   }, [anchorFace]);
+
+  // 常用礼物按钮图标（人气票，本地静态 png）
+  const renqipiaoRef = useRef<HTMLImageElement | null>(null);
+  useEffect(() => {
+    const img = new Image();
+    img.src = "/renqipiao.png";
+    img.onload = () => {
+      renqipiaoRef.current = img;
+      bumpChrome();
+    };
+    return () => {
+      img.onload = null;
+    };
+  }, []);
 
   /**
    * 把"主播头像+昵称"（左上）和"底部评论栏"直接绘制进画布（最上层），
@@ -795,6 +824,7 @@ function MergedPlayer({
     ctx: CanvasRenderingContext2D,
     faceImg: HTMLImageElement | null,
     giftImg: HTMLImageElement | null,
+    renqipiaoImg: HTMLImageElement | null,
   ) => {
     // ---- 左上角主播胶囊 badge（距顶部距离约为默认的 2 倍） ----
     const bx = 16;
@@ -846,7 +876,13 @@ function MergedPlayer({
     const gx = CANVAS_W - 20 - giftSize;
     const gy = CANVAS_H - barBottom - giftSize;
     const inputX = 20;
-    const inputW = gx - 16 - inputX;
+    // 输入框右侧为"常用礼物"按钮让位（同模拟器：输入框 → 人气票按钮 → 礼物按钮）
+    // 常用礼物按钮尺寸/底色完全照礼物按钮复刻
+    const qgSize = giftSize;
+    const qGap = 10;
+    const qgx = gx - qGap - qgSize;
+    const qgy = gy;
+    const inputW = qgx - 12 - inputX;
     roundRectPath(ctx, inputX, inputY, inputW, inputH, inputH / 2);
     ctx.fillStyle = "rgba(119, 108, 112, 0.5)";
     ctx.fill();
@@ -878,13 +914,36 @@ function MergedPlayer({
     ctx.lineWidth = 3;
     ctx.stroke();
 
+    // 常用礼物按钮（复刻模拟器"人气票"：圆形底色 + 人气票图标，位于输入框与礼物按钮之间）
+    ctx.beginPath();
+    ctx.arc(qgx + qgSize / 2, qgy + qgSize / 2, qgSize / 2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(119, 108, 112, 0.5)";
+    ctx.fill();
+    if (renqipiaoImg && renqipiaoImg.naturalWidth > 0) {
+      // 人气票图标内容偏满，缩小使其完整落在 badge 内（并裁剪进圆形，避免溢出）
+      const ri = qgSize * 0.72;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(qgx + qgSize / 2, qgy + qgSize / 2, qgSize / 2, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(renqipiaoImg, qgx + (qgSize - ri) / 2, qgy + (qgSize - ri) / 2, ri, ri);
+      ctx.restore();
+    }
+
     // 礼物按钮
     ctx.beginPath();
     ctx.arc(gx + giftSize / 2, gy + giftSize / 2, giftSize / 2, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(119, 108, 112, 0.5)";
     ctx.fill();
     if (giftImg && giftImg.naturalWidth > 0) {
-      ctx.drawImage(giftImg, gx, gy, giftSize, giftSize);
+      // 礼物图标放大以填满 badge（再裁剪进圆形，缩放后四角不溢出于圆形外）
+      const gi = giftSize * 1.2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(gx + giftSize / 2, gy + giftSize / 2, giftSize / 2, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(giftImg, gx + (giftSize - gi) / 2, gy + (giftSize - gi) / 2, gi, gi);
+      ctx.restore();
     }
   };
 
@@ -1304,7 +1363,21 @@ function MergedPlayer({
       }
 
       // 最上层：主播头像/昵称 + 底部评论栏（直接画进画布，保存视频时一起录制）
-      drawChrome(ctx, faceRef.current, giftIconRef.current);
+      // 预渲染到离屏画布，每帧贴同一位图：chrome 区域像素逐帧完全一致，
+      // 编码器不会把这段当动态区域，从而避免视频体积暴涨。
+      if (chromeVersionRef.current !== chromeRenderedVersionRef.current) {
+        if (!chromeCanvasRef.current) chromeCanvasRef.current = document.createElement("canvas");
+        const cc = chromeCanvasRef.current;
+        if (cc.width !== CANVAS_W || cc.height !== CANVAS_H) {
+          cc.width = CANVAS_W;
+          cc.height = CANVAS_H;
+        }
+        const cctx = cc.getContext("2d");
+        if (cctx) drawChrome(cctx, faceRef.current, giftIconRef.current, renqipiaoRef.current);
+        chromeRenderedVersionRef.current = chromeVersionRef.current;
+      }
+      const chromeBuf = chromeCanvasRef.current;
+      if (chromeBuf) ctx.drawImage(chromeBuf, 0, 0);
 
       // 右上角倒计时：整个拼接视频的剩余时间（分钟:秒），仅播放时显示，不录制进视频
       if (!savingRef.current) {
@@ -1395,6 +1468,8 @@ function MergedPlayer({
     setSaving(true);
     savingRef.current = true; // 同步置位：录制期间禁用循环回绕，避免录到下一遍开头
     const wasPlaying = !live.paused;
+    let dataDirAbs = ""; // 应用沙盒数据目录（移动端边录边写的落盘目录）
+    let abortPath = ""; // 出错时待清理的本地半成品文件
     try {
       // 从头播放以便录制完整内容。不钉在 0：首段缓冲起点≈0.02（非 0），
       // 停在 0 会让 Chrome 不渲染 → 起始卡顿/黑屏，故落到已缓冲起点
@@ -1438,9 +1513,41 @@ function MergedPlayer({
         ? "video/mp4"
         : "video/webm";
       const ext = mimeBase === "video/mp4" ? "mp4" : "webm";
+      const isMobile = isTauriMobile();
+      const fileName = `礼物录屏_${fmtFileTs(Date.now())}.${ext}`;
+      // 边录边写：移动端长视频把每个 500ms chunk 用 plugin-fs 流式追加写到应用沙盒文件，
+      // JS/WebKit 只短暂持有单个 chunk，避免整段 mp4 在 Blob→ArrayBuffer→IPC 里整体拷贝，
+      // 导致 iOS 长视频 WKWebView 内存吃紧闪退回首页。写完后一次性用文件路径导入相册。
+      if (isMobile) {
+        dataDirAbs = await appDataDir();
+      }
+      // 用对象持有句柄：避免 let 被闭包赋值后 TS 把它收窄成 null-only，读句柄处需用下标取值
+      const streamState: { handle: FileHandle | null } = { handle: null };
+      let appendChain: Promise<void> = Promise.resolve();
+      let chunkFailed = false;
+      let bytesWritten = 0;
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunks.push(e.data);
+        if (!e.data || e.data.size === 0) return;
+        if (isMobile) {
+          const data = e.data;
+          if (data && typeof data.arrayBuffer === "function") {
+            appendChain = appendChain.then(async () => {
+              if (chunkFailed) return;
+              try {
+                if (!streamState.handle) streamState.handle = await open(await join(dataDirAbs, fileName), { create: true, write: true, append: true });
+                const buf = new Uint8Array(await data.arrayBuffer());
+                const written = await streamState.handle!.write(buf);
+                bytesWritten += written;
+              } catch (err) {
+                chunkFailed = true;
+                console.error("[GiftReplay] 分块落盘失败:", err);
+              }
+            });
+          }
+        } else {
+          chunks.push(e.data);
+        }
       };
       const stopped = new Promise<void>((resolve) => {
         rec.onstop = () => resolve();
@@ -1452,13 +1559,27 @@ function MergedPlayer({
       await stopped;
       stream.getTracks().forEach((t) => t.stop());
 
-      const blob = new Blob(chunks, { type: mimeBase });
-      if (blob.size === 0) throw new Error("录制结果为空");
-      const buf = await blob.arrayBuffer();
-      const res = await saveVideoFile(buf, `礼物录屏_${fmtFileTs(Date.now())}.${ext}`, mimeBase);
-      if (res === "fallback") showToast("视频保存失败，请重试");
+      if (isMobile) {
+        await appendChain; // 等待所有分块真正写盘完成
+        await streamState.handle?.close();
+        if (chunkFailed) throw new Error("录制分块写入失败");
+        if (bytesWritten === 0) throw new Error("录制结果为空");
+        abortPath = await join(dataDirAbs, fileName);
+        // 从本地文件路径导入相册（成功已弹 toast），不再把整段带回 JS/IPC 内存
+        await saveVideoFileFromPath(abortPath, fileName, mimeBase);
+      } else {
+        const blob = new Blob(chunks, { type: mimeBase });
+        if (blob.size === 0) throw new Error("录制结果为空");
+        const buf = await blob.arrayBuffer();
+        const res = await saveVideoFile(buf, fileName, mimeBase);
+        if (res === "fallback") showToast("视频保存失败，请重试");
+      }
     } catch (e) {
       console.error("[GiftReplay] 保存视频失败:", e);
+      // 边录边写中途失败：删掉半成品本地文件，避免残留
+      if (abortPath) {
+        try { await remove(abortPath); } catch { /* ignore */ }
+      }
       showToast("保存视频失败");
     } finally {
       savingRef.current = false;

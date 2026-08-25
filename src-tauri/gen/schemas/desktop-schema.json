@@ -6489,10 +6489,10 @@
           "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`\n- `allow-save-file-public-from-path`",
           "type": "string",
           "const": "pldownloader:default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-ping`\n- `allow-download-private`\n- `allow-download-public`\n- `allow-save-file-private-from-buffer`\n- `allow-save-file-public-from-buffer`\n- `allow-save-file-public-from-path`"
         },
         {
           "description": "Enables the copy_file_path command without any pre-configured scope.",

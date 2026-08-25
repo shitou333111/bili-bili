@@ -4085,8 +4085,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-pldownloader"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0ea087f7c37a9f5b47b0be59bd5e5a9cc6ff156af6e8b92fd472c231f15dd8"
 dependencies = [
  "serde",
  "tauri",

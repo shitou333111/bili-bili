@@ -12,6 +12,7 @@
  */
 
 import { showToast } from "@/lib/toast";
+import { invoke } from "@tauri-apps/api/core";
 import { saveFilePublicFromBuffer } from "tauri-plugin-pldownloader-api";
 
 /** 判断当前是否为 Tauri 环境 */
@@ -132,4 +133,29 @@ export async function saveVideoFile(buffer: ArrayBuffer, fileName: string, mimeT
     console.error("[saveVideoFile] 保存失败:", err);
   }
   return "fallback";
+}
+
+/**
+ * 边录边写（移动端长视频）：把已分块写到本地文件的视频，从文件路径直接导入相册。
+ *
+ * 区别于 saveVideoFile 的"整段 Blob→ArrayBuffer 再经 IPC 整体拷贝"：调用方先用
+ * @tauri-apps/plugin-fs 把录制 chunk 流式落地到应用沙盒文件（JS 峰值只占单个 chunk），
+ * 再把文件绝对路径交给本函数；原生侧（iOS PHPhotoLibrary / Android MediaStore）
+ * 直接从盘上导入，整段内容不再进入 WebKit/IPC 内存 → 避免 iOS 长视频闪退回首页。
+ * @throws 当插件命令失败时。
+ */
+function isMobileSave(): boolean {
+  return isMobileTauri();
+}
+
+export async function saveVideoFileFromPath(filePath: string, fileName: string, mimeType: string): Promise<void> {
+  if (!isMobileSave()) throw new Error("仅移动端支持路径导入");
+  const res = await invoke<{ fileName?: string; path?: string; uri?: string }>("plugin:pldownloader|save_file_public_from_path", {
+    payload: { path: filePath, fileName, mimeType },
+  });
+  if (res && (res.uri || res.path)) {
+    showToast("视频已保存到相册");
+  } else {
+    throw new Error("保存未写入相册");
+  }
 }

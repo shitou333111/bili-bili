@@ -1,0 +1,345 @@
+## Cursor Rules for Tauri Plugin PLDownloader
+
+### Project Overview
+
+This is a Tauri plugin for file downloading (PLDownloader) that supports both desktop and mobile platforms (Android/iOS).
+
+### Code Organization & Structure
+
+- `src/lib.rs` - Main plugin entry point and exports
+- `src/commands.rs` - Tauri command implementations
+- `src/models.rs` - Data structures and types
+- `src/error.rs` - Error handling and custom error types
+- `src/desktop.rs` - Desktop-specific implementations
+- `src/mobile.rs` - Mobile-specific implementations and routing
+- `src/android_fs.rs` - Android-specific filesystem helpers used by Rust
+
+#### Platform-Specific Code
+
+- `android/` - Android-specific Kotlin code (e.g., `Downloader.kt`)
+- `ios/` - iOS-specific Swift code (scaffold in `ExamplePlugin.swift`)
+- `guest-js/` - JavaScript/TypeScript client code
+
+#### Examples
+
+- `examples/tauri-app/` - Example Tauri application demonstrating plugin usage
+
+### Cross-Platform Data Consistency Rules
+
+#### CRITICAL: Multi-Layer Data Synchronization
+
+This is a Tauri plugin repository where ANY changes to data structures, interfaces, commands, or behaviors MUST be synchronized across ALL layers:
+
+```
+guest-js/ (TypeScript interfaces)
+    ↓
+src/models.rs (Rust data structures)
+    ↓
+src/commands.rs (Rust command parameters/returns)
+    ↓
+android/ (Kotlin implementations)
+ios/ (Swift implementations)
+    ↓
+build.rs (Command registration)
+```
+
+#### Mandatory Synchronization Checklist
+
+When making ANY changes to:
+
+- TypeScript interfaces in `guest-js/`
+- Rust data structures in `src/models.rs`
+- Command signatures in `src/commands.rs`
+- Native implementations under `android/` or `ios/`
+- New or modified commands
+
+You MUST verify and update ALL of the following:
+
+1. TypeScript Client (`guest-js/`)
+
+   - Interface definitions, type exports
+   - Function signatures and error types
+
+2. Rust Models (`src/models.rs`)
+
+   - Struct definitions and serde attributes
+   - Type conversions and validation logic
+
+3. Rust Commands (`src/commands.rs`)
+
+   - Function signatures, parameter and return types
+   - Error handling
+
+4. Native Implementations
+
+   - Android (`android/`): Kotlin data classes and function signatures (e.g., `Downloader.kt`)
+   - iOS (`ios/`): Swift structs and function signatures (even if scaffolded)
+
+5. Build Configuration (`build.rs`)
+
+   - Command registration
+   - Permission and platform-specific configuration
+
+6. Permissions (`permissions/`)
+
+   - Command permissions, schema definitions, ACL manifests
+
+7. Examples (`examples/tauri-app/`)
+   - Usage examples, type imports, function calls
+
+#### Data Type Consistency Rules
+
+- Naming: Use identical semantic names across all platforms (follow platform casing conventions)
+- Structure: Maintain same field structure and compatible types
+- Serialization: Ensure proper serde attributes for cross-platform serialization
+- Validation: Implement consistent validation logic in all layers
+- Error Handling: Use consistent error types and messages
+
+#### Command Synchronization Rules
+
+- Function Names: Match across Rust commands and native implementations
+- Parameters: Same parameter types and order
+- Return Types: Consistent types across all layers
+- Error Types: Unified error handling approach
+
+#### Example Synchronization Pattern
+
+```rust
+// 1. Define in src/models.rs
+#[derive(Serialize, Deserialize)]
+pub struct DownloadRequest {
+    pub url: String,
+    pub destination: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DownloadResponse {
+    pub success: bool,
+    pub file_path: Option<String>,
+}
+
+// 2. Use in src/commands.rs
+#[tauri::command]
+pub async fn start_download(
+    app_handle: tauri::AppHandle,
+    request: DownloadRequest,
+) -> Result<DownloadResponse, crate::error::Error> {
+    // Implementation
+}
+```
+
+```ts
+// 3. Define in guest-js/index.ts
+export interface DownloadRequest {
+  url: string;
+  destination: string;
+}
+
+export interface DownloadResponse {
+  success: boolean;
+  file_path?: string;
+}
+```
+
+```kotlin
+// 4. Implement in android/Downloader.kt
+data class DownloadRequest(
+    val url: String,
+    val destination: String
+)
+```
+
+```swift
+// 5. Implement in ios/ExamplePlugin.swift (or specific downloader file)
+struct DownloadRequest: Codable {
+    let url: String
+    let destination: String
+}
+```
+
+```rust
+// 6. Register in build.rs
+// Ensure the `start_download` command is registered
+```
+
+#### Validation Checklist
+
+- [ ] TypeScript interfaces match Rust structs
+- [ ] Command signatures are consistent across platforms
+- [ ] Native implementations use correct data types
+- [ ] Build configuration includes new/updated commands
+- [ ] Permissions are properly defined/updated
+- [ ] Examples are updated and compile
+- [ ] Error handling is consistent
+- [ ] Serialization/deserialization works correctly
+
+### Development Guidelines
+
+#### Rust Code Standards
+
+- Use `anyhow` or domain error types in `src/error.rs` as appropriate
+- Follow Rust naming conventions (snake_case for functions/variables, PascalCase for types)
+- Use `serde` for serialization/deserialization
+- Add documentation comments for public APIs
+- Prefer clear, early-return control flow; avoid deep nesting
+
+#### Command Implementation Pattern
+
+```rust
+#[tauri::command]
+pub async fn command_name(
+    app_handle: tauri::AppHandle,
+    // other parameters
+) -> Result<ResponseType, ErrorType> {
+    // Implementation
+}
+```
+
+#### Error Handling
+
+- Use custom error types defined in `src/error.rs`
+- Return `Result<T, E>` from all command functions
+- Provide meaningful error messages; avoid leaking sensitive info
+- Map platform-specific errors to unified error variants
+
+#### Platform-Specific Code
+
+- Desktop: Implement in `src/desktop.rs`
+- Mobile: Implement in `src/mobile.rs` with platform detection; leverage `src/android_fs.rs` for Android FS specifics when needed
+- Use conditional compilation with `#[cfg(target_os = "...")]`
+
+#### TypeScript/JavaScript Client
+
+- Maintain type safety with proper TypeScript definitions
+- Use async/await for command calls and handle errors
+- Keep API surface minimal and consistent
+
+### Testing & Examples
+
+#### Example Application
+
+- Keep `examples/tauri-app/` updated with latest plugin features
+- Demonstrate major functionality including error handling
+- Verify both desktop and mobile flows where applicable
+
+#### Testing Strategy
+
+- Unit tests for Rust code
+- Integration tests for command functionality
+- Platform-specific tests for Android/iOS where feasible
+- Example app serves as an integration test
+
+### Build & Configuration
+
+#### Cargo.toml
+
+- Maintain accurate dependencies and versions
+- Include necessary features per target platform
+- Keep build scripts updated
+
+#### Platform Configuration
+
+- Android: Maintain `android/` structure and Gradle configs
+- iOS: Maintain `ios/` structure and Xcode/Swift Package configs
+- Ensure required permissions and capabilities are present
+
+### Documentation
+
+#### Code Documentation
+
+- Document all public APIs with `///` comments
+- Include usage examples in docs
+- Maintain `README.md` with setup and usage
+- Document platform-specific requirements
+
+#### API Documentation
+
+- Keep `permissions/` directory updated
+- Maintain schema definitions and ACL manifests
+- Document command parameters and return types
+
+#### Permissions and Schema Maintenance (MANDATORY when adding a command)
+
+- `permissions/schemas/schema.json` is NOT auto-generated. Update it manually whenever you add a new command:
+  - Add two PermissionKind entries following this pattern:
+    - `allow-<kebab-command-name>`
+    - `deny-<kebab-command-name>`
+  - Example: Rust command `download_private` → permissions `allow-download-private`, `deny-download-private`.
+- Create an autogenerated command permission file under `permissions/autogenerated/commands/`:
+  - File name: `<kebab-command-name>.toml`
+  - Content should define both `allow-...` and `deny-...` entries mapping to the new command.
+- Add the new `allow-...` entry to `permissions/default.toml` if the command should be enabled by default.
+- Verify the following after changes:
+  - New command registered in `src/lib.rs` invoke handler
+  - Rust command in `src/commands.rs`
+  - Bridge in `src/mobile.rs` and desktop fallback in `src/desktop.rs`
+  - Types in `src/models.rs` and `guest-js/index.ts`
+  - Android/iOS native implementations added/updated
+
+### Git Workflow
+
+#### Commit Messages
+
+- Use conventional commit format
+- Include platform-specific tags when relevant (e.g., android, ios, rust, js)
+- Reference issues/PRs when applicable
+
+#### Branch Strategy
+
+- `main` - stable releases
+- `develop` - integration branch for development
+- Feature branches for new functionality
+- Platform-specific branches when needed
+
+### Performance & Best Practices
+
+#### Memory Management
+
+- Avoid unnecessary allocations in hot paths
+- Use proper ownership patterns in Rust
+- Minimize data copying across the JS/Rust/native boundary
+
+#### Async Operations
+
+- Use async/await consistently
+- Handle long-running operations with progress/cancellation if applicable
+- Avoid blocking the main thread on any platform
+
+#### Platform Integration
+
+- Follow platform best practices
+- Handle platform differences gracefully with clear fallbacks
+
+### Security Considerations
+
+#### Input Validation
+
+- Validate all command inputs (URLs, file paths, etc.)
+- Sanitize data before processing
+- Implement proper access controls and sandbox-aware paths
+
+#### Error Information
+
+- Avoid exposing sensitive information in errors
+- Log appropriately for debugging without leaking secrets
+- Handle authentication/authorization concerns if introduced
+
+### Maintenance
+
+#### Dependencies
+
+- Keep dependencies updated
+- Monitor security advisories
+- Test thoroughly after updates
+
+#### Platform Updates
+
+- Stay current with Tauri updates
+- Monitor Android/iOS SDK changes
+- Update platform-specific code as needed
+
+#### Code Quality
+
+- Run clippy and format consistently
+- Maintain readable, well-structured code
+- Perform regular reviews and refactoring

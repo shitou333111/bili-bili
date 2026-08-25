@@ -1,0 +1,43 @@
+{
+  "name": "tauri-plugin-pldownloader-api",
+  "version": "1.0.1",
+  "author": "Phuc Le <lecaobaophuc@gmail.com>",
+  "description": "TypeScript client for the Tauri PLDownloader plugin (Android/iOS).",
+  "type": "module",
+  "types": "./dist-js/index.d.ts",
+  "main": "./dist-js/index.cjs",
+  "module": "./dist-js/index.js",
+  "exports": {
+    "types": "./dist-js/index.d.ts",
+    "import": "./dist-js/index.js",
+    "require": "./dist-js/index.cjs"
+  },
+  "files": [
+    "dist-js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "prepublishOnly": "yarn build",
+    "pretest": "yarn build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lecaobaophuc0912/tauri-plugin-pldownloader.git"
+  },
+  "homepage": "https://github.com/lecaobaophuc0912/tauri-plugin-pldownloader",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^12.0.0",
+    "rollup": "^4.9.6",
+    "typescript": "^5.3.3",
+    "tslib": "^2.6.2"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

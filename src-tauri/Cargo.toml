@@ -61,5 +61,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # 本地 vendor 的 tauri-plugin-hotswap：修复 Android 热更新目录路径（identifier 含 '-'，
 # 而 Android 包名将其替换为 '_'，原插件硬编码 /data/data/<identifier>/ 指向不存在目录，
 # 导致 apply 时 create_dir_all 报 EACCES 13 "I/O ERROR: Permission denied"）。
+# tauri-plugin-pldownloader 同样本地 vendor：新增增量写入（边录边写）能力
+# （save_file_public_append/finalize/abort），长视频录制时按 chunk 分块落盘，
+# 避免整段 mp4 在 WKWebView 中 Blob→ArrayBuffer 再经 IPC 整体拷贝导致的 iOS 闪退回首页。
 [patch.crates-io]
 tauri-plugin-hotswap = { path = "vendor/tauri-plugin-hotswap" }
+tauri-plugin-pldownloader = { path = "vendor/tauri-plugin-pldownloader" }

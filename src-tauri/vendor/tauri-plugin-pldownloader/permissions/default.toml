@@ -1,0 +1,3 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = ["allow-ping", "allow-download-private", "allow-download-public", "allow-save-file-private-from-buffer", "allow-save-file-public-from-buffer", "allow-save-file-public-from-path"]
