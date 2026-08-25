@@ -18,11 +18,12 @@ function formatActivityRange(start?: number, end?: number): string {
   const fmt = (ts?: number) => {
     if (!ts) return "";
     const d = new Date(ts * 1000);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    // 精简日期：仅月份.日子，如 08.26
+    return `${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
   };
   const s = fmt(start);
   const e = fmt(end);
-  if (s && e) return `${s} ~ ${e}`;
+  if (s && e) return `${s} - ${e}`;
   return s || (e ? `~ ${e}` : "");
 }
 

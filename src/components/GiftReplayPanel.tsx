@@ -514,6 +514,7 @@ function truncateText(ctx: CanvasRenderingContext2D, text: string, maxW: number)
 /** 送礼横幅用户头像缓存：昵称 -> 已加载 img（null 表示已确认无头像）；未请求过 = undefined */
 const bannerFaceCache = new Map<string, HTMLImageElement | null>();
 
+/** 按送礼者昵称取头像（礼物流水只有昵称，贡献榜按昵称返回 face） */
 function getBannerFace(nick?: string): HTMLImageElement | null | undefined {
   if (!nick) return null;
   return bannerFaceCache.get(nick);
@@ -1034,6 +1035,23 @@ function MergedPlayer({
       }
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
+      // 把一帧按定位规则画到主画布：竖屏铺满、横屏长宽等比并居中偏上
+      const drawFrame = (src: CanvasImageSource, vw: number, vh: number, topOffset: number) => {
+        const lr = vw / vh;
+        const portrait = vh / vw > PORTRAIT_RATIO;
+        if (portrait) {
+          const cr = CANVAS_W / CANVAS_H;
+          let dw = CANVAS_W;
+          let dh = CANVAS_H;
+          if (lr > cr) dw = CANVAS_H * lr;
+          else dh = CANVAS_W / lr;
+          ctx.drawImage(src, (CANVAS_W - dw) / 2, (CANVAS_H - dh) / 2, dw, dh);
+        } else {
+          const vh2 = CANVAS_W * (vh / vw);
+          ctx.drawImage(src, 0, topOffset, CANVAS_W, vh2);
+        }
+      };
+
       // 直播间背景图（最底层）：保持原图比例 cover 裁剪，根据画布比例裁掉多出的高或宽
       const bg = bgRef.current;
       if (bg && bg.naturalWidth > 0 && bg.naturalHeight > 0) {
@@ -1126,10 +1144,9 @@ function MergedPlayer({
           }
         }
 
-        // 跨 run 主动切换 + 渐隐渐显过渡：
+        // 跨 run 主动切换：最简单拼接。
         // - 不同礼物(相隔>20s)被拆成多个 run，run 间用 EXT-X-DISCONTINUITY 衔接，片段携带源 PTS，
         //   hls.js 在该交接处常卡在上一 run 最后一帧、无法自动续播 → 主动 seek 到下一 run 起点并 startLoad。
-        // - 同时在段尾把画面淡出(黑)、跳段后淡入，消除切换的突兀感。fadeA 供最上层遮罩绘制使用。
         fadeA = 0;
         if (videoReady && !live.paused && !needsRecoveryRef.current) {
           let curRi = -1;
@@ -1138,30 +1155,15 @@ function MergedPlayer({
             const rs1 = plan.runs[i].segEnd * SEG_SECONDS;
             if (live.currentTime >= rs0 && live.currentTime < rs1) { curRi = i; break; }
           }
-          if (curRi >= 0) {
-            const FADE = 0.4; // 单段渐隐/渐显时长(s)
-            const runStart = plan.runs[curRi].segStart * SEG_SECONDS;
+          if (curRi >= 0 && curRi < plan.runs.length - 1) {
             const runEnd = plan.runs[curRi].segEnd * SEG_SECONDS;
-            const isLast = curRi === plan.runs.length - 1;
-            // 段尾渐出（非末段）：runEnd 前 FADE 开始淡出，在 runEnd-0.05 跳入下一段（此时已接近全黑）
-            if (!isLast) {
-              const fadeStart = runEnd - FADE;
-              if (live.currentTime > fadeStart) {
-                fadeA = Math.min(1, (live.currentTime - fadeStart) / FADE);
-              }
-              if (live.currentTime >= runEnd - 0.05 && live.currentTime < runEnd + 0.6) {
-                fadeA = 1;
-                const nextStart = plan.runs[curRi + 1].segStart * SEG_SECONDS;
-                console.warn(`[GiftReplay][hls] 跨 run 过渡(${live.currentTime.toFixed(1)}→${nextStart.toFixed(1)})`);
-                try { live.currentTime = nextStart; } catch { /* ignore */ }
-                try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
-                watchLastT = nextStart;
-                watchLastMove = performance.now();
-              }
-            }
-            // 段首渐入（非首段）：跳段后从黑淡入
-            if (curRi > 0 && live.currentTime < runStart + FADE) {
-              fadeA = Math.max(fadeA, 1 - (live.currentTime - runStart) / FADE);
+            if (live.currentTime >= runEnd - 0.05 && live.currentTime < runEnd + 0.6) {
+              const nextStart = plan.runs[curRi + 1].segStart * SEG_SECONDS;
+              console.warn(`[GiftReplay][hls] 跨 run 拼接(${live.currentTime.toFixed(1)}→${nextStart.toFixed(1)})`);
+              try { live.currentTime = nextStart; } catch { /* ignore */ }
+              try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
+              watchLastT = nextStart;
+              watchLastMove = performance.now();
             }
           }
         }
@@ -1236,20 +1238,7 @@ function MergedPlayer({
 
       if (videoReady) {
         // 直播画面定位：竖屏铺满整个画布，横屏宽度填满高度等比（参考模拟器 LiveStreamBackground）
-        const lr = live.videoWidth / live.videoHeight;
-        const portrait = live.videoHeight / live.videoWidth > PORTRAIT_RATIO;
-        if (portrait) {
-          const cr = CANVAS_W / CANVAS_H;
-          let dw = CANVAS_W;
-          let dh = CANVAS_H;
-          if (lr > cr) dw = CANVAS_H * lr;
-          else dh = CANVAS_W / lr;
-          ctx.drawImage(live, (CANVAS_W - dw) / 2, (CANVAS_H - dh) / 2, dw, dh);
-        } else {
-          const vh = CANVAS_W * (live.videoHeight / live.videoWidth);
-          const vy = CANVAS_H * 0.2; // 顶部留出画布高度的 20%，视频居中偏上
-          ctx.drawImage(live, 0, vy, CANVAS_W, vh);
-        }
+        drawFrame(live, live.videoWidth, live.videoHeight, CANVAS_H * 0.2);
       }
 
       // 礼物特效叠加：礼物在 animStart 处出现（run 内按排队规则）。
@@ -1328,8 +1317,7 @@ function MergedPlayer({
         ctx.textBaseline = "middle";
       }
 
-      // 跨 run 交界"渐隐渐显"过渡：在同一段末尾把画面淡出，跳到下一段后淡入，
-      // 让不同段落之间的切换不再突兀（叠加黑色遮罩，alpha 由过渡相位算出）。
+      // 过渡遮罩（当前恒为 0，保留变量避免影响其余逻辑）
       if (fadeA > 0.002) {
         ctx.globalAlpha = fadeA;
         ctx.fillStyle = "#000";
@@ -1401,13 +1389,21 @@ function MergedPlayer({
       setPlaying(true);
 
       const stream = canvas.captureStream(30);
-      // 选择当前环境支持的录制格式（iOS/Safari 通常只支持 video/mp4）
+      // 选择当前环境支持的录制格式。优先 mp4：容器自带时长元数据与封面，系统相册可正确识别
+      // （webm 由 MediaRecorder 产出常缺 Duration，表现为"可播但时长0、封面黑屏"）。
       let mime = "";
-      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) mime = "video/webm;codecs=vp9";
+      if (MediaRecorder.isTypeSupported("video/mp4")) mime = "video/mp4";
+      else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) mime = "video/webm;codecs=vp9";
       else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) mime = "video/webm;codecs=vp8";
       else if (MediaRecorder.isTypeSupported("video/webm")) mime = "video/webm";
-      else if (MediaRecorder.isTypeSupported("video/mp4")) mime = "video/mp4";
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      // 以 recorder 实际生效的 mimeType 为准判断容器，避免因探测返回 false 导致格式张冠李戴
+      // （如 iOS 上探测不出 mp4、MediaRecorder 默认却编码 mp4，若仍当 webm 存，相册会拒写）
+      const actualMime = rec.mimeType || mime || "";
+      const mimeBase = actualMime.startsWith("video/mp4") || actualMime.startsWith("application/mp4")
+        ? "video/mp4"
+        : "video/webm";
+      const ext = mimeBase === "video/mp4" ? "mp4" : "webm";
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunks.push(e.data);
@@ -1422,8 +1418,6 @@ function MergedPlayer({
       await stopped;
       stream.getTracks().forEach((t) => t.stop());
 
-      const mimeBase = mime.startsWith("video/mp4") ? "video/mp4" : "video/webm";
-      const ext = mimeBase === "video/mp4" ? "mp4" : "webm";
       const blob = new Blob(chunks, { type: mimeBase });
       if (blob.size === 0) throw new Error("录制结果为空");
       const buf = await blob.arrayBuffer();
@@ -1602,20 +1596,24 @@ export default function GiftReplayPanel({
       new Set(clips.map((c) => c.group.session.live_id).filter(Boolean)),
     ).filter((id) => !fetchedFaceLiveIdsRef.current.has(id));
     if (liveIds.length === 0) return;
-    for (const id of liveIds) fetchedFaceLiveIdsRef.current.add(id);
     let disposed = false;
     (async () => {
       for (const id of liveIds) {
         try {
           const res = await dataFetch(`/api/anchor/gift-replay?action=user_faces&live_id=${id}`);
           const json = await res.json();
-          if (disposed || json?.code !== 0 || !json?.data) continue;
+          if (disposed || json?.code !== 0 || !json?.data) {
+            // 失败/异常：不标记「已请求」，下次生成或刷新会自动重试
+            continue;
+          }
           const faces = json.data as Record<string, string>;
+          // 仅当成功拉到非空头像列表才记入已请求集合，避免对同一场次反复发请求
+          if (Object.keys(faces).length > 0) fetchedFaceLiveIdsRef.current.add(id);
           for (const [nick, face] of Object.entries(faces)) {
             if (nick && face) setBannerFace(nick, face);
           }
         } catch {
-          // 拉取失败不阻塞横幅（兜底显示首字占位）
+          // 拉取失败不阻塞横幅（兜底显示首字占位）；不标记已请求，留待重试
         }
       }
     })();

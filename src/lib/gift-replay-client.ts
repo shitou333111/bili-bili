@@ -76,7 +76,7 @@ type BaseResp = {
 type UserScoreRankResp = {
   code: number;
   message: string;
-  data?: { userInfos?: Array<{ nickname?: string; face?: string }> };
+  data?: { userInfos?: Array<{ nickname?: string; uname?: string; face?: string }> };
 };
 
 const NEEDS_RELOGIN = { code: 0, message: "needs-relogin", data: null };
@@ -262,7 +262,9 @@ async function fetchUserFaces(
   });
   const map: Record<string, string> = {};
   for (const u of json?.data?.userInfos ?? []) {
-    if (u?.nickname && u?.face) map[u.nickname] = u.face;
+    // 礼物流水只有昵称，贡献榜按昵称返回 face；用昵称作主键匹配横幅头像
+    const nick = u?.nickname || u?.uname;
+    if (nick && u?.face) map[nick] = u.face;
   }
   return map;
 }
