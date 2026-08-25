@@ -19,25 +19,11 @@
   ],
   "synthesis_activities": [
     {
-      "id": "activity-1",
-      "type": "material_package",
-      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/HalfInit?config_id=sp_2076590402963353600",
-      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/PlayRecord?config_id=sp_2076590402963353600",
-      "active": true
-    },
-    {
-      "id": "activity-2",
-      "type": "slot_draw",
-      "info_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id=9",
-      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneRecord?conf_id=9",
-      "active": true
-    },
-    {
-      "id": "activity-3",
-      "type": "card_flip",
-      "info_url": "",
-      "record_url": "https://api.live.bilibili.com/xlive/custom-activity-interface/general/cardplay/PlayRecord?config_id=8",
-      "active": true
+      "id": "玲珑宝斋",
+      "active": true,
+      "name": "玲珑宝斋",
+      "products": ["相识玉扣", "常伴珠钗", "缘起瓷瓶", "倾心宝冠", "万象天衣"],
+      "materials": ["玲珑宝斋-锦囊", "玲珑宝斋-瓷瓶", "玲珑宝斋-银盒", "玲珑宝斋-云锦", "玲珑宝斋-玉函"]
     }
   ],
   "real_activity_url": "",

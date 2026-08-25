@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import type { SynthesisActivityConfig, SynthesisActivityType } from "./config";
+import type { SynthesisActivityConfig } from "./config";
 
 const CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.json");
 const DEFAULT_CONFIG_FILE = path.join(process.cwd(), "public", "admin-config.default.json");
@@ -75,14 +75,4 @@ async function readDefaultConfig(): Promise<AdminConfig | null> {
 export async function writeAdminConfig(config: AdminConfig) {
   await ensureConfigFile();
   await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
-}
-
-const VALID_ACTIVITY_TYPES: SynthesisActivityType[] = ["slot_draw", "material_package", "card_flip"];
-
-export function validateActivityType(type: string): type is SynthesisActivityType {
-  return VALID_ACTIVITY_TYPES.includes(type as SynthesisActivityType);
-}
-
-export function getValidActivityTypes(): string[] {
-  return VALID_ACTIVITY_TYPES;
 }

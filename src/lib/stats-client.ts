@@ -14,7 +14,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
-import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice } from "./gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice, getGiftList as getCatalogGiftList } from "./gift-catalog-client";
 import {
   BLIND_BOX_CONFIG,
   BLIND_BOX_API,
@@ -697,227 +697,57 @@ async function fetchRedPocketGiftList(platform: Platform, cookie: string): Promi
   }
 }
 
-// ---- 合成活动信息 ----
+// ---- 包裹礼物 ----
 
-type SynthesisActivityInfo = {
-  name: string;
-  icon?: string;
-  resource?: Record<string, unknown>;
-  rewards?: Record<string, unknown>[];
-  gift_info?: Array<{
-    gift_id: number;
-    gift_name: string;
-    gift_img: string;
-    gift_price: number;
-  }>;
-  gift_image_cache?: Record<string, string>;
-};
-
-async function fetchSynthesisActivityInfo(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo | null> {
-  try {
-    if (activity.type === "slot_draw") return fetchSlotDrawInfo(platform, cookie, activity);
-    if (activity.type === "material_package") return fetchMaterialPackageInfo(platform, cookie, activity);
-    if (activity.type === "card_flip") return { name: "仲夏卡牌" };
-    return { name: activity.id };
-  } catch {
-    return { name: activity.id };
-  }
-}
-
-async function fetchSlotDrawInfo(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo> {
-  const response = await platform.fetchBilibiliJson<{
-    code: number;
-    data?: { activity_name?: string; activity_img?: string; gift_info?: SynthesisActivityInfo["gift_info"] } | null;
-  }>({ url: activity.info_url, cookie });
-  if (response.code === 0 && response.data) {
-    const result: SynthesisActivityInfo = {
-      name: response.data.activity_name || activity.id,
-      icon: response.data.activity_img,
-    };
-    if (response.data.gift_info) result.gift_info = response.data.gift_info;
-    return result;
-  }
-  return { name: activity.id };
-}
-
-async function fetchMaterialPackageInfo(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo> {
-  const response = await platform.fetchBilibiliJson<{
-    code: number;
-    data?: {
-      act_name?: string;
-      resource?: Record<string, unknown>;
-      rewards?: Record<string, unknown>[];
-    } | null;
-  }>({ url: activity.info_url, cookie });
-  if (response.code === 0 && response.data) {
-    const result: SynthesisActivityInfo = {
-      name: response.data.act_name || activity.id,
-      icon: (response.data.resource?.gift_1 as string) || undefined,
-    };
-    if (response.data.resource) result.resource = response.data.resource;
-    if (response.data.rewards) result.rewards = response.data.rewards;
-    return result;
-  }
-  return { name: activity.id };
-}
-
-// ---- 合成活动记录 ----
-
-type SlotDrawRawRecord = {
-  goods_num: number;
-  pay_price: number;
-  refund_price: number;
-  record_type: number;
-  status: number;
-  mtime: string;
-  gift_info: {
-    gift_id: number;
-    gift_name: string;
-    gift_img: string;
-    gift_price: number;
-  } | null;
-  ruid: number;
-};
-
-type MaterialPackageRawRecord = {
-  ruid: number;
-  synthetic_time: number;
-  synthetic_result: number;
+type BagGiftItem = {
+  gift_id: number;
   gift_name: string;
-  gift_price: number;
-  materials: Array<{ name: string; num: number }>;
-  materials_price: number;
+  gift_num: number;
+  is_locked: boolean;
+  locked_text: string;
+  /** 单价（元） */
+  price: number;
+  img: string;
 };
 
-type CardFlipRawRecord = {
-  reward_name: string;
-  reward_value: number;
-  card_idx: number[];
-  ruid: number;
-  settle_time?: number;
-  [key: string]: unknown;
-};
-
-type SynthesisActivityRawRecord = SlotDrawRawRecord | MaterialPackageRawRecord | CardFlipRawRecord;
-
-async function fetchSynthesisActivityRecords(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityRawRecord[]> {
-  // 注意：此处不要吞掉错误。一旦这里把异常吞掉并返回空数组，
-  // 上层 fetchSynthesisStats 会把空数组当作“有效空数据”保存，覆盖本地缓存，
-  // 导致活动卡片数据丢失。让异常向上传播，由上层回退到本地缓存。
-  if (activity.type === "slot_draw") return fetchSlotDrawRecords(platform, cookie, activity);
-  if (activity.type === "material_package") return fetchMaterialPackageRecords(platform, cookie, activity);
-  if (activity.type === "card_flip") return fetchCardFlipRecords(platform, cookie, activity);
-  return [];
-}
-
-/**
- * 带重试的 B站 JSON 请求。
- * 网络瞬时失败（连接/TLS 抖动）时指数退避重试，避免单次失败中断整段翻页。
- */
-async function fetchSynthesisJsonWithRetry<T>(
-  platform: Platform,
-  url: string,
-  cookie: string,
-): Promise<T | null> {
-  const MAX_RETRIES = 3;
-  const BACKOFF_MS = 1000;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await platform.fetchBilibiliJson<T>({ url, cookie });
-    } catch (err: any) {
-      lastErr = err;
-      const isRateLimit = err?.message?.includes("412");
-      const delay = isRateLimit ? 30_000 : BACKOFF_MS * Math.pow(2, attempt);
-      if (attempt < MAX_RETRIES) {
-        console.warn(`[SynthesisStats] 请求失败，等待${delay}ms后重试 ${attempt + 1}/${MAX_RETRIES}: ${err?.message || err}`);
-        await new Promise((r) => setTimeout(r, delay));
-      }
+async function fetchBagList(platform: Platform, cookie: string): Promise<BagGiftItem[]> {
+  try {
+    const url = `https://api.live.bilibili.com/xlive/web-room/v1/gift/bag_list?room_id=23915535`;
+    const response = await platform.fetchBilibiliJson<{
+      code: number;
+      data?: {
+        list?: Array<{
+          gift_id: number;
+          gift_name: string;
+          gift_num: number;
+          is_locked: boolean;
+          locked_text: string;
+        }>;
+        gift_config?: Array<{ id: number; name: string; price: number; img_basic: string }>;
+      } | null;
+    }>({ url, cookie, live: true });
+    if (response.code !== 0 || !response.data?.list) return [];
+    // gift_config 是数组，按 gift_id 建立索引后再匹配价格与图标
+    const configMap = new Map<number, { name: string; price: number; img_basic: string }>();
+    for (const c of response.data.gift_config ?? []) {
+      configMap.set(c.id, c);
     }
+    return response.data.list.map((item) => {
+      const cfg = configMap.get(item.gift_id);
+      return {
+        gift_id: item.gift_id,
+        gift_name: item.gift_name,
+        gift_num: item.gift_num,
+        is_locked: item.is_locked,
+        locked_text: item.locked_text || "",
+        // 礼物列表中的 price 是分（百分为 1 电池），除以 100 换算成电池单价
+        price: cfg ? Math.round(cfg.price / 100) : 0,
+        img: cfg?.img_basic || "",
+      };
+    });
+  } catch {
+    return [];
   }
-  throw lastErr;
-}
-
-async function fetchSlotDrawRecords(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SlotDrawRawRecord[]> {
-  const allRecords: SlotDrawRawRecord[] = [];
-  let offset = 0;
-  while (true) {
-    const url = `${activity.record_url}&offset=${offset}`;
-    const response = await fetchSynthesisJsonWithRetry<{
-      code: number;
-      data?: { record_info?: Array<SlotDrawRawRecord>; next_offset: number } | null;
-    }>(platform, url, cookie);
-    if (!response || response.code !== 0 || !response.data) break;
-    const records = response.data.record_info ?? [];
-    allRecords.push(...records);
-    if (response.data.next_offset === -1 || records.length === 0) break;
-    offset = response.data.next_offset;
-  }
-  return allRecords;
-}
-
-async function fetchMaterialPackageRecords(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<MaterialPackageRawRecord[]> {
-  const allRecords: MaterialPackageRawRecord[] = [];
-  let page = 1;
-  while (true) {
-    const url = `${activity.record_url}&page=${page}&page_size=10`;
-    const response = await fetchSynthesisJsonWithRetry<{
-      code: number;
-      data?: { items?: MaterialPackageRawRecord[]; has_more?: boolean } | null;
-    }>(platform, url, cookie);
-    if (!response || response.code !== 0 || !response.data) break;
-    const items = response.data.items ?? [];
-    allRecords.push(...items);
-    if (!response.data.has_more || items.length === 0) break;
-    page++;
-  }
-  return allRecords;
-}
-
-async function fetchCardFlipRecords(
-  platform: Platform,
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<CardFlipRawRecord[]> {
-  const allRecords: CardFlipRawRecord[] = [];
-  let page = 1;
-  while (true) {
-    const url = `${activity.record_url}&page=${page}&page_size=10`;
-    const response = await fetchSynthesisJsonWithRetry<{
-      code: number;
-      data?: { items?: CardFlipRawRecord[]; has_more?: boolean } | null;
-    }>(platform, url, cookie);
-    if (!response || response.code !== 0 || !response.data) break;
-    const items = response.data.items ?? [];
-    allRecords.push(...items);
-    if (!response.data.has_more || items.length === 0) break;
-    page++;
-  }
-  return allRecords;
 }
 
 // ---- 盲盒 ----
@@ -1076,6 +906,10 @@ type SynthesisDetailedRecord = {
   synthetic_time: number;
   coin_type?: string;
   gift_id?: number;
+  /** 合成产物记录的数量（包裹礼物补充时若大于1则为多条聚合数量） */
+  gift_num?: number;
+  /** 消费记录方式：素材记录关联的产物名（用于卡片按产物聚合花费） */
+  product_name?: string;
 };
 
 type SynthesisActivityProfitResult = {
@@ -1106,558 +940,15 @@ type SynthesisCertification = {
 
 type SynthesisActivityStats = {
   id: string;
-  type: string;
+  type?: string;
   name: string;
   icon?: string;
+  start_time?: number;
+  end_time?: number;
   profit: SynthesisActivityProfitResult;
   certifications: SynthesisCertification[];
 };
 
-interface SynthesisProfitCalculator {
-  calculate(records: unknown[], activityInfo?: JsonObject | null): SynthesisActivityProfitResult;
-}
-
-function formatTimestamp(ts: number): string {
-  const date = new Date(ts * 1000);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${year}.${month}.${day} ${hours}:${minutes}`;
-}
-
-class SlotDrawCalculator implements SynthesisProfitCalculator {
-  calculate(records: unknown[], activityInfo?: JsonObject | null): SynthesisActivityProfitResult {
-    const recs = records as SlotDrawRawRecord[];
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let drawCount = 0;
-    let replaceCount = 0;
-    let synthesisCount = 0;
-    const giftMap = new Map<number, SynthesisGiftInfo>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageMap = new Map<string, string>();
-    const giftInfo = activityInfo?.gift_info as Array<{
-      gift_name: string;
-      gift_img: string;
-    }> | undefined;
-    if (giftInfo) {
-      for (const gift of giftInfo) giftImageMap.set(gift.gift_name, gift.gift_img);
-    }
-
-    const anchorCurrentGift = new Map<number, { name: string; price: number; img: string } | null>();
-
-    const synthesizedAnchors = new Set<number>();
-    for (const record of recs) {
-      if (record.status === 1 && record.record_type === 4 && record.gift_info) {
-        synthesizedAnchors.add(record.ruid);
-      }
-    }
-
-    for (const record of recs) {
-      if (record.status !== 1) continue;
-
-      const anchor = anchorMap.get(record.ruid) || { ruid: record.ruid, rname: "", totalSpent: 0, totalEarned: 0 };
-      const timestamp = Math.floor(new Date(record.mtime.replace(/-/g, "/")).getTime() / 1000);
-      const dateStr = record.mtime.replace(/-/g, ".");
-
-      if (record.record_type === 4 && record.gift_info) {
-        const price = record.gift_info.gift_price / 100;
-        totalEarned += price;
-        anchor.totalEarned += price;
-        synthesisCount++;
-
-        const existing = giftMap.get(record.gift_info.gift_id);
-        if (existing) {
-          existing.count++;
-        } else {
-          const giftImg = giftImageMap.get(record.gift_info.gift_name) || record.gift_info.gift_img;
-          giftMap.set(record.gift_info.gift_id, {
-            gift_id: record.gift_info.gift_id,
-            gift_name: record.gift_info.gift_name,
-            gift_img: giftImg,
-            gift_price: price,
-            count: 1,
-          });
-        }
-
-        const giftImg = giftImageMap.get(record.gift_info.gift_name) || record.gift_info.gift_img;
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_info.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent: 0,
-          profit: price,
-          synthetic_result: 1,
-          date: dateStr,
-          synthetic_time: timestamp,
-        });
-
-        anchorCurrentGift.set(record.ruid, { name: record.gift_info.gift_name, price, img: giftImg });
-      } else if (record.record_type === 1 || record.record_type === 3) {
-        if (!synthesizedAnchors.has(record.ruid)) continue;
-        const spent = record.pay_price / 100;
-        totalSpent += spent;
-        anchor.totalSpent += spent;
-        if (record.record_type === 1) drawCount++;
-        else replaceCount++;
-
-        const currentGift = anchorCurrentGift.get(record.ruid);
-        const giftName = currentGift?.name || "未合成";
-        const giftImg = currentGift?.img || "";
-        const giftPrice = currentGift?.price || 0;
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: giftName,
-          gift_price: giftPrice,
-          gift_img: giftImg,
-          spent,
-          profit: -spent,
-          synthetic_result: 0,
-          date: dateStr,
-          synthetic_time: timestamp,
-        });
-      }
-
-      anchorMap.set(record.ruid, anchor);
-    }
-
-    const giftList = Array.from(giftMap.values()).sort((a, b) => b.gift_price - a.gift_price);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount,
-      replaceCount,
-      synthesisCount,
-      successCount: synthesisCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-class MaterialPackageCalculator implements SynthesisProfitCalculator {
-  calculate(records: unknown[], activityInfo?: JsonObject | null): SynthesisActivityProfitResult {
-    const recs = records as MaterialPackageRawRecord[];
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let synthesisCount = 0;
-    let successCount = 0;
-    const giftMap = new Map<string, SynthesisGiftInfo & { gift_key: string }>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageMap = new Map<string, string>();
-    if (activityInfo?.resource) {
-      for (const [key, value] of Object.entries(activityInfo.resource)) {
-        if (key.startsWith("gift_") && typeof value === "string") giftImageMap.set(key, value);
-      }
-    }
-    const giftPriceMap = new Map<number, string>();
-    for (const [key, img] of giftImageMap.entries()) {
-      const idx = parseInt(key.split("_")[1]);
-      giftPriceMap.set(idx, img);
-    }
-
-    for (const record of recs) {
-      const isFull = record.synthetic_result === 2;
-      const spent = isFull ? 0 : record.materials_price / 100;
-      totalSpent += spent;
-      synthesisCount++;
-
-      const anchor = anchorMap.get(record.ruid) || { ruid: record.ruid, rname: "", totalSpent: 0, totalEarned: 0 };
-      anchor.totalSpent += spent;
-
-      const price = record.gift_price / 100;
-      let giftImg = "";
-      const img1 = giftPriceMap.get(1);
-      const img2 = giftPriceMap.get(2);
-      const img3 = giftPriceMap.get(3);
-      const img4 = giftPriceMap.get(4);
-      if (price >= 8000 && img3) giftImg = img3;
-      else if (price >= 2000 && img2) giftImg = img2;
-      else if (price >= 350 && img1) giftImg = img1;
-      else if (img4) giftImg = img4;
-
-      if (record.synthetic_result !== 0) {
-        totalEarned += price;
-        successCount++;
-        anchor.totalEarned += price;
-
-        const key = record.gift_name;
-        const existing = giftMap.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          giftMap.set(key, {
-            gift_id: 0,
-            gift_name: record.gift_name,
-            gift_img: giftImg,
-            gift_price: price,
-            count: 1,
-            gift_key: key,
-          });
-        }
-
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent,
-          profit: price - spent,
-          synthetic_result: record.synthetic_result,
-          date: formatTimestamp(record.synthetic_time),
-          synthetic_time: record.synthetic_time,
-        });
-      } else {
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent,
-          profit: -spent,
-          synthetic_result: 0,
-          date: formatTimestamp(record.synthetic_time),
-          synthetic_time: record.synthetic_time,
-        });
-      }
-
-      anchorMap.set(record.ruid, anchor);
-    }
-
-    const giftList = Array.from(giftMap.values())
-      .sort((a, b) => b.gift_price - a.gift_price)
-      .map(({ gift_key, ...rest }) => rest);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount: 0,
-      replaceCount: 0,
-      synthesisCount,
-      successCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-class CardFlipCalculator implements SynthesisProfitCalculator {
-  private static readonly FLIP_COSTS = [50, 112, 172, 316, 620, 1025, 2033];
-
-  calculate(records: unknown[], activityInfo?: JsonObject | null): SynthesisActivityProfitResult {
-    const recs = records as CardFlipRawRecord[];
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let synthesisCount = 0;
-    let successCount = 0;
-    const giftMap = new Map<string, SynthesisGiftInfo>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageCache: Record<string, string> = (activityInfo?.gift_image_cache as Record<string, string>) || {};
-
-    for (const record of recs) {
-      synthesisCount++;
-
-      let roundCost = 0;
-      let goodCount = 0;
-      let totalFlips = 0;
-      let badCardCount = 0;
-      let endedByBadCard = false;
-
-      for (const idx of record.card_idx) {
-        if (idx === -1) continue;
-        roundCost += CardFlipCalculator.FLIP_COSTS[goodCount] || 0;
-        totalFlips++;
-        if (idx >= 1 && idx <= 7) goodCount++;
-        else if (idx >= 8 && idx <= 9) {
-          badCardCount++;
-          endedByBadCard = true;
-        }
-      }
-
-      const reward = record.reward_value / 100;
-      totalSpent += roundCost;
-      totalEarned += reward;
-      if (goodCount > 0) successCount++;
-
-      const anchor = anchorMap.get(record.ruid) || { ruid: record.ruid, rname: "", totalSpent: 0, totalEarned: 0 };
-      anchor.totalSpent += roundCost;
-      anchor.totalEarned += reward;
-      anchorMap.set(record.ruid, anchor);
-
-      const giftImg = giftImageCache[record.reward_name] || "";
-      if (record.reward_value > 0 && record.reward_name) {
-        const existing = giftMap.get(record.reward_name);
-        if (existing) {
-          existing.count++;
-        } else {
-          giftMap.set(record.reward_name, {
-            gift_id: 0,
-            gift_name: record.reward_name,
-            gift_img: giftImg,
-            gift_price: reward,
-            count: 1,
-          });
-        }
-      }
-
-      const settleTime = record.settle_time as number | undefined;
-      const dateStr = settleTime ? formatTimestamp(settleTime) : "";
-
-      detailedRecords.push({
-        ruid: record.ruid,
-        rname: "",
-        gift_name: record.reward_name,
-        gift_price: reward,
-        gift_img: giftImg,
-        spent: roundCost,
-        profit: reward - roundCost,
-        synthetic_result: goodCount > 0 ? 1 : 0,
-        date: dateStr,
-        synthetic_time: settleTime || 0,
-      });
-    }
-
-    const giftList = Array.from(giftMap.values()).sort((a, b) => b.gift_price - a.gift_price);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount: 0,
-      replaceCount: 0,
-      synthesisCount,
-      successCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-const calculators: Record<string, SynthesisProfitCalculator> = {
-  slot_draw: new SlotDrawCalculator(),
-  material_package: new MaterialPackageCalculator(),
-  card_flip: new CardFlipCalculator(),
-};
-
-function getSynthesisCalculator(type: string): SynthesisProfitCalculator | null {
-  return calculators[type] || null;
-}
-
-// ==================== 合成活动认证计算（与 gift-db 对应） ====================
-
-function calculateCardFlipCertifications(
-  rawRecords: unknown[],
-  detailedRecords: SynthesisDetailedRecord[],
-  maxGiftPrice?: number,
-): SynthesisCertification[] {
-  const certifications: SynthesisCertification[] = [];
-  if (!maxGiftPrice || maxGiftPrice <= 0 || rawRecords.length === 0) return certifications;
-
-  const recs = rawRecords as CardFlipRawRecord[];
-  const dailyMap = new Map<string, { records: CardFlipRawRecord[]; ruid: number }>();
-  for (const record of recs) {
-    const settleTime = record.settle_time as number | undefined;
-    if (!settleTime) continue;
-    const dateStr = new Date(settleTime * 1000).toISOString().slice(0, 10).replace(/-/g, ".");
-    const key = `${dateStr}_${record.ruid}`;
-    if (!dailyMap.has(key)) dailyMap.set(key, { records: [], ruid: record.ruid });
-    dailyMap.get(key)!.records.push(record);
-  }
-
-  for (const [key, { records: dayRecords, ruid }] of dailyMap) {
-    const dateStr = key.split("_")[0];
-    let totalFlips = 0;
-    let totalBadCards = 0;
-    let totalCost = 0;
-    let totalReward = 0;
-    let maxGoodCount = 0;
-    let roundsWithMaxGift = 0;
-    const costs = [50, 112, 172, 316, 620, 1025, 2033];
-
-    for (const record of dayRecords) {
-      let goodCount = 0;
-      let badCount = 0;
-      let roundFlips = 0;
-      let roundCost = 0;
-      for (const idx of record.card_idx) {
-        if (idx === -1) continue;
-        roundCost += costs[goodCount] || 0;
-        roundFlips++;
-        if (idx >= 1 && idx <= 7) goodCount++;
-        else if (idx >= 8 && idx <= 9) badCount++;
-      }
-      totalFlips += roundFlips;
-      totalBadCards += badCount;
-      totalCost += roundCost;
-      totalReward += record.reward_value / 100;
-      if (goodCount > maxGoodCount) maxGoodCount = goodCount;
-      if (record.reward_value / 100 >= maxGiftPrice) roundsWithMaxGift++;
-    }
-
-    if (dayRecords.length === 1 && maxGoodCount === 7 && roundsWithMaxGift >= 1) {
-      const settleTime = dayRecords[0].settle_time as number;
-      const giftImg = detailedRecords.find((r) => r.ruid === ruid && r.gift_price >= maxGiftPrice)?.gift_img || "";
-      certifications.push({
-        type: "lucky",
-        ruid,
-        rname: "",
-        gift_name: dayRecords[0].reward_name,
-        gift_price: dayRecords[0].reward_value / 100,
-        gift_img: giftImg,
-        spent: totalCost,
-        profit: totalReward - totalCost,
-        date: formatTimestamp(settleTime),
-      });
-    }
-
-    if (totalFlips > 100 && totalBadCards > totalFlips / 2) {
-      const settleTime = dayRecords[0].settle_time as number;
-      certifications.push({
-        type: "unlucky",
-        ruid,
-        rname: "",
-        gift_name: `${totalFlips}次翻牌`,
-        gift_price: 0,
-        gift_img: "",
-        spent: totalCost,
-        profit: totalReward - totalCost,
-        date: formatTimestamp(settleTime),
-        count: totalBadCards,
-      });
-    }
-  }
-
-  return certifications;
-}
-
-function calculateSynthesisCertifications(
-  detailedRecords: SynthesisDetailedRecord[],
-  maxGiftPriceFromInfo?: number,
-): SynthesisCertification[] {
-  const certifications: SynthesisCertification[] = [];
-  if (detailedRecords.length === 0) return certifications;
-  if (!maxGiftPriceFromInfo || maxGiftPriceFromInfo <= 0) return certifications;
-  const maxGiftPrice = maxGiftPriceFromInfo;
-
-  const maxPriceRecords = detailedRecords.filter((r) => r.gift_price === maxGiftPrice);
-  if (maxPriceRecords.length === 0) return certifications;
-
-  const accumulatedMap = new Map<number, number>();
-  const successRecords: Array<{
-    ruid: number;
-    rname: string;
-    gift_name: string;
-    gift_price: number;
-    gift_img: string;
-    totalSpent: number;
-    profit: number;
-    date: string;
-    isFull: boolean;
-  }> = [];
-
-  for (let i = maxPriceRecords.length - 1; i >= 0; i--) {
-    const record = maxPriceRecords[i];
-    const accumulated = accumulatedMap.get(record.ruid) || 0;
-    const newAccumulated = accumulated + record.spent;
-    if (record.synthetic_result !== 0) {
-      successRecords.push({
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        totalSpent: newAccumulated,
-        profit: record.gift_price - newAccumulated,
-        date: record.date,
-        isFull: record.synthetic_result === 2,
-      });
-      accumulatedMap.set(record.ruid, 0);
-    } else {
-      accumulatedMap.set(record.ruid, newAccumulated);
-    }
-  }
-
-  successRecords.reverse();
-
-  for (const record of successRecords) {
-    if (record.isFull) {
-      certifications.push({
-        type: "unlucky",
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        spent: record.totalSpent,
-        profit: record.profit,
-        date: record.date,
-      });
-    } else if (record.totalSpent < record.gift_price * 0.1) {
-      certifications.push({
-        type: "lucky",
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        spent: record.totalSpent,
-        profit: record.profit,
-        date: record.date,
-      });
-    }
-  }
-
-  const dailyMaxGiftCounts = new Map<string, number>();
-  for (const record of successRecords) {
-    const dateKey = `${record.date.split(" ")[0]}_${record.ruid}`;
-    dailyMaxGiftCounts.set(dateKey, (dailyMaxGiftCounts.get(dateKey) || 0) + 1);
-  }
-  for (const [dateKey, count] of dailyMaxGiftCounts) {
-    if (count >= 6) {
-      const [date, ruidStr] = dateKey.split("_");
-      const ruid = parseInt(ruidStr);
-      const firstRecord = successRecords.find((r) => r.date.startsWith(date) && r.ruid === ruid);
-      if (firstRecord) {
-        certifications.push({
-          type: "rich",
-          ruid: firstRecord.ruid,
-          rname: firstRecord.rname,
-          gift_name: firstRecord.gift_name,
-          gift_price: firstRecord.gift_price,
-          gift_img: firstRecord.gift_img,
-          spent: 0,
-          profit: 0,
-          date,
-          count,
-        });
-      }
-    }
-  }
-
-  return certifications;
-}
 
 // ==================== 历史合成盈亏（与 gift-db.calcHistoricalSynthesisProfit 对应） ====================
 
@@ -1813,6 +1104,233 @@ function calcHistoricalSynthesisProfit(
   };
 }
 
+/**
+ * 按消费记录计算单个合成活动的盈亏（method = "payrecord"）
+ * 逻辑与 gift-db.calcPayRecordActivityProfit 对应（自包含实现，不依赖 Node）。
+ *
+ * 起止时间可选，不填则对应方向无边界（范围 = 所有消费记录）；产物送出窗口为 [start, end + 49h]。
+ * 层次填了素材单价则只计入单价一致的记录，未填则接受任意价格；逐记录累加 pay_coin。
+ */
+function calcPayRecordActivityProfit(
+  records: RawGiftRecord[],
+  config: SynthesisActivityConfig,
+  excludedGiftIds: Set<number> = new Set(),
+  bagGifts: BagGiftItem[] = [],
+): SynthesisActivityProfitResult {
+  const products = config.products || [];
+  const materials = config.materials || [];
+  const startTs = config.start_time;
+  const endTs = config.end_time;
+  const productEndTs = endTs === undefined ? Number.POSITIVE_INFINITY : endTs + 49 * 3600;
+  const inMaterialWindow = (ts: number) =>
+    (startTs === undefined || ts >= startTs) && (endTs === undefined || ts <= endTs);
+  const inProductWindow = (ts: number) =>
+    (startTs === undefined || ts >= startTs) && ts <= productEndTs;
+  // 素材/产物直接按消费记录 gift_name 模糊匹配；无需把产物与素材一一对应，也无需素材单价区分
+  const inMaterials = (giftName: string) => materials.some((m) => giftName.includes(m));
+  const inProducts = (giftName: string) => products.some((p) => giftName.includes(p));
+
+  let totalSpent = 0;
+  let totalEarned = 0;
+  let drawCount = 0;
+  let synthesisCount = 0;
+  const giftMap = new Map<number, SynthesisGiftInfo>();
+  const anchorMap = new Map<number, SynthesisAnchorInfo>();
+  const detailedRecords: SynthesisDetailedRecord[] = [];
+
+  const coinsOf = (record: RawGiftRecord) => Number((record.pay_coin || record.coin || "0").replace(/,/g, ""));
+  const dateStrOf = (ts: number) =>
+    ts ? new Date(ts * 1000).toISOString().slice(0, 10).replace(/-/g, ".") : "";
+
+  for (const record of records) {
+    if (record.status_msg === "已退回") continue;
+    if (record.gift_id === 1 && record.gift_name === "礼物天选") continue;
+
+    const ts = record.timestamp || 0;
+    const coins = coinsOf(record);
+
+    // 素材：gift_name 匹配 materials 中任一名称，且时间在材料窗口内
+    if (inMaterialWindow(ts) && coins > 0 && materials.length > 0 && inMaterials(record.gift_name)) {
+      totalSpent += coins;
+      drawCount += record.gift_num;
+
+      const anchor = anchorMap.get(record.ruid) || {
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      anchor.totalSpent += coins;
+      if (record.r_uname) anchor.rname = anchor.rname || record.r_uname;
+      anchorMap.set(record.ruid, anchor);
+
+      detailedRecords.push({
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        gift_name: record.gift_name,
+        gift_price: record.gift_num > 0 ? coins / record.gift_num : coins,
+        gift_img: record.gift_img || "",
+        spent: coins,
+        profit: -coins,
+        synthetic_result: 0,
+        date: dateStrOf(ts),
+        synthetic_time: ts,
+        coin_type: record.coin_type,
+        gift_id: record.gift_id,
+      });
+      continue; // 一条记录只归入一个角色，避免同时被当作产物
+    }
+
+    // 产物：包裹道具 + gift_name 匹配 products 中任一名称 + 时间在产物窗口内
+    if (
+      record.bag_desc === "包裹道具" &&
+      !excludedGiftIds.has(record.gift_id) &&
+      inProductWindow(ts) &&
+      products.length > 0 &&
+      inProducts(record.gift_name)
+    ) {
+      totalEarned += coins;
+      synthesisCount += record.gift_num;
+
+      const price = record.gift_num > 0 ? Math.round(coins / record.gift_num) : coins;
+      const existing = giftMap.get(record.gift_id);
+      if (existing) {
+        existing.count += record.gift_num;
+      } else {
+        giftMap.set(record.gift_id, {
+          gift_id: record.gift_id,
+          gift_name: record.gift_name,
+          gift_img: record.gift_img || "",
+          gift_price: price,
+          count: record.gift_num,
+        });
+      }
+
+      const anchor = anchorMap.get(record.ruid) || {
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      anchor.totalEarned += coins;
+      if (record.r_uname) anchor.rname = anchor.rname || record.r_uname;
+      anchorMap.set(record.ruid, anchor);
+
+      detailedRecords.push({
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        gift_name: record.gift_name,
+        gift_price: price,
+        gift_img: record.gift_img || "",
+        spent: 0,
+        profit: coins,
+        synthetic_result: 1,
+        date: dateStrOf(ts),
+        synthetic_time: ts,
+        coin_type: record.coin_type,
+        gift_id: record.gift_id,
+      });
+    }
+  }
+
+  // ===== 包裹礼物补充 =====
+  // 合成产物礼物在未送出前不会出现在消费记录中，会暂存于包裹（bag_list）。
+  // 用活动的产物礼物匹配包裹礼物，并区分其所属主播后补充计入产出。
+  if (bagGifts.length > 0 && products.length > 0) {
+    // 消费记录假定最新在前，取每条 r_uname 首次出现的 ruid（当前昵称 → 最新 UID 映射）
+    const nameRuids = new Map<string, number>();
+    for (const n of records) {
+      if (n.r_uname && !nameRuids.has(n.r_uname)) nameRuids.set(n.r_uname, n.ruid);
+    }
+    // room_id → ruid 映射（未锁定的当前直播间礼物归属）
+    const roomRuids = new Map<number, number>();
+    for (const r of records) {
+      if (!roomRuids.has(r.room_id)) roomRuids.set(r.room_id, r.ruid);
+    }
+    const anchorNameMatcher = /该礼物仅限([^的]+)的直播间使用/;
+
+    for (const g of bagGifts) {
+      if (!inProducts(g.gift_name)) continue;
+
+      // 归属主播：未锁定 → 当前直播间（room_id=23915535）；锁定 → 从 locked_text 解析主播名再映射最新 ruid
+      let ruid: number | undefined;
+      if (!g.is_locked) {
+        ruid = roomRuids.get(23915535);
+      } else {
+        const m = g.locked_text.match(anchorNameMatcher);
+        const anchorName = m ? m[1] : "";
+        ruid = nameRuids.get(anchorName);
+      }
+      if (ruid === undefined) continue; // 无法归属，保守跳过该礼物
+
+      const earned = g.price * g.gift_num;
+      totalEarned += earned;
+      synthesisCount += g.gift_num;
+
+      const anchor = anchorMap.get(ruid) || {
+        ruid,
+        rname: "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      if (!anchor.rname) {
+        for (const r of records) {
+          if (r.ruid === ruid && r.r_uname) {
+            anchor.rname = r.r_uname;
+            break;
+          }
+        }
+      }
+      anchor.totalEarned += earned;
+      anchorMap.set(ruid, anchor);
+
+      const existing = giftMap.get(g.gift_id);
+      if (existing) {
+        existing.count += g.gift_num;
+      } else {
+        giftMap.set(g.gift_id, {
+          gift_id: g.gift_id,
+          gift_name: g.gift_name,
+          gift_img: g.img,
+          gift_price: Math.round(g.price),
+          count: g.gift_num,
+        });
+      }
+
+      detailedRecords.push({
+        ruid,
+        rname: anchor.rname,
+        gift_name: g.gift_name,
+        gift_price: g.price,
+        gift_img: g.img,
+        spent: 0,
+        profit: earned,
+        synthetic_result: 1,
+        date: "",
+        synthetic_time: 0,
+        gift_id: g.gift_id,
+        gift_num: g.gift_num,
+      });
+    }
+  }
+
+  const giftList = Array.from(giftMap.values());
+  const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
+
+  return {
+    totalSpent,
+    totalEarned,
+    profit: totalEarned - totalSpent,
+    drawCount,
+    replaceCount: 0,
+    synthesisCount,
+    successCount: synthesisCount,
+    giftList,
+    anchors,
+    detailedRecords,
+  };
+}
+
 // ==================== 主导出：合成统计 ====================
 
 export type SynthesisStatsResponse = {
@@ -1859,143 +1377,54 @@ export async function fetchSynthesisStats(
     const records = await readPayRecords(platform, session.mid, session.uname || "");
     const activities: SynthesisActivityStats[] = [];
     const effectiveSynthConfig = await getEffectiveSynthesisConfig(platform);
+    // 天选/红包礼物在消费记录方式下同样需要排除（产物可能与其重合）
+    const excludedGiftIds = new Set<number>([...tianxuanGiftIds, ...redPocketGiftIds]);
+
+    // 合成产物礼物在未送出前暂存于包裹（bag_list），不在消费记录中；在线时抓取用于补充产出
+    let bagGifts: BagGiftItem[] = [];
+    try {
+      bagGifts = await fetchBagList(platform, cookie);
+    } catch (err) {
+      console.error("[SynthesisStats] 获取包裹礼物失败:", err);
+    }
 
     for (const activity of effectiveSynthConfig.current_activity) {
       try {
-        const calculator = getSynthesisCalculator(activity.type);
-        if (!calculator) continue;
-
-        let info: SynthesisActivityInfo | null = null;
-        try {
-          const cached = await getSynthesisActivityInfo(platform, activity.id);
-          if (cached && cached.name && (activity.type !== "material_package" || cached.resource)) {
-            info = cached as SynthesisActivityInfo;
-          } else {
-            info = await fetchSynthesisActivityInfo(platform, cookie, activity);
-            if (info && info.name) {
-              await saveSynthesisActivityInfo(platform, activity.id, info as unknown as JsonObject);
-            }
-          }
-        } catch (infoErr) {
-          console.warn(`[SynthesisStats] 获取活动信息失败（活动可能已结束）:`, infoErr);
-        }
-
-        let rawRecords: unknown[] = [];
-        try {
-          rawRecords = await fetchSynthesisActivityRecords(platform, cookie, activity);
-          await saveSynthesisRecords(
-            platform,
-            session.mid,
-            session.uname || "",
-            activity.id,
-            rawRecords,
-            info?.name,
-          );
-        } catch (recordErr) {
-          // 拉取失败时回退到本地已保存记录，避免活动卡片数据被清空
-          console.warn(`[SynthesisStats] 获取活动记录失败，回退到本地缓存:`, recordErr);
-          try {
-            rawRecords = await readSynthesisRecords(platform, session.mid, session.uname || "", activity.id);
-          } catch {
-            rawRecords = [];
+        // 消费记录计算方式：直接从全量消费记录计算，无需抓取活动信息/记录
+        const profit = calcPayRecordActivityProfit(records, activity, excludedGiftIds, bagGifts);
+        // 活动图标：优先取配置中最后一个产物的图片；找不到时依次回退其他产物。
+        // 图片来源依次：礼物目录（全局，最可靠）、包裹、活动产物列表。
+        const products = activity.products || [];
+        const findProductImg = (productName: string): string | undefined => {
+          const bagGift = bagGifts.find((g) => g.img && g.gift_name.includes(productName));
+          if (bagGift) return bagGift.img;
+          const prodGift = profit.giftList.find((g) => g.gift_img && g.gift_name.includes(productName));
+          if (prodGift) return prodGift.gift_img;
+          const catGift = getCatalogGiftList().find((g) => g.name.includes(productName));
+          return catGift ? (catGift.img_basic || catGift.webp || catGift.gif || "") : undefined;
+        };
+        let activityIcon: string | undefined = findProductImg(
+          products.length > 0 ? products[products.length - 1] : "",
+        );
+        if (!activityIcon) {
+          for (const p of products) {
+            activityIcon = findProductImg(p);
+            if (activityIcon) break;
           }
         }
-
-        if (activity.type === "card_flip" && info) {
-          const giftImageCache = await getCardFlipGiftImages(platform);
-          (info as unknown as JsonObject).gift_image_cache = giftImageCache;
-        }
-
-        const profit = calculator.calculate(rawRecords, info as unknown as JsonObject | null);
-
-        if (activity.type === "card_flip") {
-          for (const gift of profit.giftList) {
-            if (!gift.gift_img) {
-              const img = await getCardFlipGiftImage(platform, gift.gift_name, session.mid, session.uname || "");
-              if (img) {
-                gift.gift_img = img;
-                await saveCardFlipGiftImage(platform, gift.gift_name, img);
-              }
-            }
-          }
-        }
-
-        const uniqueRuids = new Set<number>();
-        for (const anchor of profit.anchors) uniqueRuids.add(anchor.ruid);
-        for (const record of profit.detailedRecords) uniqueRuids.add(record.ruid);
-
-        const payRecordNameMap = new Map<number, string>();
-        for (const payRecord of records) {
-          if (payRecord.r_uname && !payRecordNameMap.has(payRecord.ruid)) {
-            payRecordNameMap.set(payRecord.ruid, payRecord.r_uname);
-          }
-        }
-
-        const namePromises = Array.from(uniqueRuids).map(async (ruid) => {
-          const name = await getUserNameByUid(platform, ruid, session.mid, session.uname || "").catch(() => "");
-          return { ruid, name };
-        });
-        const nameResults = await Promise.all(namePromises);
-        const nameMap = new Map<number, string>();
-        for (const { ruid, name } of nameResults) nameMap.set(ruid, name);
-
-        for (const anchor of profit.anchors) {
-          const nameMapVal = nameMap.get(anchor.ruid);
-          const payName = payRecordNameMap.get(anchor.ruid);
-          const validNameMapVal = nameMapVal && !nameMapVal.startsWith("主播") ? nameMapVal : undefined;
-          anchor.rname = payName || validNameMapVal || nameMapVal || `主播${anchor.ruid}`;
-        }
-        for (const record of profit.detailedRecords) {
-          const nameMapVal = nameMap.get(record.ruid);
-          const payName = payRecordNameMap.get(record.ruid);
-          const validNameMapVal = nameMapVal && !nameMapVal.startsWith("主播") ? nameMapVal : undefined;
-          record.rname = payName || validNameMapVal || nameMapVal || `主播${record.ruid}`;
-        }
-
-        let maxGiftPrice: number | undefined;
-        let maxGiftImg: string | undefined;
-        if (info?.gift_info && info.gift_info.length > 0) {
-          const maxGift = info.gift_info.reduce((a, b) =>
-            a.gift_price > b.gift_price ? a : b,
-          );
-          maxGiftPrice = maxGift.gift_price;
-          maxGiftImg = maxGift.gift_img;
-        }
-
-        let certifications: SynthesisCertification[];
-        if (activity.type === "card_flip") {
-          const maxGiftPriceForCert = profit.giftList.length > 0
-            ? Math.max(...profit.giftList.map((g) => g.gift_price))
-            : undefined;
-          certifications = calculateCardFlipCertifications(rawRecords, profit.detailedRecords, maxGiftPriceForCert);
-        } else {
-          certifications = calculateSynthesisCertifications(profit.detailedRecords, maxGiftPrice);
-        }
-
-        for (const cert of certifications) {
-          cert.rname = nameMap.get(cert.ruid) || `主播${cert.ruid}`;
-        }
-
-        const activityIcon =
-          info?.icon ||
-          maxGiftImg ||
-          (profit.giftList.length > 0
-            ? profit.giftList.reduce((a, b) => (a.gift_price > b.gift_price ? a : b)).gift_img
-            : undefined);
-
         activities.push({
           id: activity.id,
-          type: activity.type,
-          name: info?.name || activity.id,
+          name: activity.name || activity.id,
           icon: activityIcon,
+          start_time: activity.start_time,
+          end_time: activity.end_time,
           profit,
-          certifications,
+          certifications: [],
         });
       } catch (err) {
         console.error(`[SynthesisStats] 获取活动 ${activity.id} 失败:`, err);
         activities.push({
           id: activity.id,
-          type: activity.type,
           name: activity.id,
           icon: undefined,
           profit: {

@@ -20,35 +20,30 @@ export const BLIND_BOX_CONFIG = {
 } as const;
 
 // ====== 合成活动配置 ======
-export type SynthesisActivityType = "slot_draw" | "material_package" | "card_flip";
 
+/** 消费记录计算方式下的合成活动配置 */
 export interface SynthesisActivityConfig {
   id: string;
-  type: SynthesisActivityType;
-  info_url: string;
-  record_url: string;
   active?: boolean;
+  /** 活动名称 */
+  name?: string;
+  /** 材料抽取窗口起点（unix 秒，可选，不填则无下界） */
+  start_time?: number;
+  /** 材料抽取窗口终点（unix 秒，可选，不填则无上界）；产物送出窗口为 [start_time, end_time + 49h] */
+  end_time?: number;
+  /** 该活动的产物礼物名称列表（用于匹配消费记录/包裹中的 gift_name） */
+  products?: string[];
+  /** 该活动的素材礼物名称列表（用于匹配消费记录中的 gift_name） */
+  materials?: string[];
 }
 
 export const SYNTHESIS_CONFIG = {
   current_activity: [
     {
-      id: "activity-1",
-      type: "material_package",
-      info_url: "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/HalfInit?config_id=sp_2076590402963353600",
-      record_url: "https://api.live.bilibili.com/xlive/custom-activity-interface/general/syntheticpackage/PlayRecord?config_id=sp_2076590402963353600",
-    },
-    {
-      id: "activity-2",
-      type: "slot_draw",
-      info_url: "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneInfo?conf_id=9",
-      record_url: "https://api.live.bilibili.com/xlive/custom-activity-interface/general/StarStoneRecord?conf_id=9",
-    },
-    {
-      id: "activity-3",
-      type: "card_flip",
-      info_url: "",
-      record_url: "https://api.live.bilibili.com/xlive/custom-activity-interface/general/cardplay/PlayRecord?config_id=8",
+      id: "activity-5",
+      name: "玲珑宝斋",
+      products: ["相识玉扣", "常伴珠钗", "缘起瓷瓶", "倾心宝冠", "万象天衣"],
+      materials: ["玲珑宝斋-锦囊", "玲珑宝斋-瓷瓶", "玲珑宝斋-银盒", "玲珑宝斋-云锦", "玲珑宝斋-玉函"],
     },
   ] as SynthesisActivityConfig[],
 };

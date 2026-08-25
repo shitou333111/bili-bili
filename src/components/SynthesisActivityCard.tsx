@@ -2,21 +2,28 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { SynthesisActivityStats, SynthesisGiftInfo, SynthesisDetailedRecord, SynthesisAnchorInfo } from "@/lib/gift-db";
+import type { SynthesisActivityStats, SynthesisGiftInfo } from "@/lib/gift-db";
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import Dropdown from "@/components/Dropdown";
 
-function formatProfit(profit: number): string {
-  if (profit >= 0) return `+${profit}`;
-  return `${profit}`;
-}
-
 function fixImageUrl(url: string): string {
   if (!url) return "";
   return url.replace(/^\/\//, "https://").replace(/^http:/, "https:");
+}
+
+function formatActivityRange(start?: number, end?: number): string {
+  const fmt = (ts?: number) => {
+    if (!ts) return "";
+    const d = new Date(ts * 1000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const s = fmt(start);
+  const e = fmt(end);
+  if (s && e) return `${s} ~ ${e}`;
+  return s || (e ? `~ ${e}` : "");
 }
 
 interface SynthesisActivityCardProps {
@@ -38,7 +45,6 @@ const ACTIVITY_CARD_BG = [
 
 export default function SynthesisActivityCard({ activity, index = 0 }: SynthesisActivityCardProps) {
   const [selectedAnchor, setSelectedAnchor] = useState<string>("");
-  const [selectedGift, setSelectedGift] = useState<SynthesisGiftInfo | null>(null);
   const [certIndex, setCertIndex] = useState(0);
   const [showCertModal, setShowCertModal] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -58,22 +64,24 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
     const giftMap = new Map<string, SynthesisGiftInfo>();
     let successCount = 0;
     for (const r of anchorRecords) {
-      if (r.synthetic_result !== 0) {
-        successCount++;
-      }
-      // 礼物聚合：对所有记录（包括翻牌首翻坏牌等 synthetic_result=0），按 gift_name 计数
+      // 只统计产物，跳过素材记录（synthetic_result=0），与"全部主播"行为一致
+      if (r.synthetic_result === 0) continue;
+      // 包裹补充的批量礼物 gift_num 可能 >1，须按 gift_num 累加（与全部主播口径一致）
+      const n = r.gift_num ?? 1;
+      successCount += n;
+      // 礼物聚合：按 gift_name 计数（只含产物）
       if (r.gift_name) {
         const key = r.gift_name;
         const existing = giftMap.get(key);
         if (existing) {
-          existing.count++;
+          existing.count += n;
         } else {
           giftMap.set(key, {
             gift_id: 0,
             gift_name: r.gift_name,
             gift_img: r.gift_img,
             gift_price: r.gift_price,
-            count: 1,
+            count: n,
           });
         }
       }
@@ -116,15 +124,21 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
   }, [selectedAnchor, activity.certifications]);
 
   const cardBgColor = ACTIVITY_CARD_BG[index % ACTIVITY_CARD_BG.length];
+  const activityRange = formatActivityRange(activity.start_time, activity.end_time);
 
   return (
     <div key={activity.id} ref={cardRef} className={`w-full min-w-0 rounded-xl border border-black/10 ${cardBgColor} p-2 shadow-[0_20px_80px_rgba(31,28,23,0.08)]`}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           {activity.icon && <img src={fixImageUrl(activity.icon)} alt="" className="w-7 h-7 rounded flex-shrink-0" />}
           <div className="text-base font-bold uppercase tracking-[0.15em] text-black/70 truncate max-w-[100px]">
             {activity.name.slice(0, 6)}{activity.name.length > 6 ? "..." : ""}
           </div>
+          {activityRange && (
+            <span className="text-sm font-medium tracking-normal normal-case text-black/60 whitespace-nowrap">
+              {activityRange}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Dropdown
@@ -172,42 +186,30 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
               <thead className="bg-black/5 text-black/60">
                 <tr>
                   <th className="pl-3 pr-2 py-2 font-medium whitespace-nowrap">合成礼物</th>
-                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[12%]">单价</th>
-                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[16%]">数目</th>
-                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[12%]">价值</th>
-                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[12%]">花费</th>
-                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[12%]">盈亏</th>
+                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[16%]">单价</th>
+                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[16%]">数量</th>
+                  <th className="px-2 py-2 font-medium text-right whitespace-nowrap w-[20%]">小计</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredStats.giftList
                   .sort((a, b) => a.gift_price - b.gift_price)
-                  .map((gift) => {
-                    const giftRecords = filteredRecords.filter(r => r.gift_name === gift.gift_name);
-                    const giftCost = giftRecords.reduce((sum, r) => sum + r.spent, 0);
-                    const giftProfit = (gift.gift_price * gift.count) - giftCost;
-                    return (
-                      <tr
-                        key={`${gift.gift_id}_${gift.gift_name}`}
-                        className="border-t border-black/10 bg-white hover:bg-black/5 cursor-pointer"
-                        onClick={() => setSelectedGift(gift)}
-                      >
-                        <td className="pl-3 pr-2 py-2">
-                          <div className="flex items-center gap-2">
-                            {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
-                            <span className="font-medium">{gift.gift_name}</span>
-                          </div>
-                        </td>
-                        <td className="px-2 py-2 text-right">{gift.gift_price}</td>
-                        <td className="px-2 py-2 text-right">×{gift.count}</td>
-                        <td className="px-2 py-2 text-right">{gift.gift_price * gift.count}</td>
-                        <td className="px-2 py-2 text-right">{Math.floor(giftCost)}</td>
-                        <td className={`px-2 py-2 text-right font-medium ${giftProfit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                          {giftProfit >= 0 ? "+" : ""}{Math.floor(giftProfit)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  .map((gift) => (
+                    <tr
+                      key={`${gift.gift_id}_${gift.gift_name}`}
+                      className="border-t border-black/10 bg-white"
+                    >
+                      <td className="pl-3 pr-2 py-2">
+                        <div className="flex items-center gap-2">
+                          {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
+                          <span className="font-medium">{gift.gift_name}</span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 text-right">{gift.gift_price}</td>
+                      <td className="px-2 py-2 text-right">×{gift.count}</td>
+                      <td className="px-2 py-2 text-right">{Math.floor(gift.gift_price * gift.count)}</td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
@@ -259,112 +261,6 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
             </table>
           </div>
         </div>
-      )}
-
-      {selectedGift && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setSelectedGift(null)}>
-          <div
-            className="relative mx-4 w-full max-w-md max-h-[80vh] rounded-xl border border-black/10 bg-white p-6 shadow-2xl flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setSelectedGift(null)}
-              className="absolute -top-10 right-0 text-white/80 hover:text-white text-sm transition"
-            >
-              ✕ 关闭
-            </button>
-            <div className="flex items-center gap-2 mb-4 flex-shrink-0">
-              {selectedGift.gift_img && <img src={fixImageUrl(selectedGift.gift_img)} alt="" className="w-8 h-8 rounded" />}
-              <span className="text-lg font-bold">{selectedGift.gift_name}</span>
-              <span className="text-sm text-black/50">单价 {selectedGift.gift_price}</span>
-            </div>
-            <div className="overflow-hidden rounded-lg border border-black/10 flex-1 overflow-y-auto">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead className="bg-gray-100 sticky top-0">
-                  <tr>
-                    <th className="pl-3 pr-2 py-2 font-medium text-xs">主播</th>
-                    <th className="px-2 py-2 font-medium text-xs text-right">花费</th>
-                    <th className="px-2 py-2 font-medium text-xs text-right">盈亏</th>
-                    <th className="px-2 py-2 font-medium text-xs text-right">日期</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    const giftRecords = filteredRecords
-                      .filter(r => r.gift_name === selectedGift.gift_name);
-
-                    if (activity.type === "card_flip") {
-                      // 翻牌活动：每条记录独立，直接显示全部（包括坏牌被迫结束的）
-                      return giftRecords.map((record, idx) => {
-                        const profit = record.gift_price - record.spent;
-                        return (
-                          <tr key={idx} className={`border-t border-black/10 ${record.synthetic_result === 0 ? "bg-red-50/50" : "bg-white"}`}>
-                            <td className="pl-3 pr-2 py-2 font-medium text-sm">{record.rname || `主播${record.ruid}`}</td>
-                            <td className="px-2 py-2 text-right">{Math.floor(record.spent)}</td>
-                            <td className={`px-2 py-2 text-right font-medium ${profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                              {profit >= 0 ? "+" : ""}{Math.floor(profit)}
-                            </td>
-                            <td className="px-2 py-2 text-right text-xs text-black/50">{record.date.split(' ')[0]}</td>
-                          </tr>
-                        );
-                      });
-                    }
-
-                    // 其他活动：反向累积算法
-                    const accumulatedMap = new Map<number, number>();
-                    const successRecords: Array<{
-                      ruid: number;
-                      rname: string;
-                      totalSpent: number;
-                      value: number;
-                      date: string;
-                      isFull: boolean;
-                    }> = [];
-
-                    for (let i = giftRecords.length - 1; i >= 0; i--) {
-                      const record = giftRecords[i];
-                      const accumulated = accumulatedMap.get(record.ruid) || 0;
-                      const newAccumulated = accumulated + record.spent;
-                      if (record.synthetic_result !== 0) {
-                        successRecords.push({
-                          ruid: record.ruid,
-                          rname: record.rname,
-                          totalSpent: newAccumulated,
-                          value: record.gift_price,
-                          date: record.date,
-                          isFull: record.synthetic_result === 2,
-                        });
-                        accumulatedMap.set(record.ruid, 0);
-                      } else {
-                        accumulatedMap.set(record.ruid, newAccumulated);
-                      }
-                    }
-
-                    successRecords.reverse();
-
-                    return successRecords.map((record, idx) => {
-                      const profit = record.value - record.totalSpent;
-                      return (
-                        <tr key={idx} className="border-t border-black/10 bg-white">
-                          <td className="pl-3 pr-2 py-2 font-medium text-sm">{record.rname || `主播${record.ruid}`}</td>
-                          <td className="px-2 py-2 text-right">
-                            {Math.floor(record.totalSpent)}
-                            {record.isFull && <span className="text-xs text-red-500 ml-1">（满出）</span>}
-                          </td>
-                          <td className={`px-2 py-2 text-right font-medium ${profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                            {profit >= 0 ? "+" : ""}{Math.floor(profit)}
-                          </td>
-                          <td className="px-2 py-2 text-right text-xs text-black/50">{record.date.split(' ')[0]}</td>
-                        </tr>
-                      );
-                    });
-                  })()}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>,
-        document.body
       )}
 
       {showCertModal && filteredCertifications.length > 0 && (

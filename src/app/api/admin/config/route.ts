@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readAdminConfig, writeAdminConfig, validateActivityType, getValidActivityTypes, type AdminConfig } from "@/lib/admin-config";
+import { readAdminConfig, writeAdminConfig, type AdminConfig } from "@/lib/admin-config";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,6 @@ export async function GET(request: Request) {
         current_activity_blind_box_ids: [],
         blind_boxes: [],
         synthesis_activities: [],
-        valid_activity_types: getValidActivityTypes(),
         recommended_anchors: [],
         real_activity_url: "",
       },
@@ -37,7 +36,6 @@ export async function GET(request: Request) {
       current_activity_blind_box_ids: adminConfig.current_activity_blind_box_ids ?? [],
       blind_boxes: adminConfig.blind_boxes ?? [],
       synthesis_activities: adminConfig.synthesis_activities ?? [],
-      valid_activity_types: getValidActivityTypes(),
       recommended_anchors: adminConfig.recommended_anchors ?? [],
       real_activity_url: adminConfig.real_activity_url ?? "",
     },
@@ -55,11 +53,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: "synthesis_activities must be an array" }, { status: 400 });
   }
   for (const act of body.synthesis_activities) {
-    if (!act.id || !act.type || !act.record_url) {
-      return NextResponse.json({ code: 400, message: "每个活动必须包含 id, type, record_url" }, { status: 400 });
-    }
-    if (!validateActivityType(act.type)) {
-      return NextResponse.json({ code: 400, message: `无效的活动类型: ${act.type}，可选: ${getValidActivityTypes().join(", ")}` }, { status: 400 });
+    if (!act.name) {
+      return NextResponse.json({ code: 400, message: "每个活动必须填写活动名称（作为活动标识）" }, { status: 400 });
     }
   }
 
@@ -76,12 +71,17 @@ export async function POST(request: Request) {
       name: String(b.name || ""),
       icon: String(b.icon || ""),
     })),
-    synthesis_activities: body.synthesis_activities.map((a: { id: string; type: string; info_url: string; record_url: string; active?: boolean }) => ({
-      id: String(a.id),
-      type: a.type,
-      info_url: String(a.info_url),
-      record_url: String(a.record_url),
+    synthesis_activities: body.synthesis_activities.map((a: any) => ({
+      // 用活动名称作为活动标识（id），不再使用独立的 activity-n 输入框
+      id: String(a.name || a.id || ""),
       active: a.active !== false,
+      name: a.name ? String(a.name) : undefined,
+      start_time: typeof a.start_time === "number" && a.start_time > 0 ? a.start_time : undefined,
+      end_time: typeof a.end_time === "number" && a.end_time > 0 ? a.end_time : undefined,
+      products: Array.isArray(a.products) ? a.products.map((p: any) => String(p || "")).filter(Boolean) : undefined,
+      materials: Array.isArray(a.materials)
+        ? a.materials.map((m: any) => String(m || "")).filter(Boolean)
+        : undefined,
     })),
     recommended_anchors: Array.isArray(body.recommended_anchors)
       ? body.recommended_anchors.map((r: any) => ({

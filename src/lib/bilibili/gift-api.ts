@@ -3,7 +3,7 @@
  * 包括：盲盒检测、盲盒记录、天选礼物列表、合成活动信息
  */
 import { fetchBilibiliJson } from "@/lib/bilibili/client";
-import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG, type SynthesisActivityConfig } from "@/lib/config";
+import { BLIND_BOX_API, TIANXUAN_CONFIG, RED_POCKET_CONFIG } from "@/lib/config";
 import type { BlindBoxGift } from "@/lib/blind-box-db";
 import { getCachedName, setCachedAnchorInfo, getCachedFace, setCachedFanInfo } from "@/lib/user-data";
 
@@ -71,105 +71,6 @@ type TianxuanGiftPanelResponse = {
   } | null;
 };
 
-// ====== 翻牌类合成活动记录响应 ======
-type SlotDrawRecordResponse = {
-  code: number;
-  message: string;
-  ttl: number;
-  data: {
-    record_info: Array<{
-      goods_num: number;
-      pay_price: number;
-      refund_price: number;
-      src_material_id: number;
-      dst_material_id: number;
-      before_slot_snap: string;
-      after_slot_snap: string;
-      record_type: number;
-      status: number;
-      mtime: string;
-      gift_info: {
-        gift_id: number;
-        gift_name: string;
-        gift_img: string;
-        gift_price: number;
-      } | null;
-      draw_response: string;
-      ruid: number;
-    }>;
-    next_offset: number;
-  } | null;
-};
-
-type SlotDrawInfoResponse = {
-  code: number;
-  message: string;
-  ttl: number;
-  data: {
-    activity_name?: string;
-    activity_img?: string;
-    [key: string]: unknown;
-  } | null;
-};
-
-// ====== 材料合成类活动 ======
-type MaterialPackageInfoResponse = {
-  code: number;
-  message: string;
-  ttl: number;
-  data: {
-    act_name?: string;
-    resource?: {
-      gift_1?: string;
-      gift_2?: string;
-      gift_3?: string;
-      gift_4?: string;
-      [key: string]: unknown;
-    };
-    [key: string]: unknown;
-  } | null;
-};
-
-type MaterialPackageRecord = {
-  ruid: number;
-  synthetic_time: number;
-  synthetic_result: number;
-  gift_name: string;
-  gift_price: number;
-  materials: Array<{ name: string; num: number }>;
-  materials_price: number;
-};
-
-type MaterialPackageRecordResponse = {
-  code: number;
-  message: string;
-  ttl: number;
-  data: {
-    items: MaterialPackageRecord[];
-    has_more: boolean;
-  } | null;
-};
-
-// ====== 卡牌翻牌活动记录 ======
-export type CardFlipRawRecord = {
-  reward_name: string;
-  reward_value: number; // divide by 100 for actual battery value
-  card_idx: number[]; // e.g. [4, -1] or [4, 8] or [1,2,3,4,5,6,7]
-  // 1-7 = good cards, 8-9 = bad cards, -1 = user quit
-  ruid: number; // anchor uid
-  [key: string]: unknown;
-};
-
-type CardFlipRecordResponse = {
-  code: number;
-  message: string;
-  ttl: number;
-  data: {
-    items: CardFlipRawRecord[];
-    has_more: boolean;
-  } | null;
-};
-
 // ====== 盲盒检测结果 ======
 export type BlindBoxCheckResult = {
   isBlindBox: boolean;
@@ -197,41 +98,6 @@ export type TianxuanGift = {
   name: string;
   img: string;
   price: number;
-};
-
-// ====== 合成活动记录 ======
-export type SlotDrawRawRecord = {
-  goods_num: number;
-  pay_price: number;
-  refund_price: number;
-  record_type: number;
-  status: number;
-  mtime: string;
-  gift_info: {
-    gift_id: number;
-    gift_name: string;
-    gift_img: string;
-    gift_price: number;
-  } | null;
-  ruid: number;
-};
-
-export type MaterialPackageRawRecord = MaterialPackageRecord;
-
-export type SynthesisActivityRawRecord = SlotDrawRawRecord | MaterialPackageRawRecord | CardFlipRawRecord;
-
-export type SynthesisActivityInfo = {
-  name: string;
-  icon?: string;
-  resource?: Record<string, unknown>;
-  rewards?: Record<string, unknown>[];
-  gift_info?: Array<{
-    gift_id: number;
-    gift_name: string;
-    gift_img: string;
-    gift_price: number;
-  }>;
-  gift_image_cache?: Record<string, string>;
 };
 
 // ====== 盲盒检测 ======
@@ -461,84 +327,71 @@ export async function fetchRedPocketGiftList(cookie: string): Promise<RedPocketG
   }
 }
 
-// ====== 合成活动 ======
+// ====== 包裹礼物列表 ======
+
+export type BagGiftItem = {
+  gift_id: number;
+  gift_name: string;
+  gift_num: number;
+  is_locked: boolean;
+  locked_text: string;
+  /** 单价（元） */
+  price: number;
+  img: string;
+};
+
+type BagListResponse = {
+  code: number;
+  message: string;
+  data: {
+    list?: Array<{
+      bag_id: number;
+      gift_id: number;
+      gift_name: string;
+      gift_num: number;
+      is_locked: boolean;
+      locked_text: string;
+    }>;
+    gift_config?: Array<{ id: number; name: string; price: number; img_basic: string }>;
+  } | null;
+};
 
 /**
- * 获取合成活动信息（活动名称、图标等）
+ * 获取包裹礼物列表（需要登录态Cookie）
+ * 合成礼物在未送出前会暂存于包裹中，不出现于消费记录，
+ * 因此需要访问本接口与消费记录互补，构成完整的合成产出礼物列表。
  */
-export async function fetchSynthesisActivityInfo(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo | null> {
+export async function fetchBagList(cookie: string): Promise<BagGiftItem[]> {
   try {
-    if (activity.type === "slot_draw") {
-      return fetchSlotDrawInfo(cookie, activity);
-    } else if (activity.type === "material_package") {
-      return fetchMaterialPackageInfo(cookie, activity);
-    } else if (activity.type === "card_flip") {
-      return { name: "仲夏卡牌" };
+    const url = `https://api.live.bilibili.com/xlive/web-room/v1/gift/bag_list?room_id=23915535`;
+    const response = await fetchBilibiliJson<BagListResponse>({ url, cookie, live: true });
+    if (response.code !== 0 || !response.data?.list) {
+      return [];
     }
-    return { name: activity.id };
+    // gift_config 是数组，按 gift_id 建立索引后再匹配价格与图标
+    const configMap = new Map<number, { name: string; price: number; img_basic: string }>();
+    for (const c of response.data.gift_config ?? []) {
+      configMap.set(c.id, c);
+    }
+    const items = response.data.list.map((item) => {
+      const cfg = configMap.get(item.gift_id);
+      return {
+        gift_id: item.gift_id,
+        gift_name: item.gift_name,
+        gift_num: item.gift_num,
+        is_locked: item.is_locked,
+        locked_text: item.locked_text || "",
+        // 礼物列表中的 price 是分（百分为 1 电池），除以 100 换算成电池单价
+        price: cfg ? Math.round(cfg.price / 100) : 0,
+        img: cfg?.img_basic || "",
+      };
+    });
+    console.log(`[fetchBagList] 获取到 ${items.length} 个包裹礼物`);
+    return items;
   } catch (error) {
-    console.error(`[Synthesis] 获取活动信息失败 (${activity.id}):`, error);
-    return { name: activity.id };
+    console.error("[BagList] 获取包裹礼物列表失败:", error);
+    return [];
   }
-}
-
-async function fetchSlotDrawInfo(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo> {
-  const response = await fetchBilibiliJson<SlotDrawInfoResponse>({
-    url: activity.info_url,
-    cookie,
-    mobile: false,
-  });
-
-  if (response.code === 0 && response.data) {
-    const result: SynthesisActivityInfo = {
-      name: response.data.activity_name || activity.id,
-      icon: response.data.activity_img,
-    };
-    if (response.data.gift_info) {
-      result.gift_info = response.data.gift_info as Array<{
-        gift_id: number;
-        gift_name: string;
-        gift_img: string;
-        gift_price: number;
-      }>;
-    }
-    return result;
-  }
-
-  return { name: activity.id };
-}
-
-async function fetchMaterialPackageInfo(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityInfo> {
-  const response = await fetchBilibiliJson<MaterialPackageInfoResponse>({
-    url: activity.info_url,
-    cookie,
-    mobile: false,
-  });
-
-  if (response.code === 0 && response.data) {
-    const result: SynthesisActivityInfo = {
-      name: response.data.act_name || activity.id,
-      icon: response.data.resource?.gift_1,
-    };
-    if (response.data.resource) {
-      result.resource = response.data.resource;
-    }
-    if (response.data.rewards) {
-      result.rewards = response.data.rewards as Record<string, unknown>[];
-    }
-    return result;
-  }
-
-  return { name: activity.id };
 }
 
 type UserInfoResponse = {
@@ -705,131 +558,4 @@ export async function getUserInfoByUid(mid: number, forceRefresh = false, reques
   const fallback = { name: `用户${mid}`, face: "" };
   userInfoCache.set(mid, fallback);
   return fallback;
-}
-
-/**
- * 获取合成活动所有记录
- * 全量获取，短期活动数据量不大
- */
-export async function fetchSynthesisActivityRecords(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SynthesisActivityRawRecord[]> {
-  try {
-    if (activity.type === "slot_draw") {
-      return fetchSlotDrawRecords(cookie, activity);
-    } else if (activity.type === "material_package") {
-      return fetchMaterialPackageRecords(cookie, activity);
-    } else if (activity.type === "card_flip") {
-      return fetchCardFlipRecords(cookie, activity);
-    }
-    return [];
-  } catch (error) {
-    console.error(`[Synthesis] 获取活动记录失败 (${activity.id}):`, error);
-    return [];
-  }
-}
-
-async function fetchSlotDrawRecords(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<SlotDrawRawRecord[]> {
-  const allRecords: SlotDrawRawRecord[] = [];
-  let offset = 0;
-
-  while (true) {
-    const url = `${activity.record_url}&offset=${offset}`;
-    const response = await fetchBilibiliJson<SlotDrawRecordResponse>({
-      url,
-      cookie,
-      mobile: false,
-    });
-
-    if (response.code !== 0 || !response.data) {
-      break;
-    }
-
-    const records = response.data.record_info ?? [];
-    allRecords.push(...records.map((r) => ({
-      goods_num: r.goods_num,
-      pay_price: r.pay_price,
-      refund_price: r.refund_price,
-      record_type: r.record_type,
-      status: r.status,
-      mtime: r.mtime,
-      gift_info: r.gift_info,
-      ruid: r.ruid,
-    })));
-
-    if (response.data.next_offset === -1 || records.length === 0) {
-      break;
-    }
-    offset = response.data.next_offset;
-  }
-
-  return allRecords;
-}
-
-async function fetchMaterialPackageRecords(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<MaterialPackageRawRecord[]> {
-  const allRecords: MaterialPackageRawRecord[] = [];
-  let page = 1;
-
-  while (true) {
-    const url = `${activity.record_url}&page=${page}&page_size=10`;
-    const response = await fetchBilibiliJson<MaterialPackageRecordResponse>({
-      url,
-      cookie,
-      mobile: false,
-    });
-
-    if (response.code !== 0 || !response.data) {
-      break;
-    }
-
-    const items = response.data.items ?? [];
-    allRecords.push(...items);
-
-    if (!response.data.has_more || items.length === 0) {
-      break;
-    }
-    page++;
-  }
-
-  console.log(`[Synthesis] 获取材料合成记录 ${allRecords.length} 条 (共${page}页)`);
-  return allRecords;
-}
-
-async function fetchCardFlipRecords(
-  cookie: string,
-  activity: SynthesisActivityConfig,
-): Promise<CardFlipRawRecord[]> {
-  const allRecords: CardFlipRawRecord[] = [];
-  let page = 1;
-
-  while (true) {
-    const url = `${activity.record_url}&page=${page}&page_size=10`;
-    const response = await fetchBilibiliJson<CardFlipRecordResponse>({
-      url,
-      cookie,
-      mobile: false,
-    });
-
-    if (response.code !== 0 || !response.data) {
-      break;
-    }
-
-    const items = response.data.items ?? [];
-    allRecords.push(...items);
-
-    if (!response.data.has_more || items.length === 0) {
-      break;
-    }
-    page++;
-  }
-
-  console.log(`[Synthesis] 获取卡牌翻牌记录 ${allRecords.length} 条 (共${page}页)`);
-  return allRecords;
 }

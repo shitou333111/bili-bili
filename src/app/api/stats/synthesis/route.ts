@@ -1,18 +1,15 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { fetchSynthesisActivityInfo, fetchSynthesisActivityRecords, fetchTianxuanGiftList, fetchRedPocketGiftList, getUserNameByUid } from "@/lib/bilibili/gift-api";
+import { fetchTianxuanGiftList, fetchRedPocketGiftList, fetchBagList, getUserNameByUid, type BagGiftItem } from "@/lib/bilibili/gift-api";
 import {
-  getSynthesisCalculator,
-  calculateSynthesisCertifications,
-  calculateCardFlipCertifications,
   calcHistoricalSynthesisProfit,
+  calcPayRecordActivityProfit,
   type SynthesisProfitResult,
   type SynthesisActivityProfitResult,
-  type SynthesisCertification,
   type SynthesisActivityStats,
 } from "@/lib/gift-db";
-import { readPayRecords, readSynthesisRecords, saveSynthesisRecords, getSynthesisActivityInfo, saveSynthesisActivityInfo, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds, getCardFlipGiftImages, getCardFlipGiftImage, saveCardFlipGiftImage } from "@/lib/user-data";
+import { readPayRecords, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds } from "@/lib/user-data";
 import type { SynthesisActivityConfig } from "@/lib/config";
 import { getEffectiveSynthesisConfig } from "@/lib/config-override";
 import { isOffline } from "@/lib/offline";
@@ -110,166 +107,61 @@ export async function GET(request: Request) {
     // 付费记录用于构建 ruid → r_uname 名称映射（B站API已认证，比 getUserNameByUid 更可靠）
     const records = await readPayRecords(validSession.mid, validSession.uname || "");
 
+    // 包裹礼物列表：合成出来的礼物在送出前只出现在包裹中（不在消费记录里），
+    // 因此需要用包裹礼物与消费记录互补，构成完整的合成产出礼物列表。
+    let bagGifts: BagGiftItem[] = [];
+    if (!offline) {
+      try {
+        bagGifts = await fetchBagList(biliCookie);
+      } catch (err) {
+        console.error("[SynthesisStats] 获取包裹礼物列表失败:", err);
+      }
+    }
+
     const activities: SynthesisActivityStats[] = [];
     const effectiveSynthConfig = await getEffectiveSynthesisConfig();
+    // 天选/红包礼物在消费记录方式下同样需要排除（产物可能与其重合）
+    const excludedGiftIds = new Set<number>([...tianxuanGiftIds, ...redPocketGiftIds]);
     for (const activity of effectiveSynthConfig.current_activity) {
       console.log(`[SynthesisStats] 处理活动: ${activity.id}`);
       try {
-        const calculator = getSynthesisCalculator(activity.type);
-        if (!calculator) {
-          console.warn(`[SynthesisStats] 未知活动类型: ${activity.type}`);
-          continue;
-        }
+        const profit = calcPayRecordActivityProfit(records, activity, excludedGiftIds, bagGifts);
+        console.log(`[SynthesisStats] 消费记录方式盈亏: totalSpent=${profit.totalSpent}, totalEarned=${profit.totalEarned}, profit=${profit.profit}, synthesisCount=${profit.synthesisCount}, giftCount=${profit.giftList.length}, anchorCount=${profit.anchors.length}`);
 
-        console.log(`[SynthesisStats] 获取活动信息: ${activity.info_url}`);
-        let info = null;
-        if (offline) {
-          // 离线模式：仅用本地缓存的活动信息
-          info = await getSynthesisActivityInfo(activity.id);
-        } else {
-          try {
-            info = await getSynthesisActivityInfo(activity.id);
-            if (info && info.name && (activity.type !== "material_package" || info.resource)) {
-              console.log(`[SynthesisStats] 从缓存读取活动信息:`, info);
-            } else {
-              info = await fetchSynthesisActivityInfo(biliCookie, activity);
-              console.log(`[SynthesisStats] 从API获取活动信息:`, info);
-              if (info && info.name) {
-                await saveSynthesisActivityInfo(activity.id, info);
-              }
-            }
-          } catch (infoErr) {
-            console.warn(`[SynthesisStats] 获取活动信息失败（活动可能已结束）:`, infoErr);
+        // 活动图标：优先取配置中最后一个产物的礼物图标（依次查包裹、产物列表），找不到再回退其他产物
+        const products = activity.products && activity.products.length > 0 ? activity.products : [];
+        const findProductImg = (productName: string): string | undefined => {
+          const bagMatch = bagGifts.find((g) => g.gift_name.includes(productName));
+          if (bagMatch && bagMatch.img) return bagMatch.img;
+          const prodGift = profit.giftList.find((g) => g.gift_name.includes(productName));
+          return prodGift?.gift_img;
+        };
+        let activityIcon = products.length > 0 ? findProductImg(products[products.length - 1]) : undefined;
+        if (!activityIcon) {
+          for (const p of products) {
+            activityIcon = findProductImg(p);
+            if (activityIcon) break;
           }
         }
-
-        console.log(`[SynthesisStats] 获取活动记录: ${activity.record_url}`);
-        let rawRecords: any[] = [];
-        if (offline) {
-          // 离线模式：仅用本地缓存的活动记录
-          rawRecords = await readSynthesisRecords(validSession.mid, validSession.uname || "", activity.id);
-          console.log(`[SynthesisStats] 离线模式，读取本地活动记录:`, rawRecords.length);
-        } else {
-          try {
-            rawRecords = await fetchSynthesisActivityRecords(biliCookie, activity);
-            console.log(`[SynthesisStats] 活动记录数量:`, rawRecords.length);
-            await saveSynthesisRecords(validSession.mid, validSession.uname || "", activity.id, rawRecords, info?.name);
-          } catch (recordErr) {
-            console.warn(`[SynthesisStats] 获取活动记录失败:`, recordErr);
-          }
-        }
-
-        // card_flip 类型需要注入礼物图片缓存，因为 info_url 为空，活动信息中不包含礼物图片
-        if (activity.type === "card_flip" && info) {
-          const giftImageCache = await getCardFlipGiftImages();
-          (info as any).gift_image_cache = giftImageCache;
-        }
-
-        const profit = calculator.calculate(rawRecords, info);
-
-        // card_flip 类型：为缺少图片的礼物尝试从缓存/付费记录中解析图片
-        if (activity.type === "card_flip") {
-          for (const gift of profit.giftList) {
-            if (!gift.gift_img) {
-              const img = await getCardFlipGiftImage(gift.gift_name, validSession.mid, validSession.uname || "");
-              if (img) {
-                gift.gift_img = img;
-                await saveCardFlipGiftImage(gift.gift_name, img);
-              }
-            }
-          }
-        }
-
-        const uniqueRuids = new Set<number>();
-        for (const anchor of profit.anchors) {
-          uniqueRuids.add(anchor.ruid);
-        }
-        for (const record of profit.detailedRecords) {
-          uniqueRuids.add(record.ruid);
-        }
-        
-        // 从付费记录构建 ruid → r_uname 映射（B站API已认证，比 getUserNameByUid 更可靠）
-        const payRecordNameMap = new Map<number, string>();
-        for (const payRecord of records) {
-          if (payRecord.r_uname && !payRecordNameMap.has(payRecord.ruid)) {
-            payRecordNameMap.set(payRecord.ruid, payRecord.r_uname);
-          }
-        }
-        
-        const namePromises = Array.from(uniqueRuids).map(async (ruid) => {
-          const name = await getUserNameByUid(ruid, validSession.mid, validSession.uname || "").catch(() => "");
-          return { ruid, name };
-        });
-        
-        const nameResults = await Promise.all(namePromises);
-        const nameMap = new Map<number, string>();
-        for (const { ruid, name } of nameResults) {
-          nameMap.set(ruid, name);
-        }
-        
-        for (const anchor of profit.anchors) {
-          // 优先使用付费记录中的 r_uname（B站API已认证），其次使用 nameMap（B站用户名片API）
-          const nameMapVal = nameMap.get(anchor.ruid);
-          const payName = payRecordNameMap.get(anchor.ruid);
-          // nameMap 可能包含 "主播xxx" 的兜底值，此时应回退到付费记录
-          const validNameMapVal = (nameMapVal && !nameMapVal.startsWith("主播")) ? nameMapVal : undefined;
-          anchor.rname = payName || validNameMapVal || nameMapVal || `主播${anchor.ruid}`;
-        }
-        for (const record of profit.detailedRecords) {
-          const nameMapVal = nameMap.get(record.ruid);
-          const payName = payRecordNameMap.get(record.ruid);
-          const validNameMapVal = (nameMapVal && !nameMapVal.startsWith("主播")) ? nameMapVal : undefined;
-          record.rname = payName || validNameMapVal || nameMapVal || `主播${record.ruid}`;
-        }
-
-        // 计算所有可能礼物中的最大价格（优先使用活动信息）
-        let maxGiftPrice: number | undefined = undefined;
-        let maxGiftImg: string | undefined = undefined;
-        if (info?.gift_info && info.gift_info.length > 0) {
-          type InfoGift = { gift_price: number; gift_img: string };
-          const maxGift = info.gift_info.reduce((a: InfoGift, b: InfoGift) => a.gift_price > b.gift_price ? a : b);
-          maxGiftPrice = maxGift.gift_price;
-          maxGiftImg = maxGift.gift_img;
-        }
-
-        let certifications: SynthesisCertification[];
-        if (activity.type === "card_flip") {
-          // 翻牌活动使用专门的认证逻辑
-          const maxGiftPriceForCert = profit.giftList.length > 0
-            ? Math.max(...profit.giftList.map(g => g.gift_price))
+        if (!activityIcon) {
+          activityIcon = profit.giftList.length > 0
+            ? profit.giftList.reduce((a, b) => (a.gift_price > b.gift_price ? a : b)).gift_img
             : undefined;
-          certifications = calculateCardFlipCertifications(rawRecords, profit.detailedRecords, maxGiftPriceForCert);
-        } else {
-          certifications = calculateSynthesisCertifications(profit.detailedRecords, maxGiftPrice);
-        }
-
-        // 为认证记录填充主播名称（card_flip 类型的认证记录 rname 为空）
-        for (const cert of certifications) {
-          cert.rname = nameMap.get(cert.ruid) || `主播${cert.ruid}`;
-        }
-
-        // 活动图标：优先使用info.icon，其次用所有可能礼物中最大礼物的图片
-        const activityIcon = info?.icon || maxGiftImg || (profit.giftList.length > 0 ? profit.giftList.reduce((a, b) => a.gift_price > b.gift_price ? a : b).gift_img : undefined);
-
-        console.log(`[SynthesisStats] 盈亏计算结果: totalSpent=${profit.totalSpent}, totalEarned=${profit.totalEarned}, profit=${profit.profit}, synthesisCount=${profit.synthesisCount}, giftCount=${profit.giftList.length}, anchorCount=${profit.anchors.length}`);
-        console.log(`[SynthesisStats] rawRecords length:`, rawRecords.length);
-        if (rawRecords.length > 0) {
-          console.log(`[SynthesisStats] first record:`, JSON.stringify(rawRecords[0]).substring(0, 200));
         }
 
         activities.push({
           id: activity.id,
-          type: activity.type,
-          name: info?.name || activity.id,
+          name: activity.name || activity.id,
           icon: activityIcon,
+          start_time: activity.start_time,
+          end_time: activity.end_time,
           profit,
-          certifications,
+          certifications: [],
         });
       } catch (err) {
         console.error(`[SynthesisStats] 获取活动 ${activity.id} 失败:`, err);
         activities.push({
           id: activity.id,
-          type: activity.type,
           name: activity.id,
           icon: undefined,
           profit: {

@@ -1,5 +1,6 @@
 import type { RawGiftRecord } from "@/lib/revenue";
-import type { CardFlipRawRecord } from "@/lib/bilibili/gift-api";
+import type { BagGiftItem } from "@/lib/bilibili/gift-api";
+import type { SynthesisActivityConfig } from "@/lib/config";
 
 // ====== 合成活动盈亏统计 ======
 
@@ -58,6 +59,10 @@ export type SynthesisDetailedRecord = {
   synthetic_time: number;
   coin_type?: string;
   gift_id?: number;
+  /** 合成产物记录的数量（包裹礼物补充时若大于1则为多条聚合数量） */
+  gift_num?: number;
+  /** 消费记录方式：素材记录关联的产物名（用于卡片按产物聚合花费） */
+  product_name?: string;
 };
 
 export type SynthesisActivityProfitResult = SynthesisProfitResult & {
@@ -81,665 +86,14 @@ export type SynthesisCertification = {
 
 export type SynthesisActivityStats = {
   id: string;
-  type: string;
+  type?: string;
   name: string;
   icon?: string;
+  start_time?: number;
+  end_time?: number;
   profit: SynthesisActivityProfitResult;
   certifications: SynthesisCertification[];
 };
-
-/**
- * 抽槽类活动原始记录
- * record_type: 1=抽取, 3=替换, 4=合成
- */
-export type SlotDrawRecord = {
-  goods_num: number;
-  pay_price: number;
-  refund_price: number;
-  record_type: number;
-  status: number;
-  mtime: string;
-  gift_info: {
-    gift_id: number;
-    gift_name: string;
-    gift_img: string;
-    gift_price: number;
-  } | null;
-  ruid: number;
-};
-
-/** 盈亏计算器策略接口 */
-export interface SynthesisProfitCalculator {
-  calculate(records: any[], activityInfo?: any): SynthesisActivityProfitResult;
-}
-
-function formatTimestamp(ts: number): string {
-  const date = new Date(ts * 1000);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${year}.${month}.${day} ${hours}:${minutes}`;
-}
-
-/** 抽槽类活动计算器（6槽抽取/替换/合成） */
-class SlotDrawCalculator implements SynthesisProfitCalculator {
-  calculate(records: SlotDrawRecord[], activityInfo?: any): SynthesisActivityProfitResult {
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let drawCount = 0;
-    let replaceCount = 0;
-    let synthesisCount = 0;
-    const giftMap = new Map<number, SynthesisGiftInfo>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageMap = new Map<string, string>();
-    if (activityInfo?.gift_info) {
-      for (const gift of activityInfo.gift_info) {
-        giftImageMap.set(gift.gift_name, gift.gift_img);
-      }
-    }
-
-    const anchorCurrentGift = new Map<number, { name: string; price: number; img: string } | null>();
-
-    // 第一遍：找出所有完成过合成的主播（有record_type=4记录）
-    // 未完成合成的主播，其抽取/替换花费会在活动结束时返还，不计入成本
-    const synthesizedAnchors = new Set<number>();
-    for (const record of records) {
-      if (record.status === 1 && record.record_type === 4 && record.gift_info) {
-        synthesizedAnchors.add(record.ruid);
-      }
-    }
-
-    for (const record of records) {
-      if (record.status !== 1) continue;
-
-      const anchor = anchorMap.get(record.ruid) || {
-        ruid: record.ruid,
-        rname: "",
-        totalSpent: 0,
-        totalEarned: 0,
-      };
-
-      const timestamp = Math.floor(new Date(record.mtime.replace(/-/g, "/")).getTime() / 1000);
-      const dateStr = record.mtime.replace(/-/g, ".");
-
-      if (record.record_type === 4 && record.gift_info) {
-        const price = record.gift_info.gift_price / 100;
-        totalEarned += price;
-        anchor.totalEarned += price;
-        synthesisCount++;
-
-        const existing = giftMap.get(record.gift_info.gift_id);
-        if (existing) {
-          existing.count++;
-        } else {
-          const giftImg = giftImageMap.get(record.gift_info.gift_name) || record.gift_info.gift_img;
-          giftMap.set(record.gift_info.gift_id, {
-            gift_id: record.gift_info.gift_id,
-            gift_name: record.gift_info.gift_name,
-            gift_img: giftImg,
-            gift_price: price,
-            count: 1,
-          });
-        }
-
-        const giftImg = giftImageMap.get(record.gift_info.gift_name) || record.gift_info.gift_img;
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_info.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent: 0,
-          profit: price,
-          synthetic_result: 1,
-          date: dateStr,
-          synthetic_time: timestamp,
-        });
-
-        anchorCurrentGift.set(record.ruid, {
-          name: record.gift_info.gift_name,
-          price,
-          img: giftImg,
-        });
-      } else if (record.record_type === 1 || record.record_type === 3) {
-        // 只计算完成过合成的主播的抽取/替换花费
-        if (!synthesizedAnchors.has(record.ruid)) {
-          continue;
-        }
-        const spent = record.pay_price / 100;
-        totalSpent += spent;
-        anchor.totalSpent += spent;
-        if (record.record_type === 1) {
-          drawCount++;
-        } else {
-          replaceCount++;
-        }
-
-        const currentGift = anchorCurrentGift.get(record.ruid);
-        const giftName = currentGift?.name || "未合成";
-        const giftImg = currentGift?.img || "";
-        const giftPrice = currentGift?.price || 0;
-
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: giftName,
-          gift_price: giftPrice,
-          gift_img: giftImg,
-          spent,
-          profit: -spent,
-          synthetic_result: 0,
-          date: dateStr,
-          synthetic_time: timestamp,
-        });
-      }
-
-      anchorMap.set(record.ruid, anchor);
-    }
-
-    const giftList = Array.from(giftMap.values()).sort((a, b) => b.gift_price - a.gift_price);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount,
-      replaceCount,
-      synthesisCount,
-      successCount: synthesisCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-/** 材料合成类活动记录 */
-export type MaterialPackageRecord = {
-  ruid: number;
-  synthetic_time: number;
-  synthetic_result: number;
-  gift_name: string;
-  gift_price: number;
-  materials: Array<{ name: string; num: number }>;
-  materials_price: number;
-};
-
-/** 材料合成类活动计算器（多档位材料合成） */
-class MaterialPackageCalculator implements SynthesisProfitCalculator {
-  calculate(records: MaterialPackageRecord[], activityInfo?: any): SynthesisActivityProfitResult {
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let synthesisCount = 0;
-    let successCount = 0;
-    const giftMap = new Map<string, SynthesisGiftInfo & { gift_key: string }>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageMap = new Map<string, string>();
-    if (activityInfo?.resource) {
-      for (const [key, value] of Object.entries(activityInfo.resource)) {
-        if (key.startsWith("gift_") && typeof value === "string") {
-          giftImageMap.set(key, value);
-        }
-      }
-    }
-
-    const giftPriceMap = new Map<number, string>();
-    for (const [key, img] of giftImageMap.entries()) {
-      const idx = parseInt(key.split("_")[1]);
-      giftPriceMap.set(idx, img);
-    }
-
-    for (const record of records) {
-      const isFull = record.synthetic_result === 2;
-      const spent = isFull ? 0 : record.materials_price / 100;
-      totalSpent += spent;
-      synthesisCount++;
-
-      const anchor = anchorMap.get(record.ruid) || {
-        ruid: record.ruid,
-        rname: "",
-        totalSpent: 0,
-        totalEarned: 0,
-      };
-      anchor.totalSpent += spent;
-
-      const price = record.gift_price / 100;
-      let giftImg = "";
-      const priceLevel = Math.floor(price / 1000);
-      const img1 = giftPriceMap.get(1);
-      const img2 = giftPriceMap.get(2);
-      const img3 = giftPriceMap.get(3);
-      const img4 = giftPriceMap.get(4);
-      if (price >= 8000 && img3) {
-        giftImg = img3;
-      } else if (price >= 2000 && img2) {
-        giftImg = img2;
-      } else if (price >= 350 && img1) {
-        giftImg = img1;
-      } else if (img4) {
-        giftImg = img4;
-      }
-
-      if (record.synthetic_result !== 0) {
-        totalEarned += price;
-        successCount++;
-        anchor.totalEarned += price;
-
-        const key = record.gift_name;
-        const existing = giftMap.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          giftMap.set(key, {
-            gift_id: 0,
-            gift_name: record.gift_name,
-            gift_img: giftImg,
-            gift_price: price,
-            count: 1,
-            gift_key: key,
-          } as SynthesisGiftInfo & { gift_key: string });
-        }
-
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent,
-          profit: price - spent,
-          synthetic_result: record.synthetic_result,
-          date: formatTimestamp(record.synthetic_time),
-          synthetic_time: record.synthetic_time,
-        });
-      } else {
-        detailedRecords.push({
-          ruid: record.ruid,
-          rname: "",
-          gift_name: record.gift_name,
-          gift_price: price,
-          gift_img: giftImg,
-          spent,
-          profit: -spent,
-          synthetic_result: 0,
-          date: formatTimestamp(record.synthetic_time),
-          synthetic_time: record.synthetic_time,
-        });
-      }
-
-      anchorMap.set(record.ruid, anchor);
-    }
-
-    const giftList = Array.from(giftMap.values())
-      .sort((a, b) => b.gift_price - a.gift_price)
-      .map(({ gift_key, ...rest }) => rest);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount: 0,
-      replaceCount: 0,
-      synthesisCount,
-      successCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-/** 卡牌翻牌类活动计算器（9张卡牌翻牌） */
-class CardFlipCalculator implements SynthesisProfitCalculator {
-  private static readonly FLIP_COSTS = [50, 112, 172, 316, 620, 1025, 2033];
-
-  calculate(records: CardFlipRawRecord[], activityInfo?: any): SynthesisActivityProfitResult {
-    let totalSpent = 0;
-    let totalEarned = 0;
-    let synthesisCount = 0;
-    let successCount = 0;
-    const giftMap = new Map<string, SynthesisGiftInfo>();
-    const anchorMap = new Map<number, SynthesisAnchorInfo>();
-    const detailedRecords: SynthesisDetailedRecord[] = [];
-
-    const giftImageCache: Record<string, string> = activityInfo?.gift_image_cache || {};
-
-    for (const record of records) {
-      synthesisCount++;
-
-      // 计算花费：遍历 card_idx，已翻好卡数决定当次花费
-      let roundCost = 0;
-      let goodCount = 0;
-      let totalFlips = 0;
-      let badCardCount = 0;
-      let endedByBadCard = false;
-
-      for (const idx of record.card_idx) {
-        if (idx === -1) continue; // 用户主动退出，不产生花费
-        roundCost += CardFlipCalculator.FLIP_COSTS[goodCount] || 0;
-        totalFlips++;
-        if (idx >= 1 && idx <= 7) {
-          goodCount++;
-        } else if (idx >= 8 && idx <= 9) {
-          badCardCount++;
-          endedByBadCard = true;
-        }
-      }
-
-      const reward = record.reward_value / 100;
-      totalSpent += roundCost;
-      totalEarned += reward;
-
-      if (goodCount > 0) {
-        successCount++;
-      }
-
-      // 主播聚合
-      const anchor = anchorMap.get(record.ruid) || {
-        ruid: record.ruid,
-        rname: "",
-        totalSpent: 0,
-        totalEarned: 0,
-      };
-      anchor.totalSpent += roundCost;
-      anchor.totalEarned += reward;
-      anchorMap.set(record.ruid, anchor);
-
-      // 礼物聚合：跳过 reward_value=0 的记录（首翻坏牌即结束，无实际奖励）
-      const giftImg = giftImageCache[record.reward_name] || "";
-      if (record.reward_value > 0 && record.reward_name) {
-        const existing = giftMap.get(record.reward_name);
-        if (existing) {
-          existing.count++;
-        } else {
-          giftMap.set(record.reward_name, {
-            gift_id: 0,
-            gift_name: record.reward_name,
-            gift_img: giftImg,
-            gift_price: reward,
-            count: 1,
-          });
-        }
-      }
-
-      // 日期：优先使用 settle_time
-      const settleTime = (record as any).settle_time as number | undefined;
-      const dateStr = settleTime ? formatTimestamp(settleTime) : "";
-
-      // 详细记录（所有记录都保留，包括坏牌被迫结束的）
-      detailedRecords.push({
-        ruid: record.ruid,
-        rname: "",
-        gift_name: record.reward_name,
-        gift_price: reward,
-        gift_img: giftImg,
-        spent: roundCost,
-        profit: reward - roundCost,
-        synthetic_result: goodCount > 0 ? 1 : 0,
-        date: dateStr,
-        synthetic_time: settleTime || 0,
-      });
-    }
-
-    const giftList = Array.from(giftMap.values()).sort((a, b) => b.gift_price - a.gift_price);
-    const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
-
-    return {
-      totalSpent,
-      totalEarned,
-      profit: totalEarned - totalSpent,
-      drawCount: 0,
-      replaceCount: 0,
-      synthesisCount,
-      successCount,
-      giftList,
-      anchors,
-      detailedRecords,
-    };
-  }
-}
-
-/** 计算器注册表 */
-const calculators: Record<string, SynthesisProfitCalculator> = {
-  slot_draw: new SlotDrawCalculator(),
-  material_package: new MaterialPackageCalculator(),
-  card_flip: new CardFlipCalculator(),
-};
-
-/** 根据活动类型获取盈亏计算器 */
-export function getSynthesisCalculator(type: string): SynthesisProfitCalculator | null {
-  return calculators[type] || null;
-}
-
-/** 翻牌活动认证计算 */
-export function calculateCardFlipCertifications(
-  rawRecords: CardFlipRawRecord[],
-  detailedRecords: SynthesisDetailedRecord[],
-  maxGiftPrice?: number,
-): SynthesisCertification[] {
-  const certifications: SynthesisCertification[] = [];
-  if (!maxGiftPrice || maxGiftPrice <= 0 || rawRecords.length === 0) return certifications;
-
-  // 按日期+主播分组
-  const dailyMap = new Map<string, { records: typeof rawRecords; ruid: number }>();
-  for (const record of rawRecords) {
-    const settleTime = (record as any).settle_time as number | undefined;
-    if (!settleTime) continue;
-    const dateStr = new Date(settleTime * 1000).toISOString().slice(0, 10).replace(/-/g, ".");
-    const key = `${dateStr}_${record.ruid}`;
-    if (!dailyMap.has(key)) {
-      dailyMap.set(key, { records: [], ruid: record.ruid });
-    }
-    dailyMap.get(key)!.records.push(record);
-  }
-
-  for (const [key, { records: dayRecords, ruid }] of dailyMap) {
-    const dateStr = key.split("_")[0];
-
-    // 统计当天该主播的所有翻牌数据
-    let totalFlips = 0;
-    let totalBadCards = 0;
-    let totalCost = 0;
-    let totalReward = 0;
-    let maxGoodCount = 0;
-    let roundsWithMaxGift = 0;
-    const roundGoodCounts: number[] = [];
-
-    for (const record of dayRecords) {
-      let goodCount = 0;
-      let badCount = 0;
-      let roundFlips = 0;
-      let roundCost = 0;
-      const costs = [50, 112, 172, 316, 620, 1025, 2033];
-
-      for (const idx of record.card_idx) {
-        if (idx === -1) continue;
-        roundCost += costs[goodCount] || 0;
-        roundFlips++;
-        if (idx >= 1 && idx <= 7) goodCount++;
-        else if (idx >= 8 && idx <= 9) badCount++;
-      }
-
-      totalFlips += roundFlips;
-      totalBadCards += badCount;
-      totalCost += roundCost;
-      totalReward += record.reward_value / 100;
-      roundGoodCounts.push(goodCount);
-
-      if (goodCount > maxGoodCount) maxGoodCount = goodCount;
-      if (record.reward_value / 100 >= maxGiftPrice) roundsWithMaxGift++;
-    }
-
-    // 欧皇：当天只尝试了一次（1局），且一气呵成翻了7张好牌获得最大礼物
-    if (dayRecords.length === 1 && maxGoodCount === 7 && roundsWithMaxGift >= 1) {
-      const settleTime = (dayRecords[0] as any).settle_time as number;
-      const giftImg = detailedRecords.find(r => r.ruid === ruid && r.gift_price >= maxGiftPrice)?.gift_img || "";
-      certifications.push({
-        type: "lucky",
-        ruid,
-        rname: "",
-        gift_name: dayRecords[0].reward_name,
-        gift_price: dayRecords[0].reward_value / 100,
-        gift_img: giftImg,
-        spent: totalCost,
-        profit: totalReward - totalCost,
-        date: formatTimestamp(settleTime),
-      });
-    }
-
-    // 非酋：当天翻了超过100次牌，其中一半以上是凶牌
-    if (totalFlips > 100 && totalBadCards > totalFlips / 2) {
-      const settleTime = (dayRecords[0] as any).settle_time as number;
-      certifications.push({
-        type: "unlucky",
-        ruid,
-        rname: "",
-        gift_name: `${totalFlips}次翻牌`,
-        gift_price: 0,
-        gift_img: "",
-        spent: totalCost,
-        profit: totalReward - totalCost,
-        date: formatTimestamp(settleTime),
-        count: totalBadCards,
-      });
-    }
-  }
-
-  return certifications;
-}
-
-export function calculateSynthesisCertifications(
-  detailedRecords: SynthesisDetailedRecord[],
-  maxGiftPriceFromInfo?: number,
-): SynthesisCertification[] {
-  const certifications: SynthesisCertification[] = [];
-
-  if (detailedRecords.length === 0) {
-    return certifications;
-  }
-
-  // 确定最大礼物价格：必须从活动信息中获取，不能回退到实际记录的最大价格
-  // 因为欧皇/非酋认证只针对活动定义的最大礼物（如30000电池），而不是用户实际合成过的最大礼物
-  if (!maxGiftPriceFromInfo || maxGiftPriceFromInfo <= 0) {
-    console.log("[calculateSynthesisCertifications] 活动信息中无最大礼物价格，不生成认证");
-    return certifications;
-  }
-  const maxGiftPrice = maxGiftPriceFromInfo;
-
-  console.log("[calculateSynthesisCertifications] 最大礼物价格:", maxGiftPrice);
-
-  // 只考虑最大价格的礼物记录
-  const maxPriceRecords = detailedRecords.filter(r => r.gift_price === maxGiftPrice);
-  console.log("[calculateSynthesisCertifications] 最大礼物记录数:", maxPriceRecords.length, "总记录数:", detailedRecords.length);
-
-  if (maxPriceRecords.length === 0) {
-    console.log("[calculateSynthesisCertifications] 没有合成出最大礼物，不生成认证");
-    return certifications;
-  }
-
-  const accumulatedMap = new Map<number, number>();
-  const successRecords: Array<{
-    ruid: number;
-    rname: string;
-    gift_name: string;
-    gift_price: number;
-    gift_img: string;
-    totalSpent: number;
-    profit: number;
-    date: string;
-    isFull: boolean;
-  }> = [];
-
-  for (let i = maxPriceRecords.length - 1; i >= 0; i--) {
-    const record = maxPriceRecords[i];
-    const accumulated = accumulatedMap.get(record.ruid) || 0;
-    const newAccumulated = accumulated + record.spent;
-    if (record.synthetic_result !== 0) {
-      successRecords.push({
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        totalSpent: newAccumulated,
-        profit: record.gift_price - newAccumulated,
-        date: record.date,
-        isFull: record.synthetic_result === 2,
-      });
-      accumulatedMap.set(record.ruid, 0);
-    } else {
-      accumulatedMap.set(record.ruid, newAccumulated);
-    }
-  }
-
-  successRecords.reverse();
-
-  for (const record of successRecords) {
-    if (record.isFull) {
-      certifications.push({
-        type: "unlucky",
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        spent: record.totalSpent,
-        profit: record.profit,
-        date: record.date,
-      });
-    } else if (record.totalSpent < record.gift_price * 0.1) {
-      certifications.push({
-        type: "lucky",
-        ruid: record.ruid,
-        rname: record.rname,
-        gift_name: record.gift_name,
-        gift_price: record.gift_price,
-        gift_img: record.gift_img,
-        spent: record.totalSpent,
-        profit: record.profit,
-        date: record.date,
-      });
-    }
-  }
-
-  const dailyMaxGiftCounts = new Map<string, number>();
-  for (const record of successRecords) {
-    const dateKey = `${record.date.split(" ")[0]}_${record.ruid}`;
-    dailyMaxGiftCounts.set(dateKey, (dailyMaxGiftCounts.get(dateKey) || 0) + 1);
-  }
-
-  for (const [dateKey, count] of dailyMaxGiftCounts) {
-    if (count >= 6) {
-      const [date, ruidStr] = dateKey.split("_");
-      const ruid = parseInt(ruidStr);
-      const firstRecord = successRecords.find(r => r.date.startsWith(date) && r.ruid === ruid);
-      if (firstRecord) {
-        certifications.push({
-          type: "rich",
-          ruid: firstRecord.ruid,
-          rname: firstRecord.rname,
-          gift_name: firstRecord.gift_name,
-          gift_price: firstRecord.gift_price,
-          gift_img: firstRecord.gift_img,
-          spent: 0,
-          profit: 0,
-          date: date,
-          count,
-        });
-      }
-    }
-  }
-
-  return certifications;
-}
 
 /**
  * 计算历史合成活动盈亏（从消费记录中统计，按主播/直播间独立累计）
@@ -897,5 +251,254 @@ export function calcHistoricalSynthesisProfit(
     giftList,
     detailedRecords,
     anchorStats,
+  };
+}
+
+/**
+ * 按消费记录计算单个合成活动的盈亏（method = "payrecord"）
+ *
+ * 直播间错位问题不存在：某直播间合成的礼物只能送给该主播，产物记录的 ruid 即可信，
+ * 因此按 ruid（直播间/主播）独立累计 spent/earned，规则参考 calcHistoricalSynthesisProfit。
+ *
+ * 时间窗口（起止时间均可选，不填则对应方向无边界，即使用全部消费记录）：
+ * - 材料抽取消费记录严格在 [start_time, end_time] 内
+ * - 合成产物送出记录截止到 end_time + 48h，为容错使用 end_time + 49h 作为实际截止
+ *
+ * 层次匹配：
+ * - 每个层次由「产物礼物名称 + 材料消费礼物名称」定义（名称用 includes 关键词匹配）
+ * - 材料名称可能各层相同（如都叫"抽取素材"），若该层填了素材单价则只计入单价一致的记录
+ *   （单价 = 记录 pay_coin / gift_num，容差 0.01），未填单价的层次接受任意价格
+ * - 同一层素材总价也可能变化（抽取时可自定义数量），因此必须逐记录累加 pay_coin，
+ *   不能以单价 × 记录数估算
+ *
+ * 包裹礼物补充（bagGifts）：
+ * 合成产物礼物在未送出前不会消费（不出现于消费记录），而是暂存于包裹（bag_list）。
+ * 用活动各层次的产物礼物名称匹配包裹中的礼物，区分其所属主播后补充计入产出，
+ * 使包裹礼物与消费记录互补构成完整的合成产物列表。
+ */
+export function calcPayRecordActivityProfit(
+  records: RawGiftRecord[],
+  config: SynthesisActivityConfig,
+  excludedGiftIds: Set<number> = new Set(),
+  bagGifts: BagGiftItem[] = [],
+): SynthesisActivityProfitResult {
+  const products = config.products || [];
+  const materials = config.materials || [];
+  // 起止时间可选：未填则对应方向不设边界（范围 = 所有消费记录）
+  const startTs = config.start_time;
+  const endTs = config.end_time;
+  const productEndTs = endTs === undefined ? Number.POSITIVE_INFINITY : endTs + 49 * 3600;
+  const inMaterialWindow = (ts: number) =>
+    (startTs === undefined || ts >= startTs) && (endTs === undefined || ts <= endTs);
+  const inProductWindow = (ts: number) =>
+    (startTs === undefined || ts >= startTs) && ts <= productEndTs;
+  // 素材/产物直接按消费记录 gift_name 模糊匹配；无需把产物与素材一一对应，也无需素材单价区分
+  const inMaterials = (giftName: string) => materials.some((m) => giftName.includes(m));
+  const inProducts = (giftName: string) => products.some((p) => giftName.includes(p));
+
+  let totalSpent = 0;
+  let totalEarned = 0;
+  let drawCount = 0;
+  let synthesisCount = 0;
+
+  const giftMap = new Map<number, SynthesisGiftInfo>();
+  const anchorMap = new Map<number, SynthesisAnchorInfo>();
+  const detailedRecords: SynthesisDetailedRecord[] = [];
+
+  const coinsOf = (record: RawGiftRecord) => Number((record.pay_coin || record.coin || "0").replace(/,/g, ""));
+  const dateStrOf = (ts: number) =>
+    ts ? new Date(ts * 1000).toISOString().slice(0, 10).replace(/-/g, ".") : "";
+
+  for (const record of records) {
+    if (record.status_msg === "已退回") continue;
+    // 礼物天选（gift_id=1 但 gift_name="礼物天选"）不是合成材料花费，排除
+    if (record.gift_id === 1 && record.gift_name === "礼物天选") continue;
+
+    const ts = record.timestamp || 0;
+    const coins = coinsOf(record);
+
+    // 素材：gift_name 匹配 materials 中任一名称，且时间在材料窗口内
+    if (inMaterialWindow(ts) && coins > 0 && materials.length > 0 && inMaterials(record.gift_name)) {
+      totalSpent += coins;
+      drawCount += record.gift_num;
+
+      const anchor = anchorMap.get(record.ruid) || {
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      anchor.totalSpent += coins;
+      if (record.r_uname) anchor.rname = anchor.rname || record.r_uname;
+      anchorMap.set(record.ruid, anchor);
+
+      detailedRecords.push({
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        gift_name: record.gift_name,
+        gift_price: record.gift_num > 0 ? coins / record.gift_num : coins,
+        gift_img: record.gift_img || "",
+        spent: coins,
+        profit: -coins,
+        synthetic_result: 0,
+        date: dateStrOf(ts),
+        synthetic_time: ts,
+        coin_type: record.coin_type,
+        gift_id: record.gift_id,
+      });
+      continue; // 一条记录只归入一个角色，避免同时被当作产物
+    }
+
+    // 产物：包裹道具 + gift_name 匹配 products 中任一名称 + 时间在产物窗口内
+    if (
+      record.bag_desc === "包裹道具" &&
+      !excludedGiftIds.has(record.gift_id) &&
+      inProductWindow(ts) &&
+      products.length > 0 &&
+      inProducts(record.gift_name)
+    ) {
+      totalEarned += coins;
+      synthesisCount += record.gift_num;
+
+      const price = record.gift_num > 0 ? Math.round(coins / record.gift_num) : coins;
+      const existing = giftMap.get(record.gift_id);
+      if (existing) {
+        existing.count += record.gift_num;
+      } else {
+        giftMap.set(record.gift_id, {
+          gift_id: record.gift_id,
+          gift_name: record.gift_name,
+          gift_img: record.gift_img || "",
+          gift_price: price,
+          count: record.gift_num,
+        });
+      }
+
+      const anchor = anchorMap.get(record.ruid) || {
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      anchor.totalEarned += coins;
+      if (record.r_uname) anchor.rname = anchor.rname || record.r_uname;
+      anchorMap.set(record.ruid, anchor);
+
+      detailedRecords.push({
+        ruid: record.ruid,
+        rname: record.r_uname || "",
+        gift_name: record.gift_name,
+        gift_price: price,
+        gift_img: record.gift_img || "",
+        spent: 0,
+        profit: coins,
+        synthetic_result: 1,
+        date: dateStrOf(ts),
+        synthetic_time: ts,
+        coin_type: record.coin_type,
+        gift_id: record.gift_id,
+      });
+    }
+  }
+
+  // ===== 包裹礼物补充 =====
+  // 合成产物礼物在未送出前不会出现在消费记录中，会暂存于包裹（bag_list）。
+  // 用活动的产物礼物匹配包裹礼物，并区分其所属主播后补充计入产出。
+  if (bagGifts.length > 0 && products.length > 0) {
+    // 消费记录假定最新在前，取每条 r_uname 首次出现的 ruid（当前昵称 → 最新 UID 映射）
+    const nameRuids = new Map<string, number>();
+    for (const n of records) {
+      if (n.r_uname && !nameRuids.has(n.r_uname)) nameRuids.set(n.r_uname, n.ruid);
+    }
+    // room_id → ruid 映射（未锁定的当前直播间礼物归属）
+    const roomRuids = new Map<number, number>();
+    for (const r of records) {
+      if (!roomRuids.has(r.room_id)) roomRuids.set(r.room_id, r.ruid);
+    }
+    const anchorNameMatcher = /该礼物仅限([^的]+)的直播间使用/;
+
+    for (const g of bagGifts) {
+      if (!inProducts(g.gift_name)) continue;
+
+      // 归属主播：未锁定 → 当前直播间（room_id=23915535）；锁定 → 从 locked_text 解析主播名再映射最新 ruid
+      let ruid: number | undefined;
+      if (!g.is_locked) {
+        ruid = roomRuids.get(23915535);
+      } else {
+        const m = g.locked_text.match(anchorNameMatcher);
+        const anchorName = m ? m[1] : "";
+        ruid = nameRuids.get(anchorName);
+      }
+      if (ruid === undefined) continue; // 无法归属，保守跳过该礼物
+
+      const earned = g.price * g.gift_num;
+      totalEarned += earned;
+      synthesisCount += g.gift_num;
+
+      const anchor = anchorMap.get(ruid) || {
+        ruid,
+        rname: "",
+        totalSpent: 0,
+        totalEarned: 0,
+      };
+      if (!anchor.rname) {
+        for (const r of records) {
+          if (r.ruid === ruid && r.r_uname) {
+            anchor.rname = r.r_uname;
+            break;
+          }
+        }
+      }
+      anchor.totalEarned += earned;
+      anchorMap.set(ruid, anchor);
+
+      const existing = giftMap.get(g.gift_id);
+      if (existing) {
+        existing.count += g.gift_num;
+      } else {
+        giftMap.set(g.gift_id, {
+          gift_id: g.gift_id,
+          gift_name: g.gift_name,
+          gift_img: g.img,
+          gift_price: Math.round(g.price),
+          count: g.gift_num,
+        });
+      }
+
+      detailedRecords.push({
+        ruid,
+        rname: anchor.rname,
+        gift_name: g.gift_name,
+        gift_price: g.price,
+        gift_img: g.img,
+        spent: 0,
+        profit: earned,
+        synthetic_result: 1,
+        date: "",
+        synthetic_time: 0,
+        gift_id: g.gift_id,
+        gift_num: g.gift_num,
+      });
+    }
+  }
+
+  const giftList = Array.from(giftMap.values());
+  const anchors = Array.from(anchorMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
+
+  console.log(`[calcPayRecordActivityProfit] 活动 ${config.id} 总记录数: ${records.length}, 包裹补充礼物: ${bagGifts.length}`);
+  console.log(`[calcPayRecordActivityProfit] 花费记录: ${totalSpent}, 收益记录: ${totalEarned}, 盈亏: ${totalEarned - totalSpent}`);
+  console.log(`[calcPayRecordActivityProfit] 礼物种类: ${giftList.length}, 详细记录: ${detailedRecords.length}, 主播数: ${anchors.length}`);
+
+  return {
+    totalSpent,
+    totalEarned,
+    profit: totalEarned - totalSpent,
+    drawCount,
+    replaceCount: 0,
+    synthesisCount,
+    successCount: synthesisCount,
+    giftList,
+    anchors,
+    detailedRecords,
   };
 }

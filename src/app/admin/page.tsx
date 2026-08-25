@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { serverApiUrl, serverPost, isTauri, pageUrl } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
-import Dropdown from "@/components/Dropdown";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import WindowTitleBar from "@/components/WindowTitleBar";
 
@@ -13,6 +12,28 @@ function fixImageUrl(url: string): string {
   if (url.startsWith("//")) return "https:" + url;
   if (url.startsWith("http://")) return url.replace("http://", "https://");
   return url;
+}
+
+/** unix 秒 → date（仅日期）输入框值 */
+function tsToDateInput(ts?: number): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** date（仅日期）输入框值 → 该日 0 点的 unix 秒 */
+function dateStartToTs(value: string): number | undefined {
+  if (!value) return undefined;
+  const ts = Math.floor(new Date(`${value}T00:00:00`).getTime() / 1000);
+  return Number.isFinite(ts) ? ts : undefined;
+}
+
+/** date（仅日期）输入框值 → 该日 24 点（次日 0 点）的 unix 秒 */
+function dateEndToTs(value: string): number | undefined {
+  if (!value) return undefined;
+  const ts = Math.floor(new Date(`${value}T24:00:00`).getTime() / 1000);
+  return Number.isFinite(ts) ? ts : undefined;
 }
 
 type User = {
@@ -29,7 +50,14 @@ type User = {
 };
 
 type BlindBoxItem = { id: number; name: string; icon: string };
-type ActivityItem = { id: string; type: string; info_url: string; record_url: string; active?: boolean };
+type ActivityItem = {
+  active?: boolean;
+  name?: string;
+  start_time?: number;
+  end_time?: number;
+  products?: string[];
+  materials?: string[];
+};
 
 type RecommendedAnchorItem = {
   uid: number;
@@ -44,7 +72,6 @@ type AdminConfigData = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
   synthesis_activities: ActivityItem[];
-  valid_activity_types: string[];
   recommended_anchors: RecommendedAnchorItem[];
   real_activity_url: string;
 };
@@ -88,14 +115,14 @@ export default function AdminPage() {
   const [addingAnchor, setAddingAnchor] = useState(false);
   // 用户搜索
   const [userSearch, setUserSearch] = useState("");
-  // 活动名称映射（从本地活动信息 JSON 读取，只读展示）
-  const [activityNames, setActivityNames] = useState<Record<string, string>>({});
   // 从服务器拉取账号数据时的阻塞遮罩
   const [serverLoading, setServerLoading] = useState(false);
   // 礼物目录（用于盲盒按名称搜索：gift_id -> { name, img }）
   const [giftCatalog, setGiftCatalog] = useState<Record<number, { name: string; img: string }>>({});
   // 盲盒名称搜索建议（当前展开的行索引）
   const [blindBoxSearchIndex, setBlindBoxSearchIndex] = useState<number | null>(null);
+  // 合成产物名称搜索建议（当前展开的产品行）
+  const [productSearch, setProductSearch] = useState<{ act: number; product: number } | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -142,23 +169,6 @@ export default function AdminPage() {
       if (!loggedIn) silentLogin();
     });
   }, [checkAdminSession, silentLogin]);
-
-  const loadActivityNames = useCallback(async (activities: ActivityItem[]) => {
-    const names: Record<string, string> = {};
-    await Promise.all(
-      activities.map(async (act) => {
-        if (!act.id) return;
-        try {
-          const res = await adminFetch(serverApiUrl(`/api/admin/activity-info?activity_id=${encodeURIComponent(act.id)}`));
-          const data = await res.json();
-          if (data.code === 0 && data.data?.name) {
-            names[act.id] = data.data.name;
-          }
-        } catch { /* ignore */ }
-      }),
-    );
-    setActivityNames(names);
-  }, []);
 
   const loadData = useCallback(async () => {
     setLoadError(false);
@@ -255,16 +265,12 @@ export default function AdminPage() {
           synthesis_activities: Array.isArray(data.synthesis_activities)
             ? data.synthesis_activities
             : [],
-          valid_activity_types: Array.isArray(data.valid_activity_types)
-            ? data.valid_activity_types
-            : [],
           recommended_anchors: Array.isArray(data.recommended_anchors)
             ? data.recommended_anchors
             : [],
           real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
         };
         setConfig(normalized);
-        loadActivityNames(normalized.synthesis_activities);
         // 解析礼物目录（用于盲盒按名称搜索）
         try {
           const catalogData = await catalogRes.json();
@@ -296,7 +302,7 @@ export default function AdminPage() {
       console.error("[admin] loadData error:", err);
       setLoadError(true);
     }
-  }, [loadActivityNames]);
+  }, []);
 
   useEffect(() => {
     if (adminLoggedIn) loadData();
@@ -540,10 +546,10 @@ export default function AdminPage() {
     setBlindBoxSearchIndex(null);
   };
 
-  const updateActivity = (index: number, field: keyof ActivityItem, value: string) => {
+  const updateActivity = (index: number, field: keyof ActivityItem, value: string | number | boolean | undefined) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
-    acts[index] = { ...acts[index], [field]: value };
+    acts[index] = { ...acts[index], [field]: value } as ActivityItem;
     setConfig({ ...config, synthesis_activities: acts });
   };
 
@@ -553,9 +559,69 @@ export default function AdminPage() {
       ...config,
       synthesis_activities: [
         ...config.synthesis_activities,
-        { id: "", type: config.valid_activity_types[0] || "material_package", info_url: "", record_url: "" },
+        { name: "", products: [], materials: [] },
       ],
     });
+  };
+
+  // 选中搜索建议后自动填充产物的名称
+  const selectGiftForProduct = (actIndex: number, productIndex: number, name: string) => {
+    updateActivityProduct(actIndex, productIndex, name);
+    setProductSearch(null);
+  };
+
+  // ====== 产物配置（可独立增删，与素材无一一对应关系）=======
+  const updateActivityProduct = (actIndex: number, productIndex: number, value: string) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const products = [...(acts[actIndex].products || [])];
+    products[productIndex] = value;
+    acts[actIndex] = { ...acts[actIndex], products };
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  const addActivityProduct = (actIndex: number) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const products = [...(acts[actIndex].products || []), ""];
+    acts[actIndex] = { ...acts[actIndex], products };
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  const removeActivityProduct = (actIndex: number, productIndex: number) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const products = [...(acts[actIndex].products || [])];
+    products.splice(productIndex, 1);
+    acts[actIndex] = { ...acts[actIndex], products };
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  // ====== 素材配置（可独立增删，数量不必与产物相同）=======
+  const updateActivityMaterial = (actIndex: number, materialIndex: number, value: string) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const materials = [...(acts[actIndex].materials || [])];
+    materials[materialIndex] = value;
+    acts[actIndex] = { ...acts[actIndex], materials };
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  const addActivityMaterial = (actIndex: number) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const materials = [...(acts[actIndex].materials || []), ""];
+    acts[actIndex] = { ...acts[actIndex], materials };
+    setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  const removeActivityMaterial = (actIndex: number, materialIndex: number) => {
+    if (!config) return;
+    const acts = [...config.synthesis_activities];
+    const materials = [...(acts[actIndex].materials || [])];
+    materials.splice(materialIndex, 1);
+    acts[actIndex] = { ...acts[actIndex], materials };
+    setConfig({ ...config, synthesis_activities: acts });
   };
 
   const removeActivity = (index: number) => {
@@ -907,13 +973,6 @@ export default function AdminPage() {
                       <span className="text-xs text-black/50 shrink-0">{box.id > 0 ? box.id : "?"}</span>
                       <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
                     </div>
-                    <input
-                      type="text"
-                      value={box.icon}
-                      onChange={(e) => updateBlindBox(realIndex, "icon", e.target.value)}
-                      placeholder="图标链接（选择礼物后自动填充，可手动修改）"
-                      className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                    />
                   </div>
                   );
                 })}
@@ -926,13 +985,13 @@ export default function AdminPage() {
             <div className="space-y-2">
               <h3 className="text-xs font-semibold">黑抽（真实合成活动）页面 URL</h3>
               <p className="text-[10px] text-black/40">
-                填写 B站 真实合成活动页面 URL 模板，使用 {'{roomId}'} 和 {'{uid}'} 作为占位符；留空则"黑抽"卡片变灰不可点击
+                填写 B站 真实合成活动页面 URL 模板，使用 {'{roomId}'} 和 {'{uid}'} 作为占位符（{'{roomId}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{roomId}'}&uid={'{uid}'}#/play?config_id=...
               </p>
               <input
                 type="text"
                 value={config.real_activity_url}
                 onChange={(e) => setConfig({ ...config, real_activity_url: e.target.value })}
-                placeholder="例如：https://live.bilibili.com/activity/...?room_id={roomId}&uid={uid}#/play?config_id=..."
+                placeholder="粘贴活动 URL 模板"
                 className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
               />
               {config.real_activity_url && (
@@ -952,6 +1011,7 @@ export default function AdminPage() {
                 <button onClick={addActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
               </div>
               <p className="text-[10px] text-black/40">勾选 = 在页面上展示该活动</p>
+              <p className="text-[10px] text-black/40">起止时间可选，不填则使用全部消费记录；材料抽取记录在 [起, 止] 内，产物送出记录截止到「止 + 49 小时」（48h 送出窗口 + 1h 容错）。产物为合成的礼物（包裹/送出记录），素材为抽取时的花费记录，素材总花费自动汇总，无需与产物一一对应。起止只填日期，开始=0点、结束=24点。</p>
               <div className="space-y-3">
                 {config.synthesis_activities.map((act, i) => (
                   <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${act.active === false ? "opacity-50" : ""}`}>
@@ -979,41 +1039,108 @@ export default function AdminPage() {
                       />
                       <input
                         type="text"
-                        value={act.id}
-                        onChange={(e) => updateActivity(i, "id", e.target.value)}
-                        placeholder="活动ID"
-                        className="w-24 rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                      />
-                      {/* 活动名称 - 自动从 info_url 提取，只读显示 */}
-                      <input
-                        type="text"
-                        value={activityNames[act.id] ?? ""}
-                        readOnly
-                        placeholder="自动获取名称"
-                        className="flex-1 min-w-[120px] rounded border border-black/10 bg-black/5 px-2 py-1.5 text-xs text-black/50 cursor-not-allowed"
-                      />
-                      <Dropdown
-                        value={act.type}
-                        onChange={(v) => updateActivity(i, "type", v)}
-                        className="w-32 shrink-0 rounded border border-black/10 bg-white px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                        options={config.valid_activity_types.map((t) => ({ value: t, label: t }))}
+                        value={act.name ?? ""}
+                        onChange={(e) => updateActivity(i, "name", e.target.value)}
+                        placeholder="活动名称"
+                        className="flex-1 min-w-[120px] rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
                       />
                       <button onClick={() => removeActivity(i)} className="text-xs text-[#e74c3c] hover:underline ml-auto">删除</button>
                     </div>
-                    <input
-                      type="text"
-                      value={act.info_url}
-                      onChange={(e) => updateActivity(i, "info_url", e.target.value)}
-                      placeholder="info_url"
-                      className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                    />
-                    <input
-                      type="text"
-                      value={act.record_url}
-                      onChange={(e) => updateActivity(i, "record_url", e.target.value)}
-                      placeholder="record_url"
-                      className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-                    />
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <label className="flex items-center gap-1 text-[10px] text-black/50 shrink-0">
+                            <span>起</span>
+                            <input
+                              type="date"
+                              value={tsToDateInput(act.start_time)}
+                              onChange={(e) => updateActivity(i, "start_time", dateStartToTs(e.target.value))}
+                              className="rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                            />
+                          </label>
+                          <label className="flex items-center gap-1 text-[10px] text-black/50 shrink-0">
+                            <span>止</span>
+                            <input
+                              type="date"
+                              value={tsToDateInput(act.end_time)}
+                              onChange={(e) => updateActivity(i, "end_time", dateEndToTs(e.target.value))}
+                              className="rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                        {/* 产物配置 */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium text-black/60">产物</span>
+                            <button onClick={() => addActivityProduct(i)} className="text-[10px] text-[#00a1d6] hover:underline">+ 添加产物</button>
+                          </div>
+                          {(act.products || []).length === 0 && (
+                            <p className="text-[10px] text-black/30">暂无产物，添加合成的礼物名称</p>
+                          )}
+                          {(act.products || []).map((pname, pi) => (
+                            <div key={pi} className="flex items-center gap-1.5">
+                              <div className="relative flex-1 min-w-[90px]">
+                                <input
+                                  type="text"
+                                  value={pname}
+                                  onChange={(e) => {
+                                    updateActivityProduct(i, pi, e.target.value);
+                                    setProductSearch({ act: i, product: pi });
+                                  }}
+                                  onFocus={() => setProductSearch({ act: i, product: pi })}
+                                  onBlur={() => setTimeout(() => setProductSearch(null), 200)}
+                                  placeholder="产物礼物名称（从礼物列表选择）"
+                                  className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                                />
+                                {productSearch && productSearch.act === i && productSearch.product === pi && pname.trim() && (
+                                  <div className="absolute z-10 mt-1 w-full rounded-lg border border-black/10 bg-white shadow-lg max-h-40 overflow-y-auto">
+                                    {searchGiftsByName(pname).length > 0 ? (
+                                      searchGiftsByName(pname).map((g) => (
+                                        <button
+                                          key={g.id}
+                                          onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            selectGiftForProduct(i, pi, g.name);
+                                          }}
+                                          className="flex items-center gap-2 w-full px-2 py-1.5 text-left hover:bg-black/5 text-[11px]"
+                                        >
+                                          {g.img && <img src={g.img} alt="" className="w-5 h-5 rounded shrink-0" />}
+                                          <span className="truncate">{g.name}</span>
+                                          <span className="ml-auto text-black/40 shrink-0">id:{g.id}</span>
+                                        </button>
+                                      ))
+                                    ) : (
+                                      <div className="px-2 py-1.5 text-[11px] text-black/40">未找到匹配的礼物</div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <button onClick={() => removeActivityProduct(i, pi)} className="text-[11px] text-[#e74c3c] hover:underline shrink-0">×</button>
+                            </div>
+                          ))}
+                        </div>
+                        {/* 素材配置 */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium text-black/60">素材</span>
+                            <button onClick={() => addActivityMaterial(i)} className="text-[10px] text-[#00a1d6] hover:underline">+ 添加素材</button>
+                          </div>
+                          {(act.materials || []).length === 0 && (
+                            <p className="text-[10px] text-black/30">暂无素材，添加抽取材料名称（同类可只填一个）</p>
+                          )}
+                          {(act.materials || []).map((mname, mi) => (
+                            <div key={mi} className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={mname}
+                                onChange={(e) => updateActivityMaterial(i, mi, e.target.value)}
+                                placeholder="素材礼物名称"
+                                className="flex-1 min-w-[90px] rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                              />
+                              <button onClick={() => removeActivityMaterial(i, mi)} className="text-[11px] text-[#e74c3c] hover:underline shrink-0">×</button>
+                            </div>
+                          ))}
+                        </div>
+                        </div>
                   </div>
                 ))}
               </div>
