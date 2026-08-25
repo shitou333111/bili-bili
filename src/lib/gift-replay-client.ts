@@ -25,8 +25,8 @@ const USER_SCORE_RANK_API =
   "https://api.live.bilibili.com/xlive/app-blink/v1/liveUserRank/UserScoreRank";
 const PAGE_SIZE = 50;
 const SEG_SECONDS = 2; // 每段短视频时长
-const BEFORE_SECONDS = 5; // 礼物时刻前 5s
-const AFTER_SECONDS = 15; // 礼物时刻后 15s
+const BEFORE_SECONDS = 2; // 礼物时刻前 2s
+const AFTER_SECONDS = 12; // 礼物时刻后 12s
 const SEVEN_DAY_SEC = 7 * 24 * 3600;
 
 // ==================== 类型定义 ====================

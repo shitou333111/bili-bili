@@ -35,8 +35,20 @@ const PRICE_OPTIONS = [
   { value: 2000, label: "≥2000电池" },
 ] as const;
 
-const BEFORE_SECONDS = 5;
+const BEFORE_SECONDS = 2; // 礼物时刻前 2s
+const AFTER_SECONDS = 12; // 礼物时刻后 12s
+// 礼物实际送出的时刻比记录时间晚约 1s（网络/上屏延迟），用于在录播时间线上后移礼物出现位置以对齐内容
+const GIFT_DELAY_SECONDS = 1;
 const SEG_SECONDS = 2; // 每段 2s
+function safeStartPos(el?: HTMLVideoElement | null, fallback = 0): number {
+  try {
+    if (!el || !el.buffered || el.buffered.length === 0) return fallback;
+    const s = el.buffered.start(0);
+    return Number.isFinite(s) && s >= 0 ? Math.max(fallback, s) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 const CANVAS_W = 720; // 画布固定 720×1280
 const CANVAS_H = 1280;
 // 竖屏判定阈值（与模拟器一致）：高/宽 > 1.2 视为竖屏，铺满整个画布
@@ -386,7 +398,7 @@ function buildMergedPlan(sorted: ClipData[]): MergedPlan {
     segCursor += kept.length;
     totalSeg += kept.length;
     for (const ci of runClipIdx) {
-      giftPosAbs[ci] = run.segStart * SEG_SECONDS + (sorted[ci].giftTime - runStartReal);
+      giftPosAbs[ci] = run.segStart * SEG_SECONDS + (sorted[ci].giftTime + GIFT_DELAY_SECONDS - runStartReal);
     }
     runSegs = [];
     runClipIdx = [];
@@ -397,7 +409,7 @@ function buildMergedPlan(sorted: ClipData[]): MergedPlan {
     const segs = extractSegments(c.playlist);
     if (segs.length === 0) continue;
     const cStart = c.giftTime - BEFORE_SECONDS;
-    const cEnd = c.giftTime + 15;
+    const cEnd = c.giftTime + AFTER_SECONDS;
     if (runSegs.length === 0) {
       runStartReal = cStart;
       runEndReal = cEnd;
@@ -1134,10 +1146,10 @@ function MergedPlayer({
         // 而真实媒体提前结束——currentTime 会卡在"真实末尾与名义末尾之间"：既不发 ended 也无法前进，
         // 触发看门狗"播放停滞"且黑屏。故按计划总时长（totalSec）提前 1s 回绕，越过该死区。
         // 片段多为本地 Blob URL（Tauri），回绕不重新请求网络；保留默认缓冲使回绕到起点可直接续播。
-        if (!live.paused && !live.ended && !needsRecoveryRef.current) {
+        if (!savingRef.current && !live.paused && !live.ended && !needsRecoveryRef.current) {
           const dur = live.duration;
           if (Number.isFinite(dur) && dur > 0 && live.currentTime >= totalSec - 1.0) {
-            try { live.currentTime = 0; } catch { /* ignore */ }
+            try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
             try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
             watchLastT = 0;
             watchLastMove = performance.now();
@@ -1381,12 +1393,21 @@ function MergedPlayer({
     const live = liveRef.current;
     if (!canvas || !live || saving || plan.totalSeg === 0) return;
     setSaving(true);
+    savingRef.current = true; // 同步置位：录制期间禁用循环回绕，避免录到下一遍开头
     const wasPlaying = !live.paused;
     try {
-      // 从头播放以便录制完整内容
-      try { live.currentTime = 0; } catch { /* ignore */ }
+      // 从头播放以便录制完整内容。不钉在 0：首段缓冲起点≈0.02（非 0），
+      // 停在 0 会让 Chrome 不渲染 → 起始卡顿/黑屏，故落到已缓冲起点
+      try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
       if (live.paused) await live.play().catch(() => {});
       setPlaying(true);
+      // 等待首帧解码并绘制，避免录制开头为黑帧（MP4 首帧缺失会让预览封面变黑）
+      const t0 = performance.now();
+      while ((!live.videoWidth || live.currentTime <= 0) && performance.now() - t0 < 4000) {
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      // 再等一帧让 drawLoop 把首帧画到画布后再开始录制
+      await new Promise((r) => requestAnimationFrame(r));
 
       const stream = canvas.captureStream(30);
       // 选择当前环境支持的录制格式。优先 mp4：容器自带时长元数据与封面，系统相册可正确识别
@@ -1412,8 +1433,8 @@ function MergedPlayer({
         rec.onstop = () => resolve();
       });
       rec.start(500);
-      // 等完整播完一遍（加 1s 缓冲）后停止录制
-      await new Promise((r) => setTimeout(r, totalSec * 1000 + 1000));
+      // 等完整播完一遍后停止（录制期间已禁用循环回绕，不会录到下一遍的开头）
+      await new Promise((r) => setTimeout(r, totalSec * 1000));
       if (rec.state !== "inactive") rec.stop();
       await stopped;
       stream.getTracks().forEach((t) => t.stop());
@@ -1427,6 +1448,7 @@ function MergedPlayer({
       console.error("[GiftReplay] 保存视频失败:", e);
       showToast("保存视频失败");
     } finally {
+      savingRef.current = false;
       if (!wasPlaying) {
         try { live.pause(); } catch { /* ignore */ }
         setPlaying(false);
