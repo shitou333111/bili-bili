@@ -1401,15 +1401,26 @@ function MergedPlayer({
       try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
       if (live.paused) await live.play().catch(() => {});
       setPlaying(true);
-      // 等待首帧解码并绘制，避免录制开头为黑帧（MP4 首帧缺失会让预览封面变黑）
+      // 等待首帧真正解码并绘制，避免录制开头为黑帧（Android 上 videoWidth>0 时往往还没出帧，
+      // 过早 captureStream 会让首帧/MP4 封面只有叠加层、画面为黑）。标准：播放头相对起播点
+      // 前进了（说明已解码出帧并呈现），再让 drawLoop 把该帧画上画布。
+      const startT = live.currentTime;
       const t0 = performance.now();
-      while ((!live.videoWidth || live.currentTime <= 0) && performance.now() - t0 < 4000) {
+      while (live.currentTime <= startT + 0.03 && performance.now() - t0 < 4000) {
         await new Promise((r) => requestAnimationFrame(r));
       }
-      // 再等一帧让 drawLoop 把首帧画到画布后再开始录制
+      // 再等两帧让 drawLoop 把视频首帧画到画布后再开始录制
+      await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
 
-      const stream = canvas.captureStream(30);
+      // 录制码率/帧率按长度做内存预算：iOS 整段 mp4 需一次性 Blob→ArrayBuffer 再经 Tauri IPC
+      // 整体拷贝，视频越长峰值内存越大，长视频无上限会导致 WKWebView 内存吃紧闪退回首页。
+      // 给"总时长"设内存预算，反推码率上限；越长越压低帧率，保证保存不 OOM 且画质够用。
+      const MEMORY_BUDGET_BYTES = 40 * 1024 * 1024; // ~40MB，峰值(renderer+IPC拷贝)≈120MB 内安全
+      const captureFps = totalSec <= 45 ? 30 : totalSec <= 90 ? 24 : 20;
+      const bitrate = Math.round((MEMORY_BUDGET_BYTES * 8) / Math.max(totalSec, 1));
+
+      const stream = canvas.captureStream(captureFps);
       // 选择当前环境支持的录制格式。优先 mp4：容器自带时长元数据与封面，系统相册可正确识别
       // （webm 由 MediaRecorder 产出常缺 Duration，表现为"可播但时长0、封面黑屏"）。
       let mime = "";
@@ -1417,7 +1428,9 @@ function MergedPlayer({
       else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) mime = "video/webm;codecs=vp9";
       else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) mime = "video/webm;codecs=vp8";
       else if (MediaRecorder.isTypeSupported("video/webm")) mime = "video/webm";
-      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const rateOpts: MediaRecorderOptions = { videoBitsPerSecond: bitrate };
+      if (mime) rateOpts.mimeType = mime;
+      const rec = new MediaRecorder(stream, rateOpts);
       // 以 recorder 实际生效的 mimeType 为准判断容器，避免因探测返回 false 导致格式张冠李戴
       // （如 iOS 上探测不出 mp4、MediaRecorder 默认却编码 mp4，若仍当 webm 存，相册会拒写）
       const actualMime = rec.mimeType || mime || "";
