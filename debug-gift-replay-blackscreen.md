@@ -114,6 +114,35 @@
 - 根因：停在**物理末尾死区**时未 fire ended、`paused` 仍为 false，toggle 走了 `else` 暂停分支 → 只是暂停无重播。
 - 修复：toggle 开头检测"已到末尾"——`live.ended` 或 `!paused && readyState>=2 && ct>=最后run物理末尾-0.6`，满足则 `currentTime=safeStartPos(0)` + startLoad + play 从头重播。
 
+## 已应用修复（第十二轮 perf，录制帧率优化，画面保持纯净）
+- 症状：所有平台录制视频帧率远低于 24/30 设定，微微卡顿。
+- 解释：`canvas.captureStream(fps)` 的 fps 是**目标上限**；WebRTC 相同帧抑制会在画布内容不变时（跨 run 过渡/静止/末尾死区）丢弃相同帧 → 静止段帧率骤降（浏览器机制，无法绕过）。动态段帧率低的主因是**特效像素级 alpha 合成每帧开销**：drawEffect 每帧 getImageData(2×全画布读回,GPU→CPU 同步) + O(W*H) JS 像素循环。
+- 修复（保持画面纯净，用户选择"只做性能优化"）：
+  1. 特效工作画布(fxWorkCanvas/fxAlphaCanvas)的 2d context 加 `{ willReadFrequently: true }`：读回走 CPU 缓冲，消除每帧 GPU→CPU 同步停顿（也消除 300 行 willReadFrequently 警告）。主画布(captureStream 源)不动，保持 GPU 合成。
+  2. drawEffect 加**合成结果缓存**：cacheKey = fx.currentTime+尺寸+裁剪参数+输出尺寸；特效未出新帧(同一帧跨多个 rAF)时直接复用上次合成画布，跳过像素循环与 getImageData → 像素级合成频率从 rAF(60fps)降到特效帧率(24/30)，省约 60% 开销。
+
+## 已应用修复（第十三轮 fx-cache-fix，修复性能优化引入的残影/开头卡顿）
+- 症状：第十二轮性能优化后，录制开头几秒卡顿 + 上一个特效的残影。
+- 根因：
+  1. **drawEffect 缓存误命中**：缓存键仅含 currentTime/尺寸/裁剪参数，未区分特效视频元素。不同特效（B站配置常相似）currentTime/尺寸恰好相同时，缓存命中画出上一个特效的帧 → 残影；该污染帧又经 hold-frame 写入 freezeCanvasRef，录制 seek 到 0 后开头贴污染帧 → 视觉卡顿。
+  2. **willReadFrequently 加在 work 画布**：该画布每帧 drawImage 到主画布(GPU)，软件渲染导致每帧软件→GPU 上传，拖慢 drawLoop。
+- 修复：
+  1. 缓存命中改为 `fxCacheFx !== fx || key !== cacheKey`（视频元素引用 + currentSrc 双重校验），不同特效必重合成。
+  2. work 画布改回 GPU 渲染（缓存后其 getImageData 仅特效新帧时执行，无需 willReadFrequently）；alphaCanvas 保留 willReadFrequently（警告来源，读回频繁）。
+
+## 已回退（第十四轮 revert-perf，撤销第十二/十三轮性能优化）
+- 用户反馈残影/开头卡顿在性能优化后仍存在，明确指示"可以接受 willReadFrequently 警告、接受帧率低，之前已基本实现需求"。
+- 回退内容：drawEffect 恢复原始实现（无合成结果缓存、无 willReadFrequently）；删除 fxCacheFx/fxCacheKey；特效画布(wxWork/fxAlpha)改回普通 getContext("2d")。willReadFrequently 警告会回来（用户接受）。
+- 保留不回退（核心功能修复）：取消循环播放 + drawLoop 录制收尾 + stopped 超时兜底(第九轮)、stopped 移至 rec.start 后(第十轮)、toggle 末尾点击重播(第十一轮)。
+
+## 已应用修复（第十五轮 fx-rvfc，温和方案：消警告+提帧率，无残影风险）
+- 用户选择温和方案（消警告+提帧率），要求不触发新问题。
+- 实现：
+  1. 特效合成改为 **requestVideoFrameCallback 事件驱动**：视频真正出新帧时才做像素级 alpha 合成（24/30fps），rAF 其余帧直接复用结果画布。**每特效元素独立结果画布（WeakMap）** + 事件驱动 → 无"内容相同误判"类残影（区别于第十二轮按 currentTime 缓存，后者因共享 key 误命中产生残影）。
+  2. 参数未变直接 drawImage 结果画布（GPU）；参数变化立即重合成+重注册 rVFC；无 rVFC 支持时退化为每帧同步合成。
+  3. alphaCanvas 加 willReadFrequently（消除 300 行警告，getImageData 走 CPU 缓冲）；work/result 画布保持 GPU 渲染（每帧输出到主画布，避免软件→GPU 上传拖慢）。
+- 保留：取消循环+drawLoop 收尾、stopped 位置、toggle 重播。
+
 ## 待办/未解
 - 起始卡顿回潮 + gap-controller 跨 run 大时间隙停滞：当前数据 run 间 gap 达数百秒，hls 无法连续缓冲跨越，依赖跨 run seek 跳跃。需核验录制期间跨 run seek 是否稳定触发、以及 gap 大时 bufferStalledError 反复触发导致开头卡顿。第五轮的 `currentTime>=0.5` 起点判定与跨 run seek 及本次数据相关，需重新画像证据。
 

@@ -247,9 +247,85 @@ function SessionsSelect({
 
 // ==================== 特效合成（参考模拟器 AlphaVideoPlayer） ====================
 
-// 复用画布，避免每帧 new canvas
-let fxWorkCanvas: HTMLCanvasElement | null = null;
+// 特效合成结果缓存（每个特效视频元素独立）：用 rVFC 在视频真正出新帧时才做像素级 alpha 合成，
+// rAF 其余帧直接复用该元素的结果画布 → 合成频率从 rAF(60fps) 降到视频帧率(24/30)。
+// 事件驱动（新帧到达才合成）+ 每元素独立画布，杜绝"内容相同误判复用旧帧"类残影（较缓存方案安全）。
+// alpha 画布每特效帧 getImageData 读回像素：加 willReadFrequently 消除 GPU→CPU 同步停顿与警告；
+// work/result 画布保持 GPU 渲染（每帧 drawImage 到主画布，避免软件→GPU 上传拖慢）。
+type ComposeParams = {
+  rx: number; ry: number; rw: number; rh: number;
+  ax: number; ay: number; aw: number; ah: number;
+  outW: number; outH: number;
+};
+const fxResultMap = new WeakMap<HTMLVideoElement, HTMLCanvasElement>();
+const fxReadySet = new WeakSet<HTMLVideoElement>();
+const fxParamsMap = new WeakMap<HTMLVideoElement, ComposeParams>();
+const fxHandleMap = new WeakMap<HTMLVideoElement, number>();
 let fxAlphaCanvas: HTMLCanvasElement | null = null;
+
+/** 把 fx 当前帧按裁剪配置合成（RGB + R 通道作 alpha）写入该元素自己的结果画布 */
+function composeFx(fx: HTMLVideoElement, p: ComposeParams) {
+  let work = fxResultMap.get(fx);
+  if (!work) {
+    work = document.createElement("canvas");
+    fxResultMap.set(fx, work);
+  }
+  work.width = p.outW;
+  work.height = p.outH;
+  const wctx = work.getContext("2d");
+  if (!wctx) return;
+
+  // 1. 绘制 RGB 帧（裁剪有效区域）
+  wctx.clearRect(0, 0, p.outW, p.outH);
+  wctx.drawImage(fx, p.rx, p.ry, p.rw, p.rh, 0, 0, p.outW, p.outH);
+
+  // 2. 应用 alpha 通道
+  try {
+    if (!fxAlphaCanvas) fxAlphaCanvas = document.createElement("canvas");
+    const alphaCanvas = fxAlphaCanvas;
+    alphaCanvas.width = p.aw;
+    alphaCanvas.height = p.ah;
+    const aCtx = alphaCanvas.getContext("2d", { willReadFrequently: true });
+    if (aCtx) {
+      aCtx.drawImage(fx, p.ax, p.ay, p.aw, p.ah, 0, 0, p.aw, p.ah);
+      const alphaData = aCtx.getImageData(0, 0, p.aw, p.ah);
+      const frameData = wctx.getImageData(0, 0, p.outW, p.outH);
+      for (let y = 0; y < p.outH; y++) {
+        for (let x = 0; x < p.outW; x++) {
+          const srcX = Math.floor((x / p.outW) * p.aw);
+          const srcY = Math.floor((y / p.outH) * p.ah);
+          const srcIdx = (srcY * p.aw + srcX) * 4;
+          const dstIdx = (y * p.outW + x) * 4;
+          frameData.data[dstIdx + 3] = alphaData.data[srcIdx]; // 取 R 通道作 alpha
+        }
+      }
+      wctx.putImageData(frameData, 0, 0);
+    }
+  } catch {
+    // 跨域等问题导致无法读取像素，保持 RGB 绘制
+  }
+  fxReadySet.add(fx);
+}
+
+/** 确保 fx 已注册 rVFC（新帧到达时自动重新合成结果画布），并记录最新裁剪参数 */
+function ensureFxCompositor(fx: HTMLVideoElement, p: ComposeParams) {
+  fxParamsMap.set(fx, p);
+  if (typeof (fx as any).requestVideoFrameCallback !== "function") {
+    // 无 rVFC 支持：退化为每帧同步合成（由 drawEffect 调用 composeFx）
+    return;
+  }
+  if (fxHandleMap.has(fx)) {
+    try { (fx as any).cancelVideoFrameCallback(fxHandleMap.get(fx)); } catch { /* ignore */ }
+  }
+  const onFrame = () => {
+    const p2 = fxParamsMap.get(fx);
+    if (!p2) return;
+    composeFx(fx, p2);
+    // 继续监听下一帧
+    fxHandleMap.set(fx, (fx as any).requestVideoFrameCallback(onFrame));
+  };
+  fxHandleMap.set(fx, (fx as any).requestVideoFrameCallback(onFrame));
+}
 
 /**
  * 把礼物特效按 JSON 配置裁剪有效区域（rgbFrame）并应用 alpha 通道（aFrame）后，
@@ -276,52 +352,35 @@ function drawEffect(
   const [ax, ay, aw, ah] = info.aFrame ?? [0, 0, fx.videoWidth, fx.videoHeight];
   const outW = Math.max(1, Math.round((info.w ?? fx.videoWidth) * (info.scale || 1)));
   const outH = Math.max(1, Math.round((info.h ?? fx.videoHeight) * (info.scale || 1)));
+  const params: ComposeParams = { rx, ry, rw, rh, ax, ay, aw, ah, outW, outH };
 
-  if (!fxWorkCanvas) fxWorkCanvas = document.createElement("canvas");
-  const work = fxWorkCanvas;
-  work.width = outW;
-  work.height = outH;
-  const wctx = work.getContext("2d");
-  if (!wctx) return;
-
-  // 1. 绘制 RGB 帧（裁剪有效区域）
-  wctx.clearRect(0, 0, outW, outH);
-  wctx.drawImage(fx, rx, ry, rw, rh, 0, 0, outW, outH);
-
-  // 2. 应用 alpha 通道
-  try {
-    if (!fxAlphaCanvas) fxAlphaCanvas = document.createElement("canvas");
-    const alphaCanvas = fxAlphaCanvas;
-    alphaCanvas.width = aw;
-    alphaCanvas.height = ah;
-    const aCtx = alphaCanvas.getContext("2d");
-    if (aCtx) {
-      aCtx.drawImage(fx, ax, ay, aw, ah, 0, 0, aw, ah);
-      const alphaData = aCtx.getImageData(0, 0, aw, ah);
-      const frameData = wctx.getImageData(0, 0, outW, outH);
-      for (let y = 0; y < outH; y++) {
-        for (let x = 0; x < outW; x++) {
-          const srcX = Math.floor((x / outW) * aw);
-          const srcY = Math.floor((y / outH) * ah);
-          const srcIdx = (srcY * aw + srcX) * 4;
-          const dstIdx = (y * outW + x) * 4;
-          frameData.data[dstIdx + 3] = alphaData.data[srcIdx]; // 取 R 通道作 alpha
-        }
-      }
-      wctx.putImageData(frameData, 0, 0);
-    }
-  } catch {
-    // 跨域等问题导致无法读取像素，保持 RGB 绘制
+  // 裁剪/尺寸参数变化（同元素配置变更）时需立即重合成当前帧并重注册 rVFC；
+  // 参数未变则直接复用该元素的结果画布（rVFC 已在后台按新帧续更）
+  const prev = fxParamsMap.get(fx);
+  const sameParams = !!prev && prev.rx === rx && prev.ry === ry && prev.rw === rw && prev.rh === rh &&
+    prev.ax === ax && prev.ay === ay && prev.aw === aw && prev.ah === ah &&
+    prev.outW === outW && prev.outH === outH;
+  if (!sameParams) {
+    composeFx(fx, params);
+    ensureFxCompositor(fx, params);
+  } else if (typeof (fx as any).requestVideoFrameCallback !== "function") {
+    // 无 rVFC 支持（退化路径）：每帧同步合成，保证特效画面持续更新
+    composeFx(fx, params);
   }
 
-  // 3. 定位：宽度铺满、高度按比例（超过画布高度则封顶），水平垂直居中
-  const scale = destW / outW;
-  const effW = destW;
-  let effH = outH * scale;
-  if (effH > destH) effH = destH;
-  const x = (destW - effW) / 2;
-  const y = (destH - effH) / 2;
-  ctx.drawImage(work, x, y, effW, effH);
+  // 定位输出：有合成结果用结果画布；否则（首次合成未完成/无 rVFC 同步路径）直接画视频帧兜底
+  const work = fxResultMap.get(fx);
+  if (work && fxReadySet.has(fx)) {
+    const scale = destW / outW;
+    const effW = destW;
+    let effH = outH * scale;
+    if (effH > destH) effH = destH;
+    const x = (destW - effW) / 2;
+    const y = (destH - effH) / 2;
+    ctx.drawImage(work, x, y, effW, effH);
+  } else {
+    ctx.drawImage(fx, 0, 0, destW, destH);
+  }
 }
 
 /** 从 clip 的播放列表文本提取片段 URL（Tauri 为 blob:，Web 为 http(s):），兼容两种模式 */
