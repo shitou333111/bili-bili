@@ -51,6 +51,28 @@ function safeStartPos(el?: HTMLVideoElement | null, fallback = 0): number {
     return fallback;
   }
 }
+// #region debug-point Z:reporter
+const __dbg: { t: number; lastBlack: boolean; lastBAt: number } = { t: 0, lastBlack: false, lastBAt: 0 };
+function __dbgR(loc: string, msg: string, d: Record<string, unknown>, min = 250) {
+  const now = performance.now();
+  if (now - __dbg.t < min) return;
+  __dbg.t = now;
+  try {
+    fetch("http://127.0.0.1:51999/event", { method: "POST", body: JSON.stringify({ sessionId: "gift-replay-blackscreen", runId: "map-hold", hypothesisId: String(d.h ?? "?"), location: loc, msg: "[DEBUG] " + msg, data: d, ts: Date.now() }) }).catch(() => {});
+  } catch { /* ignore */ }
+}
+function __blackAt(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): number {
+  try {
+    const id = ctx.getImageData(x, y, s, s).data;
+    let max = 0;
+    for (let i = 0; i < id.length; i += 4) {
+      const m = Math.max(id[i], id[i + 1], id[i + 2]);
+      if (m > max) max = m;
+    }
+    return max;
+  } catch { return -1; }
+}
+// #endregion
 const CANVAS_W = 720; // 画布固定 720×1280
 const CANVAS_H = 1280;
 // 竖屏判定阈值（与模拟器一致）：高/宽 > 1.2 视为竖屏，铺满整个画布
@@ -733,6 +755,10 @@ function MergedPlayer({
   useEffect(() => {
     savingRef.current = saving;
   }, [saving]);
+  // 录制收尾的可靠通道：drawLoop 每帧判定"已播到末尾并停滞"后直接调用 recRef.stop()，
+  // 不依赖 doSave 内部独立的 rAF 轮询（该链可能因异常/卸载断掉 → 视频停但录制不停）。
+  const recRef = useRef<MediaRecorder | null>(null);
+  const recStartAtRef = useRef(0);
   const readyRef = useRef(false);
 
   // 按礼物时刻先后排序
@@ -776,6 +802,14 @@ function MergedPlayer({
   const bumpChrome = () => {
     chromeVersionRef.current++;
   };
+  // 跨 run seek 遮黑：seek 到下一 run 首帧解码前，画布会 clearRect 成黑底（录制时进文件即黑屏）。
+  // 快照上一帧并用它在过渡期冻结，把"黑屏"变成"冻结上一帧"。
+  const freezeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // 干净的过渡基底：仅含"背景+视频画面"（不含礼物动画/送礼横幅）。跨 run 冻结过渡时贴它，
+  // 避免把上一 run 残留的礼物动画帧一起冻结造成"撕裂/残影"，也避免与新 run 动画叠加成鬼影。
+  const transBaseRef = useRef<HTMLCanvasElement | null>(null);
+  const transFreezingRef = useRef(false);
+  const transUntilRef = useRef(0);
   useEffect(() => {
     const faceImg = new Image();
     if (anchorFace) {
@@ -973,18 +1007,12 @@ function MergedPlayer({
       setError("视频初始化超时，请查看控制台日志");
     }, 8000);
 
-    // 循环播放：播到结尾自动从头开始（hls 播完进入 STOPPED 时需先 startLoad 才能重启）
+    // 播放到结尾自然停止，不再循环回绕（用户确认：只播放一次即可）。
+    // 之前回绕到 0 会与录制/跨 run seek 纠缠成"循环播放+循环录制"停不下来；
+    // 现在播完即止，录制的收尾由 drawLoop 的"末尾停滞判定"完成。
     const handleEnded = () => {
       if (disposed) return;
-      try { live.currentTime = 0; } catch { /* ignore */ }
-      try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
-      // ended 后 hls 需先重填起点缓冲，立即 play 可能因 buffer 未就绪失败；延迟再试一次兜底
-      const tryPlay = () => {
-        if (disposed) return;
-        if (live.paused) live.play().then(() => setPlaying(true)).catch(() => {});
-      };
-      tryPlay();
-      window.setTimeout(tryPlay, 300);
+      setPlaying(false);
     };
 
     if (Hls.isSupported()) {
@@ -1030,9 +1058,17 @@ function MergedPlayer({
         hls.on(Hls.Events.ERROR, (_e, data) => {
           // bufferSeekOverHole：主动跨 run seek 越过 PTS 空洞时 hls.js 的正常提示，非致命、无需处理
           if (data.details === "bufferSeekOverHole") return;
+          // bufferNudgeOnStall / bufferStalledError：均为非致命(数据=无害)的启动/跨隙抖动，
+          // hls 的 gap-controller 会自行微调(currentTime+0.1)恢复，无需标记 needsRecovery。
+          // 否则 watchdog 会把这种良性抖动当成"停滞未恢复"而重建播放器 → 开头反复重建→ 开场卡顿。
+          if (data.details === "bufferNudgeOnStall") return;
+          if (data.details === "bufferStalledError" && !data.fatal) {
+            try { hls.startLoad(); } catch { /* ignore */ }
+            return;
+          }
           console.warn("[GiftReplay][hls] ERROR", data.type, data.details, data.fatal, data.frag?.url ?? "");
-          // 缓冲停滞/追加失败（跨场次片段时间戳/编码参数跳变等）→ 强制恢复加载，避免卡死后点击无反应
-          if (data.details === "bufferStalledError" || data.details === "bufferAppendError") {
+          // 缓冲追加失败（跨场次片段时间戳/编码参数跳变等本质问题）→ 标记收货，交由 watchdog 恢复
+          if (data.details === "bufferAppendError") {
             needsRecoveryRef.current = true;
             try { hls.startLoad(); } catch { /* ignore */ }
             return;
@@ -1157,6 +1193,13 @@ function MergedPlayer({
             lastPosRef.current = live.currentTime;
             needsRecoveryRef.current = false; // 时间在前进 → 无需恢复
           } else if (
+            // 已到最后一个 run 的真实物理末尾(死区停滞)：不做任何恢复(startLoad/微调 seek/重建)，
+            // 否则 hls 会重填缓冲从头再播 → 循环播放/循环录制停不下来。这里无论是否录制都跳过，
+            // 保证"只播放一次"；录制收尾由 drawLoop 的末尾停滞判定完成。
+            !(
+              plan.runs.length > 0 &&
+              watchLastT >= plan.runs[plan.runs.length - 1].segEnd * SEG_SECONDS - 0.6
+            ) &&
             performance.now() - watchLastMove > 3000 &&
             performance.now() - watchLastRecover > 6000
           ) {
@@ -1179,10 +1222,23 @@ function MergedPlayer({
               try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
               if (live.paused) live.play().catch(() => {});
             } else if (needsRecoveryRef.current) {
-              // 已尝试 startLoad 仍停滞（如跨 run 编码参数不符）→ 重建播放器强恢复
+              // 已尝试 startLoad 仍停滞（如跨 run 编码参数不符）→ 重建播放器强恢复。
+              // 但录制期间若停滞发生在"结尾附近"则不再重建：B站真实媒体略短于名义时长，
+              // 末尾处常被判停滞，而重建后 resume 会落到 0 从头重播 → 造成"循环播放/循环录制"。
+              // 此时交给录制停止逻辑收尾即可。
               needsRecoveryRef.current = false;
-              console.warn("[GiftReplay][hls] 停滞未恢复，重建播放器");
-              rebuildHlsRef.current?.();
+              const _dur = live.duration;
+              const nearEndSaving = savingRef.current && Number.isFinite(_dur) && lastPosRef.current >= _dur - 1.0;
+              // 开局(<3s)也不重建：此时视频刚起播，bufferStalled 之类多为良性启动抖动，
+              // 重建反而在开头制造反复 teardown/re-init 的卡顿。
+              const tooEarlyRebuild = lastPosRef.current < 3.0;
+              if (nearEndSaving || tooEarlyRebuild) {
+                if (nearEndSaving) console.warn("[GiftReplay][hls] 录制末尾停滞，交由录制逻辑收尾");
+                else console.warn("[GiftReplay][hls] 开局抖动，暂不重建，稍后由 watchdog 再判");
+              } else {
+                console.warn("[GiftReplay][hls] 停滞未恢复，重建播放器");
+                rebuildHlsRef.current?.();
+              }
             } else {
               needsRecoveryRef.current = true;
               stallPosRef.current = watchLastT; // 记录停滞位置（重建时用于跳过死区）
@@ -1198,21 +1254,6 @@ function MergedPlayer({
           watchLastT = live.currentTime;
           watchLastMove = performance.now();
           lastPosRef.current = live.currentTime;
-        }
-
-        // 循环修复：在 VOD 名义时长结束前预判回绕，避免 hls 进入 STOPPED/ended 状态导致黑屏停滞。
-        // 原因：B站 2s 片段的真实时长常略短于 m3u8 的 #EXTINF 2.00，hls 把 video.duration 设为名义总时长，
-        // 而真实媒体提前结束——currentTime 会卡在"真实末尾与名义末尾之间"：既不发 ended 也无法前进，
-        // 触发看门狗"播放停滞"且黑屏。故按计划总时长（totalSec）提前 1s 回绕，越过该死区。
-        // 片段多为本地 Blob URL（Tauri），回绕不重新请求网络；保留默认缓冲使回绕到起点可直接续播。
-        if (!savingRef.current && !live.paused && !live.ended && !needsRecoveryRef.current) {
-          const dur = live.duration;
-          if (Number.isFinite(dur) && dur > 0 && live.currentTime >= totalSec - 1.0) {
-            try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
-            try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
-            watchLastT = 0;
-            watchLastMove = performance.now();
-          }
         }
 
         // 跨 run 主动切换：最简单拼接。
@@ -1231,12 +1272,40 @@ function MergedPlayer({
             if (live.currentTime >= runEnd - 0.05 && live.currentTime < runEnd + 0.6) {
               const nextStart = plan.runs[curRi + 1].segStart * SEG_SECONDS;
               console.warn(`[GiftReplay][hls] 跨 run 拼接(${live.currentTime.toFixed(1)}→${nextStart.toFixed(1)})`);
+              // seek 前不用再快照：freezeCanvasRef 已由每帧末尾的 hold-frame 保留上一张完整合成帧，
+              // 直接复用即可避免此帧顶部 clearRect 造成的黑帧快照
+              transUntilRef.current = nextStart;
+              transFreezingRef.current = true;
               try { live.currentTime = nextStart; } catch { /* ignore */ }
               try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
               watchLastT = nextStart;
               watchLastMove = performance.now();
+              // #region debug-point A:cross-run-seek
+              __dbgR("GiftReplay:seek", "cross-run seek", { h: "A", from: live.currentTime, to: nextStart, curRi, runs: plan.runs.length, saving: savingRef.current }, 0);
+              // #endregion
             }
           }
+        }
+
+        // 录制收尾（可靠路径，drawLoop 每帧必跑）：录制中且播放头已到最后一个 run 的真实物理末尾
+        // 并停滞(>3s 无前进) → 停止录制。物理末尾 = 最后 run 结束，与 totalSec 名义时长解耦，
+        // 覆盖 B 站真实媒体偏短、currentTime 达不到 totalSec-1.0 的死区。
+        // 不放在 doSave 内部轮询：那条 rAF 链可能断掉(异常/卸载)导致"视频停但录制不停"。
+        if (recRef.current && savingRef.current && videoReady && !live.paused && !live.ended) {
+          const lastEnd = plan.runs.length > 0 ? plan.runs[plan.runs.length - 1].segEnd * SEG_SECONDS : totalSec;
+          const atEnd = live.currentTime >= lastEnd - 0.6;
+          const stalled = performance.now() - watchLastMove > 3000;
+          if (atEnd && stalled) {
+            try { recRef.current.stop(); } catch { /* ignore */ }
+          }
+          // 兜底：录制超时(名义时长+20s)仍未收尾（如判定边界异常）也强制停止
+          if (performance.now() - recStartAtRef.current > (totalSec + 20) * 1000) {
+            try { recRef.current.stop(); } catch { /* ignore */ }
+          }
+        }
+        // 视频自然播完(ended，此时 paused 会变 true，上方主判定不触发) → 立即收尾录制
+        if (recRef.current && savingRef.current && live.ended) {
+          try { recRef.current.stop(); } catch { /* ignore */ }
         }
       }
 
@@ -1307,15 +1376,48 @@ function MergedPlayer({
         }
       }
 
-      if (videoReady) {
-        // 直播画面定位：竖屏铺满整个画布，横屏宽度填满高度等比（参考模拟器 LiveStreamBackground）
+      if (transFreezingRef.current) {
+        // 跨 run 过渡期：直到 seek 结束、时间到达目标且视频已解码出可绘制帧(readyState>=2/videoReady)
+        // 才恢复正常绘制。关键：settled 必须要求 videoReady，否则 seek 刚结束时 readyState 常消退到 1
+        // （仅 metadata、无当前帧），此时 drawFrame 被跳过→画布黑，且该黑帧还会被 hold-frame 写进
+        // freezeCanvasRef 污染后续过渡遮罩。要求 videoReady 后，过渡期间始终粘贴上一张好帧。
+        const settled = !live.seeking && videoReady && live.currentTime >= transUntilRef.current - 0.05;
+        // #region debug-point B:transition-draw
+        __dbgR("GiftReplay:trans", "transition-draw", { h: "B", settled, seeking: live.seeking, ready: live.readyState, vw: live.videoWidth, ct: Math.round(live.currentTime * 100) / 100, until: Math.round(transUntilRef.current * 100) / 100, black: __blackAt(ctx, CANVAS_W / 2 - 6, CANVAS_H / 2 - 6, 12) }, 120);
+        // #endregion
+        if (settled) {
+          transFreezingRef.current = false;
+          drawFrame(live, live.videoWidth, live.videoHeight, CANVAS_H * 0.2);
+        } else {
+          // 贴"干净过渡基底"（背景+视频，不含礼物动画/横幅）：避免把上一 run 残留动画
+          // 冻结造成撕裂残影，也避免与新 run 动画叠成鬼影。chrome 由下方共享逻辑补画。
+          const tb = transBaseRef.current;
+          if (tb) ctx.drawImage(tb, 0, 0);
+          // #region debug-point G:freeze-content
+          __dbgR("GiftReplay:freeze", "freeze-drawn", { h: "G", fw: tb?.width, fh: tb?.height, fcBlack: tb ? __blackAt(tb.getContext("2d")!, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16) : -1, canvasBlack: __blackAt(ctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16), ready: live.readyState, seeking: live.seeking, ct: Math.round(live.currentTime * 100) / 100, until: Math.round(transUntilRef.current * 100) / 100 }, 0);
+          // #endregion
+        }
+      } else if (videoReady) {
+        // 直播画面定位：竖屏铺满画布，横屏宽度填满高度等比（参考模拟器 LiveStreamBackground）
         drawFrame(live, live.videoWidth, live.videoHeight, CANVAS_H * 0.2);
+        // 留存"干净过渡基底"：此刻只画了背景+视频，尚未叠加礼物特效/横幅，
+        // 供跨 run 冻结过渡使用，避免残留上一 run 的动画造成撕裂残影。
+        if (!transBaseRef.current) transBaseRef.current = document.createElement("canvas");
+        const tb = transBaseRef.current;
+        if (tb.width !== CANVAS_W || tb.height !== CANVAS_H) { tb.width = CANVAS_W; tb.height = CANVAS_H; }
+        tb.getContext("2d")?.drawImage(canvas, 0, 0);
+      } else {
+        // 视频未就绪（run 内片段交接/解码间隙，videoReady 短暂为 false）：
+        // 贴上一张好帧兜底，避免黑闪，而不是留下黑底。
+        const fc = freezeCanvasRef.current;
+        if (fc) ctx.drawImage(fc, 0, 0);
       }
 
       // 礼物特效叠加：礼物在 animStart 处出现（run 内按排队规则）。
       // showFx=false（同一礼物 10s 内连续赠送的第二次）只播视频不叠动画；
       // 动画时长超过 15s 时只播放前 15s。
-      if (idx >= 0) {
+      // 过渡期间不叠加：此时画布贴的是干净过渡基底，再叠新 run 动画会与上一 run 残影叠成鬼影。
+      if (idx >= 0 && !transFreezingRef.current) {
         const c = sorted[idx];
         if (c.showFx) {
           const fxV = fxArr[idx];
@@ -1343,8 +1445,9 @@ function MergedPlayer({
 
       // ---- 送礼横幅（画进画布，保存视频时一起录制） ----
       // 顶部送礼横幅：所有片段（含无专属动画/重复送礼）在各自送礼时刻前 1s 渐显、后 5s 渐隐。
-      // 不依赖动画 idx，故"总价达阈值但无专属动画"的礼物也能正常显示横幅
-      if (videoReady && curRun >= 0) {
+      // 不依赖动画 idx，故"总价达阈值但无专属动画"的礼物也能正常显示横幅。
+      // 过渡期间同样不画横幅：画布贴干净基底，不残留上一 run 横幅。
+      if (videoReady && curRun >= 0 && !transFreezingRef.current) {
         const run = plan.runs[curRun];
         let bi = -1;
         let bt = 0;
@@ -1409,6 +1512,33 @@ function MergedPlayer({
         ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
         ctx.globalAlpha = 1;
       }
+
+      // #region debug-point Z:hold-frame
+      // 每帧末尾把"完整合成帧"（视频+特效+banner+chrome）复制到 freezeCanvasRef 留存。
+      // 跨 run seek 时的过渡遮罩直接复用这份"上一张好帧"，避免 seek 当帧顶部已被 clearRect、
+      // drawFrame 尚未执行时快照 canvasRef 得到黑帧 → 过渡期再也不闪黑。
+      // 仅在"视频已就绪(videoReady)"的帧才留存，否则黑/未出帧的画面不会污染 freezeCanvasRef，
+      // 保证过渡期粘贴的永远是最近一张可用的好帧。
+      if (!transFreezingRef.current && videoReady) {
+        if (!freezeCanvasRef.current) freezeCanvasRef.current = document.createElement("canvas");
+        const hf = freezeCanvasRef.current;
+        if (hf.width !== CANVAS_W || hf.height !== CANVAS_H) { hf.width = CANVAS_W; hf.height = CANVAS_H; }
+        hf.getContext("2d")?.drawImage(canvas, 0, 0);
+      }
+      // #endregion
+
+      // #region debug-point F:composite-black
+      {
+        const bmax = __blackAt(ctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16);
+        const isBlack = bmax <= 20;
+        const now2 = performance.now();
+        if (isBlack !== __dbg.lastBlack || now2 - __dbg.lastBAt > 2500) {
+          __dbg.lastBlack = isBlack;
+          __dbg.lastBAt = now2;
+          __dbgR("GiftReplay:frame", isBlack ? "BLACK" : "frame", { h: "F", black: isBlack, bmax, trans: transFreezingRef.current, ready: live.readyState, vw: live.videoWidth, ct: Math.round(live.currentTime * 10) / 10, saving: savingRef.current }, 0);
+        }
+      }
+      // #endregion
     };
     drawLoop();
 
@@ -1439,6 +1569,16 @@ function MergedPlayer({
     const live = liveRef.current;
     if (!live) return;
     setError(""); // 点击时清除错误提示，允许重试
+    // 已播放到末尾：fire ended（paused=true）或停在物理末尾死区（未 fire ended、
+    // paused 仍为 false、播放头卡在最后一个 run 末尾）→ 点击视为"从头开始播放"。
+    const lastEnd = plan.runs.length > 0 ? plan.runs[plan.runs.length - 1].segEnd * SEG_SECONDS : totalSec;
+    const atDeadEnd = !live.paused && live.readyState >= 2 && live.currentTime >= lastEnd - 0.6;
+    if (live.ended || atDeadEnd) {
+      try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
+      try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
+      live.play().then(() => setPlaying(true)).catch(() => {});
+      return;
+    }
     if (live.paused) {
       // 检测到停滞/加载失败（startLoad 无法恢复）时：重建 hls 强恢复；否则正常恢复播放
       if (needsRecoveryRef.current || !readyRef.current) {
@@ -1449,9 +1589,6 @@ function MergedPlayer({
       } else {
         // 若 hls 因片段加载失败进入 STOPPED，先 startLoad 恢复加载再播放，否则点击无反应
         try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
-        if (live.ended) {
-          try { live.currentTime = 0; } catch { /* ignore */ }
-        }
         live.play().then(() => setPlaying(true)).catch(() => {});
       }
     } else {
@@ -1468,6 +1605,10 @@ function MergedPlayer({
     setSaving(true);
     savingRef.current = true; // 同步置位：录制期间禁用循环回绕，避免录到下一遍开头
     const wasPlaying = !live.paused;
+    // #region debug-point C:save-start
+    const _enterT = performance.now();
+    __dbgR("doSave:start", "rec-start enter", { h: "C", playing: !live.paused, ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState, vw: live.videoWidth, totalSec }, 0);
+    // #endregion
     let dataDirAbs = ""; // 应用沙盒数据目录（移动端边录边写的落盘目录）
     let abortPath = ""; // 出错时待清理的本地半成品文件
     try {
@@ -1476,24 +1617,37 @@ function MergedPlayer({
       try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
       if (live.paused) await live.play().catch(() => {});
       setPlaying(true);
-      // 等待首帧真正解码并绘制，避免录制开头为黑帧（Android 上 videoWidth>0 时往往还没出帧，
-      // 过早 captureStream 会让首帧/MP4 封面只有叠加层、画面为黑）。标准：播放头相对起播点
-      // 前进了（说明已解码出帧并呈现），再让 drawLoop 把该帧画上画布。
-      const startT = live.currentTime;
+      // #region debug-point C:after-seek
+      __dbgR("doSave:seeked", "after seek+play", { h: "C", ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState, vw: live.videoWidth, enterToSeekMs: Math.round(performance.now() - _enterT) }, 0);
+      // #endregion
+      // 等待"录制起点"真正对齐：要求 readyState>=2（已解码当前帧）、画布中心非黑，
+      // **且播放头确已越过起始缓冲停滞区(currentTime>=0.5)**。
+      // 实测证据：seek 到 0 后首帧 ~80ms 即 ready(ct≈0.06)，但随后首 run 分段缓冲会让播放头
+      // 在 [0.06,0.3] 之间"爬行"长达 ~5s（低性能设备更久）。若以 currentTime>0.02 为起点，
+      // 会在 80ms 就 rec.start，把那 ~5s 的近冻结/撕裂帧录进开头，且内容整体后移把末尾挤掉。
+      // 故必须等 currentTime 真正冲出该停滞区(采集到 0.05~0.3 处的停滞，0.5 已安全越过)，
+      // 画布开始流畅逐帧变化后才录制，既去头部卡顿又不丢尾部。上限放宽到 15s。
       const t0 = performance.now();
-      while (live.currentTime <= startT + 0.03 && performance.now() - t0 < 4000) {
+      const _cctx = canvasRef.current?.getContext("2d");
+      while (performance.now() - t0 < 15000) {
+        const bm = _cctx ? __blackAt(_cctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16) : 0;
+        if (live.videoWidth > 0 && live.readyState >= 2 && live.currentTime >= 0.5 && bm > 20) break;
         await new Promise((r) => requestAnimationFrame(r));
       }
       // 再等两帧让 drawLoop 把视频首帧画到画布后再开始录制
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
 
-      // 录制码率/帧率按长度做内存预算：iOS 整段 mp4 需一次性 Blob→ArrayBuffer 再经 Tauri IPC
-      // 整体拷贝，视频越长峰值内存越大，长视频无上限会导致 WKWebView 内存吃紧闪退回首页。
-      // 给"总时长"设内存预算，反推码率上限；越长越压低帧率，保证保存不 OOM 且画质够用。
-      const MEMORY_BUDGET_BYTES = 40 * 1024 * 1024; // ~40MB，峰值(renderer+IPC拷贝)≈120MB 内安全
-      const captureFps = totalSec <= 45 ? 30 : totalSec <= 90 ? 24 : 20;
-      const bitrate = Math.round((MEMORY_BUDGET_BYTES * 8) / Math.max(totalSec, 1));
+      // #region debug-point C:first-frame-ready
+      __dbgR("doSave:firstframe", "first frame ready", { h: "C", ms: Math.round(performance.now() - t0), ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState }, 0);
+      // #endregion
+
+      // 目标码率：固定值（已改为分块落盘保存，不再需按"整段 mp4 内存预算"反推码率）。
+      // 移动端逐 chunk 落盘、不整段进 JS/IPC；桌面端仍全量 Blob 累积，超长视频内存占用随体积增长，
+      // 若实测桌面超长视频内存吃紧，可将桌面也改为分块落盘，或单独下调该固定码率。
+      const TARGET_BITRATE = 6_000_000; // 目标码率约 6Mbps
+      const captureFps = totalSec <= 120 ? 30 : 24;
+      const bitrate = TARGET_BITRATE;
 
       const stream = canvas.captureStream(captureFps);
       // 选择当前环境支持的录制格式。优先 mp4：容器自带时长元数据与封面，系统相册可正确识别
@@ -1527,8 +1681,17 @@ function MergedPlayer({
       let chunkFailed = false;
       let bytesWritten = 0;
       const chunks: Blob[] = [];
+      // #region debug-point D:first-chunk
+      let firstChunkT = 0;
+      // #endregion
       rec.ondataavailable = (e) => {
+        // #region debug-point D:every-chunk
+        { const _el = performance.now() - recStartedAt; if (_el < 6000) __dbgR("doSave:chunkall", "chunk", { h: "D", el: Math.round(_el / 100) / 10, size: e.data ? e.data.size : -1, ct: Math.round(live.currentTime * 10) / 10 }, 0); }
+        // #endregion
         if (!e.data || e.data.size === 0) return;
+        // #region debug-point D:first-chunk
+        if (!firstChunkT) { firstChunkT = performance.now(); __dbgR("doSave:chunk", "first chunk", { h: "D", msFromStart: Math.round(performance.now() - recStartedAt), size: e.data.size }, 0); }
+        // #endregion
         if (isMobile) {
           const data = e.data;
           if (data && typeof data.arrayBuffer === "function") {
@@ -1549,13 +1712,27 @@ function MergedPlayer({
           chunks.push(e.data);
         }
       };
-      const stopped = new Promise<void>((resolve) => {
-        rec.onstop = () => resolve();
-      });
+      recRef.current = rec;
       rec.start(500);
-      // 等完整播完一遍后停止（录制期间已禁用循环回绕，不会录到下一遍的开头）
-      await new Promise((r) => setTimeout(r, totalSec * 1000));
-      if (rec.state !== "inactive") rec.stop();
+      recStartAtRef.current = performance.now();
+      // #region debug-point D:rec-start
+      const recStartedAt = performance.now();
+      __dbgR("doSave:recstart", "recorder started", { h: "D", msFromEnter: Math.round(performance.now() - _enterT) }, 0);
+      // #endregion
+      // 注意：stopped 必须在 rec.start() 之后创建——start 前 state 还是 "inactive"，
+      // 若提前创建，下方"state===inactive 立即 resolve"的兜底会秒过，导致录到空结果。
+      const stopped = new Promise<void>((resolve) => {
+        if (rec.state === "inactive") { resolve(); return; }
+        rec.onstop = () => resolve();
+        // 兜底：即使 onstop 未触发（rec.stop() 已同步置 inactive），定时器轮询也能 resolve，
+        // 不依赖 rAF（主循环外的 rAF 链可能断掉）。
+        const iv = window.setInterval(() => {
+          if (rec.state === "inactive") { window.clearInterval(iv); resolve(); }
+        }, 250);
+      });
+      // 停止时机由 drawLoop 每帧判定（可靠路径）：录制中且播放头已到最后一个 run 的真实物理末尾
+      // 并停滞(>3s) → rec.stop()；另有 totalSec+20s 超时兜底。这里不再用独立 rAF 轮询，
+      // 避免该链断掉导致"视频停但录制不停"。
       await stopped;
       stream.getTracks().forEach((t) => t.stop());
 
@@ -1583,6 +1760,7 @@ function MergedPlayer({
       showToast("保存视频失败");
     } finally {
       savingRef.current = false;
+      recRef.current = null;
       if (!wasPlaying) {
         try { live.pause(); } catch { /* ignore */ }
         setPlaying(false);
