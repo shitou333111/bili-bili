@@ -27,6 +27,19 @@
     }
   ],
   "real_activity_url": "",
+  "simulator_activities": [
+    {
+      "id": "fans-autumn-2026",
+      "title": "玲珑宝斋",
+      "entryImage": "https://i1.hdslb.com/bfs/new_dyn/60c08992696180903baa3351d2258fe03546967191849918.jpg@1052w_!web-dynamic.webp",
+      "urlTemplate": "https://live.bilibili.com/activity/live-activity-battle/index.html?app_name=fans_autumn_2026&show_close=0&room_id={roomId}&uid={uid}#/play?fans_autumn_2026_user_play_tab=1",
+      "roomId": 0,
+      "uid": 0,
+      "enabled": true,
+      "algorithmType": "fans-autumn-2026",
+      "algorithmParams": {}
+    }
+  ],
   "recommended_anchors": [
     {
       "uid": 3546376791133013,

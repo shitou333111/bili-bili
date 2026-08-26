@@ -20,6 +20,10 @@
   var CFG = window.__BILI_ACTIVITY_MOCK_CONFIG__ || {};
 
   var CONFIG = {
+    // 算法类型：决定使用哪套 mock 算法拦截逻辑。由前端算法注册表(algorithms.ts)按活动配置注入。
+    //  - stone-gongfang   ：晶石工坊（槽位抽取/替换/合成，下方默认值即该算法参数）
+    //  - fans-autumn-2026 ：玲珑宝斋（占位：通用成功拦截，避免真实扣费，玩法实现后热更新补充）
+    algorithmType: "stone-gongfang",
     act_id: 110558,
     activity_name: "山海工坊",
     start_time: 1786161600,
@@ -413,8 +417,28 @@
     };
   }
 
+  // ===== 算法分派 =====
+  // 不同 algorithmType 使用不同的拦截规则与 mock 逻辑（各活动玩法背后的算法）。
+  // 新增算法类型：在此处补充分派分支，改完随前端热更新推送即可，无需原生包更新。
+  function algType() {
+    return CONFIG.algorithmType || "stone-gongfang";
+  }
+
+  // 通用登录态/钱包拦截（所有算法共享）
+  function isLoginOrWallet(url) {
+    return /x\/web-interface\/nav/i.test(url) || /xlive\/revenue\/v1\/wallet\/myWallet/i.test(url);
+  }
+
+  // —— 晶石工坊（山海工坊）算法：6 槽位抽取/替换/合成 ——
   function handleRequest(url, body) {
     var params = parseBody(body);
+    // 玲珑宝斋占位算法：玩法接口尚未实现。只处理登录态/钱包；
+    // mockAllApi=true（占位算法默认）时其余 live 接口一律返回通用成功，杜绝真实扣费。
+    if (algType() === "fans-autumn-2026") {
+      if (/x\/web-interface\/nav/i.test(url)) return fakeLoginNav();
+      if (/xlive\/revenue\/v1\/wallet\/myWallet/i.test(url)) return fakeWallet();
+      return genericSuccess();
+    }
     if (/StarStoneDraw/i.test(url)) return makeDraw(parseSlotIds(params));
     if (/StarStoneReplace/i.test(url)) return makeReplace(parseSlotId(params));
     if (/StarStoneCompose/i.test(url)) return makeCompose();
@@ -430,6 +454,11 @@
   }
   function shouldMock(url) {
     if (!url) return false;
+    // 玲珑宝斋占位算法：只拦截登录态/钱包（+可选 mockAllApi 全拦截），
+    // 其余接口放行真实数据保证页面渲染；具体玩法接口待算法实现后在此补充。
+    if (algType() === "fans-autumn-2026") {
+      return isLoginOrWallet(url) || (CONFIG.mockAllApi && /api\.live\.bilibili\.com/i.test(url));
+    }
     // StarStone 动作接口 + 状态查询接口本地 mock：
     //   - StarStoneDraw / StarStoneReplace / StarStoneCompose：操作接口，本地 mock 防止真实扣费；
     //   - StarStoneInfo（状态查询）：返回本地保存的槽位状态，实现「下次打开还原抽取状态」。

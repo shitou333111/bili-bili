@@ -375,7 +375,15 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         .parse()
         .map_err(|e| format!("活动 URL 解析失败: {}", e))?;
     let mock_cfg_js = mock_cfg.to_string();
-    let mock_shim = include_str!("../../public/native-inject/mock-shim.js");
+    // mock-shim.js（各活动算法的实现载体）从资产解析器运行时读取：hotswap OTA 目录优先、回退内置资源。
+    // 内置资源来自 out/native-inject/mock-shim.js（public/ 会被 Next.js 复制进 out/ 并嵌入二进制）。
+    // 好处：新增活动算法只需改 mock-shim.js + 触发前端热更新（OTA 包覆盖同路径文件），
+    // 无需重新编译原生包，三平台即时生效。
+    let mock_shim: String = app
+        .asset_resolver()
+        .get("native-inject/mock-shim.js".to_string())
+        .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned())
+        .unwrap_or_else(|| include_str!("../../public/native-inject/mock-shim.js").to_string());
     // 按序注入：①mock 配置 → ②mock-shim → ③返回按钮 → ④标题栏
     let inject_config = format!("window.__BILI_ACTIVITY_MOCK_CONFIG__ = {};", mock_cfg_js);
     // 标题栏顶部偏移：桌面端子 WebView 面板占下方 2/3，标题栏贴顶（0）；

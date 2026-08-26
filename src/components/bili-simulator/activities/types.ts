@@ -33,7 +33,7 @@ export interface ActivityConfig {
   id: string;
   /** 活动标题 */
   title: string;
-  /** 入口卡片图片（public 下的静态资源路径） */
+  /** 入口卡片图片（public 下的静态资源路径，或外部 URL） */
   entryImage: string;
   /** 页面类型：决定渲染哪个组件 */
   pageType: ActivityPageType;
@@ -43,6 +43,13 @@ export interface ActivityConfig {
   params: ActivityParams;
   /** 活动是否启用（配置切换时保留停用的活动） */
   enabled: boolean;
+  /**
+   * 算法类型：对应 algorithms.ts 注册表中的一个键，决定 mock-shim 使用哪套 mock 算法
+   * 返回当前活动页面的模拟数据。缺省按 "stone-gongfang"（晶石工坊）处理。
+   */
+  algorithmType?: string;
+  /** 算法类型专属参数（透传给 mock-shim 的 CONFIG，可覆盖算法默认值） */
+  algorithmParams?: Record<string, unknown>;
 }
 
 /** 活动页面组件通用 Props */

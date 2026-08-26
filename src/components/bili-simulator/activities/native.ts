@@ -11,7 +11,7 @@
 
 import type { ActivityConfig } from "./types";
 import { buildActivityUrl } from "./types";
-import { STONE_GONGFANG } from "./stone-gongfang/config";
+import { getAlgorithmDefinition } from "./algorithms";
 
 /** 是否运行在 Tauri 原生客户端（三平台统一标记） */
 export function isTauriRuntime(): boolean {
@@ -21,13 +21,14 @@ export function isTauriRuntime(): boolean {
 
 /**
  * 生成注入到 B站 H5 的 mock 配置（字段与 mock-shim.js 的 CONFIG 一致）。
- * 默认 mockAllApi=false：只拦截 StarStone 三接口，其余请求放行真实数据，保证页面正常渲染。
+ * 按活动的算法类型（algorithmType）从注册表取对应算法的配置，再合并算法参数；
+ * 默认 mockAllApi=false：只拦截算法相关接口，其余请求放行真实数据，保证页面正常渲染。
+ * 算法定义（如 fans-autumn-2026 占位）可自行覆盖 mockAllApi=true 以杜绝真实扣费。
  */
-function buildMockConfig(pageType: string): Record<string, unknown> {
-  if (pageType === "stone-gongfang") {
-    return { ...STONE_GONGFANG, mockAllApi: false };
-  }
-  return { mockAllApi: false };
+function buildMockConfig(config: ActivityConfig): Record<string, unknown> {
+  const algo = getAlgorithmDefinition(config.algorithmType);
+  const base = algo ? algo.buildMockConfig(config.algorithmParams ?? {}) : {};
+  return { mockAllApi: false, ...base };
 }
 
 /**
@@ -45,7 +46,7 @@ export async function openActivityNative(
   if (!isTauriRuntime()) return false;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const mockConfig: Record<string, unknown> = buildMockConfig(config.pageType);
+    const mockConfig: Record<string, unknown> = buildMockConfig(config);
     if (slotState && Object.keys(slotState).length > 0) {
       mockConfig.slot_state = slotState;
     }

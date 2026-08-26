@@ -26,6 +26,7 @@ export async function GET(request: Request) {
         synthesis_activities: [],
         recommended_anchors: [],
         real_activity_url: "",
+        simulator_activities: [],
       },
     });
   }
@@ -38,6 +39,7 @@ export async function GET(request: Request) {
       synthesis_activities: adminConfig.synthesis_activities ?? [],
       recommended_anchors: adminConfig.recommended_anchors ?? [],
       real_activity_url: adminConfig.real_activity_url ?? "",
+      simulator_activities: adminConfig.simulator_activities ?? [],
     },
   });
 }
@@ -94,6 +96,22 @@ export async function POST(request: Request) {
         }))
       : [],
     real_activity_url: typeof body.real_activity_url === "string" ? body.real_activity_url : "",
+    // 模拟器活动入口配置（含算法类型），按原样持久化
+    simulator_activities: Array.isArray(body.simulator_activities)
+      ? body.simulator_activities.map((a: any) => ({
+          id: String(a.id || ""),
+          title: String(a.title || ""),
+          entryImage: String(a.entryImage || ""),
+          urlTemplate: String(a.urlTemplate || ""),
+          roomId: Number(a.roomId) || 0,
+          uid: Number(a.uid) || 0,
+          enabled: a.enabled !== false,
+          algorithmType: String(a.algorithmType || "stone-gongfang"),
+          algorithmParams: a.algorithmParams && typeof a.algorithmParams === "object"
+            ? a.algorithmParams
+            : {},
+        }))
+      : [],
   };
 
   await writeAdminConfig(config);

@@ -6,6 +6,8 @@ import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import WindowTitleBar from "@/components/WindowTitleBar";
+// 模拟器活动算法注册表：作为下拉框选项的唯一数据源（新增算法只需在注册表登记）
+import { ALGORITHM_REGISTRY } from "@/components/bili-simulator/activities/algorithms";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -68,12 +70,26 @@ type RecommendedAnchorItem = {
   order: number;
 };
 
+/** 模拟器活动入口配置项（算法参数以 JSON 文本编辑，保存时解析为对象） */
+type SimulatorActivityItem = {
+  id: string;
+  title: string;
+  entryImage: string;
+  urlTemplate: string;
+  roomId: number;
+  uid: number;
+  enabled: boolean;
+  algorithmType: string;
+  algorithmParams: string;
+};
+
 type AdminConfigData = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
   synthesis_activities: ActivityItem[];
   recommended_anchors: RecommendedAnchorItem[];
   real_activity_url: string;
+  simulator_activities: SimulatorActivityItem[];
 };
 
 /** 读取本地保存的管理员会话 sid */
@@ -269,6 +285,19 @@ export default function AdminPage() {
             ? data.recommended_anchors
             : [],
           real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
+          simulator_activities: Array.isArray(data.simulator_activities)
+            ? data.simulator_activities.map((a: any) => ({
+                id: String(a.id ?? ""),
+                title: String(a.title ?? ""),
+                entryImage: String(a.entryImage ?? ""),
+                urlTemplate: String(a.urlTemplate ?? ""),
+                roomId: Number(a.roomId) || 0,
+                uid: Number(a.uid) || 0,
+                enabled: a.enabled !== false,
+                algorithmType: String(a.algorithmType ?? "stone-gongfang"),
+                algorithmParams: JSON.stringify(a.algorithmParams ?? {}, null, 2),
+              }))
+            : [],
         };
         setConfig(normalized);
         // 解析礼物目录（用于盲盒按名称搜索）
@@ -471,10 +500,23 @@ export default function AdminPage() {
   const handleSaveConfig = async () => {
     if (!config) return;
     setConfigSaved(false);
+    // 模拟器活动的算法参数以 JSON 文本编辑，保存前解析为对象（解析失败则用空对象）
+    const body = {
+      ...config,
+      simulator_activities: (config.simulator_activities ?? []).map((a) => {
+        let algorithmParams: Record<string, unknown> = {};
+        try {
+          algorithmParams = a.algorithmParams.trim() ? JSON.parse(a.algorithmParams) : {};
+        } catch {
+          algorithmParams = {};
+        }
+        return { ...a, algorithmParams };
+      }),
+    };
     const res = await adminFetch(serverApiUrl("/api/admin/config"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (data.code === 0) {
@@ -640,6 +682,45 @@ export default function AdminPage() {
     const acts = [...config.synthesis_activities];
     [acts[index], acts[target]] = [acts[target], acts[index]];
     setConfig({ ...config, synthesis_activities: acts });
+  };
+
+  // ========== 模拟器活动配置管理 ==========
+  const addSimulatorActivity = () => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      simulator_activities: [
+        ...config.simulator_activities,
+        {
+          id: "",
+          title: "",
+          entryImage: "",
+          urlTemplate: "",
+          roomId: 0,
+          uid: 0,
+          enabled: true,
+          algorithmType: "stone-gongfang",
+          algorithmParams: "",
+        },
+      ],
+    });
+  };
+  const updateSimulatorActivity = (
+    index: number,
+    field: keyof SimulatorActivityItem,
+    value: string | number | boolean
+  ) => {
+    if (!config) return;
+    const acts = [...config.simulator_activities];
+    acts[index] = { ...acts[index], [field]: value } as SimulatorActivityItem;
+    setConfig({ ...config, simulator_activities: acts });
+  };
+  const removeSimulatorActivity = (index: number) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      simulator_activities: config.simulator_activities.filter((_, i) => i !== index),
+    });
   };
 
   // ========== 推荐主播管理 ==========
@@ -1000,6 +1081,125 @@ export default function AdminPage() {
               {!config.real_activity_url && (
                 <p className="text-[10px] text-black/40">⚠ 未配置，首页"黑抽"卡片将变灰不可点击</p>
               )}
+            </div>
+
+            <hr className="border-black/5" />
+
+            {/* 模拟器活动配置（玩法可热更新） */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold">模拟器活动配置（玩法可热更新）</h3>
+                <button onClick={addSimulatorActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
+              </div>
+              <p className="text-[10px] text-black/40">
+                模拟器页面活动入口：每个活动配置真实 H5 链接 + 选择背后玩法算法类型。算法类型对应 mock-shim.js 里的一套 mock 算法；
+                新活动若属于已有算法类型，只需新增配置并选择对应类型即可，无需改代码；全新玩法需实现算法后通过前端热更新推送（无需原生包更新）。
+                列表第一项启用的活动为当前展示的活动。
+              </p>
+              <div className="space-y-3">
+                {config.simulator_activities.map((act, i) => (
+                  <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${!act.enabled ? "opacity-50" : ""}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <input
+                        type="checkbox"
+                        checked={act.enabled}
+                        onChange={(e) => updateSimulatorActivity(i, "enabled", e.target.checked)}
+                        className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
+                        title="勾选为展示活动"
+                      />
+                      <input
+                        type="text"
+                        value={act.title}
+                        onChange={(e) => updateSimulatorActivity(i, "title", e.target.value)}
+                        placeholder="活动名称（如：玲珑宝斋）"
+                        className="flex-1 min-w-[120px] rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <select
+                        value={act.algorithmType}
+                        onChange={(e) => updateSimulatorActivity(i, "algorithmType", e.target.value)}
+                        className="rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30 shrink-0"
+                        title="选择玩法算法类型"
+                      >
+                        {Object.entries(ALGORITHM_REGISTRY).map(([key, def]) => (
+                          <option key={key} value={key}>{def.label}</option>
+                        ))}
+                      </select>
+                      <button onClick={() => removeSimulatorActivity(i)} className="text-xs text-[#e74c3c] hover:underline ml-auto">删除</button>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">活动 ID（唯一，如 fans-autumn-2026）</span>
+                        <input
+                          type="text"
+                          value={act.id}
+                          onChange={(e) => updateSimulatorActivity(i, "id", e.target.value)}
+                          placeholder="fans-autumn-2026"
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">入口卡片图片 URL</span>
+                        <input
+                          type="text"
+                          value={act.entryImage}
+                          onChange={(e) => updateSimulatorActivity(i, "entryImage", e.target.value)}
+                          placeholder="https://..."
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">活动页面 URL 模板（{'{roomId}'}=直播间号、{'{uid}'}=主播UID，打开时替换）</span>
+                        <input
+                          type="text"
+                          value={act.urlTemplate}
+                          onChange={(e) => updateSimulatorActivity(i, "urlTemplate", e.target.value)}
+                          placeholder="https://live.bilibili.com/activity/...?room_id={roomId}&uid={uid}#/play?..."
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-[10px] text-black/50">
+                          <span>roomId</span>
+                          <input
+                            type="number"
+                            value={act.roomId || ""}
+                            onChange={(e) => updateSimulatorActivity(i, "roomId", Number(e.target.value))}
+                            placeholder="0"
+                            className="w-24 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1 text-[10px] text-black/50">
+                          <span>uid</span>
+                          <input
+                            type="number"
+                            value={act.uid || ""}
+                            onChange={(e) => updateSimulatorActivity(i, "uid", Number(e.target.value))}
+                            placeholder="0"
+                            className="w-28 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                          />
+                        </label>
+                        <span className="text-[10px] text-black/30 ml-auto">运行时会被当前主播信息覆盖</span>
+                      </div>
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">算法参数（JSON，可选；覆盖算法默认值，如 {"{"}"draw_price":3000{"}"}）</span>
+                        <textarea
+                          value={act.algorithmParams}
+                          onChange={(e) => updateSimulatorActivity(i, "algorithmParams", e.target.value)}
+                          rows={2}
+                          placeholder="{ }"
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      {ALGORITHM_REGISTRY[act.algorithmType]?.description && (
+                        <p className="text-[10px] text-black/30">{ALGORITHM_REGISTRY[act.algorithmType].description}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {config.simulator_activities.length === 0 && (
+                  <p className="text-[10px] text-black/30">暂无活动配置，点击"+ 添加活动"新增</p>
+                )}
+              </div>
             </div>
 
             <hr className="border-black/5" />

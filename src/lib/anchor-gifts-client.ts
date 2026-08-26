@@ -62,6 +62,8 @@ type RecordsMetaData = {
   end_date?: string;
   last_fetch?: string;
   total_page?: number;
+  /** 可疑空月份及"被判定为空"的次数，用于下轮补拉；达到上限则视为真无数据，防死循环 */
+  empty_counts?: Record<string, number>;
 };
 
 export type AnchorGiftsResult = {
@@ -107,6 +109,12 @@ const RATE_LIMIT_COOLDOWN_MS = 30_000;
 // 月度并行度：1=串行，>1 时批内多个月份并行拉取（注意：多个月同时翻页会增加 412 限流风险）
 const MONTH_CONCURRENCY = 12;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
+
+// 伪空重试间隔：page0 返回 total_page=0 时，按这些递增间隔再查，
+// 区分"软限流/冷缓存的假空"与"真无数据"
+const EMPTY_RETRY_INTERVAL_MS = [5000, 15000];
+// 可疑空月份连续判定上限：同一空月份连续 N 次运行仍为空 → 视为真无数据并放行 end_date（防死循环）
+const MAX_CONSECUTIVE_EMPTY_RUNS = 2;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
 
@@ -321,11 +329,11 @@ async function readRecordsWithMeta(
   const parsed = await readJson<unknown>(platform, filePath);
   if (!parsed) return { records: [], meta: null };
   if (Array.isArray(parsed)) return { records: parsed as BiliGiftRecord[], meta: null };
-  const obj = parsed as { records?: BiliGiftRecord[]; end_date?: string; last_fetch?: string; total_page?: number };
+  const obj = parsed as { records?: BiliGiftRecord[]; end_date?: string; last_fetch?: string; total_page?: number; empty_counts?: Record<string, number> };
   return {
     records: obj.records ?? [],
     meta: obj.end_date !== undefined
-      ? { end_date: obj.end_date, last_fetch: obj.last_fetch, total_page: obj.total_page }
+      ? { end_date: obj.end_date, last_fetch: obj.last_fetch, total_page: obj.total_page, empty_counts: obj.empty_counts ?? {} }
       : null,
   };
 }
@@ -350,6 +358,7 @@ async function saveRecordsWithMeta(
         // 导致文件每次刷新都变 → 增量上传失效、几十 MB 全量重传。
         total_page: Math.ceil(records.length / PAGE_SIZE),
         total_count: records.length,
+        empty_counts: meta.empty_counts ?? {},
         records,
       },
       null,
@@ -616,6 +625,8 @@ export async function fetchAnchorGifts(
         yesterdayReady?: boolean;
         interrupted: boolean;
         page0Failed: boolean;
+        /** 本次判定为"可疑空月份"（伪空重试后仍 total_page=0） */
+        empty?: boolean;
         /** B站凭证失效（code=-101/3/"未登录"）：与 page0Failed 不同，需要立即终止整个 fetchAnchorGifts 并让上层跳 /login */
         credentialExpired?: boolean;
       }> {
@@ -674,9 +685,26 @@ export async function fetchAnchorGifts(
           yesterdayReady = firstPage.data.ready === 1;
         }
 
-        const totalPages = firstPage.data?.total_page ?? 0;
+        let totalPages = firstPage.data?.total_page ?? 0;
+        // total_page=0 不一定代表该月无数据：B站 在软限流/冷缓存时静默返回假空（非错误、不重试）。
+        // 按递增间隔再探测：恢复出数据 → 视为假空继续翻页；仍为 0 → 判定"可疑空月份"，交给上层用 empty_counts 决定是否补拉。
         if (totalPages === 0) {
-          return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false };
+          for (const delay of EMPTY_RETRY_INTERVAL_MS) {
+            await new Promise((r) => setTimeout(r, delay));
+            try {
+              const retried = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
+              if (retried.code === 0 && (retried.data?.total_page ?? 0) > 0) {
+                firstPage = retried;
+                totalPages = firstPage.data?.total_page ?? 0;
+                console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 伪空重试恢复：total_page=${totalPages}，继续`);
+                break;
+              }
+            } catch { /* 重试失败则继续等下一个间隔 */ }
+          }
+          if (totalPages === 0) {
+            console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 可疑空月份：重试后仍 total_page=0（标记 empty）`);
+            return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false, empty: true };
+          }
         }
 
         if (firstPage.data?.list?.length) {
@@ -782,6 +810,7 @@ export async function fetchAnchorGifts(
               end_date: chunk.start,
               total_page: (meta?.total_page ?? 0) + fetchedNewPages,
               last_fetch: getBeijingTime(),
+              empty_counts: meta?.empty_counts ?? {},
             });
             interrupted = true;
             break;
@@ -811,6 +840,7 @@ export async function fetchAnchorGifts(
               end_date: chunk.start,
               total_page: (meta?.total_page ?? 0) + fetchedNewPages,
               last_fetch: getBeijingTime(),
+              empty_counts: meta?.empty_counts ?? {},
             });
             interrupted = true;
             break;
@@ -820,12 +850,38 @@ export async function fetchAnchorGifts(
       // 仅当未发生中断/失败时才推进 end_date 到昨天。
       // 若 interrupted=true，上面已在中断点保存了 end_date=chunk.start，此处不可覆盖。
       if (!interrupted) {
+        // empty_counts：有数据的月份清零，可疑空月份累加；只有仍低于上限的空月份才挡住 end_date（供下轮补拉），
+        // 达到上限视为真无数据放行，避免 end_date 永不推进导致死循环。
+        const nextEmptyCounts: Record<string, number> = { ...(meta?.empty_counts ?? {}) };
+        for (let ci = 0; ci < chunkResults.length; ci++) {
+          const result = chunkResults[ci];
+          const start = chunks[ci]?.start;
+          if (!result || !start) continue;
+          if (result.empty) {
+            nextEmptyCounts[start] = (nextEmptyCounts[start] ?? 0) + 1;
+          } else if (result.records.length > 0) {
+            delete nextEmptyCounts[start];
+          }
+        }
+        const suspiciousEmptyStarts = chunks
+          .map((c) => c.start)
+          .filter((s) => s && (nextEmptyCounts[s] ?? 0) < MAX_CONSECUTIVE_EMPTY_RUNS);
+        const nextEndDate = suspiciousEmptyStarts.length > 0
+          ? suspiciousEmptyStarts.sort()[0]
+          : yesterdayStr;
+
         allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
         await saveRecordsWithMeta(platform, session.mid, allRecords, {
-          end_date: yesterdayStr,
+          end_date: nextEndDate,
           total_page: (meta?.total_page ?? 0) + fetchedNewPages,
           last_fetch: getBeijingTime(),
+          empty_counts: nextEmptyCounts,
         });
+        if (suspiciousEmptyStarts.length > 0) {
+          console.log(`[AnchorGifts-Tauri] 获取完成: end_date 保留在最早可疑空月份 ${nextEndDate}（共${suspiciousEmptyStarts.length}个待补拉），总计 ${allRecords.length} 条`);
+        } else {
+          console.log(`[AnchorGifts-Tauri] 获取完成: 推进到昨天，总计 ${allRecords.length} 条`);
+        }
       }
     }
 

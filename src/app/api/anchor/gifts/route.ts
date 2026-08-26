@@ -49,6 +49,11 @@ type RecordsMetaData = {
   end_date: string;       // 已获取到的截止日期，如 "20260801"
   last_fetch: string;     // 最后一次获取时间
   total_page: number;     // 累计获取页数
+  /** 可疑空月份及连续"被判定为空"的次数（key=月份起始YYYYMMDD）。
+   *  用于区分"伪空（软限流/冷缓存返回 total_page=0）"与"真无数据"：
+   *  只有次数 < MAX_CONSECUTIVE_EMPTY_RUNS 的空月份才挡住 end_date 供下一轮补拉；
+   *  达到上限的视为真无数据，放行 end_date，避免 end_date 永不推进导致死循环。 */
+  empty_counts?: Record<string, number>;
 };
 
 // ==================== 常量 ====================
@@ -244,6 +249,7 @@ async function readRecordsWithMeta(mid: number, uname: string): Promise<{ record
           end_date: parsed.end_date ?? "",
           last_fetch: parsed.last_fetch ?? parsed.exportedAt ?? "",
           total_page: parsed.total_page ?? 0,
+          empty_counts: parsed.empty_counts ?? {},
         },
       };
     }
@@ -267,6 +273,7 @@ async function tryReadOldMetadata(mid: number, uname: string): Promise<RecordsMe
       end_date: parsed.end_date ?? "",
       last_fetch: parsed.last_fetch ?? "",
       total_page: parsed.total_page ?? 0,
+      empty_counts: parsed.empty_counts ?? {},
     };
   } catch {
     return null;
@@ -283,6 +290,7 @@ async function saveRecordsWithMeta(mid: number, uname: string, records: GiftReco
     end_date: meta.end_date,
     total_page: meta.total_page,
     total_count: records.length,
+    empty_counts: meta.empty_counts ?? {},
     records,
   };
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
@@ -383,6 +391,14 @@ const RATE_LIMIT_COOLDOWN_MS = 30_000;
 
 /** 412限流后恢复翻页的慢速间隔（ms） */
 const SLOW_REQUEST_INTERVAL_MS = 1500;
+
+/** 伪空重试间隔：page0 返回 total_page=0 时，按这些递增间隔再查，
+ *  把"软限流/冷缓存导致的假空"从"真无数据"里区分出来。 */
+const EMPTY_RETRY_INTERVAL_MS = [5000, 15000];
+
+/** 可疑空月份连续判定上限：同一空月份连续 N 次运行都被判空 → 视为真无数据并放行 end_date，
+ *  保证修复不会因真·空月份导致 end_date 永不推进（死循环）。 */
+const MAX_CONSECUTIVE_EMPTY_RUNS = 2;
 
 /** 月度数据获取失败时抛出的错误，携带失败的月份范围 */
 class MonthFetchError extends Error {
@@ -585,7 +601,7 @@ export async function GET(request: Request) {
     let yesterdayApiReady: boolean | null = null;
 
     /** 获取指定月份(payload按整个自然月)内的所有记录，自动翻页 */
-    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string): Promise<{ records: GiftRecord[]; pages: number; ready?: number }> {
+    async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string): Promise<{ records: GiftRecord[]; pages: number; ready?: number; empty?: boolean }> {
       const records: GiftRecord[] = [];
       let rateLimited = false; // 412限流标记，触发后切换慢速模式
 
@@ -625,7 +641,7 @@ export async function GET(request: Request) {
 
       // 第0页：total_page 有意义，total_page=0 表示该月无数据
       // page=0 使用更多重试次数（5次），避免因网络波动丢失整个月份
-      const firstPage = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
+      let firstPage = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
       if (!firstPage) {
         throw new MonthFetchError(begin, end, "第0页获取失败（已重试），终止以避免数据缺失");
       }
@@ -636,17 +652,33 @@ export async function GET(request: Request) {
         return { records, pages: 0 };
       }
 
-      const totalPages = firstPage.data?.total_page ?? 0;
+      let totalPages = firstPage.data?.total_page ?? 0;
       const totalHamster = firstPage.data?.total_hamster ?? 0;
+
+      // total_page=0 不一定代表该月无数据：B站 在软限流或被冷缓存命中时，
+      // 会静默返回 code=0/total_page=0（假空），并非错误、也不会重试。
+      // 这里按递增间隔再做几次 page0 探测：恢复出数据 → 视为假空，继续翻页；
+      // 仍为 0 → 判定为"可疑空月份"（empty=true，交给上层用 empty_counts 决定是否补拉）。
+      if (totalPages === 0) {
+        for (const delay of EMPTY_RETRY_INTERVAL_MS) {
+          await new Promise(r => setTimeout(r, delay));
+          const retried = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
+          if (retried && retried.code === 0 && (retried.data?.total_page ?? 0) > 0) {
+            firstPage = retried;
+            totalPages = firstPage.data?.total_page ?? 0;
+            console.log(`[AnchorGifts] ${begin}~${end} 伪空重试恢复：total_page=${totalPages} total_hamster=${firstPage.data?.total_hamster ?? "?"}，继续`);
+            break;
+          }
+        }
+        if (totalPages === 0) {
+          console.log(`[AnchorGifts] ${begin}~${end} 可疑空月份：重试后仍 total_page=0（标记 empty，交由上层判定）`);
+          return { records: [], pages: 0, ready: firstPage.data?.ready, empty: true };
+        }
+      }
+
       const listLen = firstPage.data?.list?.length ?? 0;
       const ready = firstPage.data?.ready;
       console.log(`[AnchorGifts] ${begin}~${end} 第0页: total_pages=${totalPages} total_hamster=${totalHamster} list_len=${listLen}`);
-
-      // total_page=0 表示该月没有数据，跳过（不是错误）
-      if (totalPages === 0) {
-        console.log(`[AnchorGifts] ${begin}~${end} 无数据(total_page=0)，跳过`);
-        return { records, pages: 0, ready };
-      }
 
       // 第0页的数据
       if (listLen > 0) {
@@ -792,6 +824,27 @@ export async function GET(request: Request) {
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
 
       const prevTotalPage = meta?.total_page ?? 0;
+      // empty_count 处理：有数据的月份清零，空月份累加，再按上限决定 end_date
+      const prevEmptyCounts = meta?.empty_counts ?? {};
+      const nextEmptyCounts: Record<string, number> = { ...prevEmptyCounts };
+      for (let ci = 0; ci < chunkResults.length; ci++) {
+        const result = chunkResults[ci];
+        if (!result) continue;
+        const start = chunks[ci]?.start;
+        if (!start) continue;
+        if (result.empty) {
+          nextEmptyCounts[start] = (nextEmptyCounts[start] ?? 0) + 1;
+        } else if (result.records.length > 0) {
+          delete nextEmptyCounts[start];
+        }
+      }
+      // 仍低于上限的空月份视为"可疑"，取其最早者作为截止点，下轮从该月补拉
+      const suspiciousEmptyStarts = chunks
+        .map(c => c.start)
+        .filter(s => s && (nextEmptyCounts[s] ?? 0) < MAX_CONSECUTIVE_EMPTY_RUNS);
+      const nextEndDate = suspiciousEmptyStarts.length > 0
+        ? suspiciousEmptyStarts.sort()[0]
+        : yesterdayStr;
 
       // 如果中途有月份失败，标记失败月份起始日为截止点，下次从该月继续
       if (firstError instanceof MonthFetchError) {
@@ -801,15 +854,21 @@ export async function GET(request: Request) {
           total_page: prevTotalPage + fetchedNewPages,
           end_date: failedBegin,
           last_fetch: getBeijingTime(),
+          empty_counts: nextEmptyCounts,
         });
         console.log(`[AnchorGifts] 获取部分完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条（截止 ${failedBegin}）`);
       } else {
         await saveRecordsWithMeta(validSession.mid, validSession.uname, allRecords, {
           total_page: prevTotalPage + fetchedNewPages,
-          end_date: yesterdayStr,
+          end_date: nextEndDate,
           last_fetch: getBeijingTime(),
+          empty_counts: nextEmptyCounts,
         });
-        console.log(`[AnchorGifts] 获取完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条`);
+        if (suspiciousEmptyStarts.length > 0) {
+          console.log(`[AnchorGifts] 获取完成: end_date 保留在最早可疑空月份 ${nextEndDate}（共${suspiciousEmptyStarts.length}个待补拉），${fetchedNewPages} 页, 新增 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条`);
+        } else {
+          console.log(`[AnchorGifts] 获取完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条`);
+        }
       }
     }
 
