@@ -417,6 +417,305 @@
     };
   }
 
+  // 消费统计（userconsume）：统一返回"今日/累计消费 0"，避免页面弹出"已累计消费 X 万元"之类
+  // 的理性消费提醒弹窗。data 里同时给常见数字字段，页面无论读哪个都取到 0。
+  function fakeZeroConsume() {
+    return {
+      code: 0,
+      message: "0",
+      ttl: 1,
+      data: { total: 0, today_cost: 0, today_total: 0, cost: 0, consume_today: 0, consume_total: 0 },
+    };
+  }
+
+  // ===== 逐级开箱（玲珑宝斋）算法 =====
+  // 玩法：分多级（默认5级）宝箱。只有成功开出上一级的"目标宝物"，才能开启下一级。
+  // 每级6个宝箱，开一个花费 item_price（电池），开出目标材料则本级成功，得到本级礼物；
+  // 最高一级开出大奖后游戏结束。
+  // 配置来自 CONFIG.item_levels（每级一个：box_name/box_icon/item_name/item_price/
+  // item_gift_value/item_gift_icon/target{id,name,icon}/materials[普通材料]，box_count）。
+  // 解析 GET URL 查询参数（OpenBox 为 GET 请求，box_position 等放在 query 里）
+  function parseQuery(url) {
+    var q = {};
+    var qi = url ? url.indexOf("?") : -1;
+    if (qi < 0) return q;
+    url.slice(qi + 1).split("&").forEach(function (p) {
+      if (!p) return;
+      var kv = p.split("=");
+      var k = decodeURIComponent(kv[0]);
+      var v = decodeURIComponent(kv.slice(1).join("="));
+      if (k && v !== "") q[k] = v;
+    });
+    return q;
+  }
+  // 逐级开箱状态：持久化到 localStorage，跨打开保留
+  // 版本号：每次修改状态结构时递增，旧版本状态自动清空以避免字段缺失导致的逻辑异常
+  // V1: 初始版本，无 assign 字段
+  // V2: 新增 assign 字段（每个宝箱预分配随机素材）
+  // V3: 重置版本，强制清除所有旧状态，确保素材完全随机
+  var LING_STATE_VERSION = 3;
+  var lingState = {
+    _v: LING_STATE_VERSION,
+    current_item_level: (CONFIG.item_levels && CONFIG.item_levels[0]) ? 1 : 1,
+    progress: {},
+  };
+  (function () {
+    try {
+      var saved = localStorage.getItem("bili_activity_linglong");
+      if (saved) {
+        var parsed = JSON.parse(saved);
+        if (!parsed || parsed._v !== LING_STATE_VERSION) {
+          console.log("[LING-MOCK] 检测到旧版本状态，清空重新初始化 (old_v=" + (parsed && parsed._v) + ")");
+          localStorage.removeItem("bili_activity_linglong");
+        } else {
+          lingState = parsed;
+        }
+      }
+    } catch (e) {}
+    console.log("[LING-MOCK] shim loaded, state_v=" + LING_STATE_VERSION + ", items=" + (CONFIG.item_levels ? CONFIG.item_levels.length : 0));
+  })();
+  function saveLingState() {
+    try {
+      lingState._v = LING_STATE_VERSION;
+      localStorage.setItem("bili_activity_linglong", JSON.stringify(lingState));
+    } catch (e) {}
+  }
+  function lingLevelCfg(level) {
+    var lv = CONFIG.item_levels || [];
+    return lv[level - 1] || null;
+  }
+  // 初始化某层进度（首次访问该层时就完成"全部装箱分配"）：
+  //  - 从 box_count 个宝箱中随机挑 1 个作为目标宝物所在宝箱；
+  //  - 其余宝箱从材料池随机且不重复地抽取普通材料，每个宝箱的素材完全随机。
+  function ensureLingLevel(level) {
+    if (lingState.progress[level]) return lingState.progress[level];
+    var cfg = lingLevelCfg(level);
+    var boxCount = cfg ? (cfg.box_count || 6) : 6;
+    var targetPos = cfg ? randInt(1, boxCount) : 1;
+    var p = { target_obtained: false, target_pos: targetPos, opened: {}, assign: {} };
+    if (cfg) {
+      var pool = (cfg.materials || []).slice();
+      for (var i = pool.length - 1; i > 0; i--) {
+        var j = randInt(0, i);
+        var tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+      }
+      var used = 0;
+      for (var b = 1; b <= boxCount; b++) {
+        if (b === targetPos) continue;
+        if (used < pool.length) {
+          p.assign[b] = pool[used++];
+        } else {
+          var fallbackIdx = (b - 1) % pool.length;
+          p.assign[b] = pool[fallbackIdx];
+        }
+      }
+      console.log("[LING-MOCK] level=" + level + " target_pos=" + targetPos + " box_count=" + boxCount + " materials_assigned=" + used);
+    }
+    lingState.progress[level] = p;
+    saveLingState();
+    return p;
+  }
+  // 构建某层的一个宝箱项（返回完整 item 所需的 boxes 数组内元素）
+  function lingBoxNode(level, pos) {
+    var p = lingState.progress[level];
+    var node = { position: pos };
+    if (p && p.opened[pos]) {
+      var m = p.opened[pos];
+      node.is_opened = true;
+      node.material_id = m.id;
+      node.material_name = m.name;
+      node.material_icon = m.icon;
+      if (pos === p.target_pos) node.is_target = true;
+    }
+    return node;
+  }
+  // 规则4：收下礼物（结算）后游戏恢复到初始状态——清空所有宝箱开启记录、回到第 1 级
+  function resetLingState() {
+    lingState.progress = {};
+    lingState.current_item_level = (CONFIG.item_levels && CONFIG.item_levels[0]) ? 1 : 1;
+    saveLingState();
+  }
+  // 构建完整 GetGameState 响应
+  function makeLingGetGameState() {
+    var lv = CONFIG.item_levels || [];
+    var items = lv.map(function (cfg) {
+      var level = cfg.item_level;
+      var p = ensureLingLevel(level);
+      var boxes = [];
+      for (var i = 1; i <= (cfg.box_count || 6); i++) {
+        var node = lingBoxNode(cfg.item_level, i);
+        boxes.push(node);
+      }
+      return {
+        item_level: cfg.item_level,
+        boxes: boxes,
+        target_obtained: !!p.target_obtained,
+        target_material_id: cfg.target.id,
+        target_material_name: cfg.target.name,
+        target_material_icon: cfg.target.icon,
+        item_name: cfg.item_name,
+        item_price: cfg.item_price,
+        item_gift_value: cfg.item_gift_value,
+        item_gift_icon: cfg.item_gift_icon,
+        box_icon: cfg.box_icon,
+        box_name: cfg.box_name,
+      };
+    });
+    return {
+      code: 0,
+      message: "OK",
+      ttl: 1,
+      data: {
+        game_status: 1,
+        current_item_level: lingState.current_item_level,
+        items: items,
+        default_selected_item: lingState.current_item_level,
+        end_time: CONFIG.end_time || 1788148799,
+        current_time: now(),
+        carousel: makeLingCarousel(),
+      },
+    };
+  }
+  function makeLingCarousel() {
+    var lv = CONFIG.item_levels || [];
+    if (!lv.length) return [];
+    var picks = [];
+    for (var i = 0; i < 10; i++) {
+      var cfg = lv[randInt(0, lv.length - 1)];
+      picks.push({ uid: randInt(1000000, 999999999), gift_name: cfg.item_name });
+    }
+    return picks;
+  }
+  // 开箱：读取 query 的 box_position（目标箱子序号），没有则开该层第一个未开的箱。
+  function makeLingOpenBox(query) {
+    var level = parseInt((query && query.item_level) || lingState.current_item_level, 10);
+    var cfg = lingLevelCfg(level);
+    if (!cfg) return { code: 0, message: "OK", ttl: 1, data: {} };
+    var boxCount = cfg.box_count || 6;
+    var p = ensureLingLevel(level);
+    if (p.target_obtained) {
+      // 页面端 verifyTargetObtained 会拦截并提示"已获取目标材料"，此处为兜底
+      for (var i = 1; i <= boxCount; i++) {
+        if (p.opened[i]) {
+          var m0 = p.opened[i];
+          return { code: 0, message: "OK", ttl: 1, data: { box_position: i, material_id: m0.id, material_name: m0.name, material_icon: m0.icon, current_item_level: level, is_target: false } };
+        }
+      }
+      return { code: 0, message: "OK", ttl: 1, data: { current_item_level: level, is_target: false } };
+    }
+    var pos = parseInt(query && query.box_position, 10);
+    if (!pos) {
+      for (var i = 1; i <= boxCount; i++) {
+        if (!p.opened[i]) { pos = i; break; }
+      }
+      if (!pos) pos = 1;
+    }
+    if (p.opened[pos]) {
+      var m0 = p.opened[pos];
+      return { code: 0, message: "OK", ttl: 1, data: { box_position: pos, material_id: m0.id, material_name: m0.name, material_icon: m0.icon, current_item_level: level, is_target: pos === p.target_pos } };
+    }
+    batteryBalance = Math.max(0, batteryBalance - cfg.item_price);
+    var final = level === CONFIG.item_levels.length;
+    var material;
+    var isTargetHit = false;
+    if (pos === p.target_pos) {
+      material = { id: cfg.target.id, name: cfg.target.name, icon: cfg.target.icon };
+      p.target_obtained = true;
+      isTargetHit = true;
+      console.log("[LING-MOCK] TARGET HIT level=" + level + " pos=" + pos + " target=" + cfg.target.name + " final=" + final);
+    } else {
+      material = (p.assign && p.assign[pos]) || { id: cfg.target.id + pos, name: "材料" + pos, icon: "" };
+    }
+    p.opened[pos] = material;
+
+    if (isTargetHit && final) {
+      // 最终级目标命中：
+      // 1. 调用 notifyCompose 把礼物推入包裹（页面 handleGameOver 不会调用 SettleGame API）
+      // 2. 立即重置所有状态 → 页面 fetchGameData 会拿到 level 1 全未开的初始状态
+      notifyCompose({
+        gift_id: cfg.gift_id,
+        gift_name: cfg.item_name,
+        gift_img: cfg.item_gift_icon,
+        gift_price: cfg.item_gift_value,
+      });
+      resetLingState();
+    } else if (isTargetHit && !final) {
+      // 非最终层目标命中：提前推进层级，配合页面 auto-advance 流程
+      lingState.current_item_level = level + 1;
+      saveLingState();
+    } else {
+      lingState.current_item_level = level;
+      saveLingState();
+    }
+
+    var responseIsTarget = isTargetHit;
+
+    var d = {
+      box_position: pos,
+      material_id: material.id,
+      material_name: material.name,
+      material_icon: material.icon,
+      current_item_level: level,
+      is_target: responseIsTarget,
+    };
+
+    if (isTargetHit && final) {
+      d.is_game_over = true;
+      d.reward_gift_name = cfg.item_name;
+      d.reward_gift_value = cfg.item_gift_value;
+      d.reward_gift_id = cfg.gift_id;
+      d.reward_gift_icon = cfg.item_gift_icon;
+    }
+
+    console.log("[LING-MOCK] openBox level=" + level + " pos=" + pos + " material=" + material.name + " target=" + isTargetHit + " final=" + final);
+    return { code: 0, message: "OK", ttl: 1, data: d };
+  }
+  // 结算（合成退出比赛）：玩家在某一层开出目标宝物后，选择"合成礼物退出"时调用。
+  // 返回当前已获得的最高级礼物的信息（settled_item_level + 礼物 id/名称/价值/图标）。
+  function makeLingSettleGame() {
+    var lv = CONFIG.item_levels || [];
+    // 从高到低找第一个已获得的层 = 可以获得并结算的最高礼物
+    var settled = null;
+    for (var i = lv.length; i >= 1; i--) {
+      var p = lingState.progress[i];
+      if (p && p.target_obtained) {
+        var cfg = lingLevelCfg(i);
+        settled = cfg || lingLevelCfg(1);
+        break;
+      }
+    }
+    if (!settled) {
+      // 尚无任何层获得 → 结算当前可玩层（仍返回礼物，避免页面空数据）
+      settled = lingLevelCfg(lingState.current_item_level) || lingLevelCfg(1);
+    }
+    if (!settled) {
+      // 配置缺失（如注入失败）时返回空结算，避免空指针导致页面报错
+      return { code: 0, message: "OK", ttl: 1, data: { settled_item_level: 0, gift_name: "", gift_value: 0, gift_id: 0, gift_icon: "" } };
+    }
+    // 收下礼物：通过共享的 activity-compose 事件把礼物推给前端，入库"礼物栏包裹"
+    //（与晶石工坊 makeCompose 同一通道，所有合成活动共用）。
+    notifyCompose({
+      gift_id: settled.gift_id,
+      gift_name: settled.item_name,
+      gift_img: settled.item_gift_icon,
+      gift_price: settled.item_gift_value,
+    });
+    // 规则4：收下礼物（结算）后，游戏状态恢复到初始状态（所有宝箱未开启、回到第 1 级）
+    resetLingState();
+    return {
+      code: 0,
+      message: "OK",
+      ttl: 1,
+      data: {
+        settled_item_level: settled.item_level,
+        gift_name: settled.item_name,
+        gift_value: settled.item_gift_value,
+        gift_id: settled.gift_id,
+        gift_icon: settled.item_gift_icon,
+      },
+    };
+  }
+
   // ===== 算法分派 =====
   // 不同 algorithmType 使用不同的拦截规则与 mock 逻辑（各活动玩法背后的算法）。
   // 新增算法类型：在此处补充分派分支，改完随前端热更新推送即可，无需原生包更新。
@@ -429,14 +728,33 @@
     return /x\/web-interface\/nav/i.test(url) || /xlive\/revenue\/v1\/wallet\/myWallet/i.test(url);
   }
 
-  // —— 晶石工坊（山海工坊）算法：6 槽位抽取/替换/合成 ——
+  // 玲珑宝斋的消费/登录门禁接口：真实登录态缺失时这些接口会返回"未登录"，挡住玩法。
+  // 只拦截"消费统计/今日消费"类门禁（userconsume），其余用户信息/昵称接口放行真实数据。
+  function isLingLoginGate(url) {
+    return /\/component\/userconsume\//i.test(url || "");
+  }
+
+  // —— 逐级开箱（玲珑宝斋）算法：拦截开箱/游戏状态/结算/登录/钱包；其余接口放行保证页面渲染。 ——
+  // URL 兜底识别：即使前端注入的 algorithmType 缺失/过期，只要命中 linglong 接口也强制走本地 mock，
+  // 避免误发真实请求导致"未登录"（与晶石工坊内嵌默认配置的思路一致，这里用 URL 作第二道防线）。
+  function isLinglongUrl(url) {
+    return /\/linglong\/LingLong/i.test(url || "");
+  }
   function handleRequest(url, body) {
     var params = parseBody(body);
-    // 玲珑宝斋占位算法：玩法接口尚未实现。只处理登录态/钱包；
-    // mockAllApi=true（占位算法默认）时其余 live 接口一律返回通用成功，杜绝真实扣费。
-    if (algType() === "fans-autumn-2026") {
+    if (algType() === "linglong-open-box" || isLinglongUrl(url)) {
+      // OpenBox 真实请求把 box_position / item_level 等参数放在 POST body，query 里只有 csrf；
+      // 合并 query + body，保证按用户点击的宝箱返回。
+      var q = parseQuery(url);
+      for (var _k in params) {
+        if (params[_k] !== undefined && q[_k] === undefined) q[_k] = params[_k];
+      }
+      if (/\/linglong\/LingLongOpenBox/i.test(url)) return makeLingOpenBox(q);
+      if (/\/linglong\/LingLongGetGameState/i.test(url)) return makeLingGetGameState();
+      if (/\/linglong\/LingLongSettleGame/i.test(url)) return makeLingSettleGame();
       if (/x\/web-interface\/nav/i.test(url)) return fakeLoginNav();
       if (/xlive\/revenue\/v1\/wallet\/myWallet/i.test(url)) return fakeWallet();
+      if (isLingLoginGate(url)) return fakeZeroConsume();
       return genericSuccess();
     }
     if (/StarStoneDraw/i.test(url)) return makeDraw(parseSlotIds(params));
@@ -454,10 +772,17 @@
   }
   function shouldMock(url) {
     if (!url) return false;
-    // 玲珑宝斋占位算法：只拦截登录态/钱包（+可选 mockAllApi 全拦截），
-    // 其余接口放行真实数据保证页面渲染；具体玩法接口待算法实现后在此补充。
-    if (algType() === "fans-autumn-2026") {
-      return isLoginOrWallet(url) || (CONFIG.mockAllApi && /api\.live\.bilibili\.com/i.test(url));
+    // 逐级开箱（玲珑宝斋）算法：只拦截玩法接口（LingLong*）+ 登录态/钱包 + 消费门禁，
+    // 其余请求（昵称、用户信息、背景配置等）放行真实服务器，否则把昵称之类接口 mock 成空
+    // 会导致页面反复提示"昵称获取失败"。GetTodayCostTotal 等消费门禁接口会报"未登录"，
+    // 因此一并拦截返回 code:0，其余一律放行。
+    if (algType() === "linglong-open-box" || isLinglongUrl(url)) {
+      return (
+        isLinglongUrl(url) ||
+        isLoginOrWallet(url) ||
+        isLingLoginGate(url) ||
+        (CONFIG.mockAllApi && /api\.live\.bilibili\.com/i.test(url))
+      );
     }
     // StarStone 动作接口 + 状态查询接口本地 mock：
     //   - StarStoneDraw / StarStoneReplace / StarStoneCompose：操作接口，本地 mock 防止真实扣费；
@@ -496,16 +821,36 @@
   // B站活动 H5 通过 window.__BiliUser__ / window.__LIVE_USER_LOGIN_STATUS__ 读取当前登录身份，
   // 页面的 isSelf = (userInfo.uid === URL uid) 判断是否"自己直播间"。把这两个全局改成假账号，
   // 页面就会认为当前参与人是"游客"而非主播，从而放开"自己直播间"的限制。
+  //
+  // 说明：玲珑宝斋等活动的 getUserInfo 在原生 WebView 里被注册为 NATIVE 实现（走 window.BiliJsBridge
+  // 原生桥的 auth.getUserInfo，不走 fetch / window.__BiliUser__），为此在下方额外提供：
+  //  ① 强制 awesome-api 的 __AWESOME_API_POLYFILL_COMPILER__ = "WEB"，让它退回被上方 nav 拦截的
+  //     fetch 路径（该路径已返回 isLogin:true）；
+  //  ② 兜底伪造 window.BiliJsBridge，若确实走了原生桥也能返回已登录假用户。
+  // 二者均为"伪造登录态"的同类做法，不会发起真实请求、不产生任何真实扣费/登录操作。
   function assertFakeLogin() {
     try {
-      window.__BiliUser__ = {
+      // 锁定 window.__BiliUser__：返回始终已登录的假对象，页面自身的 __BiliUser__ 无法覆盖它。
+      // 部分 getUserInfo 变体会走 window.__BiliUser__.get()，稳定的登录态才能保证 isLogin:true。
+      var fakeUserObj = {
         get: function () {
           return Promise.resolve({
             code: 0,
             data: { mid: CONFIG.fake_uid, uname: "模拟游客", face: "https://i0.hdslb.com/bfs/face/noface.jpg", isLogin: true },
           });
         },
+        quickLogin: function (cb) { if (cb) cb({ code: -1 }); },
       };
+      try {
+        Object.defineProperty(window, "__BiliUser__", {
+          configurable: true,
+          enumerable: true,
+          get: function () { return fakeUserObj; },
+          set: function () {}, // 忽略页面/库覆盖，始终用假登录态
+        });
+      } catch (e) {
+        try { window.__BiliUser__ = fakeUserObj; } catch (e2) {}
+      }
       window.__LIVE_USER_LOGIN_STATUS__ = {
         uid: CONFIG.fake_uid,
         uname: "模拟游客",
@@ -513,10 +858,116 @@
         isLogin: true,
         isError: false,
       };
+      // 部分页面从父窗口读取 __LIVE_USER_LOGIN_STATUS__，同步铺到 parent/top 以便被读到。
+      if (window.parent && window.parent !== window) {
+        window.parent.__LIVE_USER_LOGIN_STATUS__ = window.__LIVE_USER_LOGIN_STATUS__;
+      }
+      if (window.top && window.top !== window) {
+        window.top.__LIVE_USER_LOGIN_STATUS__ = window.__LIVE_USER_LOGIN_STATUS__;
+      }
+      // 强制 awesome-api 把 getUserInfo 解析为 WEB 实现（fetch /x/web-interface/nav，已被上方拦截），
+      // 从而绕过原生桥 BiliJsBridge，避免在纯 WebView 中原生桥不可用导致 isLogin=false。
+      //
+      // 关键：必须用 getter 把该值"锁死"为 "WEB"。光靠定时赋值不够——页面自身的 awesome-api
+      // 初始化可能在 getUserInfo 首次被调用前把该值改写成 true/false，而首次注册会把它固化成
+      // NATIVE 桥 实现（Li）并永久缓存进 O["NATIVE"]["getUserInfo"]，之后无论 nav 怎么拦都返回
+      // 未登录。锁成 "WEB" 后，首次注册一定会选到 WEB 实现（fetch nav）并返回 isLogin:true。
+      lockPolyfillFlag();
+    } catch (e) {}
+  }
+
+  // 把 __AWESOME_API_POLYFILL_COMPILER__ 锁定为 "WEB"：页面/库无法再改写它。
+  function lockPolyfillFlag() {
+    try {
+      var FLAG = "WEB";
+      function lockOn(g) {
+        try {
+          Object.defineProperty(g, "__AWESOME_API_POLYFILL_COMPILER__", {
+            configurable: true,
+            enumerable: true,
+            get: function () { return FLAG; },
+            set: function () {}, // 忽略页面的任何改写
+          });
+        } catch (e) {
+          try { g.__AWESOME_API_POLYFILL_COMPILER__ = FLAG; } catch (e2) {}
+        }
+      }
+      if (typeof self !== "undefined") lockOn(self);
+      if (typeof globalThis !== "undefined" && globalThis !== self) lockOn(globalThis);
+      if (typeof window !== "undefined" && window !== self) lockOn(window);
     } catch (e) {}
   }
   assertFakeLogin();
   setInterval(assertFakeLogin, 800);
+
+  // ===== 兜底：伪造 window.BiliJsBridge 原生桥 =====
+  // 玲珑宝斋的 getUserInfo 在 WebView 中可能被注册为 NATIVE 实现（Li），其内部经 BiliJsBridge 调用
+  // auth.getUserInfo。这里兜底覆盖 BiliJsBridge，使其 getUserInfo / auth.getUserInfo 返回已登录假用户，
+  // 让 NATIVE 路径也能拿到 isLogin:true。仅在活动请求时同步读取，不触碰真实账号、无真实请求。
+  function fabricateJsBridge() {
+    try {
+      var fakeUser = {
+        uid: CONFIG.fake_uid,
+        mid: CONFIG.fake_uid,
+        uname: "模拟游客",
+        userName: "模拟游客",
+        face: "https://i0.hdslb.com/bfs/face/noface.jpg",
+        isLogin: true,
+        state: 1,
+        isTourist: false,
+      };
+      // awesome-api 通过 BiliJsBridge 的原生桥协议调用（getUserInfo / auth.getUserInfo）。
+      // 这里同时覆盖"直接方法"和"promise 风格"两种可能的读取方式。
+      function resolveUser() {
+        return Promise.resolve({ ...fakeUser });
+      }
+      function resolveAuthGetUserInfo() {
+        return Promise.resolve({ data: { ...fakeUser }, params: {} });
+      }
+      var bridge = window.BiliJsBridge;
+      if (!bridge) {
+        bridge = {
+          // 让 isSupportV2 判定为"非注入 v2"，从而走老通道，以便被 getUserInfo 覆盖命中
+          noBiliInjectV2: false,
+          getUserInfo: resolveUser,
+        };
+        bridge.auth = { getUserInfo: resolveAuthGetUserInfo };
+        bridge.native = bridge;
+        try {
+          window.BiliJsBridge = bridge;
+        } catch (e) {}
+      } else {
+        // 已有桥：强制替换登录态方法为假实现（可能已被 awesome-api 固化为 NATIVE 桥 getUserInfo，
+        // 若不覆盖，getUserInfo 会走真实原生桥/或返回未登录）。仅覆盖登录态方法，保留桥的其他能力。
+        try { bridge.getUserInfo = resolveUser; } catch (e) {}
+        if (bridge.auth) {
+          try { bridge.auth.getUserInfo = resolveAuthGetUserInfo; } catch (e) {}
+        } else {
+          try { bridge.auth = { getUserInfo: resolveAuthGetUserInfo }; } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+  fabricateJsBridge();
+  setInterval(fabricateJsBridge, 1000);
+
+  // ===== 伪造登录 Cookie =====
+  // B站活动 H5 的请求层 CSRF 中间件读取 document.cookie 中的 bili_jct（缺失时在客户端就直接
+  // 报"未登录"，根本不会发出请求，网络拦截救不了），部分页面还校验 SESSDATA / DedeUserID。
+  // 这里写入假 Cookie 让页面认为已登录。仅对当前页面 origin 生效，不触碰真实账号、不产生任何
+  // 真实扣费/登录操作；写入的值是伪造串，真实服务器校验必失败（但玩法接口全部本地 mock）。
+  function fakeCookies() {
+    try {
+      var exp = new Date(Date.now() + 7 * 86400e5).toUTCString();
+      var uid = CONFIG.fake_uid || 900000000;
+      document.cookie = "bili_jct=fakebili_jct" + uid + "; path=/; expires=" + exp;
+      document.cookie = "SESSDATA=fakeSESSDATA" + uid + "abcdef0123456789; path=/; expires=" + exp;
+      document.cookie = "DedeUserID=" + uid + "; path=/; expires=" + exp;
+      document.cookie = "DedeUserID__ckMd5=0; path=/; expires=" + exp;
+    } catch (e) {}
+  }
+  fakeCookies();
+  setInterval(fakeCookies, 3000);
 
   // ===== 宽度自适应：让活动页主内容铺满整个 WebView（与主窗口等宽）=====
   // 活动页用 flexible rem 方案，根字号被钳制在 540（clientWidth>540 时），导致主内容只有 540px、

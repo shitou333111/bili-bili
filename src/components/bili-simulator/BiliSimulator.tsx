@@ -7,6 +7,7 @@ import ComboNotification from "./ComboNotification";
 import type { Gift, EffectConfig, GiftEffectInfo } from "./types";
 import { useActivities } from "./activities/registry";
 import { openActivityNative, closeActivityNative, isTauriRuntime } from "./activities/native";
+import type { ActivityConfig } from "./activities/types";
 import { ensureGiftCatalogLoaded, getGiftList, getRoomGiftData } from "@/lib/gift-catalog-client";
 import { getEffectsMap } from "@/lib/gift-effects-client";
 import { refreshGiftData, getGiftEffectsMap, loadGiftExtraIds } from "@/lib/gift-local-store";
@@ -29,6 +30,9 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   const [showFloatingCombo, setShowFloatingCombo] = useState(false);
   // 原生活动面板（桌面子 WebView 下方 2/3 / 移动端窗口）是否打开：仅此时显示顶部遮罩
   const [nativePanelOpen, setNativePanelOpen] = useState(false);
+  // 活动入口卡片轮播：展开/收起 + 当前展示下标
+  const [activityCarouselOpen, setActivityCarouselOpen] = useState(true);
+  const [activityCarouselIndex, setActivityCarouselIndex] = useState(0);
   // Android 平台：底部栏需要额外距离，避免虚拟导航栏遮挡
   const [isAndroid, setIsAndroid] = useState(false);
   const { activities: activityConfigs } = useActivities();
@@ -54,6 +58,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   // 活动（山海工坊）本地状态：槽位抽取状态 + 包裹合成礼物（用于持久化与还原）
   const slotStateRef = useRef<Record<string, number>>({});
   const bagGiftsRef = useRef<BagGift[]>([]);
+  const giftsRef = useRef<Gift[]>([]);
 
   // 最终显示的连击数 = 连击次数 * 单次倍数
   const comboCount = comboHits * comboMultiplier;
@@ -107,6 +112,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
           coin_type: g.coin_type,
         }));
         setGifts(parsedGifts);
+        giftsRef.current = parsedGifts;
 
         // 构建礼物ID到礼物对象映射
         const giftById = new Map<number, Gift>();
@@ -164,14 +170,17 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
         // - Web：直接读取打包的静态文件（本地资源，无延迟）
         const mergeExtraGiftIds = (extraGiftIds: number[]) => {
           if (!Array.isArray(extraGiftIds) || !extraGiftIds.length) return;
-          const extraGifts = pickByIds(extraGiftIds).filter((g) => !giftTabIds.has(g.id));
-          if (!extraGifts.length) return;
-          const extraIdSet = new Set(extraGifts.map((g) => g.id));
-          setTabGifts((prev) => ({
-            ...prev,
-            gift: [...(prev.gift as Gift[]), ...extraGifts],
-            fans: (prev.fans as Gift[]).filter((g) => !extraIdSet.has(g.id)),
-          }));
+          setTabGifts((prev) => {
+            const existingIds = new Set((prev.gift as Gift[]).map((g) => g.id));
+            const extraGifts = pickByIds(extraGiftIds).filter((g) => !existingIds.has(g.id));
+            if (!extraGifts.length) return prev;
+            const extraIdSet = new Set(extraGifts.map((g) => g.id));
+            return {
+              ...prev,
+              gift: [...(prev.gift as Gift[]), ...extraGifts],
+              fans: (prev.fans as Gift[]).filter((g) => !extraIdSet.has(g.id)),
+            };
+          });
         };
         if (isTauriRuntime() && platform) {
           loadGiftExtraIds(platform)
@@ -243,21 +252,22 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   }, []);
 
   // 合成礼物入库"包裹"选项卡（按 gift_id 去重，数量+1），并持久化到本地文件。
+  // price 始终使用 B站礼物目录的电池价（目录加载时已转换为电池单位）。
   const addComposedGift = useCallback(
     (g?: { gift_id: number; gift_name?: string; gift_img?: string; gift_price?: number }) => {
       if (!g || !g.gift_id) return;
       const found = gifts.find((x) => x.id === g.gift_id);
       const base: Gift = found || {
         id: g.gift_id,
+        // 目录找不到时，使用游戏配置的 gift_price（已是电池数）
+        price: g.gift_price || 0,
         name: g.gift_name || "合成礼物",
-        price: (g.gift_price || 0) / 100,
         img: g.gift_img || "",
         effect_id: 0,
       };
       const existing = bagGiftsRef.current.find((b) => b.id === base.id);
       let next: BagGift[];
       if (existing) {
-        // 已有同款礼物，数量 +1
         next = bagGiftsRef.current.map((b) =>
           b.id === base.id ? { ...b, count: b.count + 1 } : b
         );
@@ -278,8 +288,15 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
       const st = await readActivityState();
       slotStateRef.current = st.slot_state;
       if (st.bag_gifts.length) {
-        bagGiftsRef.current = st.bag_gifts;
-        setTabGifts((prev) => ({ ...prev, bag: st.bag_gifts }));
+        // 用 B站礼物目录修正持久化数据中的价格/名称/图标/特效
+        const catalog = giftsRef.current;
+        const migrated = st.bag_gifts.map((bg) => {
+          const found = catalog.find((g) => g.id === bg.id);
+          return found ? { ...bg, ...found } : bg;
+        });
+        bagGiftsRef.current = migrated;
+        setTabGifts((prev) => ({ ...prev, bag: migrated }));
+        writeActivityState({ slot_state: slotStateRef.current, bag_gifts: migrated });
       }
     })();
   }, [loading]);
@@ -610,34 +627,50 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
     return () => clearComboTimers();
   }, [clearComboTimers]);
 
-  // 当前活动（配置中第一个启用的活动，单活动不滑动）
+  // 当前启用的活动列表（不设上限，多活动并列展示，各自可点）。单活动不滑动。
   // 如果有主播信息，覆盖 room_id 和 uid 为当前主播的
-  const activeActivity = useMemo(() => {
-    const base = activityConfigs[0] ?? null;
-    if (!base || !streamerInfo) return base;
-    return {
-      ...base,
-      params: {
-        ...base.params,
-        roomId: streamerInfo.roomId,
-        uid: streamerInfo.uid,
-        anchorName: streamerInfo.uname,
-      },
-    };
-  }, [activityConfigs, streamerInfo]);
+  const activitiesWithStreamer = useMemo(
+    () =>
+      (activityConfigs || []).map((base) => {
+        if (!streamerInfo) return base;
+        return {
+          ...base,
+          params: {
+            ...base.params,
+            roomId: streamerInfo.roomId,
+            uid: streamerInfo.uid,
+            anchorName: streamerInfo.uname,
+          },
+        };
+      }),
+    [activityConfigs, streamerInfo]
+  );
+
+  // 活动入口卡片轮播：展开且多活动时，每 4s 自动切换到下一张（左右轮播）
+  useEffect(() => {
+    if (!activityCarouselOpen || activitiesWithStreamer.length <= 1) return;
+    const t = setInterval(() => {
+      setActivityCarouselIndex((i) => (i + 1) % activitiesWithStreamer.length);
+    }, 4000);
+    return () => clearInterval(t);
+  }, [activityCarouselOpen, activitiesWithStreamer.length]);
+  // 活动数量变化时重置到第一张
+  useEffect(() => {
+    setActivityCarouselIndex(0);
+  }, [activitiesWithStreamer.length]);
 
   // 点击活动入口：仅原生客户端用原生 WebView 面板打开真实 H5（注入 mock）。
   // 浏览器/Web 不使用本地复刻方案（按需求不再维护复刻页），活动体验即"模拟"页面本身。
-  const handleActivityCardClick = useCallback(async () => {
-    if (!activeActivity) return;
+  const handleActivityCardClick = useCallback(async (activity: ActivityConfig) => {
+    if (!activity) return;
     if (!isTauriRuntime()) return;
     // 把上次保存的槽位抽取状态传给原生层，活动页打开即可还原
-    const opened = await openActivityNative(activeActivity, slotStateRef.current);
+    const opened = await openActivityNative(activity, slotStateRef.current);
     if (opened) {
       // 原生面板打开后，前端只需显示顶部遮罩（点击关闭），底部面板由原生子 WebView 承载
       setNativePanelOpen(true);
     }
-  }, [activeActivity]);
+  }, []);
 
   // 关闭原生活动面板（顶部遮罩点击时调用）
   const handleCloseActivity = useCallback(async () => {
@@ -804,19 +837,62 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
         </button>
       )}
 
-      {/* 活动入口卡片 - 单活动不滑动，仅显示图片；高度按图片宽高比自适应 */}
-      <div className="absolute right-3 bottom-24 z-20" style={{ display: showFloatingCombo && comboGift ? "none" : "block" }}>
-        {activeActivity && (
-          <button
-            className="relative block rounded-lg overflow-hidden shadow-lg bg-black/40"
-            onClick={handleActivityCardClick}
-          >
-            <img
-              src={activeActivity.entryImage}
-              alt=""
-              className="block w-20 h-auto object-contain"
-            />
-          </button>
+      {/* 活动入口卡片 - 占一个位置，多活动左右轮播；下方按钮居中收起/展开（向上弹出动画）。全部未勾选则不显示 */}
+      <div className="absolute right-3 bottom-24 z-20 flex flex-col items-center gap-1.5" style={{ display: showFloatingCombo && comboGift ? "none" : "flex" }}>
+        {activitiesWithStreamer.length > 0 && (
+          <>
+            {/* 轮播槽（收起时向上收起隐藏，带过渡动画） */}
+            <div
+              className="overflow-hidden transition-all duration-300 ease-out"
+              style={{
+                maxHeight: activityCarouselOpen ? 112 : 0,
+                opacity: activityCarouselOpen ? 1 : 0,
+                transform: activityCarouselOpen ? "translateY(0)" : "translateY(8px)",
+              }}
+            >
+              <div className="relative w-20 h-24">
+                {activitiesWithStreamer.map((activity, i) => (
+                  <button
+                    key={activity.id}
+                    className="absolute top-0 left-0 w-20 h-24 rounded-lg overflow-hidden shadow-lg bg-black/40 transition-transform duration-500 ease-in-out"
+                    style={{ transform: `translateX(${(i - activityCarouselIndex) * 88}px)` }}
+                    onClick={() => handleActivityCardClick(activity)}
+                  >
+                    <img
+                      src={activity.entryImage}
+                      alt={activity.title || ""}
+                      className="block w-full h-full object-contain"
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* 收起/展开按钮：隐藏时上三角（点击展开），显示时下三角（点击收起）；扁平 chevron 图标 */}
+            <button
+              type="button"
+              onClick={() => setActivityCarouselOpen((v) => !v)}
+              className="flex h-5 w-9 items-center justify-center rounded-full bg-[#6b6b6b]/70 text-white/90 transition-colors hover:bg-[#7a7a7a]/80"
+              aria-label={activityCarouselOpen ? "收起活动入口" : "展开活动入口"}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: activityCarouselOpen ? "none" : "rotate(180deg)",
+                  transition: "transform 0.25s ease",
+                }}
+                aria-hidden="true"
+              >
+                <path d="M4 7l8 8 8-8" />
+              </svg>
+            </button>
+          </>
         )}
       </div>
 

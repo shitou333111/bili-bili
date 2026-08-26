@@ -32,24 +32,180 @@ export interface AlgorithmDefinition {
   buildMockConfig: (params: Record<string, unknown>) => Record<string, unknown>;
 }
 
+/**
+ * 逐级开箱（玲珑宝斋）默认配置：各层级宝箱的静态数据（单源配置）。
+ *
+ * 玩法：分多级（这里5级）宝箱，只有开出上一级的"目标宝物"才能开启下一级；每级 box_count 个宝箱，
+ * 开一个花费 item_price（电池），开出目标材料则本级成功得到 item_name 礼物并自动进入下一级，
+ * 最高一级开出大奖即结束。
+ *
+ * 字段与真实 LingLongGetGameState/LingLongOpenBox 响应一致：
+ *  - item_level：层级(1..5)
+ *  - box_name / box_icon：该层宝箱名与图标
+ *  - item_name / item_price / item_gift_value / item_gift_icon：该层礼物名、开箱单价、礼物价值、图标
+ *  - target：本层目标材料（开出即成功）
+ *  - materials：普通材料池（开出后即消耗一个宝箱）
+ *  - box_count：每层宝箱数（默认6）
+ * 数值取自 .data/test-data/activity/multi-lever-open-box-state.json（含 obtained 版），可被算法参数覆盖。
+ */
+const LING_COMMON_MATERIALS = [
+  {
+    id: 6,
+    name: "铜饰",
+    icon: "https://i0.hdslb.com/bfs/live/9fc60e990e2645474616fd0f6739a02b5666111f.png",
+  },
+  {
+    id: 7,
+    name: "琉璃",
+    icon: "https://i0.hdslb.com/bfs/live/d35c3882a319c166ae7c41efca39829fd6c7f0f1.png",
+  },
+  {
+    id: 9,
+    name: "彩石",
+    icon: "https://i0.hdslb.com/bfs/live/ceb71201a35fc592af1f28529b114b88d31be5d8.png",
+  },
+  {
+    id: 12,
+    name: "粗绸",
+    icon: "https://i0.hdslb.com/bfs/live/95287f5b049a751315b6a52ed1e49c3e9cbf4093.png",
+  },
+];
+
+interface LingLevelConfig {
+  item_level: number;
+  box_name: string;
+  box_icon: string;
+  item_name: string;
+  item_price: number;
+  item_gift_value: number;
+  item_gift_icon: string;
+  /** 结算/合成退出时返回的礼物 id（真实 LingLongSettleGame 响应字段） */
+  gift_id: number;
+  target: { id: number; name: string; icon: string };
+  materials: typeof LING_COMMON_MATERIALS;
+  box_count: number;
+}
+
+/** 从真实抓包提取的 5 级宝箱静态数据 */
+const LING_LEVELS: LingLevelConfig[] = [
+  {
+    item_level: 1,
+    box_name: "锦囊",
+    box_icon: "https://i0.hdslb.com/bfs/live/d77e05af3c913a891d3ee6142878cd20696df2f2.png",
+    item_name: "相识玉扣",
+    item_price: 100,
+    item_gift_value: 350,
+    item_gift_icon: "https://s1.hdslb.com/bfs/live/bff63d7642954aa6ee4df9ecbe0e1c6646140c82.png",
+    gift_id: 35777,
+    target: {
+      id: 1,
+      name: "纯银",
+      icon: "https://i0.hdslb.com/bfs/live/f56ed56bbdecc71f3d0995becde44659aecb7f58.png",
+    },
+    materials: LING_COMMON_MATERIALS,
+    box_count: 6,
+  },
+  {
+    item_level: 2,
+    box_name: "瓷瓶",
+    box_icon: "https://i0.hdslb.com/bfs/live/7bed855d19fc76b1a93c56e4641e95dd8a191601.png",
+    item_name: "常伴珠钗",
+    item_price: 185,
+    item_gift_value: 1000,
+    item_gift_icon: "https://s1.hdslb.com/bfs/live/064108fdf7b61328b3f72cd14d7f2762a5f8dd6e.png",
+    gift_id: 35778,
+    target: {
+      id: 2,
+      name: "和田玉",
+      icon: "https://i0.hdslb.com/bfs/live/a0b29518efb44cdaf928043499868db75558f940.png",
+    },
+    materials: LING_COMMON_MATERIALS,
+    box_count: 6,
+  },
+  {
+    item_level: 3,
+    box_name: "银盒",
+    box_icon: "https://i0.hdslb.com/bfs/live/f32e0a8915e2ae9d7ee902d7b9e494b38269bc8f.png",
+    item_name: "缘起瓷瓶",
+    item_price: 570,
+    item_gift_value: 3000,
+    item_gift_icon: "https://s1.hdslb.com/bfs/live/1dc3f0b3297afadf9e7cf65662bfa4f32d37f5e1.png",
+    gift_id: 35779,
+    target: {
+      id: 3,
+      name: "足金",
+      icon: "https://i0.hdslb.com/bfs/live/9faccdc8ec230f4d8e6eb8eda7ed3b02cabb9a06.png",
+    },
+    materials: LING_COMMON_MATERIALS,
+    box_count: 6,
+  },
+  {
+    item_level: 4,
+    box_name: "卷轴",
+    box_icon: "https://i0.hdslb.com/bfs/live/dae7066b333b49dfb2ee813a4d988245a9fd1a51.png",
+    item_name: "倾心宝冠",
+    item_price: 1420,
+    item_gift_value: 8000,
+    item_gift_icon: "https://s1.hdslb.com/bfs/live/b9ac10fd732197fcf8b76e3e37fcf6eb0139efff.png",
+    gift_id: 35780,
+    target: {
+      id: 4,
+      name: "云锦",
+      icon: "https://i0.hdslb.com/bfs/live/3623e557f3acffacbb66be92dc545edef11d8180.png",
+    },
+    materials: LING_COMMON_MATERIALS,
+    box_count: 6,
+  },
+  {
+    item_level: 5,
+    box_name: "玉函",
+    box_icon: "https://i0.hdslb.com/bfs/live/c7ee8442d5326d93312ab40f311f6202695f10d2.png",
+    item_name: "万象天衣",
+    item_price: 6280,
+    item_gift_value: 30000,
+    item_gift_icon: "https://s1.hdslb.com/bfs/live/14ba1e8bb376e8b256494fdb2fe34dfbc7204558.png",
+    gift_id: 35600,
+    target: {
+      id: 5,
+      name: "红珊瑚",
+      icon: "https://i0.hdslb.com/bfs/live/e73d2530a6acd4998b5ba47f9da56217d833fa9b.png",
+    },
+    materials: LING_COMMON_MATERIALS,
+    box_count: 6,
+  },
+];
+
+/** 组装逐级开箱算法的默认 CONFIG（可在参数 confirmation 中覆盖 item_levels/end_time 等） */
+function buildLinglongConfig(params: Record<string, unknown>): Record<string, unknown> {
+  const levels = Array.isArray(params.item_levels) ? params.item_levels : LING_LEVELS;
+  return {
+    end_time: typeof params.end_time === "number" ? params.end_time : 1788148799,
+    item_levels: levels,
+  };
+}
+
 /** 算法注册表：键 = algorithmType，与 mock-shim.js 的分派一致 */
 export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
   /** 晶石工坊（山海工坊）：6 槽位抽取/替换/合成 */
   "stone-gongfang": {
-    label: "晶石工坊（槽位合成）",
+    label: "槽位抽同",
     description: "6 槽位抽取材料 → 替换 → 按相同素材数合成礼物",
-    buildMockConfig: (params) => ({ ...STONE_GONGFANG, ...(params ?? {}) }),
+    // 剔除 replace_price/draw_gift_info：mock-shim.js 已改用 REPLACE_PRICE_MAP 动态定价 +
+    // gift_info 完整礼物表，这两字段仅本地复刻页在用，不应注入真实 H5 mock 配置。
+    buildMockConfig: (params) => {
+      const { replace_price: _r, draw_gift_info: _d, ...rest } = STONE_GONGFANG;
+      return { ...rest, ...(params ?? {}) };
+    },
   },
   /**
-   * 玲珑宝斋（fans_autumn_2026）：玩法算法占位。
-   * 尚未研究真实玩法接口，暂用"通用拦截"：默认 mockAllApi=true，
-   * 对 api.live.bilibili.com 一律返回通用成功，保证绝不产生真实扣费。
-   * 待玩法实现后，在 mock-shim.js 补充具体接口分派并通过热更新推送。
+   * 玲珑宝斋（逐级开箱）：分多级宝箱，只有开出上一级目标宝物才能进入下一级。
+   * 每级开箱花费递增（item_price），开出目标即得到该级礼物；最高级开出大奖结束。
+   * 算法逻辑在 mock-shim.js 的 linglong 分派中，数据在此注册表中，改完随前端热更新推送即可。
    */
-  "fans-autumn-2026": {
-    label: "玲珑宝斋（玩法待实现）",
-    description: "占位算法：通用成功拦截，避免真实扣费；具体玩法接口待实现后热更新",
-    buildMockConfig: (params) => ({ mockAllApi: true, ...(params ?? {}) }),
+  "linglong-open-box": {
+    label: "逐级开箱",
+    description: "分5级开箱，开出上一级宝物才能进下一级；每级开箱花费递增，开出目标级宝物即获得该级礼物",
+    buildMockConfig: buildLinglongConfig,
   },
 };
 

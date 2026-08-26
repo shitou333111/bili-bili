@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Resource>/bfs/static/live-activity-battle/static/js/517.1e66e440.js</Resource><RequestId>1787721383908512361</RequestId><HostId>bfs-proxy-2508376-5649bf74c5-n9zq5</HostId></Error>

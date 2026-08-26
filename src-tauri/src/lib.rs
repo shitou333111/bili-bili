@@ -375,15 +375,49 @@ async fn open_activity_panel(app: tauri::AppHandle, config: Value) -> Result<(),
         .parse()
         .map_err(|e| format!("活动 URL 解析失败: {}", e))?;
     let mock_cfg_js = mock_cfg.to_string();
-    // mock-shim.js（各活动算法的实现载体）从资产解析器运行时读取：hotswap OTA 目录优先、回退内置资源。
-    // 内置资源来自 out/native-inject/mock-shim.js（public/ 会被 Next.js 复制进 out/ 并嵌入二进制）。
-    // 好处：新增活动算法只需改 mock-shim.js + 触发前端热更新（OTA 包覆盖同路径文件），
-    // 无需重新编译原生包，三平台即时生效。
-    let mock_shim: String = app
-        .asset_resolver()
-        .get("native-inject/mock-shim.js".to_string())
-        .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned())
-        .unwrap_or_else(|| include_str!("../../public/native-inject/mock-shim.js").to_string());
+    // mock-shim.js（各活动算法的实现载体）读取优先级：
+    //  1. 开发模式：直接从 public/native-inject/mock-shim.js 文件读取（修改即时生效，无需重新编译）
+    //  2. asset_resolver：从前端资源目录或热更新缓存读取（生产模式/OTA 更新）
+    //  3. include_str：编译时嵌入的默认版本（最终回退）
+    let mock_shim: String = {
+        #[cfg(debug_assertions)]
+        {
+            // Tauri 运行时工作目录为 src-tauri/，项目根目录需向上一级
+            let dev_paths = [
+                "../public/native-inject/mock-shim.js",
+                "public/native-inject/mock-shim.js",
+            ];
+            let mut content_opt: Option<String> = None;
+            for dev_path in &dev_paths {
+                match std::fs::read_to_string(dev_path) {
+                    Ok(content) => {
+                        eprintln!("[BILI-MOCK] 开发模式：从文件系统读取 mock-shim.js path={} ({} bytes)", dev_path, content.len());
+                        content_opt = Some(content);
+                        break;
+                    }
+                    Err(_) => {
+                        eprintln!("[BILI-MOCK] 开发模式：文件 {} 不存在", dev_path);
+                    }
+                }
+            }
+            content_opt.unwrap_or_else(|| {
+                eprintln!("[BILI-MOCK] 开发模式：所有路径均失败，使用 asset_resolver");
+                app
+                    .asset_resolver()
+                    .get("native-inject/mock-shim.js".to_string())
+                    .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned())
+                    .unwrap_or_else(|| include_str!("../../public/native-inject/mock-shim.js").to_string())
+            })
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            app
+                .asset_resolver()
+                .get("native-inject/mock-shim.js".to_string())
+                .map(|asset| String::from_utf8_lossy(&asset.bytes).into_owned())
+                .unwrap_or_else(|| include_str!("../../public/native-inject/mock-shim.js").to_string())
+        }
+    };
     // 按序注入：①mock 配置 → ②mock-shim → ③返回按钮 → ④标题栏
     let inject_config = format!("window.__BILI_ACTIVITY_MOCK_CONFIG__ = {};", mock_cfg_js);
     // 标题栏顶部偏移：桌面端子 WebView 面板占下方 2/3，标题栏贴顶（0）；

@@ -28,7 +28,9 @@ export function isTauriRuntime(): boolean {
 function buildMockConfig(config: ActivityConfig): Record<string, unknown> {
   const algo = getAlgorithmDefinition(config.algorithmType);
   const base = algo ? algo.buildMockConfig(config.algorithmParams ?? {}) : {};
-  return { mockAllApi: false, ...base };
+  // 必须注入 algorithmType，否则 mock-shim 的 CONFIG 保持默认 "stone-gongfang"，
+  // 导致新算法的接口（如玲珑宝斋 LingLongOpenBox）不被拦截 → 误发真实请求 → 提示未登录。
+  return { mockAllApi: false, algorithmType: config.algorithmType || "stone-gongfang", ...base };
 }
 
 /**

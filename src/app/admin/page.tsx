@@ -6,8 +6,10 @@ import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import WindowTitleBar from "@/components/WindowTitleBar";
+import { DESKTOP_TITLEBAR_H } from "@/lib/layout";
 // 模拟器活动算法注册表：作为下拉框选项的唯一数据源（新增算法只需在注册表登记）
 import { ALGORITHM_REGISTRY } from "@/components/bili-simulator/activities/algorithms";
+import { extractRoomUidFromUrl } from "@/components/bili-simulator/activities/types";
 
 function fixImageUrl(url: string): string {
   if (!url) return "";
@@ -139,6 +141,10 @@ export default function AdminPage() {
   const [blindBoxSearchIndex, setBlindBoxSearchIndex] = useState<number | null>(null);
   // 合成产物名称搜索建议（当前展开的产品行）
   const [productSearch, setProductSearch] = useState<{ act: number; product: number } | null>(null);
+  // 算法参数全屏编辑器：记录正在编辑的活动序号 / 临时文本 / 校验错误
+  const [paramsEditIndex, setParamsEditIndex] = useState<number | null>(null);
+  const [paramsEditText, setParamsEditText] = useState("");
+  const [paramsEditError, setParamsEditError] = useState("");
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -272,6 +278,21 @@ export default function AdminPage() {
       }
       if (configData.code === 0) {
         const data = configData.data ?? {};
+        // 模拟器活动列表以 admin 配置（.data/admin-config.json）为唯一数据源。
+        // 空算法参数的活动：回填该算法类型的默认配置，便于管理员直接查看/编辑（json 内置参数透传给 admin）。
+        const simActs: any[] = (Array.isArray(data.simulator_activities) ? data.simulator_activities : []).map((a: any) => {
+          // roomId/uid 未配置（0）时，回退到 URL 模板中自带的字面参数作为默认值
+          if (!Number(a.roomId) || !Number(a.uid)) {
+            const fromUrl = extractRoomUidFromUrl(String(a.urlTemplate ?? ""));
+            if (!Number(a.roomId) && fromUrl.roomId) a.roomId = fromUrl.roomId;
+            if (!Number(a.uid) && fromUrl.uid) a.uid = fromUrl.uid;
+          }
+          if (!a.algorithmParams || !Object.keys(a.algorithmParams).length) {
+            a.algorithmParams =
+              ALGORITHM_REGISTRY[String(a.algorithmType ?? "stone-gongfang")]?.buildMockConfig?.({}) ?? {};
+          }
+          return a;
+        });
         // 数组字段全部兜底，避免老配置文件缺字段引发 TypeError: undefined.length
         const normalized: AdminConfigData = {
           current_activity_blind_box_ids: Array.isArray(data.current_activity_blind_box_ids)
@@ -285,8 +306,7 @@ export default function AdminPage() {
             ? data.recommended_anchors
             : [],
           real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
-          simulator_activities: Array.isArray(data.simulator_activities)
-            ? data.simulator_activities.map((a: any) => ({
+          simulator_activities: simActs.map((a: any) => ({
                 id: String(a.id ?? ""),
                 title: String(a.title ?? ""),
                 entryImage: String(a.entryImage ?? ""),
@@ -295,9 +315,14 @@ export default function AdminPage() {
                 uid: Number(a.uid) || 0,
                 enabled: a.enabled !== false,
                 algorithmType: String(a.algorithmType ?? "stone-gongfang"),
-                algorithmParams: JSON.stringify(a.algorithmParams ?? {}, null, 2),
+                algorithmParams: JSON.stringify(
+                  a.algorithmParams && Object.keys(a.algorithmParams).length
+                    ? a.algorithmParams
+                    : (ALGORITHM_REGISTRY[String(a.algorithmType ?? "stone-gongfang")]?.buildMockConfig?.({}) ?? {}),
+                  null,
+                  2
+                ),
               }))
-            : [],
         };
         setConfig(normalized);
         // 解析礼物目录（用于盲盒按名称搜索）
@@ -722,6 +747,27 @@ export default function AdminPage() {
       simulator_activities: config.simulator_activities.filter((_, i) => i !== index),
     });
   };
+  // 打开算法参数全屏编辑器（临时文本，保存时才写回配置）
+  const openParamsEditor = (index: number) => {
+    if (!config) return;
+    setParamsEditIndex(index);
+    setParamsEditText(config.simulator_activities[index]?.algorithmParams ?? "{}");
+    setParamsEditError("");
+  };
+  const saveParamsEditor = () => {
+    if (paramsEditIndex === null) return;
+    const text = paramsEditText.trim();
+    if (text) {
+      try {
+        JSON.parse(text);
+      } catch {
+        setParamsEditError("JSON 格式有误，请检查后重试");
+        return;
+      }
+    }
+    updateSimulatorActivity(paramsEditIndex, "algorithmParams", text || "{}");
+    setParamsEditIndex(null);
+  };
 
   // ========== 推荐主播管理 ==========
   const addRecommendedAnchor = async () => {
@@ -1094,7 +1140,7 @@ export default function AdminPage() {
               <p className="text-[10px] text-black/40">
                 模拟器页面活动入口：每个活动配置真实 H5 链接 + 选择背后玩法算法类型。算法类型对应 mock-shim.js 里的一套 mock 算法；
                 新活动若属于已有算法类型，只需新增配置并选择对应类型即可，无需改代码；全新玩法需实现算法后通过前端热更新推送（无需原生包更新）。
-                列表第一项启用的活动为当前展示的活动。
+                所有活动都会列出，勾选前面的复选框即在模拟器显示入口卡片；全部未勾选则模拟器不显示活动入口。
               </p>
               <div className="space-y-3">
                 {config.simulator_activities.map((act, i) => (
@@ -1181,13 +1227,22 @@ export default function AdminPage() {
                         <span className="text-[10px] text-black/30 ml-auto">运行时会被当前主播信息覆盖</span>
                       </div>
                       <label className="block">
-                        <span className="text-[10px] text-black/50">算法参数（JSON，可选；覆盖算法默认值，如 {"{"}"draw_price":3000{"}"}）</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-black/50">算法参数（JSON，可选；覆盖算法默认值，如 {"{"}"draw_price":3000{"}"}）</span>
+                          <button
+                            type="button"
+                            onClick={() => openParamsEditor(i)}
+                            className="text-[10px] text-[#00a1d6] hover:underline shrink-0"
+                          >
+                            全屏编辑
+                          </button>
+                        </div>
                         <textarea
                           value={act.algorithmParams}
                           onChange={(e) => updateSimulatorActivity(i, "algorithmParams", e.target.value)}
-                          rows={2}
+                          rows={6}
                           placeholder="{ }"
-                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-black/30"
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-black/30 resize-y"
                         />
                       </label>
                       {ALGORITHM_REGISTRY[act.algorithmType]?.description && (
@@ -1433,6 +1488,62 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      {/* 算法参数全屏编辑器：PC 端避开顶部窗口标题栏（DESKTOP_TITLEBAR_H），移动端/浏览器全屏 */}
+      {paramsEditIndex !== null && config && (
+        (() => {
+          const isMobile = typeof navigator !== "undefined" && /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
+          const titlebarH = isTauri() && !isMobile ? DESKTOP_TITLEBAR_H : 0;
+          return (
+            <div
+              className="fixed left-0 right-0 bottom-0 z-[99998] flex flex-col bg-white"
+              style={{ top: titlebarH, boxShadow: "0 -8px 24px rgba(0,0,0,.14)" }}
+            >
+              <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 shrink-0">
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold">编辑算法参数（JSON）</span>
+                  <span className="text-[10px] text-black/40">
+                    {config.simulator_activities[paramsEditIndex]?.title || ""} ·{" "}
+                    {ALGORITHM_REGISTRY[config.simulator_activities[paramsEditIndex]?.algorithmType || ""]?.label || "未知算法"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setParamsEditIndex(null)}
+                    className="rounded border border-black/10 px-3 py-1.5 text-xs text-black/60 hover:bg-black/5"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveParamsEditor}
+                    className="rounded bg-[#00a1d6] px-4 py-1.5 text-xs text-white hover:opacity-90"
+                  >
+                    保存
+                  </button>
+                </div>
+              </div>
+              {paramsEditError && (
+                <div className="border-b border-[#e74c3c]/20 bg-[#fdf0ef] px-4 py-2 text-xs text-[#e74c3c] shrink-0">
+                  {paramsEditError}
+                </div>
+              )}
+              <textarea
+                value={paramsEditText}
+                onChange={(e) => {
+                  setParamsEditText(e.target.value);
+                  if (paramsEditError) setParamsEditError("");
+                }}
+                className="flex-1 w-full resize-none p-4 font-mono text-xs outline-none"
+                spellCheck={false}
+                placeholder="{ }"
+                autoFocus
+              />
+            </div>
+          );
+        })()
+      )}
 
       {/* 从服务器拉取账号数据的加载遮罩（样式与首次登录一致，因无月度数据进度故为不确定进度条） */}
       {serverLoading && (

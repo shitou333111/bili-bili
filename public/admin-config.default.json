@@ -29,6 +29,17 @@
   "real_activity_url": "",
   "simulator_activities": [
     {
+      "id": "stone-gongfang",
+      "title": "山海工坊",
+      "entryImage": "/activity-entry.avif",
+      "urlTemplate": "https://live.bilibili.com/activity/live-activity-battle/index.html?app_name=area_stone_template&show_refresh=0&show_close=0&room_id={roomId}&uid={uid}#/play?config_id=11&rank_config_id=3",
+      "roomId": 1844040969,
+      "uid": 3546967191849918,
+      "enabled": false,
+      "algorithmType": "stone-gongfang",
+      "algorithmParams": {}
+    },
+    {
       "id": "fans-autumn-2026",
       "title": "玲珑宝斋",
       "entryImage": "https://i1.hdslb.com/bfs/new_dyn/60c08992696180903baa3351d2258fe03546967191849918.jpg@1052w_!web-dynamic.webp",
@@ -36,7 +47,7 @@
       "roomId": 0,
       "uid": 0,
       "enabled": true,
-      "algorithmType": "fans-autumn-2026",
+      "algorithmType": "linglong-open-box",
       "algorithmParams": {}
     }
   ],
