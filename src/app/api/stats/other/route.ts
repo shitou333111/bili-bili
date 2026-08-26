@@ -209,11 +209,11 @@ export async function GET(request: Request) {
     // 获取天选和红包礼物ID列表（离线时跳过 B 站抓取，仅用本地累积的 ID）
     let tianxuanGiftIds: number[] = [];
     const tianxuanGifts = offline ? [] : await fetchTianxuanGiftList("").catch(() => []);
-    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(session.mid, tianxuanGifts.map(g => g.id));
+    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(tianxuanGifts.map(g => g.id));
 
     let redPocketGiftIds: number[] = [];
     const redPocketGifts = offline ? [] : await fetchRedPocketGiftList("").catch(() => []);
-    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(session.mid, redPocketGifts.map(g => g.id));
+    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(redPocketGifts.map(g => g.id));
 
     const records = await readPayRecords(session.mid, session.uname || "");
 

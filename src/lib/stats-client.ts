@@ -189,24 +189,24 @@ async function saveSynthesisActivityInfo(platform: Platform, activityId: string,
   await platform.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
-// ==================== 天选/红包礼物 ID 累积（按用户本地存储，不再共享） ====================
+// ==================== 天选/红包礼物 ID 累积（全局共享：列表对所有用户一致） ====================
 
 type SpecialGiftDb = {
   tianxuan_gift_ids?: number[];
   red_pocket_gift_ids?: number[];
 };
 
-async function specialGiftDbPath(platform: Platform, mid: number): Promise<string> {
-  return `${await platform.getDataDir()}/uid_${mid}/special-gift-ids.json`;
+async function specialGiftDbPath(platform: Platform): Promise<string> {
+  return `${await platform.getDataDir()}/special-gift-ids.json`;
 }
 
-async function readSpecialGiftDb(platform: Platform, mid: number): Promise<SpecialGiftDb> {
-  return (await readJson<SpecialGiftDb>(platform, await specialGiftDbPath(platform, mid))) ?? {};
+async function readSpecialGiftDb(platform: Platform): Promise<SpecialGiftDb> {
+  return (await readJson<SpecialGiftDb>(platform, await specialGiftDbPath(platform))) ?? {};
 }
 
-async function writeSpecialGiftDb(platform: Platform, mid: number, db: SpecialGiftDb): Promise<void> {
-  const filePath = await specialGiftDbPath(platform, mid);
-  await platform.mkdir(`${await platform.getDataDir()}/uid_${mid}`);
+async function writeSpecialGiftDb(platform: Platform, db: SpecialGiftDb): Promise<void> {
+  const filePath = await specialGiftDbPath(platform);
+  await platform.mkdir(await platform.getDataDir());
   await platform.writeFile(filePath, JSON.stringify(db, null, 2));
 }
 
@@ -251,24 +251,24 @@ async function doUploadAllUserData(platform: Platform): Promise<void> {
   }
 }
 
-async function getAccumulatedTianxuanGiftIds(platform: Platform, mid: number, currentIds: number[]): Promise<number[]> {
-  const db = await readSpecialGiftDb(platform, mid);
+async function getAccumulatedTianxuanGiftIds(platform: Platform, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDb(platform);
   const historicalIds = db.tianxuan_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
   if (currentIds.length > 0) {
     db.tianxuan_gift_ids = merged;
-    await writeSpecialGiftDb(platform, mid, db);
+    await writeSpecialGiftDb(platform, db);
   }
   return merged;
 }
 
-async function getAccumulatedRedPocketGiftIds(platform: Platform, mid: number, currentIds: number[]): Promise<number[]> {
-  const db = await readSpecialGiftDb(platform, mid);
+async function getAccumulatedRedPocketGiftIds(platform: Platform, currentIds: number[]): Promise<number[]> {
+  const db = await readSpecialGiftDb(platform);
   const historicalIds = db.red_pocket_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
   if (currentIds.length > 0) {
     db.red_pocket_gift_ids = merged;
-    await writeSpecialGiftDb(platform, mid, db);
+    await writeSpecialGiftDb(platform, db);
   }
   return merged;
 }
@@ -1357,7 +1357,7 @@ export async function fetchSynthesisStats(
       const tianxuanGifts = await fetchTianxuanGiftList(platform, cookie);
       const currentIds = tianxuanGifts.map((g) => g.id);
       tianxuanGiftList = tianxuanGifts.map((g) => ({ id: g.id, name: g.name }));
-      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, session.mid, currentIds);
+      tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, currentIds);
     } catch (err) {
       console.error("[SynthesisStats] 获取天选礼物列表失败:", err);
     }
@@ -1368,7 +1368,7 @@ export async function fetchSynthesisStats(
       const redPocketGifts = await fetchRedPocketGiftList(platform, cookie);
       const currentRedPocketIds = redPocketGifts.map((g) => g.id);
       redPocketGiftList = redPocketGifts.map((g) => ({ id: g.id, name: g.name }));
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, session.mid, currentRedPocketIds);
+      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, currentRedPocketIds);
     } catch (err) {
       console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
     }
@@ -1783,11 +1783,11 @@ export async function fetchOtherStats(
     await ensureGiftCatalogLoaded(platform);
     let tianxuanGiftIds: number[] = [];
     const tianxuanGifts = await fetchTianxuanGiftList(platform, cookie).catch(() => []);
-    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, session.mid, tianxuanGifts.map((g) => g.id));
+    tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, tianxuanGifts.map((g) => g.id));
 
     let redPocketGiftIds: number[] = [];
     const redPocketGifts = await fetchRedPocketGiftList(platform, cookie).catch(() => []);
-    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, session.mid, redPocketGifts.map((g) => g.id));
+    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, redPocketGifts.map((g) => g.id));
 
     const records = await readPayRecords(platform, session.mid, session.uname || "");
 

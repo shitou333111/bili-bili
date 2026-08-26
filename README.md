@@ -276,7 +276,6 @@ bili_live/
 | `received-anchors-list.json` | 主播头像缓存 |
 | `blindbox_info/*.json` | 盲盒信息 |
 | `account-info.json` | 用户个人资料 |
-| `special-gift-ids.json` | 天选/红包礼物 ID 的历史累积（按用户本地，用于识别特殊礼物） |
 
 顶层还有：
 
@@ -287,6 +286,7 @@ bili_live/
 | `admin-config.json` | 管理后台配置 |
 | `upload-state.json` | 增量上传哈希记录（Tauri 端）|
 | `gift-catalog.json` | 礼物图标目录缓存（服务端，来自 B站 giftConfig API，12h 更新一次）|
+| `special-gift-ids.json` | 天选/红包礼物 ID 的历史累积（全局共享：列表对所有用户一致） |
 
 > Tauri 端的会话存在 `plugin-store`（`bili-live-state.json`），Web 端的会话存在服务器的 `.data/bili-live-state.json`。它们结构相同，但**互不通**——在 Web 登录的账号和在本机客户端登录的账号是各自独立的。
 
@@ -436,7 +436,7 @@ Tauri 的图标由 `cargo tauri icon <源图>` 生成。CI 打包时若**不指�
 
 - **实现位置**：服务端 [gift-catalog.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/gift-catalog.ts)（`/api/gift-catalog`，`.data/gift-catalog.json` 兜底）；Tauri 客户端 [gift-catalog-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/gift-catalog-client.ts)（`localStorage` 缓存）。
 - **只取图标，不取价格**：新接口也含价格等字段，但不同数据源记录方式不同，**只使用 `img_basic`**，价格等仍由各统计模块按原有逻辑各自处理，避免破坏已有计算。
-- **天选/红包 ID 单独处理**：giftConfig 无法可靠识别"天选/红包"这类特殊礼物。这些 ID 的历史累积从全局 `gift-db.json` 迁移到**每个用户本地**的 `special-gift-ids.json`（按 `uid_<mid>/` 隔离），参与合成盈亏等礼物计算。
+- **天选/红包 ID 单独处理**：giftConfig 无法可靠识别"天选/红包"这类特殊礼物。这些 ID 的历史累积存储在全局 `special-gift-ids.json`（`.data/` 顶层，所有用户共享，因为列表对所有用户一致），参与合成盈亏等礼物计算。
 - **`gift-db.json` 已废弃**：所有上传/下载/合并逻辑已移除，`/api/gift-db` 路由已删除，服务器上的 `gift-db.json` 可删除，不再需要维护。
 
 > **模拟器"礼物"选项卡复用这份目录**：它以**直播间礼物面板 API**（`roomGiftList`，无需登录，12h 缓存）返回的 `gold_list` 顺序为基准，补上 `public/gift-extra-ids.json` 的额外礼物并去重；礼物详情从目录联表获取，因此随目录 12h 自动更新（见 [BiliSimulator.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/BiliSimulator.tsx)）。
