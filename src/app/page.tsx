@@ -2617,7 +2617,7 @@ export default function HomePage() {
           >
             <span className="shrink-0 h-6 w-6 rounded-full bg-[#eab308] flex items-center justify-center text-white text-sm">↻</span>
             <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效</span>
-            <span className="shrink-0 text-xs font-semibold text-yellow-800">立即生效 →</span>
+            <span className="shrink-0 text-sm font-semibold text-[#eab308]">↻</span>
           </button>
         </div>
       )}
