@@ -33,6 +33,8 @@ const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";
  * 用于修复：hotswap 插件本地无热更新缓存时 current_sequence=0，只要服务器发布过
  * 任何热更新就会误报（新装/刚更新的原生包必然中招，所有平台一致）。
  * 本地开发无注入 → 0（不抑制任何热更新，仅 dev 场景，无影响）。
+ * 说明：热更新识别仅依赖 sequence > 当前原生包内置 run_number，与前端内容是否变化无关——
+ * 因此"仅注释/无实质改动"的提交（keyword=hot）同样会产出更高序列，供热更新链路联调验证。
  */
 const BUILTIN_HOTSWAP_SEQUENCE = Number(process.env.NEXT_PUBLIC_BUILD_SEQ) || 0;
 
