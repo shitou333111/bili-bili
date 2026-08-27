@@ -4,7 +4,6 @@ import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import ToastHost from "@/components/ToastHost";
 import GlobalContextMenuBlocker from "@/components/GlobalContextMenuBlocker";
-import BuildStampBadge from "@/components/BuildStampBadge";
 
 // 字体改用系统字体栈（不再依赖 next/font/google 构建期从 Google CDN 拉取，
 // 离线/桌面 Tauri 环境更稳定）。见 globals.css 中 --font-sans/--font-mono 的定义。
@@ -43,7 +42,6 @@ export default function RootLayout({
         <SafeAreaStyler />
         <ToastHost />
         <GlobalContextMenuBlocker />
-        <BuildStampBadge />
         {children}
       </body>
     </html>

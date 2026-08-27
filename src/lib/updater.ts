@@ -220,12 +220,6 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
   try {
     const { checkUpdate } = await import("tauri-plugin-hotswap-api");
     const result = await checkUpdate();
-    // 诊断日志：直接打印插件返回的原始结果，便于排查"有热更新但识别不到"
-    console.log(
-      "[HotUpdate] checkUpdate 原始返回:",
-      { available: result.available, sequence: result.sequence, version: result.version, notes: result.notes },
-      `内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}${BUILTIN_HOTSWAP_SEQUENCE > 0 ? "（服务器 sequence 需大于此值才会提示）" : "（未注入，不抑制任何热更新）"}`,
-    );
     // checkUpdate() 内部已做两道门（见插件 updater.rs check_update）：
     //   1. min_binary_version 门：当前原生版本 < manifest.min_binary_version → 跳过（available=false，不暴露原因）
     //   2. sequence 门：manifest.sequence <= 当前 sequence → 无更新
@@ -244,21 +238,6 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
       result.sequence <= BUILTIN_HOTSWAP_SEQUENCE
     ) {
       available = false;
-    }
-    // 诊断：无论检测结果如何，打印完整判定信息，便于确认"识别不到"是哪个门拦下的。
-    // 常见场景：当前内置 sequence（本机原生包的 run_number）>= 服务器热更 sequence 时，
-    // 说明服务器最新热更内容已被本机原生包内建，会被主动拦截（属正常，非故障）。
-    if (available !== result.available) {
-      console.log(
-        `[HotUpdate] 拦截判定：服务器 sequence=${result.sequence} <= 内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}，` +
-          "该热更内容已内建在当前原生包中，不提示更新（如需提示请先发布更新的 hot 更新）"
-      );
-    } else if (!available) {
-      console.log(
-        `[HotUpdate] 无热更新：插件判定不可用。服务器 sequence=${result.sequence ?? "?"}，` +
-          `本机 current_sequence（热更缓存）与内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE} 有关；` +
-          "若服务器 sequence 高于内置 sequence 却仍不可用，多为 min_binary_version 门或插件本地缓存门槛所致"
-      );
     }
 
     let shellTooOld = false;
