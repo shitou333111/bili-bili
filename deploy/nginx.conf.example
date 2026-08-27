@@ -69,6 +69,18 @@ server {
         set $cd "attachment; filename*=UTF-8''$dl_utf8; filename=\"$dl_ascii\"";
         if ($http_user_agent ~* "Android") { set $cd "attachment; filename=\"$dl_utf8\""; }
         add_header Content-Disposition $cd;
+
+        # hotswap.json 是热更新清单（固定路径），客户端插件拉它判断是否有新热更。
+        # 该文件每次 CI 发布都会覆盖更新，若被浏览器/代理/CDN 缓存，客户端会拿到旧清单
+        # （表现为"服务器已出新热更但客户端识别不到"）。必须按"永不缓存"返回；
+        # 版本化的 frontend-<sequence>.tar.gz 不受影响、仍可按需缓存。
+        location = /artifacts/webapp/hotswap.json {
+            alias YOUR_SSH_TARGET_DIR/artifacts/webapp/hotswap.json;
+            add_header Content-Disposition "inline";
+            add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+            expires 0;
+            add_header Pragma "no-cache";
+        }
     }
 
     # ---- 2) 其余全部请求（含 Next.js 静态资源 /_next/ 等）----
