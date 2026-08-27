@@ -88,7 +88,8 @@ function fixImageUrl(url: string): string {
 function formatCoinsShort(coins: number): string {
   if (coins === 0) return "0";
   if (coins >= 10000) return `${(coins / 10000).toFixed(1)}万`;
-  return String(coins);
+  // 小于1万显示完整数位，去掉小数位（如 321.5 -> 321）
+  return String(Math.floor(coins));
 }
 
 function formatBattery(hamster: number): string {
@@ -283,6 +284,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [yesterdayAvailable, setYesterdayAvailable] = useState(true); // 默认 true，避免初始闪烁
   const [fanBubbleData, setFanBubbleData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [fanFaces, setFanFaces] = useState<Record<number, string>>({});
+  // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框（与粉丝/消费页一致）
+  const [pieActive, setPieActive] = useState<{ chart: "all" | "period"; index: number } | null>(null);
+  const [pieTipPos, setPieTipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 挂载标记：避免在渲染分支中直接使用 isMobileDevice() 造成 SSR/客户端不一致（Hydration 报错）
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const pieIsMobile = mounted && isMobileDevice();
 
   // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
   const fetchingRef = useRef(false);
@@ -529,7 +537,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
 
   const giftSummaryFiltered = (() => {
     if (!stats) return [];
-    const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
+    const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
     const map = new Map<number, { gift_id: number; name: string; num: number; hamster: number; img: string }>();
     // stats.giftSummary 中的 img 已从本地 gift-list.json 获取（getGiftImg()），直接作为主数据源
     const imgMap = new Map(stats.giftSummary.map(g => [g.gift_id, g.img]));
@@ -548,7 +556,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
   // 礼物清单对应的日期范围字符串（基于实际记录）
   const giftListDateStr = (() => {
     if (!stats) return "";
-    const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
+    const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
     if (rawRecords.length === 0) return "";
     const dates = rawRecords.map(r => r.time.slice(0, 10));
     const min = dates.reduce((a, b) => a < b ? a : b);
@@ -857,11 +865,16 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                       outerRadius="95%"
                                       paddingAngle={0}
                                       isAnimationActive={false}
-                                      onClick={(data: any) => {
+                                      onClick={(data: any, index: number, e: any) => {
                                         if (data?.uid !== null && data?.uid !== undefined) {
                                           const uidStr = String(data.uid);
                                           setSelectedFan(uidStr === selectedFan ? "" : uidStr);
                                           setSelectedDay(null);
+                                        }
+                                        // 点击扇形：选中/取消选中。移动端只有选中才显示提示框
+                                        setPieActive(pieActive?.chart === "all" && pieActive?.index === index ? null : { chart: "all", index });
+                                        if (typeof (e as any)?.clientX === "number") {
+                                          setPieTipPos({ x: (e as any).clientX, y: (e as any).clientY });
                                         }
                                       }}
                                       cursor="pointer"
@@ -875,9 +888,22 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                         />
                                       ))}
                                     </Pie>
-                                    <Tooltip
-                                      content={<PieTooltip />}
-                                    />
+                                    {/* 桌面端用 hover 显示提示框 */}
+                                    {!pieIsMobile && (
+                                      <Tooltip content={<PieTooltip />} />
+                                    )}
+                                    {/* 移动端：仅选中时显示提示框 */}
+                                    {pieIsMobile && pieActive?.chart === "all" && allTimePieData[pieActive.index] && (
+                                      <PieTooltip
+                                        active
+                                        coordinate={pieTipPos}
+                                        payload={[{
+                                          name: allTimePieData[pieActive.index].uname,
+                                          value: allTimePieData[pieActive.index].hamster,
+                                          payload: { fill: allTimePieData[pieActive.index].fill, battery: allTimePieData[pieActive.index].battery },
+                                        }]}
+                                      />
+                                    )}
                                   </PieChart>
                                 </ResponsiveContainer>
                               </div>
@@ -921,11 +947,16 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                       outerRadius="95%"
                                       paddingAngle={0}
                                       isAnimationActive={false}
-                                      onClick={(data: any) => {
+                                      onClick={(data: any, index: number, e: any) => {
                                         if (data?.uid !== null && data?.uid !== undefined) {
                                           const uidStr = String(data.uid);
                                           setSelectedFan(uidStr === selectedFan ? "" : uidStr);
                                           setSelectedDay(null);
+                                        }
+                                        // 点击扇形：选中/取消选中。移动端只有选中才显示提示框
+                                        setPieActive(pieActive?.chart === "period" && pieActive?.index === index ? null : { chart: "period", index });
+                                        if (typeof (e as any)?.clientX === "number") {
+                                          setPieTipPos({ x: (e as any).clientX, y: (e as any).clientY });
                                         }
                                       }}
                                       cursor="pointer"
@@ -939,9 +970,22 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                         />
                                       ))}
                                     </Pie>
-                                    <Tooltip
-                                      content={<PieTooltip />}
-                                    />
+                                    {/* 桌面端用 hover 显示提示框 */}
+                                    {!pieIsMobile && (
+                                      <Tooltip content={<PieTooltip />} />
+                                    )}
+                                    {/* 移动端：仅选中时显示提示框 */}
+                                    {pieIsMobile && pieActive?.chart === "period" && periodPieData[pieActive.index] && (
+                                      <PieTooltip
+                                        active
+                                        coordinate={pieTipPos}
+                                        payload={[{
+                                          name: periodPieData[pieActive.index].uname,
+                                          value: periodPieData[pieActive.index].hamster,
+                                          payload: { fill: periodPieData[pieActive.index].fill, battery: periodPieData[pieActive.index].battery },
+                                        }]}
+                                      />
+                                    )}
                                   </PieChart>
                                 </ResponsiveContainer>
                               </div>

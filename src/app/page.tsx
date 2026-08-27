@@ -296,7 +296,8 @@ function fixImageUrl(url: string): string {
 function formatCoinsShort(coins: number): string {
   if (coins === 0) return "0";
   if (coins >= 10000) return `${(coins / 10000).toFixed(1)}万`;
-  return String(coins);
+  // 小于1万显示完整数位，去掉小数位（如 321.5 -> 321）
+  return String(Math.floor(coins));
 }
 
 function formatDateShort(dateStr: string): string {
@@ -2380,7 +2381,7 @@ export default function HomePage() {
   // 礼物清单汇总（按gift_name聚合，解决同名不同gift_id的重复问题）
   const monthGiftSummary = (() => {
     // 没有选中月份时显示全部记录，选中月份但没选日期时显示当月，选中日期时显示当天
-    const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
+    const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
     // 过滤合成材料（gift_id=1不是最终送出礼物）
     const summaryRecords = rawRecords.filter(r => r.gift_id !== 1);
     const map = new Map<string, { gift_id: number; gift_name: string; gift_img: string; count: number; coins: number }>();
@@ -2424,7 +2425,7 @@ export default function HomePage() {
   // displayCoins：用于清单展示的礼物价值（包裹道具=礼物本身价值，其他=实际花费）
   // coins：用于标题栏动态花费汇总的实际消费（包裹道具=0，其他=实际花费）
   // 验证：全部时间全部主播时，coins 汇总 = 顶部"消费电池"总数
-  const rawRecords = dayRecords.length > 0 ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
+  const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
   // 标题栏动态花费汇总（全部实际消费，不含包裹道具，不受清单显示过滤影响）
   const giftListSpendingTotal = rawRecords
     .filter(r => r.bag_desc !== "包裹道具")
@@ -2615,8 +2616,7 @@ export default function HomePage() {
             onClick={() => window.location.reload()}
             className="w-full flex items-center gap-2.5 rounded-xl bg-yellow-50 border border-yellow-200 px-3.5 py-2.5 text-left shadow-[0_8px_30px_rgba(202,138,4,0.15)]"
           >
-            <span className="shrink-0 h-6 w-6 rounded-full bg-[#eab308] flex items-center justify-center text-white text-sm">↻</span>
-            <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效</span>
+            <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效 →</span>
             <span className="shrink-0 text-sm font-semibold text-[#eab308]">↻</span>
           </button>
         </div>
