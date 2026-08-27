@@ -149,15 +149,18 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
       if (oldMask) oldMask.remove();
       var oldScrim = document.getElementById("__bili_activity_scrim__");
       if (oldScrim) oldScrim.remove();
-      // 1. 可点击收起区（仅移动端 TOP_OFFSET>0）：覆盖标题栏上方偏移区，点击整页向下收起
-      //    （同礼物栏交互）。背景全透明：配合原生窗口透明，透出下层模拟器的直播流背景。
-      //    这里不再铺不透明遮罩/纯黑，避免盖住直播流；内容区由 B站 页面自身的背景承载。
+      // 1. 可点击收起区（仅移动端 TOP_OFFSET>0）：覆盖标题栏上方偏移区，
+      //    暗紫色遮罩，点击整页向下收起（同礼物栏交互）。
+      //    背景改为完全不透明：否则页面内容滚动时会从半透明处"透到标题栏上方"，
+      //    造成"内容可以滑动超出标题栏"的错觉。不再用纯黑铺满偏移区（避免黑屏观感）。
+      //    曾在此区居中显示"↑ 收起"胶囊作视觉提示，已按需求删除，仅保留可点击暗紫遮罩。
       if (TOP > 0) {{
         var scrim = document.createElement("div");
         scrim.id = "__bili_activity_scrim__";
         scrim.style.cssText =
           "position:fixed;top:0;left:0;right:0;height:" + TOP + "px;z-index:2147483644;" +
-          "background:transparent;cursor:pointer;";
+          "background:linear-gradient(to bottom, #2b1f2b 0%, #241a2e 60%, #1c1426 100%);" +
+          "display:flex;align-items:center;justify-content:center;cursor:pointer;";
         scrim.onclick = dismiss;
         document.body.appendChild(scrim);
       }}
@@ -176,8 +179,8 @@ fn activity_title_bar_script(title: &str, top_offset: f64) -> String {
         "background:#000;color:#fff;font-size:16px;font-weight:500;line-height:" + BAR_H + "px;" +
         "text-align:center;font-family:'PingFang SC','Microsoft YaHei',sans-serif;" +
         "border-radius:12px 12px 0 0;user-select:none;-webkit-user-select:none;";
-      document.documentElement.style.backgroundColor = "transparent";
-      document.body.style.backgroundColor = "transparent";
+      document.documentElement.style.backgroundColor = "#000";
+      document.body.style.backgroundColor = "#000";
       document.body.appendChild(mask);
       document.body.appendChild(bar);
       document.body.style.paddingTop = TOTAL_H + "px";
@@ -683,8 +686,8 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
       titleEl.textContent = TITLE;
       bar.appendChild(backBtn);
       bar.appendChild(titleEl);
-      document.documentElement.style.backgroundColor = "transparent";
-      document.body.style.backgroundColor = "transparent";
+      document.documentElement.style.backgroundColor = "#000";
+      document.body.style.backgroundColor = "#000";
       document.body.appendChild(mask);
       document.body.appendChild(bar);
       document.body.style.paddingTop = TOTAL_H + "px";

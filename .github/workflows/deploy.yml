@@ -399,25 +399,11 @@ jobs:
           cat > "$PKG_DIR/ActivityPanelActivity.kt" <<EOF
           $PKG_LINE
 
-          import android.graphics.Color
           import android.os.Bundle
-          import android.view.View
-          import android.view.ViewGroup
 
           class ActivityPanelActivity : TauriActivity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  // 窗口背景透明 + 整棵树背景透明：透出下层模拟器（含直播流）。
-                  // 需配合 AndroidManifest 的 android:theme 半透明主题才能让系统合成下层窗口。
-                  window.setBackgroundDrawableResource(android.R.color.transparent)
-                  makeViewTreeTransparent(window.decorView)
-              }
-
-              private fun makeViewTreeTransparent(v: View) {
-                  v.setBackgroundColor(Color.TRANSPARENT)
-                  if (v is ViewGroup) {
-                      for (i in 0 until v.childCount) makeViewTreeTransparent(v.getChildAt(i))
-                  }
               }
           }
           EOF
@@ -425,23 +411,11 @@ jobs:
           cat > "$PKG_DIR/RealActivityPanelActivity.kt" <<EOF
           $PKG_LINE
 
-          import android.graphics.Color
           import android.os.Bundle
-          import android.view.View
-          import android.view.ViewGroup
 
           class RealActivityPanelActivity : TauriActivity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  window.setBackgroundDrawableResource(android.R.color.transparent)
-                  makeViewTreeTransparent(window.decorView)
-              }
-
-              private fun makeViewTreeTransparent(v: View) {
-                  v.setBackgroundColor(Color.TRANSPARENT)
-                  if (v is ViewGroup) {
-                      for (i in 0 until v.childCount) makeViewTreeTransparent(v.getChildAt(i))
-                  }
               }
           }
           EOF
@@ -457,8 +431,7 @@ jobs:
             echo "android:usesCleartextTraffic 已存在，跳过"
           fi
           if ! grep -q 'ActivityPanelActivity' "$MANIFEST"; then
-            # android:theme 用框架自带半透明主题，让面板 Activity 透出下层的模拟器窗口（含直播流）
-            sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
+            sed -i 's#</application>#\n    <activity android:name=".ActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n    <activity android:name=".RealActivityPanelActivity" android:exported="false" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" android:hardwareAccelerated="true" />\n  </application>#' "$MANIFEST"
           fi
 
           echo "--- 注册的 Activity ---"

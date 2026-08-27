@@ -48,6 +48,12 @@ function getServerUrl() {
 const serverUrl = getServerUrl();
 console.log(`[build-tauri] 服务器地址: ${serverUrl}`);
 
+// 内置热更新 sequence：CI 由 workflow 注入（= github.run_number，与热更新包同 sequence）。
+// 原生包内置该值为"已含最新内容"的水位线：热更新检查时若服务器 sequence ≤ 此值则视为
+// 已内建、不提示（修复"刚装原生包仍误报热更新"）。本地开发未注入 → 0（不抑制）。
+const buildSeq = Number(process.env.NEXT_PUBLIC_BUILD_SEQ) || 0;
+console.log(`[build-tauri] 内置热更新 sequence: ${buildSeq}${buildSeq > 0 ? "" : " （未注入，不抑制热更新误报）"}`);
+
 // 构建日期：CI 环境由 workflow 传入；本地开发取当前日期（东八区）
 const buildDate = process.env.NEXT_PUBLIC_BUILD_DATE
   || (() => {
@@ -65,7 +71,7 @@ execSync("node scripts/patch-foamtree.mjs", { stdio: "inherit", cwd: root });
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 
 execSync(
-  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} NEXT_PUBLIC_BUILD_DATE=${buildDate} NEXT_PUBLIC_IS_TAURI_PROD=1 next build`,
+  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} NEXT_PUBLIC_BUILD_DATE=${buildDate} NEXT_PUBLIC_IS_TAURI_PROD=1 NEXT_PUBLIC_BUILD_SEQ=${buildSeq} next build`,
   {
     stdio: "inherit",
     cwd: root,
@@ -76,6 +82,7 @@ execSync(
       NEXT_PUBLIC_SERVER_URL: serverUrl,
       NEXT_PUBLIC_BUILD_DATE: buildDate,
       NEXT_PUBLIC_IS_TAURI_PROD: "1",
+      NEXT_PUBLIC_BUILD_SEQ: String(buildSeq),
       NEXT_TELEMETRY_DISABLED: "1",
     },
   },
