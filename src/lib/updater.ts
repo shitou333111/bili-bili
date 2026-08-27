@@ -243,6 +243,21 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
     ) {
       available = false;
     }
+    // 诊断：无论检测结果如何，打印完整判定信息，便于确认"识别不到"是哪个门拦下的。
+    // 常见场景：当前内置 sequence（本机原生包的 run_number）>= 服务器热更 sequence 时，
+    // 说明服务器最新热更内容已被本机原生包内建，会被主动拦截（属正常，非故障）。
+    if (available !== result.available) {
+      console.log(
+        `[HotUpdate] 拦截判定：服务器 sequence=${result.sequence} <= 内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}，` +
+          "该热更内容已内建在当前原生包中，不提示更新（如需提示请先发布更新的 hot 更新）"
+      );
+    } else if (!available && !result.error) {
+      console.log(
+        `[HotUpdate] 无热更新：插件判定不可用。服务器 sequence=${result.sequence ?? "?"}，` +
+          `本机 current_sequence（热更缓存）与内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE} 有关；` +
+          `若服务器 sequence 高于内置 sequence 却仍不可用，多为 min_binary_version 门或插件本地缓存门槛所致`
+      );
+    }
 
     let shellTooOld = false;
     let version: string | undefined = result.version || undefined;
