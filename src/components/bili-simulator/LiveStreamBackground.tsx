@@ -13,9 +13,12 @@ import { getLiveStreamUrl } from "./liveStream";
 
 interface Props {
   roomId: number;
+  /** 原生活动面板是否打开（面板占下方 2/3，仅上方 1/3 可见）。
+   *  为 true 时横屏视频贴顶显示，避免顶部留出黑色空隙。 */
+  panelOpen?: boolean;
 }
 
-export default function LiveStreamBackground({ roomId }: Props) {
+export default function LiveStreamBackground({ roomId, panelOpen = false }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<any>(null);
   const [status, setStatus] = useState<"loading" | "playing" | "error">("loading");
@@ -128,11 +131,12 @@ export default function LiveStreamBackground({ roomId }: Props) {
     <div className="absolute inset-0 z-0 overflow-hidden bg-[#1a1a2e]">
       {/* 直播视频流：竖屏时铺满全屏（object-cover），即使上下裁剪也要无黑边。
           用户要求：宁可裁剪/放大也要铺满全屏，不接受黑边。
-          横屏时保持宽度对应页面宽度、高度按比例自适应 */}
+          横屏时保持宽度对应页面宽度、高度按比例自适应；
+          活动面板打开时（仅上方 1/3 可见）改为贴顶，避免顶部黑色空隙 */}
       <video
         ref={videoRef}
         className={portrait ? "absolute inset-0 w-full h-full object-cover" : "absolute left-0 w-full object-contain"}
-        style={!portrait ? { top: "200px" } : undefined}
+        style={!portrait && !panelOpen ? { top: "200px" } : undefined}
         onLoadedMetadata={updatePortrait}
         onLoadedData={updatePortrait}
         onCanPlay={updatePortrait}

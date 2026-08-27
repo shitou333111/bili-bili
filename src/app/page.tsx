@@ -2192,6 +2192,8 @@ export default function HomePage() {
   }
 
   const isLoggedIn = Boolean(currentAccount) || apiLoggedIn;
+  // 服务器账号（source=server）无登录凭证，需要登录的功能应禁用
+  const serverAccount = currentAccount?.source === "server";
   const isRealSnapshot = snapshot?.source === "real";
 
   // 礼物天选特殊处理：主播给自己发天选，昵称为空、ruid=0，归到当前登录账号
@@ -2866,12 +2868,18 @@ export default function HomePage() {
                   )}
                 </div>
 
-                {/* 重建数据库卡片：只在有登录账号时显示 */}
+                {/* 重建数据库卡片：只在有登录账号时显示；服务器账号无登录凭证不可用 */}
                 {isLoggedIn && (
-                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4">
+                  <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4 ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
                     <button
-                      onClick={() => setShowRebuildDbConfirm(true)}
-                      className="shrink-0 w-16 h-16 rounded-full bg-[#6366f1] flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white shadow-md hover:bg-[#4f46e5] active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        if (serverAccount) {
+                          showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+                          return;
+                        }
+                        setShowRebuildDbConfirm(true);
+                      }}
+                      className={`shrink-0 w-16 h-16 rounded-full flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed ${serverAccount ? "bg-gray-400 cursor-not-allowed" : "bg-[#6366f1] hover:bg-[#4f46e5] active:scale-95"}`}
                       disabled={rebuildDbLoading || syncing}
                     >
                       {rebuildDbLoading ? <span className="animate-spin text-xl">↻</span> : (
@@ -2882,11 +2890,16 @@ export default function HomePage() {
                       )}
                     </button>
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-bold text-indigo-900">重建当前账号数据库</h3>
-                      <p className="mt-0.5 text-xs text-indigo-800/75 leading-relaxed">
-                        重新获取全部数据，只在数据严重不全时使用。如果只是正常更新近期数据，使用绿色环形按钮
+                      <h3 className={`text-sm font-bold ${serverAccount ? "text-black/40" : "text-indigo-900"}`}>重建当前账号数据库</h3>
+                      <p className={`mt-0.5 text-xs leading-relaxed ${serverAccount ? "text-black/40" : "text-indigo-800/75"}`}>
+                        {serverAccount
+                          ? "服务器账号无登录凭证，无法重新获取 B站 数据"
+                          : "重新获取全部数据，只在数据严重不全时使用。如果只是正常更新近期数据，使用绿色环形按钮"}
                       </p>
                     </div>
+                    {serverAccount && (
+                      <svg className="w-4 h-4 text-black/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+                    )}
                   </div>
                 )}
                 {[
@@ -2896,7 +2909,6 @@ export default function HomePage() {
                   { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false },
                 ].map((tool) => {
                   // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
-                  const serverAccount = currentAccount?.source === "server";
                   const disabled = tool.needsLogin && (serverAccount || !isOnline);
                   return (
                   <button
@@ -2937,28 +2949,38 @@ export default function HomePage() {
                   </button>
                   );
                 })}
-                {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟 */}
+                {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟；服务器账号无登录凭证不可用 */}
                 <button
-                  onClick={() => setRealActivityModalOpen(true)}
+                  onClick={() => {
+                    if (serverAccount) {
+                      showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+                      return;
+                    }
+                    setRealActivityModalOpen(true);
+                  }}
                   disabled={!realActivityUrl}
                   className={
-                    realActivityUrl
-                      ? "rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
-                      : "rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+                    !realActivityUrl || serverAccount
+                      ? "rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+                      : "rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
                   }
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-3xl">⚡</span>
+                    <span className={`text-3xl ${serverAccount ? "grayscale opacity-50" : ""}`}>⚡</span>
                     <div>
-                      <h3 className={realActivityUrl ? "text-base font-bold text-red-700" : "text-base font-bold text-black/40"}>合成活动"黑抽"</h3>
-                      <p className={realActivityUrl ? "mt-0.5 text-xs text-red-600/60" : "mt-0.5 text-xs text-black/30"}>
-                        {realActivityUrl ? "主播未开播时直接进入真实合成活动页面，真实消费" : "管理员暂未配置黑抽活动地址"}
+                      <h3 className={!realActivityUrl || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-red-700"}>合成活动"黑抽"</h3>
+                      <p className={!realActivityUrl || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-red-600/60"}>
+                        {serverAccount
+                          ? "服务器账号无登录凭证，无法使用真实消费功能"
+                          : realActivityUrl
+                            ? "主播未开播时直接进入真实合成活动页面，真实消费"
+                            : "管理员暂未配置黑抽活动地址"}
                       </p>
                     </div>
-                    {realActivityUrl ? (
-                      <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                    ) : (
+                    {!realActivityUrl || serverAccount ? (
                       <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+                    ) : (
+                      <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                     )}
                   </div>
                 </button>

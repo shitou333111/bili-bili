@@ -735,7 +735,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   return (
     <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto" }}>
       {/* 直播流背景（最底层） */}
-      {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} />}
+      {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} panelOpen={nativePanelOpen} />}
       {!streamerInfo && <div className="absolute inset-0 bg-[#2B1F2B]" />}
 
       {/* 顶部栏（安全区 padding-top 移到此处，让视频可铺满全屏） */}
@@ -958,11 +958,12 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
         cornerMarkOverride={cornerMarkOverride}
       />
 
-      {/* 活动原生面板顶部遮罩 - 原生面板占据下方 2/3，遮罩覆盖上方 1/3，点击关闭（同礼物面板交互） */}
+      {/* 活动原生面板顶部遮罩 - 原生面板占据下方 2/3，遮罩覆盖上方 1/3，点击关闭（同礼物面板交互）。
+          透明背景：让上方的直播流背景透出（用户要求看到直播流，而非黑色遮罩） */}
       {nativePanelOpen && (
         <div
           className="absolute inset-x-0 top-0 z-[40] transition-opacity duration-300"
-          style={{ height: "33.333%", backgroundColor: "rgba(0,0,0,0.35)" }}
+          style={{ height: "33.333%", backgroundColor: "transparent" }}
           onClick={handleCloseActivity}
         />
       )}

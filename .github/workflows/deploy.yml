@@ -35,6 +35,11 @@ concurrency:
 #   3. GitHub Secrets 中的 NEXT_PUBLIC_SERVER_URL
 #   4. 默认值 http://192.168.1.2:3000（本地测试用）
 # 请在 GitHub Settings → Secrets and variables → Actions 中配置 NEXT_PUBLIC_SERVER_URL
+#
+# 管理后台密码（ADMIN_PASSWORD）：不写死在源码中，部署时由 deploy-server 作业
+# 从 Secrets 读取并注入到服务器启动命令（pm2 / nohup 的进程环境变量），
+# server.js 运行时通过 process.env.ADMIN_PASSWORD 读取（见 src/lib/auth/admin.ts）。
+# 请在 GitHub Settings → Secrets and variables → Actions 中配置 ADMIN_PASSWORD
 
 env:
   SERVER_URL: ${{ (github.event_name == 'push' && contains(github.event.head_commit.message, 'local')) && 'http://192.168.1.2:3000' || inputs.server_url || secrets.NEXT_PUBLIC_SERVER_URL || 'http://192.168.1.2:3000' }}
@@ -185,7 +190,7 @@ jobs:
               # delete 后以当前 current 目录重新 start，让 pm2 重新解析到最新版本路径。
               pm2 delete bili-live >/dev/null 2>&1 || true
               cd "${TARGET_DIR}/current"
-              HOST=127.0.0.1 PORT=3000 pm2 start server.js --name bili-live
+              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" pm2 start server.js --name bili-live
               pm2 save || true
             else
               PID_FILE="${TARGET_DIR}/server.pid"
@@ -198,7 +203,7 @@ jobs:
               fi
 
               cd "${TARGET_DIR}/current"
-              HOST=127.0.0.1 PORT=3000 nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
               echo $! > "${PID_FILE}"
             fi
 
@@ -246,7 +251,7 @@ jobs:
             fi
 
             cd "${TARGET_DIR}/current"
-            HOST=127.0.0.1 PORT=3000 nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+            HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
             echo $! > "${PID_FILE}"
 
             # 清理旧版本，保留最近 5 个

@@ -527,6 +527,42 @@ function LuckyBadge() {
   );
 }
 
+/** 住在直播间徽章：点击徽章本身弹出说明，点击其他区域收起（同天选之子交互） */
+function LiveRoomBadge({ text }: { text: string }) {
+  const [open, setOpen] = React.useState(false);
+  const rootRef = React.useRef<HTMLSpanElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [open]);
+
+  return (
+    <span ref={rootRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 rounded-full border border-orange-400 bg-orange-50 px-2 py-0.5 text-xs font-medium cursor-pointer transition hover:bg-orange-100"
+        title="点击查看说明"
+        aria-label="住在直播间说明"
+      >
+        <span>🏠</span>
+        <span className="text-orange-700">住在直播间</span>
+      </button>
+      {open && (
+        <span className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs leading-relaxed text-black/70 shadow-lg">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   const {
     snapshot,
@@ -1645,19 +1681,13 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="text-base font-bold tracking-tight inline-flex items-center gap-1">送礼天数<InfoHint text="最长只有最近1年记录" /></h3>
                   {(otherStats.dayStats.maxConsecutiveDays >= 100 || otherStats.dayStats.maxDaysInYear >= 300) && (
-                    <>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-orange-400 bg-orange-50 px-2 py-0.5 text-xs font-medium">
-                        <span>🏠</span>
-                        <span className="text-orange-700">住在直播间</span>
-                      </span>
-                      <InfoHint
-                        text={
-                          otherStats.dayStats.maxConsecutiveDays >= 100
-                            ? `${otherStats.dayStats.maxConsecutiveStart.replace(/-/g, ".")} - ${otherStats.dayStats.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${otherStats.dayStats.maxConsecutiveDays} 天送礼，一天不刷浑身难受🎉`
-                            : `${otherStats.dayStats.maxDaysInYearRange.start.replace(/-/g, ".")} - ${otherStats.dayStats.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${otherStats.dayStats.maxDaysInYear} 天活跃🎉`
-                        }
-                      />
-                    </>
+                    <LiveRoomBadge
+                      text={
+                        otherStats.dayStats.maxConsecutiveDays >= 100
+                          ? `${otherStats.dayStats.maxConsecutiveStart.replace(/-/g, ".")} - ${otherStats.dayStats.maxConsecutiveEnd.replace(/-/g, ".")}，连续 ${otherStats.dayStats.maxConsecutiveDays} 天送礼，一天不刷浑身难受🎉`
+                          : `${otherStats.dayStats.maxDaysInYearRange.start.replace(/-/g, ".")} - ${otherStats.dayStats.maxDaysInYearRange.end.replace(/-/g, ".")}，365天内 ${otherStats.dayStats.maxDaysInYear} 天活跃🎉`
+                      }
+                    />
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">

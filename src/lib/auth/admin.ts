@@ -6,9 +6,6 @@ const STATE_DIR = path.join(process.cwd(), ".data");
 const ADMIN_STATE_FILE = path.join(STATE_DIR, "admin-sessions.json");
 const ADMIN_COOKIE_NAME = "admin_sid";
 
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "333";
-
 type AdminSession = {
   sid: string;
   loginAt: string;
@@ -39,8 +36,10 @@ async function writeAdminSessions(sessions: AdminSession[]) {
 }
 
 export function verifyAdmin(username: string | undefined, password: string): boolean {
-  // 仅校验密码（管理员账号固定为 admin，用户名无需校验）
-  return password === ADMIN_PASS;
+  // 仅校验密码（管理员账号固定为 admin，用户名无需校验）。
+  // 密码从环境变量 ADMIN_PASSWORD 读取（本地：.env.local；生产：GitHub Actions Secrets 注入），
+  // 避免硬编码在源码中导致仓库泄露。
+  return password === (process.env.ADMIN_PASSWORD ?? "");
 }
 
 export async function createAdminSession(): Promise<string> {
