@@ -251,11 +251,11 @@ async function checkHotUpdate(): Promise<HotUpdateInfo> {
         `[HotUpdate] 拦截判定：服务器 sequence=${result.sequence} <= 内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE}，` +
           "该热更内容已内建在当前原生包中，不提示更新（如需提示请先发布更新的 hot 更新）"
       );
-    } else if (!available && !result.error) {
+    } else if (!available) {
       console.log(
         `[HotUpdate] 无热更新：插件判定不可用。服务器 sequence=${result.sequence ?? "?"}，` +
           `本机 current_sequence（热更缓存）与内置 sequence=${BUILTIN_HOTSWAP_SEQUENCE} 有关；` +
-          `若服务器 sequence 高于内置 sequence 却仍不可用，多为 min_binary_version 门或插件本地缓存门槛所致`
+          "若服务器 sequence 高于内置 sequence 却仍不可用，多为 min_binary_version 门或插件本地缓存门槛所致"
       );
     }
 
