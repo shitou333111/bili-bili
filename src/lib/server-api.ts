@@ -7,6 +7,9 @@
 
 const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
 
+/** 构建日期（CI 构建时注入；本地开发为"开发版"），用于判定是否生产打包 */
+const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";
+
 /** 检测是否在 Tauri 环境 */
 export function isTauri(): boolean {
   try {
