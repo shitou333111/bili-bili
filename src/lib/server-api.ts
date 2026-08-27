@@ -20,17 +20,18 @@ export function isTauri(): boolean {
 }
 
 /**
- * 当前是否为 Tauri 生产构建（静态导出 output:export → 本地 file:// HTML 文件）。
- * 判断依据：TAURI_ENV 环境变量（tauriBuild时会设为"production"，dev时为"development"），
- * 以及 URL 协议为 file: （静态打包产物的特征）。
- * 只有生产构建时才有 xxx.html 静态文件；next dev server 只有 /admin 这样的路由，不能加 .html。
+ * 当前是否为 Tauri 生产构建。
+ * 主要依据：构建期注入的 NEXT_PUBLIC_IS_TAURI_PROD=1（见 scripts/build-tauri.mjs，
+ * 仅 `tauri build` 会经过该脚本；`tauri dev` 走 next dev 不注入）。
+ * 兜底保留旧特征检测（file: 协议 / .html 路径），兼容未注入标志的历史构建。
+ * 注意：不能用 __TAURI_ENVIRONMENT__ 或 file: 协议唯一判定——Tauri v2 生产窗口
+ * 通过自定义资产协议加载（既非 file:，pathname 也可能不是 .html），曾被错误判为 false，
+ * 导致热更新检查被短路拦截。
  */
 export function isTauriProduction(): boolean {
   if (!isTauri()) return false;
+  if (process.env.NEXT_PUBLIC_IS_TAURI_PROD === "1") return true;
   try {
-    const tauriEnv: string | undefined =
-      (globalThis as any).__TAURI_ENVIRONMENT__ as string | undefined;
-    if (tauriEnv === "production") return true;
     if (typeof window !== "undefined" && window.location?.protocol === "file:") return true;
     // 兜底：如果页面URL里含 ".html" 说明已经是静态导出页了
     if (typeof window !== "undefined" && /\.html($|\?|#)/.test(window.location.pathname)) return true;

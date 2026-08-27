@@ -65,7 +65,7 @@ execSync("node scripts/patch-foamtree.mjs", { stdio: "inherit", cwd: root });
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 
 execSync(
-  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} NEXT_PUBLIC_BUILD_DATE=${buildDate} next build`,
+  `cross-env TAURI_BUILD=1 NEXT_PUBLIC_SERVER_URL=${serverUrl} NEXT_PUBLIC_BUILD_DATE=${buildDate} NEXT_PUBLIC_IS_TAURI_PROD=1 next build`,
   {
     stdio: "inherit",
     cwd: root,
@@ -75,6 +75,7 @@ execSync(
       TAURI_BUILD: "1",
       NEXT_PUBLIC_SERVER_URL: serverUrl,
       NEXT_PUBLIC_BUILD_DATE: buildDate,
+      NEXT_PUBLIC_IS_TAURI_PROD: "1",
       NEXT_TELEMETRY_DISABLED: "1",
     },
   },
