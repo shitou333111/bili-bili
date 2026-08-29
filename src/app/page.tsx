@@ -2278,6 +2278,9 @@ export default function HomePage() {
 
   /** 登录凭证失效时：清除会话并跳转登录页重新登录 */
   async function handleAuthExpired() {
+    // 服务器账号（source=server）无 B站 登录凭证，也不使用登录凭证，
+    // 任何“凭证失效”都不适用，绝不能跳转扫码登录页。直接忽略。
+    if (currentAccount?.source === "server") return;
     try {
       await dataFetch("/api/auth/logout", { method: "POST" });
     } catch { /* ignore */ }
