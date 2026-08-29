@@ -94,6 +94,10 @@ export default function LoginPage() {
           // 存储 SID 到 localStorage，持久化以便下次打开自动登录
           if (data.data.sid) {
             localStorage.setItem("bili_live_sid", data.data.sid);
+            // 标记本次跳转由"扫码登录"触发：主页据此对该账号的主播收益做一次
+            // 有容错的全量探测（仅此一次，消费后即清除），无收益则置位 noRevenue；
+            // 冷启动/绿色刷新不再重复全量探测。
+            localStorage.setItem("bili_live_anchor_probe", "1");
           }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {

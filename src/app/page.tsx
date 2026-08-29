@@ -26,6 +26,8 @@ import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
 import { RevenueModuleContent } from "@/components/RevenueModuleContent";
 import MedicalFeeSettlement from "@/components/MedicalFeeSettlement";
+import { fetchFollowingAnchors, likeAnchors, loadLikedAnchorsToday, markAnchorLikedToday, DAILY_ANCHOR_LIMIT, type LikeAnchor } from "@/lib/like-client";
+import { hasLiveRoom as checkAccountHasLiveRoom } from "@/lib/medical-client";
 import ScreenshotViewer from "@/components/ScreenshotViewer";
 import BiliSimulator from "@/components/bili-simulator/BiliSimulator";
 import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type StreamerInfo, type HistoryEntry } from "@/components/bili-simulator/liveStream";
@@ -92,6 +94,8 @@ type Account = {
   face?: string;
   source: "qr" | "dev" | "server";
   updatedAt: string;
+  /** 首次登录全量收益探测结果为空 → 判定为无收益/非持续开播主播，跳过后续全量探测 */
+  noRevenue?: boolean;
 };
 
 type Snapshot = {
@@ -842,7 +846,7 @@ export default function HomePage() {
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
-  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical">("home");
+  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical" | "like">("home");
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState<string>("");
   const [simulatorOpen, setSimulatorOpen] = useState(false);
@@ -1008,6 +1012,16 @@ export default function HomePage() {
   const [fansSelected, setFansSelected] = useState<Set<number>>(new Set());
   const [fansRemoving, setFansRemoving] = useState(false);
   const [fansMsg, setFansMsg] = useState("");
+  // 助力主播 自动点赞：关注主播列表 + 每日点赞状态（每账号每天最多 5 位主播/5000 赞）
+  const [likeList, setLikeList] = useState<LikeAnchor[]>([]);
+  const [likeLoading, setLikeLoading] = useState(false);
+  const [likeLiking, setLikeLiking] = useState(false);
+  const [likedToday, setLikedToday] = useState<Set<number>>(new Set());
+  // 切换账号时重载今日点赞状态（跨天自动重置）
+  useEffect(() => {
+    if (!currentAccount?.mid) { setLikedToday(new Set()); return; }
+    setLikedToday(loadLikedAnchorsToday(currentAccount.mid));
+  }, [currentAccount?.mid]);
   // 离线功能轻提示（短时间内自动消失）
   const [offlineToast, setOfflineToast] = useState("");
   const offlineToastTimer = useRef<number | null>(null);
@@ -1440,6 +1454,8 @@ export default function HomePage() {
   const [isFirstTime, setIsFirstTime] = useState(false);
   // 在线状态（离线时使用本地缓存数据，并禁用需要联网的功能）
   const isOnline = useOnlineStatus();
+  // 当前账号是否有直播间（是否为主播）：false 时隐藏"主播"选项卡及托盘按钮
+  const [hasLiveRoom, setHasLiveRoom] = useState(false);
 
   // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
   useEffect(() => {
@@ -1512,6 +1528,7 @@ export default function HomePage() {
           face: statusData.data.face || matched?.face || "",
           source: matched?.source || "qr",
           updatedAt: matched?.updatedAt || "",
+          noRevenue: matched?.noRevenue,
         });
         // 是否本机登录：accounts 仅返回本机登录账号（/api/auth/accounts 已按设备令牌过滤）
         setIsLocalAccount(!!matched);
@@ -1578,7 +1595,44 @@ export default function HomePage() {
   // 切换标签栏（display:none / display:flex）不触发任何请求，仅展示已加载到 React state 中的数据
   const anchorRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
-  /** 刷新收尾：先让收益模块重新拉取，再统一上传本账号所有变化的数据（哈希判断，未变则跳过） */
+  /** 检查当前账号是否有直播间（是否为主播）。仅确知无房时才返回 false 并隐藏"主播"选项卡；
+   *  查询出错（网络/接口异常）时视为有房，避免误隐藏真实主播。
+   *  若该账号曾在首次登录全量探测中被判定为无收益（noRevenue），同样按无房处理（不再显示）。 */
+  const checkHasLiveRoom = useCallback(async () => {
+    if (!currentAccount?.mid) {
+      setHasLiveRoom(false);
+      return false;
+    }
+    // 无收益标记（持久化）：视为无直播间，直接隐藏，无需再实时查房间
+    if (currentAccount.noRevenue) {
+      setHasLiveRoom(false);
+      return false;
+    }
+    try {
+      const has = await checkAccountHasLiveRoom(currentAccount.mid);
+      setHasLiveRoom(has);
+      return has;
+    } catch {
+      setHasLiveRoom(true);
+      return true;
+    }
+  }, [currentAccount?.mid, currentAccount?.noRevenue]);
+
+  // 账号切换/变更时重新判断是否有直播间
+  useEffect(() => {
+    checkHasLiveRoom();
+  }, [checkHasLiveRoom]);
+
+  // 账号无直播间时，若当前正停留在"主播"页面则退回粉丝页（隐藏该选项卡）
+  useEffect(() => {
+    if (!hasLiveRoom && activeModule === "anchor") {
+      pushView("revenue", "home");
+    }
+  }, [hasLiveRoom, activeModule, pushView]);
+
+  /** 刷新收尾：先让收益模块重新拉取，再统一上传本账号所有变化的数据（哈希判断，未变则跳过）。
+   *  无直播间（非主播）的跳过由收益拉取内部（客户端 skipPull / 服务器 checkAnchorHasRoom）决定，
+   *  此处必须无条件调用，避免因 hasLiveRoom state 尚未就绪（stale closure）而永远跳过导致"加载中"。 */
   const finishRefresh = async () => {
     try {
       if (anchorRefreshRef.current) await anchorRefreshRef.current();
@@ -1624,6 +1678,7 @@ export default function HomePage() {
           face: statusData.data.face || matched?.face || "",
           source: matched?.source || "qr",
           updatedAt: matched?.updatedAt || "",
+          noRevenue: matched?.noRevenue,
         });
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
@@ -2024,6 +2079,48 @@ export default function HomePage() {
     setMedalsRemoving(false);
   }
 
+  // ===== 助力主播 自动点赞 =====
+  async function loadLikeAnchors() {
+    setLikeLoading(true);
+    try {
+      const list = await fetchFollowingAnchors();
+      setLikeList(list);
+      if (currentAccount?.mid) setLikedToday(loadLikedAnchorsToday(currentAccount.mid));
+    } catch (err) {
+      setLikeList([]);
+      showToast(err instanceof Error ? err.message : "获取关注列表失败");
+    } finally {
+      setLikeLoading(false);
+    }
+  }
+
+  async function likeOne(anchor: LikeAnchor) {
+    if (likeLiking) return;
+    const mid = currentAccount?.mid;
+    if (!mid) { showToast("未登录，无法点赞"); return; }
+    if (likedToday.has(anchor.uid)) { showToast("该主播今日已点过 1000 赞"); return; }
+    if (likedToday.size >= DAILY_ANCHOR_LIMIT) { showToast("今日点赞已达上限（5 位主播）"); return; }
+    setLikeLiking(true);
+    try {
+      showToast(`正在为 ${anchor.uname} 点赞...`);
+      const r = await likeAnchors(
+        [{ uid: anchor.uid, roomid: anchor.roomid }],
+        (done, total) => showToast(`正在为 ${anchor.uname} 点赞 ${done}/${total}...`),
+      );
+      if (r.code === 0) {
+        markAnchorLikedToday(mid, anchor.uid);
+        setLikedToday(loadLikedAnchorsToday(mid));
+        showToast(r.message || "点赞成功");
+      } else {
+        showToast(r.message || "点赞失败");
+      }
+    } catch {
+      showToast("点赞失败，请检查网络");
+    } finally {
+      setLikeLiking(false);
+    }
+  }
+
   const refreshData = useCallback(async () => {
     setSyncing(true);
     // 手动刷新不是首次初始化，确保不弹阻塞遮罩
@@ -2129,12 +2226,14 @@ export default function HomePage() {
 
   /** 刷新入口：服务器账号从服务器重载，本机账号走 B站 增量刷新 */
   const handleRefresh = useCallback(async () => {
+    // 每次刷新先复检是否有直播间：账号新开直播后，点刷新可立即显示"主播"相关页面
+    await checkHasLiveRoom();
     if (currentAccount?.source === "server") {
       await reloadServerData();
     } else {
       await refreshData();
     }
-  }, [currentAccount, reloadServerData, refreshData]);
+  }, [currentAccount, reloadServerData, refreshData, checkHasLiveRoom]);
 
   async function switchAccount(sid: string) {
     try {
@@ -2482,7 +2581,11 @@ export default function HomePage() {
   // 底部托盘导航：切换页面
   function handleDockChange(tab: DockTabKey) {
     if (tab === "fans") { pushView("revenue", "home"); }
-    else if (tab === "anchor") { pushView("anchor", "home"); }
+    else if (tab === "anchor") {
+      // 无直播间时禁用"主播"选项卡
+      if (!hasLiveRoom) return;
+      pushView("anchor", "home");
+    }
     else if (tab === "help") { pushView("screenshot", "home"); }
     else { pushView("pending", "home"); }
   }
@@ -2761,6 +2864,16 @@ export default function HomePage() {
           onRefresh={handleRefresh}
           showToast={showToast}
           onFetchProgress={(p) => setFetchProgress(p)}
+          onNoRevenue={() => {
+            // 登录探测判定该账号无收益：置位标记并立即隐藏"主播"选项卡。
+            // 仅在首次探测判定时轻提示，冷启动/刷新（已标记）不再重复打扰。
+            const wasMarked = !!currentAccount?.noRevenue;
+            setCurrentAccount((prev) => (prev ? { ...prev, noRevenue: true } : prev));
+            setHasLiveRoom(false);
+            if (!wasMarked) {
+              showToast("该账号暂无直播收益记录，已隐藏主播相关功能");
+            }
+          }}
         />
       </div>
 
@@ -2903,6 +3016,7 @@ export default function HomePage() {
                   </div>
                 )}
                 {[
+                  { icon: "👍", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
@@ -2919,7 +3033,8 @@ export default function HomePage() {
                         else showOfflineToast("当前处于离线模式，无法使用此项功能");
                         return;
                       }
-                      if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
+                      if (tool.title === "助力主播 自动点赞") { pushView("screenshot", "like"); loadLikeAnchors(); }
+                      else if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
                       else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
                       else if (tool.title === "多人接力PK医药费") { pushView("screenshot", "medical"); }
                       else { openScreenshotPage(); }
@@ -3407,6 +3522,73 @@ export default function HomePage() {
               </div>
             )}
 
+            {/* 助力主播 自动点赞 */}
+            {activeModule === "screenshot" && toolsPage === "like" && (
+              <div className="space-y-3">
+                {/* 返回 + 操作栏 */}
+                <div className="flex items-center gap-4 py-1">
+                  <button onClick={() => { pushView("screenshot", "home"); setLikeList([]); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    返回
+                  </button>
+                  <span className="text-sm font-semibold">助力主播 自动点赞</span>
+                  {likeList.length > 0 && <span className="text-xs text-black/40">共 {likeList.length} 位常看主播</span>}
+                  <div className="ml-auto flex items-center gap-2">
+                    <button onClick={loadLikeAnchors} disabled={likeLoading} className="shrink-0 rounded-full border border-black/15 px-3 py-1 text-xs text-black/60 hover:bg-gray-50 transition disabled:opacity-50">
+                      <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${likeLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      {likeLoading ? "刷新中..." : "刷新"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 顶部提醒：今日还可为几位主播点赞（每账号每日最多 5 位/5000 赞） */}
+                <div className={`rounded-lg border px-3 py-2 text-xs ${likedToday.size >= DAILY_ANCHOR_LIMIT ? "border-[#e74c3c]/20 bg-[#e74c3c]/10 text-[#e74c3c]" : "border-[#00a1d6]/20 bg-[#00a1d6]/10 text-[#00a1d6]"}`}>
+                  {likedToday.size >= DAILY_ANCHOR_LIMIT ? (
+                    <span className="font-medium">今日点赞已满（{likedToday.size}/{DAILY_ANCHOR_LIMIT}）</span>
+                  ) : (
+                    <span>
+                      今日还可为 <b>{Math.max(DAILY_ANCHOR_LIMIT - likedToday.size, 0)}</b> 位主播点赞（每主播 1000 赞，每日上限 5000 赞）
+                    </span>
+                  )}
+                </div>
+
+                {/* 主播列表 */}
+                {likeLoading && likeList.length === 0 ? (
+                  <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/35">加载中...</div>
+                ) : likeList.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {likeList.map((anchor) => {
+                      const liked = likedToday.has(anchor.uid);
+                      const full = likedToday.size >= DAILY_ANCHOR_LIMIT;
+                      const btnDisabled = likeLiking || liked || (full && !liked);
+                      const btnText = liked ? "今日已点" : (full && !liked) ? "今日已满" : "点1000赞";
+                      return (
+                        <div key={anchor.uid} className="flex items-center gap-3 rounded-lg border border-black/10 bg-white p-2.5 transition">
+                          <img src={fixImageUrl(anchor.face)} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-medium truncate">{anchor.uname}</span>
+                              <span className="text-[10px] px-1 rounded bg-[#00a1d6]/10 text-[#00a1d6] flex-shrink-0">直播中</span>
+                            </div>
+                            {anchor.title && <div className="text-[10px] text-black/35 truncate">{anchor.title}</div>}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); likeOne(anchor); }}
+                            disabled={btnDisabled}
+                            className={`ml-auto flex-shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${btnDisabled ? "bg-black/10 text-black/40 cursor-not-allowed" : "bg-[#00a1d6] text-white hover:opacity-90"}`}
+                          >
+                            {btnText}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/35">点击上方按钮加载主播列表</div>
+                )}
+              </div>
+            )}
+
             {/* 多人接力PK医药费 */}
             {activeModule === "screenshot" && toolsPage === "medical" && (
               <MedicalFeeSettlement
@@ -3512,7 +3694,8 @@ export default function HomePage() {
       <BottomDock
         tabs={[
           { key: "fans", label: "粉丝" },
-          { key: "anchor", label: "主播" },
+          // 无直播间（非主播）时不显示"主播"选项卡及托盘按钮
+          ...(hasLiveRoom ? [{ key: "anchor" as const, label: "主播" }] : []),
           { key: "pending", label: "模拟" },
           { key: "help", label: "帮助" },
         ]}

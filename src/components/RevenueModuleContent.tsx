@@ -8,6 +8,8 @@ import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import PieTooltip from "@/components/PieTooltip";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
+import { sendDanmaku } from "@/lib/barrage";
+import { fetchMedicalRoomId } from "@/lib/medical-client";
 
 // ===== Type definitions =====
 type Snapshot = {
@@ -307,24 +309,24 @@ interface RevenueModuleContentProps {
 // 防氪文案轮播：循环提示理性消费，隐显效果复制 landing 页（淡入→停留→淡出→下一句）
 const ANTI_KILL_SLOGANS = [
   "你是不是必须要靠花钱刷礼物才能得到女人的认可？",
-  // "你自己额生活都过不好，还妄想拯救别人",
-  // "你是真的想乐于助人，还是想得到认同",
-  // "你是讨好型人格吗？",
-  // "取悦别人，填补不了你内心的空虚",
-  // "换算一下其他消费，直播刷礼物真的很贵！",
-  // "一个游乐园就相当于给自己或家人换一部新手机",
+  "你自己的生活都过不好，还妄想拯救别人？",
+  "你是真的想乐于助人，还是想得到认同？",
+  "你是讨好型人格吗？",
+  "取悦别人，填补不了你内心的空虚",
+  "换算一下其他消费，直播刷礼物真的很贵！",
+  "一个游乐园就相当于给家人换一部新手机！",
   "1个心动盲盒就是一杯奶茶",
-  // "2个心动就是一顿外卖",
+  "2个心动就是一顿外卖",
   // "3个心动盲盒就是一个超大的西瓜",
   // "5个心动就是一个榴莲",
   // "20个心动就能买一部3A游戏",
   // "50连心动，",
-  // "100连心动，可以去看一场演唱会",
-  // "200连心动，可以来一场自由行",
-  // "理性消费...你真的能理性吗？",
-  // "你家人知道你刷这么多吗？",
+  "100连心动，可以去看一场演唱会",
+  "200连心动，可以来一场自由行",
+  "看看自己的总消费，可以买一辆车了吗？",
+  "家人现实中知道你刷这么多吗？",
   // "如果你觉得是对的，为什么不敢告诉家人？",
-  // "陪你茶米油盐的是家人，所以如果是主播",
+  "陪你茶米油盐的是家人，不是主播",
 ];
 
 const ANTI_KILL_FADE_MS = 800;
@@ -645,6 +647,45 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     setShowAntiKillDesc(kind === "desc" ? willOpen : false);
     setShowAntiKillStats(kind === "stats" ? willOpen : false);
   };
+
+  // ===== 盈亏弹幕发送 =====
+  /** 盲盒时期文案：全部→最近两月 */
+  const blindBoxPeriodText = (dateRange: string): string => {
+    switch (dateRange) {
+      case "thisMonth":
+        return "本月";
+      case "thisWeek":
+        return "本周";
+      case "today":
+        return "本日";
+      default:
+        return "最近两月";
+    }
+  };
+
+  /** 盲盒盈亏弹幕文本：[吃瓜]<时间段><盲盒名称>：<n>个 <爆出价值>-<花费>=<盈亏>电池 */
+  const buildBlindBoxDanmakuText = (
+    stat: BlindBoxProfitResult,
+    dateRange: string,
+  ): string =>
+    `[吃瓜]${blindBoxPeriodText(dateRange)}${stat.blindBoxName}：${stat.drawCount}个 ${stat.totalEarned}-${stat.totalSpent}=${stat.profit}电池`;
+
+  /** 发送盲盒盈亏弹幕到主播直播间 */
+  const handleSendBlindBoxDanmaku = async (stat: BlindBoxProfitResult, ruid: string) => {
+    const text = buildBlindBoxDanmakuText(stat, blindBoxFilters[stat.blindBoxId]?.dateRange ?? "all");
+    const roomRes = await fetchMedicalRoomId(Number(ruid));
+    if (roomRes.code !== 0 || !roomRes.data?.roomid) {
+      showToast(roomRes.message || "获取直播间号失败");
+      return;
+    }
+    const res = await sendDanmaku(roomRes.data.roomid, text);
+    if (res.code === 0) {
+      showToast("弹幕已发送");
+    } else {
+      showToast(res.message || res.msg || "发送弹幕失败");
+    }
+  };
+
 
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -1362,6 +1403,21 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                                 </tbody>
                               </table>
                             </div>
+                          </div>
+                        )}
+
+                        {/* 盈亏弹幕：选择具体主播时显示 */}
+                        {currentFilter.ruid !== "" && (
+                          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-black/15 bg-gray-200 px-3 py-1.5 text-xs">
+                            <span className="flex-1 min-w-0 text-black/80 font-medium">
+                              [吃瓜]{blindBoxPeriodText(currentFilter.dateRange)}{stat.blindBoxName}：<b>{stat.drawCount}</b>个 <b>{stat.totalEarned}</b>-<b>{stat.totalSpent}</b>=<b className={stat.profit >= 0 ? "text-green-600" : "text-red-500"}>{stat.profit}</b>电池
+                            </span>
+                            <button
+                              onClick={() => handleSendBlindBoxDanmaku(stat, currentFilter.ruid)}
+                              className="flex-shrink-0 rounded-full bg-blue-500 px-3 py-1 text-xs text-white hover:bg-blue-600 transition"
+                            >
+                              发送弹幕
+                            </button>
                           </div>
                         )}
                       </div>

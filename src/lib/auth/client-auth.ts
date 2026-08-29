@@ -201,13 +201,26 @@ export async function clientGetAccounts(platform: Platform): Promise<{
   data: { accounts: unknown[]; hasAccounts: boolean };
 }> {
   const state = await platform.getSessionState();
-  const accounts = state.sessions.map((s) => ({
-    sid: s.sid,
-    uname: s.uname,
-    mid: s.mid,
-    face: s.face ?? "",
-    source: s.source,
-    updatedAt: s.updatedAt,
+  const accounts = await Promise.all(state.sessions.map(async (s) => {
+    // 读取本地 anchor-gifts-records.json 元数据中的 noRevenue 标记：
+    // 首次全量收益探测为空后被置位，用于"无直播间/无收益账号"隐藏主播页且不再重复探测。
+    let noRevenue = false;
+    try {
+      const filePath = `${await platform.getDataDir()}/uid_${s.mid}/anchor-gifts-records.json`;
+      if (await platform.exists(filePath)) {
+        const parsed = JSON.parse(await platform.readFile(filePath)) as { noRevenue?: boolean };
+        noRevenue = !!parsed.noRevenue;
+      }
+    } catch { /* 文件缺失/损坏时按未标记处理 */ }
+    return {
+      sid: s.sid,
+      uname: s.uname,
+      mid: s.mid,
+      face: s.face ?? "",
+      source: s.source,
+      updatedAt: s.updatedAt,
+      noRevenue,
+    };
   }));
   return {
     code: 0,

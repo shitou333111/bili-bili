@@ -470,9 +470,13 @@ export async function GET(request: Request) {
 
         // 从全部记录构建元数据
         const dateRange = getDateRange(mergedRecords);
-        const anchors = buildAnchorList(mergedRecords);
 
-        // 按筛选条件过滤记录
+        // 主播下拉列表只按日期筛选（不受主播筛选影响）：
+        // 仅显示所选时间段内有数据的主播，count 为该时段内的送出个数
+        const dateOnlyFiltered = filterRecords(mergedRecords, null, filterDateRange);
+        const anchors = buildAnchorList(dateOnlyFiltered);
+
+        // 按筛选条件过滤记录（含主播筛选，用于盈亏明细）
         const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
 
         // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）

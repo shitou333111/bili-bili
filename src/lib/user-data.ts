@@ -365,7 +365,10 @@ export async function getReceivedAnchorsList(userMid: number, uname: string): Pr
 
 // ====== 用户个人信息（account-info.json） ======
 
-type AccountInfo = { mid: number; uname: string; face: string };
+/** 是否在首次登录的全量收益探测中被判定为"无收益/非持续开播主播"。
+ *  该标记持久化在 account-info.json：置位后，冷启动与绿色刷新均跳过全量收益探测
+ *  （大多数用户并未开播或未持续开播，反复全量探测消耗过大且无必要）。 */
+type AccountInfo = { mid: number; uname: string; face: string; noRevenue?: boolean };
 
 /** 获取 account-info.json 路径 */
 function getAccountInfoFile(userMid: number, uname: string): string {
@@ -373,9 +376,9 @@ function getAccountInfoFile(userMid: number, uname: string): string {
 }
 
 /** 保存用户个人信息（登录或信息更新时调用） */
-export async function saveAccountInfo(userMid: number, uname: string, face: string): Promise<void> {
+export async function saveAccountInfo(userMid: number, uname: string, face: string, noRevenue?: boolean): Promise<void> {
   const filePath = getAccountInfoFile(userMid, uname);
-  const data: AccountInfo = { mid: userMid, uname, face };
+  const data: AccountInfo = { mid: userMid, uname, face, noRevenue };
   try {
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -394,6 +397,23 @@ export async function loadAccountInfo(userMid: number, uname: string): Promise<A
   } catch {
     return null;
   }
+}
+
+/** 读取账号的 noRevenue 标记（无收益/非持续开播主播判定）。
+ *  置位处为 anchor-gifts-records.json 元数据（Tauri 客户端与服务器 route 都在此写入），
+ *  故优先读它；account-info.json 作为兼容回退。重建数据删除记录文件后该标记自然清除，
+ *  下次登录可重新探测。 */
+export async function readAccountNoRevenue(mid: number, uname: string): Promise<boolean> {
+  const recordsPath = path.join(getUserDataDir(mid, uname), "anchor-gifts-records.json");
+  try {
+    const raw = await fs.readFile(recordsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.noRevenue === true) return true;
+  } catch {
+    // 文件缺失/损坏按未标记处理
+  }
+  const info = await loadAccountInfo(mid, uname);
+  return info?.noRevenue === true;
 }
 
 // ====== 天选/红包礼物 ID 持久化存储（全局共享：列表对所有用户一致） ======

@@ -51,7 +51,7 @@ async function resolveAccessCookie(platform: Platform): Promise<string> {
 export type MedicalRoomIdResult = {
   code: number;
   message?: string;
-  data?: { roomid?: number } | null;
+  data?: { roomid?: number; roomStatus?: number } | null;
 };
 
 export type MedicalUniversalMember = {
@@ -100,10 +100,10 @@ export async function fetchMedicalRoomId(mid: number): Promise<MedicalRoomIdResu
         cookie: buvid,
         live: true,
       });
-      if (data?.code !== 0 || !data?.data?.roomid) {
+      if (data?.code !== 0 || !data?.data) {
         return { code: data?.code ?? -1, message: data?.message ?? "未获取到房间号", data: null };
       }
-      return { code: 0, data: { roomid: data.data.roomid } };
+      return { code: 0, data: { roomid: data.data.roomid, roomStatus: data.data.roomStatus } };
     } catch (err) {
       console.error("[MedicalClient] 直连获取房间号失败:", err);
       return { code: -1, message: "直连获取房间号失败", data: null };
@@ -116,6 +116,20 @@ export async function fetchMedicalRoomId(mid: number): Promise<MedicalRoomIdResu
   } catch {
     return { code: -1, message: "获取房间号失败", data: null };
   }
+}
+
+/**
+ * 判断账号是否有直播间（是否为主播）。
+ * getRoomInfoOld 为公开接口，无房时 roomStatus=0、roomid=0，无需登录凭证即可查询。
+ * roomStatus 优先（0=无房，1=有房），roomid>0 作为兜底（部分直连路径仅返回 roomid）。
+ * 出错（网络/接口异常等）时返回 false，由调用方决定幂等兜底。
+ */
+export async function hasLiveRoom(mid: number): Promise<boolean> {
+  const r = await fetchMedicalRoomId(mid).catch(() => null);
+  if (!r || r.code !== 0 || !r.data) return false;
+  // roomStatus 明确给出时以其为准
+  if (typeof r.data.roomStatus === "number") return r.data.roomStatus === 1;
+  return (r.data.roomid ?? 0) > 0;
 }
 
 // ==================== 获取接力实时信息 ====================

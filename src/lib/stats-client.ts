@@ -2177,8 +2177,11 @@ export async function fetchBlindBoxStats(
           );
         }
 
+        // 主播下拉列表只按日期筛选（不受主播筛选影响）：
+        // 仅显示所选时间段内有数据的主播，count 为该时段内的送出个数
         const dateRange = getDateRange(mergedRecords);
-        const anchors = buildAnchorList(mergedRecords);
+        const dateOnlyFiltered = filterRecords(mergedRecords, null, filterDateRange);
+        const anchors = buildAnchorList(dateOnlyFiltered);
         const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
 
         // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）

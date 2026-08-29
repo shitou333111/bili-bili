@@ -102,7 +102,9 @@ async function dispatchNative(
       const refresh = query.get("refresh") === "true";
       const dateRange = query.get("dateRange") ?? "all";
       const fan = query.get("fan") ?? "";
-      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, onProgress }));
+      // probe=true：扫码登录触发的全量探测（仅登录后首次加载会带上）
+      const probe = query.get("probe") === "true";
+      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, onProgress }));
     }
     case "/api/anchor/gift-replay": {
       const { fetchGiftReplay } = await import("./gift-replay-client");

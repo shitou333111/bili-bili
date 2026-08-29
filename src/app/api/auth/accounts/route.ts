@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionsByUserToken, getUserTokenCookieName } from "@/lib/auth/session";
-import { loadAccountInfo } from "@/lib/user-data";
+import { loadAccountInfo, readAccountNoRevenue } from "@/lib/user-data";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
       face,
       source: s.source,
       updatedAt: s.updatedAt,
+      noRevenue: await readAccountNoRevenue(s.mid, s.uname),
     };
   }));
 

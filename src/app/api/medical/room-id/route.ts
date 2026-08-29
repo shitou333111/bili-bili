@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     if (data?.code !== 0) {
       return NextResponse.json({ code: data?.code ?? -1, message: data?.message ?? "获取房间信息失败" });
     }
-    return NextResponse.json({ code: 0, data: { roomid: data?.data?.roomid ?? 0 } });
+    return NextResponse.json({ code: 0, data: { roomid: data?.data?.roomid ?? 0, roomStatus: data?.data?.roomStatus ?? 0 } });
   } catch (err) {
     console.error("[Medical] 获取房间信息失败:", err);
     return NextResponse.json({ code: -1, message: "获取房间信息失败" }, { status: 500 });

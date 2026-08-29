@@ -241,6 +241,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   showToast,
   /** 收益拉取进度上报（透传给父级全屏遮罩：首次初始化时遮罩全程显示"获取主播收益"进度） */
   onFetchProgress = undefined,
+  /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
+  onNoRevenue,
 }: {
   anchorName?: string;
   anchorFace?: string;
@@ -264,6 +266,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   showToast?: (msg: string) => void;
   /** 收益拉取进度上报（透传给父级全屏遮罩） */
   onFetchProgress?: (p: { text: string; ratio?: number } | null) => void;
+  /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
+  onNoRevenue?: () => void;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -329,7 +333,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
       } catch {
         // Web 模式下 getPlatform 可能抛错，忽略，走 stats.giftSummary 已带图标即可
       }
-      const res = await dataFetch("/api/anchor/gifts", { cache: "no-store" }, (p) => {
+      // 登录触发的全量探测标记：扫码登录跳转主页时由 /login 页写入，仅消费一次。
+      // 置位时向收益接口传 probe=true，仅在该账号 roomStatus=1 时做一次有容错的全量探测；
+      // 冷启动/绿色刷新（无此标记）不做全量探测，避免对无收益账号反复试探。
+      const probe = typeof window !== "undefined" && localStorage.getItem("bili_live_anchor_probe") === "1";
+      if (probe) localStorage.removeItem("bili_live_anchor_probe");
+      const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts", { cache: "no-store" }, (p) => {
         // 模块内进度条 + 透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
         setFetchProgress({ text: p.text, ratio: p.ratio });
         onFetchProgress?.({ text: p.text, ratio: p.ratio });
@@ -343,6 +352,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
       if (data.code === 0 && data.data) {
         setStats(data.data);
         setYesterdayAvailable(data.data.yesterdayAvailable ?? true);
+        // 无收益判定（仅扫码登录探测会置位）：立即通知父级隐藏"主播"选项卡，
+        // 不必等下次账号刷新/重载
+        if (data.data.noRevenue) onNoRevenue?.();
         // 盲盒盈亏数据独立存储，与收入统计解耦
         setBlindBoxProfits(data.data.blindBoxProfits);
         // 首次加载时保存完整粉丝列表，供筛选下拉框使用
@@ -1149,7 +1161,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                 className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
                                 options={[
                                   { value: "", label: "全部粉丝" },
-                                  ...(fullBlindBoxAnchors[bb.gift_id] ?? bb.anchors).map((a) => ({
+                                  // 选择了具体时间段时用 bb.anchors（服务器已按该时间段过滤列表与数量），
+                                  // 选择"全部"时用完整粉丝列表（保留切换粉丝的能力）
+                                  ...(blindBoxDateFilter !== "all" ? bb.anchors : (fullBlindBoxAnchors[bb.gift_id] ?? bb.anchors)).map((a) => ({
                                     value: String(a.ruid),
                                     label: `${a.rname} (${a.count})`,
                                   })),

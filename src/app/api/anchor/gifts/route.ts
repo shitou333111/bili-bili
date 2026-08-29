@@ -54,12 +54,36 @@ type RecordsMetaData = {
    *  只有次数 < MAX_CONSECUTIVE_EMPTY_RUNS 的空月份才挡住 end_date 供下一轮补拉；
    *  达到上限的视为真无数据，放行 end_date，避免 end_date 永不推进导致死循环。 */
   empty_counts?: Record<string, number>;
+  /** 首次登录全量探测收益为空 → 判定为无收益/非持续开播主播，置位后跳过后续全量探测 */
+  noRevenue?: boolean;
 };
 
 // ==================== 常量 ====================
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
+const ROOM_INFO_API = "https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld";
+
+/** 判断该 mid 是否有直播间（是否为主播）。getRoomInfoOld 为公开接口，无需登录凭证。 */
+async function checkAnchorHasRoom(mid: number): Promise<boolean> {
+  try {
+    const res = await fetch(`${ROOM_INFO_API}?mid=${encodeURIComponent(String(mid))}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://live.bilibili.com/",
+      },
+      cache: "no-store",
+    });
+    const data = await res.json();
+    // roomStatus: 0 无房 / 1 有房
+    return data?.code === 0 && (data?.data?.roomStatus === 1 || (data?.data?.roomid ?? 0) > 0);
+  } catch (err) {
+    // 查询失败（网络/接口异常）→ 视为可能有房，不阻断（幂等兜底：宁可多拉也不漏）
+    console.error(`[AnchorGifts] 检查房间失败，默认视为有房:`, err);
+    return true;
+  }
+}
 
 // ==================== 工具函数 ====================
 
@@ -242,7 +266,7 @@ async function readRecordsWithMeta(mid: number, uname: string): Promise<{ record
     const parsed = JSON.parse(raw);
     const records: GiftRecord[] = Array.isArray(parsed) ? parsed : (parsed.records ?? []);
     // 新格式：元数据内嵌在records文件中
-    if (parsed.end_date !== undefined) {
+    if (parsed.end_date !== undefined || parsed.noRevenue !== undefined) {
       return {
         records,
         meta: {
@@ -250,6 +274,7 @@ async function readRecordsWithMeta(mid: number, uname: string): Promise<{ record
           last_fetch: parsed.last_fetch ?? parsed.exportedAt ?? "",
           total_page: parsed.total_page ?? 0,
           empty_counts: parsed.empty_counts ?? {},
+          noRevenue: parsed.noRevenue ?? false,
         },
       };
     }
@@ -274,6 +299,7 @@ async function tryReadOldMetadata(mid: number, uname: string): Promise<RecordsMe
       last_fetch: parsed.last_fetch ?? "",
       total_page: parsed.total_page ?? 0,
       empty_counts: parsed.empty_counts ?? {},
+      noRevenue: parsed.noRevenue ?? false,
     };
   } catch {
     return null;
@@ -291,6 +317,7 @@ async function saveRecordsWithMeta(mid: number, uname: string, records: GiftReco
     total_page: meta.total_page,
     total_count: records.length,
     empty_counts: meta.empty_counts ?? {},
+    noRevenue: meta.noRevenue ?? false,
     records,
   };
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
@@ -394,11 +421,12 @@ const SLOW_REQUEST_INTERVAL_MS = 1500;
 
 /** 伪空重试间隔：page0 返回 total_page=0 时，按这些递增间隔再查，
  *  把"软限流/冷缓存导致的假空"从"真无数据"里区分出来。 */
-const EMPTY_RETRY_INTERVAL_MS = [5000, 15000];
+const EMPTY_RETRY_INTERVAL_MS = [5000, 15000, 30000];
 
 /** 可疑空月份连续判定上限：同一空月份连续 N 次运行都被判空 → 视为真无数据并放行 end_date，
- *  保证修复不会因真·空月份导致 end_date 永不推进（死循环）。 */
-const MAX_CONSECUTIVE_EMPTY_RUNS = 2;
+ *  保证修复不会因真·空月份导致 end_date 永不推进（死循环）。
+ *  上限越大，持续软限流/冷缓存导致的伪空越不容易被误判丢弃（但真空月份冗余补拉轮数也越多）。 */
+const MAX_CONSECUTIVE_EMPTY_RUNS = 5;
 
 /** 月度数据获取失败时抛出的错误，携带失败的月份范围 */
 class MonthFetchError extends Error {
@@ -581,6 +609,9 @@ export async function GET(request: Request) {
   const refresh = url.searchParams.get("refresh") === "true";
   const dateRangeFilter = url.searchParams.get("dateRange") ?? "all";
   const fanFilter = url.searchParams.get("fan") ?? "";
+  // probe=true：扫码登录触发的全量收益探测（仅登录后首次加载会带上）；
+  // 冷启动/绿色刷新不传此参数，不做全量探测（避免对无收益账号反复试探）。
+  const probe = url.searchParams.get("probe") === "true";
 
   try {
     // 读取已有记录和元数据（合并存储）
@@ -588,6 +619,8 @@ export async function GET(request: Request) {
 
     let allRecords = existingRecords;
     let fetchedNewPages = 0;
+    // 本次探测是否判定该账号无收益（置位后随响应带回，前端据此立即隐藏主播页）
+    let markedNoRevenue = false;
 
     const yesterdayStr = getYesterdayStr();
 
@@ -721,54 +754,77 @@ export async function GET(request: Request) {
 
     // ==================== 统一获取逻辑 ====================
     // 只用 end_date 决定起始日期：
-    // - end_date 为空或文件不存在 → 首次使用，从3年前下个月开始（如2026年8月→2023年9月）
-    // - end_date 不为空 → 从 end_date 开始增量获取
+    // - probe=true（扫码登录触发）：允许有容错的全量探测——
+    //   end_date 为空或文件不存在 → 首次使用，从3年前下个月开始（如2026年8月→2023年9月）
+    //   end_date 不为空 → 从 end_date 开始增量获取（含被中断探测的续拉）
+    // - probe=false（冷启动/绿色刷新）：绝不全量探测，仅在有数据基线时增量追赶；
+    //   无基线（从未探测成功 / 登录探测被中断）→ skipFetch，跳过拉取避免反复试探
     // refresh=true 只是代表用户手动触发，不影响起始日期判断
+    let skipFetch = false;
     const startDate = (() => {
-      if (meta?.end_date) {
-        // ===== 保底：end_date 已推进至近期但 records 为空 → 视为被错误推进，回退全量 =====
-        // 典型场景：首次打开时网络/412 导致 page 0 失败被旧代码当成"无数据"跳过，
-        // end_date 被错误写入"昨天"。即使现在网络已恢复，按 meta.end_date=昨天 只会拉 1-2 天，
-        // 永远拿不到 3 年历史。
-        // 判据：本地一条记录都没有（从来没成功获取过）且 end_date 距离昨天 ≤ 30 天
-        // （已经推到"最新"），则放弃 end_date，从 3 年前重新全量。
-        // 对于真·3年无任何礼物的极小号：无非多跑一次全部月份的 total_page=0，
-        // 耗时很小，正确性无损。
-        if (existingRecords.length === 0) {
-          try {
-            const endD = parseDateStr(meta.end_date);
-            const yesD = parseDateStr(yesterdayStr);
-            const diffDays = Math.round((yesD.getTime() - endD.getTime()) / 86400000);
-            if (diffDays >= 0 && diffDays <= 30) {
-              const now = new Date();
-              const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-              const beijing = new Date(utc + 8 * 3600000);
-              const startYear = beijing.getFullYear() - 3;
-              const startMonth = beijing.getMonth() + 1;
-              const beginYear = startMonth === 12 ? startYear + 1 : startYear;
-              const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
-              const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
-              console.warn(`[AnchorGifts] 保底回退：end_date=${meta.end_date}(距昨天${diffDays}天)但现有0条记录，视为被错误推进，改为从${beginDate}全量拉取`);
-              return beginDate;
-            }
-          } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
+      if (probe) {
+        if (meta?.end_date) {
+          // ===== 保底：end_date 已推进至近期但 records 为空 → 视为被错误推进，回退全量 =====
+          // 典型场景：首次打开时网络/412 导致 page 0 失败被旧代码当成"无数据"跳过，
+          // end_date 被错误写入"昨天"。即使现在网络已恢复，按 meta.end_date=昨天 只会拉 1-2 天，
+          // 永远拿不到 3 年历史。
+          // 判据：本地一条记录都没有（从来没成功获取过）且 end_date 距离昨天 ≤ 30 天
+          // （已经推到"最新"），则放弃 end_date，从 3 年前重新全量。
+          if (existingRecords.length === 0) {
+            try {
+              const endD = parseDateStr(meta.end_date);
+              const yesD = parseDateStr(yesterdayStr);
+              const diffDays = Math.round((yesD.getTime() - endD.getTime()) / 86400000);
+              if (diffDays >= 0 && diffDays <= 30) {
+                const now = new Date();
+                const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+                const beijing = new Date(utc + 8 * 3600000);
+                const startYear = beijing.getFullYear() - 3;
+                const startMonth = beijing.getMonth() + 1;
+                const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+                const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+                const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+                console.warn(`[AnchorGifts] 保底回退：end_date=${meta.end_date}(距昨天${diffDays}天)但现有0条记录，视为被错误推进，改为从${beginDate}全量拉取`);
+                return beginDate;
+              }
+            } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
+          }
+          console.log(`[AnchorGifts] 起始日期：使用 end_date=${meta.end_date}${refresh ? " (用户手动触发)" : ""}`);
+          return meta.end_date;
         }
+        // 首次使用：B站最多保存3年数据，从3年前的下个月开始
+        // 如当前2026年8月 → 2023年9月（8月数据可能已过期）
+        const now = new Date();
+        const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+        const beijing = new Date(utc + 8 * 3600000);
+        const startYear = beijing.getFullYear() - 3;
+        const startMonth = beijing.getMonth() + 1; // 0-indexed → 1-indexed (1~12)
+        // 下个月：12月 → 次年1月
+        const beginYear = startMonth === 12 ? startYear + 1 : startYear;
+        const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
+        const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+        console.log(`[AnchorGifts] 首次使用：起始日期=${beginDate}（当前${beijing.getFullYear()}年${startMonth}月 → 3年前${startYear}年${startMonth}月 → 下个月${beginYear}年${beginMonth}月）${refresh ? " (用户手动触发)" : ""}`);
+        return beginDate;
+      }
+      // 非登录（冷启动/绿色刷新）：仅增量追赶，绝不全量探测
+      if (meta?.end_date && existingRecords.length > 0) {
         console.log(`[AnchorGifts] 起始日期：使用 end_date=${meta.end_date}${refresh ? " (用户手动触发)" : ""}`);
         return meta.end_date;
       }
-      // 首次使用：B站最多保存3年数据，从3年前的下个月开始
-      // 如当前2026年8月 → 2023年9月（8月数据可能已过期）
-      const now = new Date();
-      const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-      const beijing = new Date(utc + 8 * 3600000);
-      const startYear = beijing.getFullYear() - 3;
-      const startMonth = beijing.getMonth() + 1; // 0-indexed → 1-indexed (1~12)
-      // 下个月：12月 → 次年1月
-      const beginYear = startMonth === 12 ? startYear + 1 : startYear;
-      const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
-      const beginDate = `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
-      console.log(`[AnchorGifts] 首次使用：起始日期=${beginDate}（当前${beijing.getFullYear()}年${startMonth}月 → 3年前${startYear}年${startMonth}月 → 下个月${beginYear}年${beginMonth}月）${refresh ? " (用户手动触发)" : ""}`);
-      return beginDate;
+      if (existingRecords.length > 0) {
+        // 旧缓存无 end_date：从已有记录最新时间开始增量获取
+        let maxTime = existingRecords[0].time;
+        for (const r of existingRecords) {
+          if (r.time > maxTime) maxTime = r.time;
+        }
+        return maxTime.slice(0, 10).replace(/-/g, "");
+      }
+      // 一条记录都没有（含旧版遗留：end_date 已被推到昨天的 0 记录账号）：
+      // 非登录拉取只会重查昨天 1 天 + 伪空重试，纯属浪费且无新数据可追。
+      // noRevenue 仅由扫码登录（probe=true，含保底回退全量重探）置位，这里一律跳过、
+      // 不置位，避免误伤"确曾有历史收益但 end_date 被旧 bug 推到昨天"的账号。
+      skipFetch = true;
+      return yesterdayStr;
     })();
 
     if (offline) {
@@ -776,8 +832,26 @@ export async function GET(request: Request) {
       console.log(`[AnchorGifts] 离线模式，使用本地缓存 ${existingRecords.length} 条记录`);
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
       fetchedNewPages = 0;
+    } else if (meta?.noRevenue) {
+      // 首次登录全量探测已确认无收益（noRevenue）：视为无直播间/非持续开播主播，跳过整个收益拉取。
+      // 与冷启动、绿色刷新一致：不再重复探测，仅使用本地已有（通常为空）记录计算统计。
+      console.log(`[AnchorGifts] ${validSession.mid} 已标记无收益，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
+      allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
+      fetchedNewPages = 0;
+    } else if (skipFetch) {
+      // 非登录（冷启动/绿色刷新）且无数据基线：不做全量探测，仅用本地已有记录计算统计。
+      // 该账号的全量探测只在下次扫码登录（probe=true）时触发，或在"重建数据"时重新进行。
+      console.log(`[AnchorGifts] ${validSession.mid} 非登录且无数据基线，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
+      allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
+      fetchedNewPages = 0;
     } else if (startDate > yesterdayStr) {
       console.log(`[AnchorGifts] 无需获取，startDate=${startDate} > yesterdayStr=${yesterdayStr}`);
+      fetchedNewPages = 0;
+    } else if (!(await checkAnchorHasRoom(validSession.mid))) {
+      // 无直播间（非主播）：跳过整个收益拉取，仅使用本地已有记录计算统计。
+      // 大多数用户并非主播，避免为完全无收益数据的账号做几十个月的翻页/重试。
+      console.log(`[AnchorGifts] ${validSession.mid} 无直播间，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
+      allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
       fetchedNewPages = 0;
     } else {
       // 获取 buvid3 反爬Cookie
@@ -824,6 +898,14 @@ export async function GET(request: Request) {
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
 
       const prevTotalPage = meta?.total_page ?? 0;
+      // 首个有数据月份下标：开播前无历史月份的响应与假空无法区分（都是 code=0/total_page=0），
+      // 若也计入 empty_counts 会把 end_date 钉到最早月份、每次全量重拉并反复重试这些月份，代价过大；
+      // 故开播前（firstDataIdx 之前）的月份一律不计数、不补拉。
+      let firstDataIdx = -1;
+      for (let i = 0; i < chunkResults.length; i++) {
+        const r = chunkResults[i];
+        if (r && r.records.length > 0) { firstDataIdx = i; break; }
+      }
       // empty_count 处理：有数据的月份清零，空月份累加，再按上限决定 end_date
       const prevEmptyCounts = meta?.empty_counts ?? {};
       const nextEmptyCounts: Record<string, number> = { ...prevEmptyCounts };
@@ -832,6 +914,7 @@ export async function GET(request: Request) {
         if (!result) continue;
         const start = chunks[ci]?.start;
         if (!start) continue;
+        if (firstDataIdx !== -1 && ci < firstDataIdx) continue;
         if (result.empty) {
           nextEmptyCounts[start] = (nextEmptyCounts[start] ?? 0) + 1;
         } else if (result.records.length > 0) {
@@ -841,7 +924,13 @@ export async function GET(request: Request) {
       // 仍低于上限的空月份视为"可疑"，取其最早者作为截止点，下轮从该月补拉
       const suspiciousEmptyStarts = chunks
         .map(c => c.start)
-        .filter(s => s && (nextEmptyCounts[s] ?? 0) < MAX_CONSECUTIVE_EMPTY_RUNS);
+        .filter(s => {
+          const c = nextEmptyCounts[s] ?? 0;
+          // 只有真正被判空过的月份（次数>=1）且仍低于上限的，才挡住 end_date 补拉。
+          // 有数据的月份不在 empty_counts 里（count=0），绝不能当作可疑空，
+          // 否则 end_date 会被钉在最早月份，导致每次更新都从头全量重拉。
+          return s && c >= 1 && c < MAX_CONSECUTIVE_EMPTY_RUNS;
+        });
       const nextEndDate = suspiciousEmptyStarts.length > 0
         ? suspiciousEmptyStarts.sort()[0]
         : yesterdayStr;
@@ -858,12 +947,22 @@ export async function GET(request: Request) {
         });
         console.log(`[AnchorGifts] 获取部分完成: ${fetchedNewPages} 页, 新增记录 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条（截止 ${failedBegin}）`);
       } else {
+        // 登录触发的全量探测（probe=true）干净完成且一条记录都没有 → 判定该账号无收益/非持续开播。
+        // 置位 noRevenue（持久化到元数据）后，冷启动/绿色刷新均直接跳过拉取，避免反复试探。
+        // 仅 probe=true 时置位；冷启动/绿色刷新（probe=false）的增量拉取即便无记录也不标记，
+        // 避免仅凭近几日增量误判。
+        const markNoRevenue = probe && allRecords.length === 0;
+        if (markNoRevenue) markedNoRevenue = true;
         await saveRecordsWithMeta(validSession.mid, validSession.uname, allRecords, {
           total_page: prevTotalPage + fetchedNewPages,
           end_date: nextEndDate,
           last_fetch: getBeijingTime(),
           empty_counts: nextEmptyCounts,
+          noRevenue: markNoRevenue || (meta?.noRevenue ?? false),
         });
+        if (markNoRevenue) {
+          console.log(`[AnchorGifts] ${validSession.mid} 首次登录全量探测无收益，标记 noRevenue，后续跳过收益拉取`);
+        }
         if (suspiciousEmptyStarts.length > 0) {
           console.log(`[AnchorGifts] 获取完成: end_date 保留在最早可疑空月份 ${nextEndDate}（共${suspiciousEmptyStarts.length}个待补拉），${fetchedNewPages} 页, 新增 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条`);
         } else {
@@ -1209,6 +1308,8 @@ export async function GET(request: Request) {
       records: filteredRecords,
       filter: { dateRange: dateRangeFilter, fan: fanFilter },
       metadata: meta,
+      // 本次已判定无收益（或此前已标记）：供前端立即隐藏主播页
+      noRevenue: markedNoRevenue || meta?.noRevenue === true,
       fetchedNewPages: fetchedNewPages,
       yesterdayAvailable,
     };
