@@ -645,19 +645,32 @@ export async function fetchAnchorGifts(
 
       const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
 
-      // 进度分母 = 首个有数据月份 → 当前时间 的月数（一开始探测出来后就固定），
-      // 而非全部 36 个自然月，也不是边获取边增长的探测值。
-      // page0 探测（36 个月各 1 个请求，很快）全部完成后，
-      // 用首个有数据月份下标 firstDataIndex 确定最终分母 totalValidMonths，之后不再变化。
+      // 进度分母 = 首个有数据月份 → 当前时间 的月数（固定）。
+      // 注意：增量拉取（冷启动/绿色刷新）时本批 chunks 只含近几个月，若仅用本批探测结果，
+      // 分母会错误地等于本批月数（常为 1）。因此先从已有记录推算最早有数据月份作为基准，
+      // 再与本批探测结果取较大者，保证分母反映全量收益月份的跨度。
+      let earliestDataBase: string | null = null; // 已有记录的最早月份（YYYYMM）
+      for (const r of existingRecords) {
+        const m = r.time.slice(0, 7).replace("-", "");
+        if (earliestDataBase === null || m < earliestDataBase) earliestDataBase = m;
+      }
+      const curYM = yesterdayStr.slice(0, 6);
+      const baseTotalMonths = earliestDataBase
+        ? (Number(curYM.slice(0, 4)) * 12 + Number(curYM.slice(4, 6)))
+          - (Number(earliestDataBase.slice(0, 4)) * 12 + Number(earliestDataBase.slice(4, 6)))
+          + 1
+        : 0;
+
       let probedCount = 0;
-      let firstDataIndex = -1; // 按时间顺序第一个有数据的月份下标
+      let firstDataIndex = -1; // 按时间顺序本批第一个有数据的月份下标
       let totalValidMonths = -1; // 固定分母；-1 表示探测未完成
       let validDone = 0; // 已完成全部翻页的有效月份数
       const probeMonthHasData = (index: number, hasData: boolean) => {
         probedCount++;
         if (hasData && (firstDataIndex === -1 || index < firstDataIndex)) firstDataIndex = index;
         if (probedCount >= chunks.length) {
-          totalValidMonths = firstDataIndex === -1 ? 0 : chunks.length - firstDataIndex;
+          const probeSpan = firstDataIndex === -1 ? 0 : chunks.length - firstDataIndex;
+          totalValidMonths = Math.max(probeSpan, baseTotalMonths);
         }
       };
 
