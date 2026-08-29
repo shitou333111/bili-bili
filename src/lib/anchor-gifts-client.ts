@@ -542,15 +542,19 @@ export async function fetchAnchorGifts(
     // 大多数用户并未开播或未持续开播：仅"扫码登录触发的全量探测"（probe=true，且 roomStatus=1）
     // 才会做有容错的全量收益探测；冷启动/绿色刷新不再重复全量探测。
     let skipPull = false;
-    if (session.source !== "server") {
-      if (meta?.noRevenue) {
-        skipPull = true;
-        console.log(`[AnchorGifts-Tauri] ${session.mid} 已标记无收益，跳过收益记录拉取`);
-      } else {
-        skipPull = !(await hasLiveRoom(session.mid));
-        if (skipPull) {
-          console.log(`[AnchorGifts-Tauri] ${session.mid} 无直播间，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
-        }
+    if (session.source === "server") {
+      // 纯服务器收集账号（source=server）本机无 B站 Cookie，根本无法从 B站 拉取增量，
+      // 只能基于已从自建服务器拉取到本地的记录计算统计。
+      // 绝不能带着空凭证去打 B站（会得到 -101 → 误触发 needs-relogin → 被强制跳登录页）。
+      skipPull = true;
+      console.log(`[AnchorGifts-Tauri] ${session.mid} 服务器账号，跳过 B站 收益拉取（仅用本地记录）`);
+    } else if (meta?.noRevenue) {
+      skipPull = true;
+      console.log(`[AnchorGifts-Tauri] ${session.mid} 已标记无收益，跳过收益记录拉取`);
+    } else {
+      skipPull = !(await hasLiveRoom(session.mid));
+      if (skipPull) {
+        console.log(`[AnchorGifts-Tauri] ${session.mid} 无直播间，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
       }
     }
 

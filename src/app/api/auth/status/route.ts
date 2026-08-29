@@ -28,20 +28,6 @@ export async function GET(request: Request) {
     );
   }
 
-  // 服务器账号（source=server）：本机没有该账号的 B站 登录凭证，
-  // 也不应校验/刷新凭证（其数据来自自建服务器）。直接视为已登录，
-  // 避免被 ensureValidCredential 误判为凭证失效而强制跳转扫码登录页。
-  if (session.source === "server") {
-    return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string; mid: number; face?: string }>>(
-      {
-        code: 0,
-        message: "active (server account)",
-        data: { loggedIn: true, sid: session.sid, uname: session.uname, mid: session.mid, face: session.face },
-      },
-      { status: 200 },
-    );
-  }
-
   // 离线模式：跳过 B 站校验，视为已登录（仍可就地读取缓存数据）
   if (isOffline(url)) {
     return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string; mid: number; face?: string }>>(

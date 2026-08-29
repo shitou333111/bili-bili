@@ -589,7 +589,10 @@ export async function GET(request: Request) {
   }
 
   const offline = isOffline(url);
-  if (!offline) {
+  // 服务器账号（source=server）本机无 B站 凭证：跳过凭证校验（与原生端一致），
+  // 否则缺失/空凭证会被 ensureValidCredential 判为失效 → 误触发 needs-relogin → 强制跳扫码登录页。
+  const isServerAccount = session.source === "server";
+  if (!offline && !isServerAccount) {
     const credentialResult = await ensureValidCredential(session);
     if (!credentialResult.valid) {
       console.log(`[AnchorGifts] B站凭证失效，需要重新登录`);
@@ -601,7 +604,7 @@ export async function GET(request: Request) {
   }
 
   const validSession = session;
-  const biliCookie = offline ? "" : buildCookieHeader(session);
+  const biliCookie = offline || isServerAccount ? "" : buildCookieHeader(session);
   const csrf = biliCookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
   console.log(`[AnchorGifts] 认证通过${offline ? " (离线模式，使用本地缓存)" : ""}: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
 
