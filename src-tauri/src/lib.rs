@@ -1525,6 +1525,46 @@ pub fn run() {
     // init() 必须最先调用：它消费原 context 并返回替换了 asset provider 的新 context，
     // 后续 Builder 必须用新 context run，WebView 才从 hotswap 服务资源。
     let context = tauri::generate_context!();
+
+    // ==================== 修复：原生包升级时清理陈旧热更新缓存 ====================
+    // 覆盖安装新原生包不会清空 AppData 里 hotswap 的旧 OTA bundle（base_dir/current 仍指向旧 seq），
+    // 插件启动时 ota_dir 指向该旧目录 → 旧前端持续生效，出现"当前版本显示旧日期 + 误报热更新"。
+    // 这里在插件 init 之前，用构建日期戳（build.rs 注入的 BILI_BUILD_DATE）检测原生包是否变化：
+    // 变化则清空 hotswap 缓存目录 → 插件解析不到 current → 直接用新包内嵌前端。
+    // 仅清缓存，不影响后续正常热更新（插件下次启动会重新按 manifest 判断下载）。
+    // 目录计算必须与 tauri-plugin-hotswap 内部 resolve_base_dir 完全一致。
+    const NATIVE_BUILD_DATE: &str = env!("BILI_BUILD_DATE");
+    let hotswap_app_id = context.config().identifier.clone();
+    let hotswap_base = {
+        #[cfg(not(target_os = "android"))]
+        {
+            let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            base.join(&hotswap_app_id).join("hotswap")
+        }
+        #[cfg(target_os = "android")]
+        {
+            // Android 包名不允许含 '-'，tauri 生成工程时会替换为 '_'（与插件/Manifest 约定一致）
+            let pkg = hotswap_app_id.replace('-', "_");
+            std::path::PathBuf::from("/data/data").join(pkg).join("files/hotswap")
+        }
+    };
+    if let Some(stamp) = hotswap_base.parent().map(|p| p.join(".native-build-date")) {
+        let prev = std::fs::read_to_string(&stamp).ok();
+        if prev.as_deref() != Some(NATIVE_BUILD_DATE) {
+            eprintln!(
+                "[hotswap] 原生包日期 {:?} -> {}，清空陈旧热更新缓存: {}",
+                prev,
+                NATIVE_BUILD_DATE,
+                hotswap_base.display()
+            );
+            let _ = std::fs::remove_dir_all(&hotswap_base);
+        }
+        if let Some(dir) = stamp.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&stamp, NATIVE_BUILD_DATE);
+    }
+
     let (hotswap, context) =
         tauri_plugin_hotswap::init(context).expect("failed to initialize hotswap plugin");
 

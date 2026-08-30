@@ -56,9 +56,14 @@ server {
         # 文件名由前端下载链接的参数传入（单一来源，见 DownloadSection.tsx）：
         #   ?fn=        ASCII 兜底名（如 Bgua.apk）——保证 .apk/.exe/.ipa 扩展名正确
         #   ?filename=  RFC 5987 UTF-8 中文名（如 B瓜.apk）——现代浏览器优先采用 filename*
-        # 直接访问不带参数的 current_* 链接时，兜底用 Bgua.apk。
+        # 直接访问不带参数（fn/filename）的 current_* 链接时，按 URL 兜底对应扩展名：
+        # current_exe→Bgua.exe、current_apk→Bgua.apk、current_ipa→Bgua.ipa，
+        # 避免 exe 被下载成 .apk 后缀。
+        set $dl_default "Bgua.apk";
+        if ($uri ~ /current_exe$) { set $dl_default "Bgua.exe"; }
+        if ($uri ~ /current_ipa$) { set $dl_default "Bgua.ipa"; }
         set $dl_ascii $arg_fn;
-        if ($dl_ascii = "") { set $dl_ascii "Bgua.apk"; }
+        if ($dl_ascii = "") { set $dl_ascii $dl_default; }
         set $dl_utf8 $arg_filename;
         if ($dl_utf8 = "") { set $dl_utf8 $dl_ascii; }
         # Android 下载管理器对"同时存在 filename= 与 filename*="的 Content-Disposition
@@ -69,6 +74,21 @@ server {
         set $cd "attachment; filename*=UTF-8''$dl_utf8; filename=\"$dl_ascii\"";
         if ($http_user_agent ~* "Android") { set $cd "attachment; filename=\"$dl_utf8\""; }
         add_header Content-Disposition $cd;
+
+        # current_* 是固定路径软链、versions.json 是清单，URL 跨版本不变。
+        # 若不显式禁用缓存，浏览器/CDN 会一直缓存旧安装包，表现正是：
+        # "landing 版本角标已更新（versions.json 拉到了新值），但下载下来的仍是旧包"。
+        # 因此这三个 current_* 与 versions.json 必须永不缓存；
+        # 版本化的 frontend-<seq>.tar.gz 等仍按需缓存，不受影响。
+        set $dl_nocache "";
+        if ($uri ~* ^/artifacts/(current_exe|current_apk|current_ipa|versions\.json)$) {
+            set $dl_nocache "1";
+        }
+        if ($dl_nocache = "1") {
+            add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+            expires 0;
+            add_header Pragma "no-cache";
+        }
 
         # hotswap.json 是热更新清单（固定路径），客户端插件拉它判断是否有新热更。
         # 该文件每次 CI 发布都会覆盖更新，若被浏览器/代理/CDN 缓存，客户端会拿到旧清单

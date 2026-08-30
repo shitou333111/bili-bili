@@ -52,6 +52,8 @@ tauri-plugin-sharekit = "0.3"
 # window.location.reload() 立即生效（无需重启进程，iOS/Android 均可）。
 # 默认 tar.gz bundle；如改发 zip 需开启 features = ["zip"]。
 tauri-plugin-hotswap = "0.0"
+# 计算 hotswap 缓存目录（与 tauri-plugin-hotswap 内部 resolve_base_dir 使用的 dirs 一致）
+dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # tokio：with_timeout 用的 tokio::time::timeout（各命令请求超时，配合全局 reqwest Client 复用）
