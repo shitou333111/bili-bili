@@ -16,7 +16,11 @@ const nextConfig: NextConfig = {
     "/*": ["./src-tauri/**", "./.data/**", "./.next/**"],
   },
   // 允许局域网/设备通过开发服务器 IP 访问（否则客户端 JS 不加载，页面交互失效）
+  // 本地开发默认使用 localhost，避免切换网络环境后 IP 变化导致页面/API 请求失败。
   allowedDevOrigins: [
+    "http://localhost:3000",
+    "http://localhost",
+    "localhost",
     "http://192.168.1.2:3000",
     "http://192.168.1.2",
     "192.168.1.2",

@@ -5,7 +5,7 @@
  * - Tauri 模式：前端是静态文件，需将 /api/... 转发到服务器（NEXT_PUBLIC_SERVER_URL）
  */
 
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
 
 /** 构建日期（CI 构建时注入；本地开发为"开发版"），用于判定是否生产打包 */
 const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";

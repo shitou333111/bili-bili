@@ -716,6 +716,257 @@
     };
   }
 
+  // ===== 逐级点亮（成名之路）算法 =====
+  // 玩法：5 档顺序点亮，从第 1 档开始；花费电池尝试点亮，概率成功。
+  // 成功：点亮当前档位；失败：当前档位点亮失败，上一已点亮档位熄灭（1 档失败无惩罚）。
+  // 每档独立【人气】，失败时该档人气 +1，人气达到上限后本局后续尝试该档必定成功。
+  // 点亮第 5 档自动结束并发放对应礼物；至少点亮 1 档后可主动结算。
+  var CHENG_STATE_VERSION = 1;
+  var chengState = {
+    _v: CHENG_STATE_VERSION,
+    current_level: 0,
+    lighted: {},
+    pity: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+  };
+  (function () {
+    try {
+      var saved = localStorage.getItem("bili_activity_chengming");
+      if (saved) {
+        var parsed = JSON.parse(saved);
+        if (parsed && parsed._v === CHENG_STATE_VERSION) {
+          chengState = parsed;
+        } else {
+          localStorage.removeItem("bili_activity_chengming");
+        }
+      }
+    } catch (e) {}
+  })();
+  function saveChengState() {
+    try {
+      chengState._v = CHENG_STATE_VERSION;
+      localStorage.setItem("bili_activity_chengming", JSON.stringify(chengState));
+    } catch (e) {}
+  }
+  function resetChengState() {
+    chengState.current_level = 0;
+    chengState.lighted = {};
+    chengState.pity = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    saveChengState();
+  }
+  function chengmingLevelCfg(level) {
+    var lv = CONFIG.chengming_levels || [];
+    return lv[level - 1] || null;
+  }
+  function chengmingNotifyGift(levelCfg) {
+    notifyCompose({
+      gift_id: levelCfg.gift_id,
+      gift_name: levelCfg.gift_name,
+      gift_img: levelCfg.gift_icon,
+      gift_price: levelCfg.gift_value,
+    });
+  }
+  function makeChengCarousel() {
+    var lv = CONFIG.chengming_levels || [];
+    if (!lv.length) return [];
+    var names = ["小羊嘎嘎嘎", "心寒的老父亲", "Kono", "哦豁down", "某个优雅的男人", "AC4o2", "Phoenix", "Caictou", "三条是大猛男", "在下香菜教主"];
+    var picks = [];
+    for (var i = 0; i < 10; i++) {
+      var cfg = lv[randInt(0, lv.length - 1)];
+      picks.push({ uid: randInt(1000000, 999999999), user_name: names[i] || "模拟用户", gift_name: cfg.gift_name });
+    }
+    return picks;
+  }
+  function makeChengGetGameState() {
+    var lv = CONFIG.chengming_levels || [];
+    var levels = lv.map(function (cfg) {
+      return {
+        item_level: cfg.item_level,
+        level_name: cfg.level_name,
+        level_icon: cfg.level_icon,
+        gift_id: cfg.gift_id,
+        gift_name: cfg.gift_name,
+        gift_icon: cfg.gift_icon,
+        gift_value: cfg.gift_value,
+        price: cfg.price,
+        success_rate: cfg.success_rate,
+        pity_progress: chengState.pity[cfg.item_level] || 0,
+        pity_limit: cfg.pity_limit,
+        is_lighted: !!chengState.lighted[cfg.item_level],
+      };
+    });
+    return {
+      code: 0,
+      message: "OK",
+      ttl: 1,
+      data: {
+        end_time: CONFIG.end_time || 1788753599,
+        current_time: now(),
+        current_level: chengState.current_level,
+        levels: levels,
+        carousel: makeChengCarousel(),
+      },
+    };
+  }
+  function makeChengLightUp(query) {
+    var targetLevel = parseInt((query && query.item_level) || (chengState.current_level + 1), 10);
+    var cfg = chengmingLevelCfg(targetLevel);
+    if (!cfg) {
+      return {
+        code: 0,
+        message: "OK",
+        ttl: 1,
+        data: {
+          is_success: false,
+          is_pity_hit: false,
+          current_level: chengState.current_level,
+          pity_progress: Object.assign({}, chengState.pity),
+          is_settled: false,
+          code: 1,
+          message: "点亮失败",
+        },
+      };
+    }
+    batteryBalance = Math.max(0, batteryBalance - cfg.price);
+    var pity = chengState.pity[targetLevel] || 0;
+    var pityLimit = cfg.pity_limit || 999;
+    var isPityHit = pity >= pityLimit;
+    var roll = randInt(1, 10000);
+    var isSuccess = isPityHit || roll <= cfg.success_rate;
+
+    var data = {
+      is_success: isSuccess,
+      is_pity_hit: isPityHit,
+      current_level: chengState.current_level,
+      pity_progress: Object.assign({}, chengState.pity),
+      is_settled: false,
+      code: isSuccess ? 0 : 1,
+      message: isSuccess ? "点亮成功" : "点亮失败",
+    };
+
+    if (isSuccess) {
+      chengState.lighted[targetLevel] = true;
+      chengState.current_level = targetLevel;
+      data.current_level = targetLevel;
+      if (targetLevel === 5) {
+        chengmingNotifyGift(cfg);
+        data.is_settled = true;
+        resetChengState();
+      }
+    } else {
+      chengState.pity[targetLevel] = pity + 1;
+      data.pity_progress[targetLevel] = chengState.pity[targetLevel];
+      if (targetLevel > 1 && chengState.lighted[targetLevel - 1]) {
+        delete chengState.lighted[targetLevel - 1];
+        var newLevel = 0;
+        for (var i = targetLevel - 1; i >= 1; i--) {
+          if (chengState.lighted[i]) {
+            newLevel = i;
+            break;
+          }
+        }
+        chengState.current_level = newLevel;
+        data.current_level = newLevel;
+      }
+    }
+
+    saveChengState();
+    console.log("[CHENG-MOCK] LightUp level=" + targetLevel + " success=" + isSuccess + " pity=" + pity + " current_level=" + data.current_level);
+    return { code: 0, message: "OK", ttl: 1, data: data };
+  }
+  function makeChengSettle() {
+    var settledLevel = chengState.current_level;
+    if (settledLevel >= 1) {
+      var cfg = chengmingLevelCfg(settledLevel);
+      if (cfg) chengmingNotifyGift(cfg);
+    }
+    resetChengState();
+    return { code: 0, message: "OK", ttl: 1, data: { item_level: settledLevel } };
+  }
+  // 页面初始化（HalfInit）返回整套页面样式/背景资源（style_config_map）+ 活动基础信息。
+  // 必须返回完整数据：若被 mock 成空，页面缺少背景图等资源，会加载失败且初始化不完整，
+  // 导致"当前档位点亮后无法自动跳到下一档"。这里用抓包到的真实资源 URL。
+  function makeChengHalfInit() {
+    return {
+      code: 0,
+      message: "OK",
+      ttl: 1,
+      data: {
+        config_id: "FCK6EHCX",
+        act_id: 110503,
+        act_name: "成名之路",
+        act_status: 1,
+        timestamp: now(),
+        start_time: CONFIG.start_time || 1788148800,
+        end_time: CONFIG.end_time || 1788753599,
+        color_map: {
+          "current-name-text-color": "#CFFAFF",
+          "desc-text-color": "#234FA1",
+          "dropdown-bg-color": "#D6FBFC",
+          "dropdown-text-color": "#446DA4",
+          "highlight-btn-text-color": "#FFEAA7",
+          "highlight-text-color": "#5DF6FF",
+          "minor-text-color": "#4D79CB",
+          "normal-text-color": "#FFFFFF",
+          "pos-bg-color": "#FF89EF",
+          "pos-tag-text-color": "#FFFFFF",
+          "progress-bg-color": "#508DFF",
+          "progress-color": "#FE8CF0",
+        },
+        rule_id: 4122,
+        style_config_map: {
+          activity_bg: "https://i0.hdslb.com/bfs/live/048ae887feff96ddf5cc03c2158d99388e663f00.png",
+          add_icon: "https://i0.hdslb.com/bfs/live/161698f3fe0722b518b40081547fbee7ed004142.png",
+          back_btn: "https://i0.hdslb.com/bfs/live/4d74c1fba689b4ec2429b19fa0e3a4dba72bcdf2.png",
+          battery_large_icon: "https://i0.hdslb.com/bfs/live/2456d39c9f8436cf8415bf664c2881c47cd3f16b.png",
+          bottom_panel_bg: "https://i0.hdslb.com/bfs/live/f25c721709495fc5feda8e99a3acc43290787ea7.png",
+          cancel_btn: "https://i0.hdslb.com/bfs/live/e46cc73984111e1b7bb98322a8fb986881ea4d22.png",
+          carousel_bg: "https://i0.hdslb.com/bfs/live/9b0bc964ea7580a56f5d6e2e67c770c72a23a8c8.png",
+          check_box_selected_icon: "https://i0.hdslb.com/bfs/live/343b66f8ac68f3ad59fb9a4e22ef0afe14ffbd81.png",
+          check_box_unselected_icon: "https://i0.hdslb.com/bfs/live/c89624a68ee2834137fade584884c6a3a3a8b67a.png",
+          circular_progress: "https://i0.hdslb.com/bfs/live/f4e857b5b2b0695e7dafe6b3b17c865d13b60d44.png",
+          circular_progress_bg: "https://i0.hdslb.com/bfs/live/1a2c6b34529a8023f0b0294a9a518a12a5cf44f1.png",
+          confirm_btn: "https://i0.hdslb.com/bfs/live/1d6d38b086ba39d3d397450c582c20c42ee71fdc.png",
+          congratulation_title: "https://i0.hdslb.com/bfs/live/78728ff9630377864dbf1522946b566e1fbee402.png",
+          decoration_left_icon: "https://i0.hdslb.com/bfs/live/c989df268c5f1b503a6d919c9328e098d50507bb.png",
+          decoration_right_icon: "https://i0.hdslb.com/bfs/live/ff59afc090246c2f41ce30f6946db656519db2db.png",
+          drawer_bg: "https://i0.hdslb.com/bfs/live/532e90dd2f977ae3461e969632cbadd9af1ebb1d.png",
+          exit_btn: "https://i0.hdslb.com/bfs/live/74a51645f74aef4eb23764e6f78e1776f5ee9431.png",
+          exit_title: "https://i0.hdslb.com/bfs/live/4bdc9bd1359f1da62439fc6417e0091811bc833b.png",
+          floating_ball_bg: "https://i0.hdslb.com/bfs/live/ccf11703c2508c5da40bd715a3afe1cecd1b42e0.png",
+          gift_info_bg: "https://i0.hdslb.com/bfs/live/5fc879afdca44bd863049109e52cb292c25291b9.png",
+          grid_lit_bg: "https://i0.hdslb.com/bfs/live/1a364efe715aec4822ed2d1ce3ff64f02c6a8d15.png",
+          grid_selected_bg: "https://i0.hdslb.com/bfs/live/953f42d0603a303dc815e77cfcd35b5d0f01161b.png",
+          grid_unlit_bg: "https://i0.hdslb.com/bfs/live/717b184d175a29c713b5d22c14789cf5888cf964.png",
+          horn_icon: "https://i0.hdslb.com/bfs/live/d81ad3760db931ef78ff4b8b21b8700912da5285.png",
+          kv: "https://i0.hdslb.com/bfs/live/dc8c3ef5672be684a812b14d689c99a67fb9cc0a.png",
+          light_btn: "https://i0.hdslb.com/bfs/live/9cd4e976b3fd06c35349ddd75029d229d253e3ac.png",
+          light_btn_disabled: "https://i0.hdslb.com/bfs/live/a66207257041694ac408dfaca9f06f7d9a466369.png",
+          lock_icon: "https://i0.hdslb.com/bfs/live/c34871e11f7de14d41f3b4b67499276798d4c4dd.png",
+          material_1: "https://i0.hdslb.com/bfs/live/88e7431ed11b9317727115b28ee319a275d4f9fa.png",
+          material_2: "https://i0.hdslb.com/bfs/live/4b13a7977cea156994aaa67cbd14c7f6b1b0d87d.png",
+          material_3: "https://i0.hdslb.com/bfs/live/a63a11611c4599dec175ddfe60f014ebd54a8c9e.png",
+          material_4: "https://i0.hdslb.com/bfs/live/9719b2452be5cbd62af4696abd3826aadaa31a32.png",
+          material_5: "https://i0.hdslb.com/bfs/live/4ca07c68348a6a2a113a8f2083cd65069b2dd961.png",
+          not_eligible_btn: "https://i0.hdslb.com/bfs/live/df780c2c4cb2fccbaa9c53f9db9baee289373105.png",
+          pop_up_bg: "https://i0.hdslb.com/bfs/live/4bb7f8b35cac0a49f0de374f14b670283758ac97.png",
+          pop_up_gift_info_bg: "https://i0.hdslb.com/bfs/live/2396f02b5e8aab120ed2e3e87164c3ff431bd8df.png",
+          question_icon: "https://i0.hdslb.com/bfs/live/52c194aa041bba022816de36f92489fe2b368402.png",
+          record_btn: "https://i0.hdslb.com/bfs/live/ee741669eace1333fa6ea218e5b71b8ccda8b5c1.png",
+          "record_btn-1": "https://i0.hdslb.com/bfs/live/3edf44ad4a203b10a5814ab5b86c54e4a447c45e.png",
+          record_item_bg: "https://i0.hdslb.com/bfs/live/72abb0e3368fcaddbc695d1ca71ee502f958969d.png",
+          record_title: "https://i0.hdslb.com/bfs/live/c22159eac51cb6f63d7df37dea78ec88a7df909c.png",
+          rule_btn: "https://i0.hdslb.com/bfs/live/8d4a0388ced167b7a7b30f2917a20c389d947d79.png",
+          rule_title: "https://i0.hdslb.com/bfs/live/0dec745332e6ea73c602646aa8405d337c418239.png",
+          分类: "https://i0.hdslb.com/bfs/live/b1846cb224f0b0e7c329ea7e05d15b91dde05d8c.png",
+          "分类-1": "https://i0.hdslb.com/bfs/live/2b2399503bb2235a07005d4040a84b7346d55842.png",
+          "分类-2": "https://i0.hdslb.com/bfs/live/b93283496c4d07b4817bb1fd361bea9fbf2feb43.png",
+          "分类-3": "https://i0.hdslb.com/bfs/live/682d930b7386c5132f3ba917a5b519e5e0116998.png",
+          "分类-4": "https://i0.hdslb.com/bfs/live/bd9c6135c0d5a6c52517de7f4f7f5d3f56659a4f.png",
+        },
+      },
+    };
+  }
+
   // ===== 算法分派 =====
   // 不同 algorithmType 使用不同的拦截规则与 mock 逻辑（各活动玩法背后的算法）。
   // 新增算法类型：在此处补充分派分支，改完随前端热更新推送即可，无需原生包更新。
@@ -740,6 +991,16 @@
   function isLinglongUrl(url) {
     return /\/linglong\/LingLong/i.test(url || "");
   }
+  // —— 逐级点亮（成名之路）算法：拦截玩法接口 + 页面初始化(HalfInit) + 登录/钱包；其余放行。 ——
+  function isChengmingUrl(url) {
+    return /\/chengming\//i.test(url || "");
+  }
+  // 仅有明确玩法/初始化接口才本地 mock；其他 chengming/*（如 GetGamerInfo、HalfInit 之外的
+  // 各种查询）一律放行真实服务器。特别注意 HalfInit 必须返回完整 style_config_map，
+  // 否则页面背景图等资源缺失、初始化不完整，导致"点亮当前档位后无法自动跳下一档"。
+  function isChengGame(url) {
+    return /\/chengming\/(GetGameState|LightUp|Settle|HalfInit|GetActivityConfig)/i.test(url || "");
+  }
   function handleRequest(url, body) {
     var params = parseBody(body);
     if (algType() === "linglong-open-box" || isLinglongUrl(url)) {
@@ -756,6 +1017,17 @@
       if (/xlive\/revenue\/v1\/wallet\/myWallet/i.test(url)) return fakeWallet();
       if (isLingLoginGate(url)) return fakeZeroConsume();
       return genericSuccess();
+    }
+    if (algType() === "progressive-light-up" || isChengmingUrl(url)) {
+      var cq = parseQuery(url);
+      for (var _ck in params) {
+        if (params[_ck] !== undefined && cq[_ck] === undefined) cq[_ck] = params[_ck];
+      }
+      if (/\/chengming\/GetGameState/i.test(url)) return makeChengGetGameState();
+      if (/\/chengming\/LightUp/i.test(url)) return makeChengLightUp(cq);
+      if (/\/chengming\/Settle/i.test(url)) return makeChengSettle();
+      // HalfInit / GetActivityConfig：返回完整页面样式资源，保证页面完整加载。
+      if (/\/chengming\/(HalfInit|GetActivityConfig)/i.test(url)) return makeChengHalfInit();
     }
     if (/StarStoneDraw/i.test(url)) return makeDraw(parseSlotIds(params));
     if (/StarStoneReplace/i.test(url)) return makeReplace(parseSlotId(params));
@@ -779,6 +1051,18 @@
     if (algType() === "linglong-open-box" || isLinglongUrl(url)) {
       return (
         isLinglongUrl(url) ||
+        isLoginOrWallet(url) ||
+        isLingLoginGate(url) ||
+        (CONFIG.mockAllApi && /api\.live\.bilibili\.com/i.test(url))
+      );
+    }
+    // 逐级点亮（成名之路）算法：只拦截明确的玩法/初始化接口（GetGameState/LightUp/Settle/
+    // HalfInit/GetActivityConfig）+ 登录态/钱包 + 消费门禁，其余（含其他 chengming/* 查询、
+    // 用户信息/昵称等）一律放行真实服务器。关键：HalfInit 若被 mock 成空会使页面背景图等资源
+    // 缺失、初始化不完整，导致"点亮当前档位后无法自动跳到下一档"。
+    if (algType() === "progressive-light-up" || isChengmingUrl(url)) {
+      return (
+        isChengGame(url) ||
         isLoginOrWallet(url) ||
         isLingLoginGate(url) ||
         (CONFIG.mockAllApi && /api\.live\.bilibili\.com/i.test(url))

@@ -39,7 +39,7 @@ const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";
 const BUILTIN_HOTSWAP_SEQUENCE = Number(process.env.NEXT_PUBLIC_BUILD_SEQ) || 0;
 
 /** 服务器基础地址（用于拉取 versions.json） */
-const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://192.168.1.2:3000";
+const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
 
 export type UpdateType = "hot" | "native" | "none";
 

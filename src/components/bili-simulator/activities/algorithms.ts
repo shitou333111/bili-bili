@@ -184,6 +184,95 @@ function buildLinglongConfig(params: Record<string, unknown>): Record<string, un
   };
 }
 
+/** 逐级点亮（成名之路）单档配置 */
+interface ChengmingLevelConfig {
+  item_level: number;
+  level_name: string;
+  level_icon: string;
+  gift_id: number;
+  gift_name: string;
+  gift_icon: string;
+  gift_value: number;
+  price: number;
+  /** 成功率，万分比，4800 = 48% */
+  success_rate: number;
+  pity_limit: number;
+}
+
+/** 从真实抓包提取的 5 档成名之路静态数据 */
+const CHENG_LEVELS: ChengmingLevelConfig[] = [
+  {
+    item_level: 1,
+    level_name: "深夜街角",
+    level_icon: "https://i0.hdslb.com/bfs/live/a05c8d639b205ac869fee63d296ff313d80f0dc9.png",
+    gift_id: 35781,
+    gift_name: "深夜街角",
+    gift_icon: "https://s1.hdslb.com/bfs/live/a05c8d639b205ac869fee63d296ff313d80f0dc9.png",
+    gift_value: 350,
+    price: 180,
+    success_rate: 4800,
+    pity_limit: 3,
+  },
+  {
+    item_level: 2,
+    level_name: "灯火小馆",
+    level_icon: "https://i0.hdslb.com/bfs/live/e54cb19bf0de40a58cd8cb5e954748a8df626f6c.png",
+    gift_id: 35782,
+    gift_name: "灯火小馆",
+    gift_icon: "https://s1.hdslb.com/bfs/live/e54cb19bf0de40a58cd8cb5e954748a8df626f6c.png",
+    gift_value: 1000,
+    price: 180,
+    success_rate: 4500,
+    pity_limit: 3,
+  },
+  {
+    item_level: 3,
+    level_name: "聚光灯下",
+    level_icon: "https://i0.hdslb.com/bfs/live/07a3ce0a27cad14d597e8c8713c38d89f04f37f9.png",
+    gift_id: 35783,
+    gift_name: "聚光灯下",
+    gift_icon: "https://s1.hdslb.com/bfs/live/07a3ce0a27cad14d597e8c8713c38d89f04f37f9.png",
+    gift_value: 3000,
+    price: 670,
+    success_rate: 4200,
+    pity_limit: 4,
+  },
+  {
+    item_level: 4,
+    level_name: "万人合唱",
+    level_icon: "https://i0.hdslb.com/bfs/live/3719650576cea2cf3a47ec52c803b8758cc9ef5f.png",
+    gift_id: 35784,
+    gift_name: "万人合唱",
+    gift_icon: "https://s1.hdslb.com/bfs/live/3719650576cea2cf3a47ec52c803b8758cc9ef5f.png",
+    gift_value: 8000,
+    price: 1300,
+    success_rate: 3900,
+    pity_limit: 4,
+  },
+  {
+    item_level: 5,
+    level_name: "环球巡演",
+    level_icon: "https://i0.hdslb.com/bfs/live/0524cfe42d17ca798f11c55e2a339486e4152039.png",
+    gift_id: 35785,
+    gift_name: "环球巡演",
+    gift_icon: "https://s1.hdslb.com/bfs/live/0524cfe42d17ca798f11c55e2a339486e4152039.png",
+    gift_value: 30000,
+    price: 6400,
+    success_rate: 3500,
+    pity_limit: 5,
+  },
+];
+
+/** 组装逐级点亮算法的默认 CONFIG */
+function buildProgressiveLightConfig(params: Record<string, unknown>): Record<string, unknown> {
+  const levels = Array.isArray(params.chengming_levels) ? params.chengming_levels : CHENG_LEVELS;
+  return {
+    start_time: typeof params.start_time === "number" ? params.start_time : 1788148800,
+    end_time: typeof params.end_time === "number" ? params.end_time : 1788753599,
+    chengming_levels: levels,
+  };
+}
+
 /** 算法注册表：键 = algorithmType，与 mock-shim.js 的分派一致 */
 export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
   /** 晶石工坊（山海工坊）：6 槽位抽取/替换/合成 */
@@ -206,6 +295,15 @@ export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
     label: "逐级开箱",
     description: "分5级开箱，开出上一级宝物才能进下一级；每级开箱花费递增，开出目标级宝物即获得该级礼物",
     buildMockConfig: buildLinglongConfig,
+  },
+  /**
+   * 逐级点亮（成名之路）：5 档顺序点亮，失败则上一档熄灭并累计人气，
+   * 人气达到上限后该档必定成功；点亮第 5 档自动结束，也可主动结算。
+   */
+  "progressive-light-up": {
+    label: "逐级点亮",
+    description: "成名之路玩法：5档顺序点亮，失败则上一档熄灭并累计人气，人气满则保底成功",
+    buildMockConfig: buildProgressiveLightConfig,
   },
 };
 
