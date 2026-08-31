@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 0.0.0.0",
+    "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
     "build:tauri": "node scripts/build-tauri.mjs",
     "start": "next start -H 0.0.0.0",
+    "moniqi:mirror": "node scripts/moniqi-mirror.mjs",
     "postinstall": "node scripts/patch-foamtree.mjs",
     "lint": "eslint",
     "tauri": "tauri"
