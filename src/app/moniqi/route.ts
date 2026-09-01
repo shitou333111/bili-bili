@@ -66,7 +66,7 @@ export async function GET(req: Request) {
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width,initial-scale=1">` +
         `<meta name="referrer" content="no-referrer"><title>活动模拟</title>` +
-        `<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2323ade5'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>模</text></svg>">` +
+        `<link rel="icon" href="/orig_icon.png">` +
         `<style>html,body{margin:0;height:100%;background:#1b1533;overflow:hidden}` +
         `.frame-wrap{width:100%;height:100%;display:flex;justify-content:center}` +
         `iframe{width:540px;max-width:100vw;height:100vh;border:0;background:#342a85}` +
@@ -95,9 +95,10 @@ export async function GET(req: Request) {
 
   const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=3`;
   const injection =
-    `<style>#__moniqi_badge__{position:fixed;top:8px;right:8px;z-index:2147483647;padding:3px 10px;` +
-    `font:12px/1.6 -apple-system,'PingFang SC',sans-serif;color:#fff;background:rgba(0,0,0,.55);` +
-    `border-radius:99px;pointer-events:none;user-select:none}` +
+    `<style>#__moniqi_badge__{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);` +
+    `z-index:2147483647;padding:8px 16px;font:12px/1.6 -apple-system,'PingFang SC',sans-serif;` +
+    `color:#fff;background:rgba(0,0,0,.55);border-radius:99px;white-space:nowrap;` +
+    `pointer-events:none;user-select:none}` +
     // 桌面浏览器下保持 B站 原始 H5 窄屏宽度（flexible 脚本 rem=37.5 对应 526px），居中显示，
     // 避免 body 100% 宽导致背景铺满全屏。
     `html{background:#1b1533!important}` +
