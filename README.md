@@ -369,6 +369,18 @@ bili_live/
 - **合成活动**：山海工坊（槽位抽取 + 合成礼物），抽到的礼物进入"包裹"选项卡；活动状态持久化到本地 `activity-state.json`。
 - **"礼物"选项卡数据源**：固定直播间（room_id=23915535）的**直播间礼物面板 API**（`xlive/web-room/v1/giftPanel/roomGiftList`，无需登录，所有直播间一致）。"礼物"选项卡 = `roomGiftList.gold_list`（原始顺序，保留既有展示顺序）+ `public/gift-extra-ids.json` 额外礼物（去重）；礼物详情（图标/价格）从**全量礼物目录**（giftConfig）联表获取。
 
+#### 活动模拟镜像页（/moniqi，独立公开页面）
+
+在模拟器之外，还有一个**独立网站页面 `/moniqi`**，用于把 B站 活动页**原样复刻成本地演示**：真实 B站 UI + 本地 mock 数据，**不登录、不真实扣费**。它展示哪个活动，取决于服务器 `admin-config.json` 的 `simulator_activities` 里**第一个启用的活动**。
+
+- **承载方式**：`/moniqi` 渲染一个 **540px 宽的 iframe** 作为 B站 活动页的手机视口，地址栏恒为 `/moniqi`（无 query/hash）。原因是 B站 页面的 rem 与组件宽度按 `document.documentElement.clientWidth` 计算——桌面浏览器视口太宽会按桌面宽度渲染导致内容溢出；iframe 视口=540 时 `clientWidth=540`、`rem=54px`，一切自动按原始手机宽度正确渲染。参数与 `#/play` 子路由都在 iframe 内部，外部地址栏始终干净。
+- **mock 机制**：镜像页在自身 origin 加载 `mock-shim.js`，在页面内拦截 `api.live.bilibili.com`，返回与 B站 真实响应结构一致的数据（成名之路 `/chengming/*`、玲珑宝斋 `/linglong/*` 等），并处理开箱结果、合成、电池余额等逻辑。
+- **镜像资源**：`node scripts/moniqi-mirror.mjs` 把活动页 index.html + mock-shim.js + 用到的 CDN 图片抓取到 `public/moniqi/mirror/<活动id>/`，随仓库部署到服务器。
+- **背景图防盗链（坑）**：hdslb CDN 是**黑名单式防盗链**——携带 Referer（如 `localhost:3000`）请求目标背景图会返回 **403**，导致背景图加载失败、透出外壳的默认整屏背景（看起来"是另一副背景"）。修复：`/moniqi` 的 route 把 `.road-to-fame-play` 的背景强制改为**本地镜像背景图** + `background-size: cover` 铺满任意视口高度；同时注入 `<meta name="referrer" content="no-referrer">`，让页面所有子资源（UI/礼物/背景图）都不带 Referer 直连 CDN。这也解释了"内置 WebView 对、外部 Chrome 不对"——两者对 Referer 的处理不同。
+- **电池扣费单位**：成名之路、玲珑宝斋的 `price`（页面显示电池数）需 **×100 转换为 gold 单位**再扣减余额；余额显示监听 `.balance-value`（兼容旧 `.balance-amount` 选择器）。
+- **favicon**：`/moniqi` 壳页面 HTML 用内联 SVG data-URI 作 favicon，不依赖 CDN，避免防盗链 403。
+- **admin 切换活动**：`/moniqi` 每次请求都读取服务器 `admin-config.json`（无模块级缓存），所以 admin 里切换活动**立即生效、无需改代码**。唯一前提是**目标活动的镜像目录 `public/moniqi/mirror/<新id>/` 必须已存在于服务器**（先在本机起用该活动后跑 `moniqi-mirror.mjs` 抓取，再提交部署）。只有当新玩法属于 mock-shim 不支持的**全新算法**时，才需要实现算法并经前端热更新/重新部署推送。
+
 ### 其他页面
 - **登录页**（`/login`）：扫码登录（QR 轮询）、开发者登录。
 - **管理后台**（`/admin`）：用户列表、盲盒/活动配置、模拟登录。
@@ -698,3 +710,4 @@ minisign -G -p hot-update.pub -s hot-update.key
 - **热更新已启用**：`tauri.conf.json` 的 `plugins.hotswap` 已配置（`endpoint` + `pubkey` + `require_https` + 各类 policy）。签名是强制的——hotswap 没有"不验签"模式。私钥丢失将无法再发任何热更新，**必须多份离线备份**。无密码私钥只需 `HOT_UPDATE_SIGN_KEY` 一个 Secret。
 - **热更新覆盖范围**：只改 `src/` 或 `public/` 下的前端代码可走热更新（commit message 含 `hot`）；改 Rust 或 Tauri 配置必须发原生包（commit message 含 `exe apk ipa`）。
 - **notifyAppReady 必须调用**：每次 APP 冷启动后调用一次 `notifyAppReady()`（page.tsx useEffect 中），否则 OTA bundle 会被判定为"启动失败"而自动回滚。
+- **`/moniqi` 活动镜像页**：①地址栏保持干净 `/moniqi`，B站 活动页用 540px iframe 当手机视口（rem=54），避免桌面视口过宽导致溢出；②镜像目录 id 必须与服务器「第一个启用的 simulator_activity」id 一致，否则报「镜像未生成」；③hdslb CDN 防盗链会 403 掉带 Referer 的背景图——背景/图片都要走本地镜像或 `no-referrer`，否则外部浏览器显示错误背景；④成名之路/玲珑宝斋扣费用 `price×100` 转 gold，余额读 `.balance-value`；⑤admin 切活动立即生效（配置按请求读取、无缓存），只要新活动的镜像目录已部署，无需改代码；只有全新玩法算法才需热更新。
