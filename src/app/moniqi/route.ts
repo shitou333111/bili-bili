@@ -66,6 +66,7 @@ export async function GET(req: Request) {
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width,initial-scale=1">` +
         `<meta name="referrer" content="no-referrer"><title>活动模拟</title>` +
+        `<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2323ade5'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>模</text></svg>">` +
         `<style>html,body{margin:0;height:100%;background:#1b1533;overflow:hidden}` +
         `.frame-wrap{width:100%;height:100%;display:flex;justify-content:center}` +
         `iframe{width:540px;max-width:100vw;height:100vh;border:0;background:#342a85}` +
@@ -108,7 +109,7 @@ export async function GET(req: Request) {
     // 这里把 CDN 背景改为指向本地镜像(同源 localhost:3000，才无 Referer 防盗链问题)，用 !important
     // 覆盖内联 CDN 背景，并强制 background-size 铺满整个玩法区，保证任何浏览器/视口下都显示目标背景。
     `.road-to-fame-play{` +
-    `background-image:url('/moniqi/mirror/${id}/img/activity_bg.png')!important;` +
+    `background-image:url('/moniqi/mirror/${id}/i0.hdslb.com/bfs/live/048ae887feff96ddf5cc03c2158d99388e663f00.png')!important;` +
     `background-size:cover!important;background-position:center!important;` +
     `background-repeat:no-repeat!important}` +
     `</style>` +
