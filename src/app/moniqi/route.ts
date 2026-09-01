@@ -37,7 +37,7 @@ export async function GET(req: Request) {
   const tplAppName = tplMatch?.[1] || id;
   // 玩法(成名之路)用 config_id 调 chengming/* 接口：缺了它 halfInitial 返回 -400 → emptyTag=1 → 内容区空白。
   const cfgMatch = act.urlTemplate?.match(/[?&]config_id=([^&]+)/);
-  const tplConfigId = cfgMatch?.[1] || act.algorithmParams?.config_id || "FCK6EHCX";
+  const tplConfigId = String(cfgMatch?.[1] || act.algorithmParams?.config_id || "FCK6EHCX");
   // 外壳(694.js)用 location.hash 决定子活动路由：fans_autumn_2026 的玩法页在 play 子路由。
   // 若不保留该 hash，SPA 会落到默认 main 标签页，玩法内容区空白。
   const hashMatch = act.urlTemplate?.match(/#([^]*)/);
@@ -101,10 +101,16 @@ export async function GET(req: Request) {
     // 避免 body 100% 宽导致背景铺满全屏。
     `html{background:#1b1533!important}` +
     `body{max-width:540px!important;margin:0 auto!important;min-height:100vh}` +
-    // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置：
-    // 图片按 540px 宽等比渲染仅约 702px 高，视口高于该值时底部会露出外壳深紫底(错误背景)。
-    // 强制 background-size 铺满整个玩法区(100% 100%)，保证任何视口高度下背景图完整铺满。
-    `.road-to-fame-play{background-size:100% 100%!important}` +
+    // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置，
+    // 并以内联 background-image 引用 B站 CDN(https://i0.hdslb.com/bfs/live/048ae887…png)。
+    // 但 B站 CDN 是黑名单式防盗链：背景图请求一旦携带 Referer(如 external Chrome 发送
+    // localhost:3000 源)就返回 403 → 图片加载失败 → 玩法区背景透明，露出外壳深紫底(h5-bg，错误背景)。
+    // 这里把 CDN 背景改为指向本地镜像(同源 localhost:3000，才无 Referer 防盗链问题)，用 !important
+    // 覆盖内联 CDN 背景，并强制 background-size 铺满整个玩法区，保证任何浏览器/视口下都显示目标背景。
+    `.road-to-fame-play{` +
+    `background-image:url('/moniqi/mirror/${id}/img/activity_bg.png')!important;` +
+    `background-size:cover!important;background-position:center!important;` +
+    `background-repeat:no-repeat!important}` +
     `</style>` +
     `<meta name="robots" content="noindex,nofollow">` +
     // B站 hdslb CDN 为黑名单式防盗链：拒绝已知外部域 Referer(如 localhost:3000)，
