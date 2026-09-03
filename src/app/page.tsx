@@ -1022,6 +1022,15 @@ export default function HomePage() {
     if (!currentAccount?.mid) { setLikedToday(new Set()); return; }
     setLikedToday(loadLikedAnchorsToday(currentAccount.mid));
   }, [currentAccount?.mid]);
+
+  // 启动自动恢复展示模块：总开关开启时自动打开展示窗口并恢复弹幕监听（autoStartDisplay 内部只执行一次）
+  useEffect(() => {
+    if (!currentAccount?.mid) return;
+    import("@/lib/display/auto-start")
+      .then((m) => m.autoStartDisplay(currentAccount.mid!, isLocalAccount))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentAccount?.mid]);
   // 离线功能轻提示（短时间内自动消失）
   const [offlineToast, setOfflineToast] = useState("");
   const offlineToastTimer = useRef<number | null>(null);
@@ -2857,7 +2866,10 @@ export default function HomePage() {
           uname={currentAccount?.uname ?? ""}
           isServerAccount={currentAccount?.source === "server"}
           syncing={syncing}
-          syncLoading={loading}
+          // 仅首次/重建初始化（isFirstTime）才用主 loading 顶起主播页的加载遮罩；
+          // 正常重开（非首次，已有本地数据）时主 loading 在整个启动增量拉取期间恒为 true，
+          // 会让"本就该静默的后台同步"在主播放展示一个不必要的更新遮罩。
+          syncLoading={isFirstTime ? loading : false}
           lastRefreshTime={lastRefreshTime}
           isLocalAccount={isLocalAccount}
           onFetchRequest={anchorRefreshRef}

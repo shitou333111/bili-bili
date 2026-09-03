@@ -2325,6 +2325,12 @@
           "markdownDescription": "Enables the close_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the close_display_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-display-window",
+          "markdownDescription": "Enables the close_display_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the close_real_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-close-real-activity-panel",
@@ -2367,16 +2373,34 @@
           "markdownDescription": "Enables the open_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_display_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-display-window",
+          "markdownDescription": "Enables the open_display_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_real_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-real-activity-panel",
           "markdownDescription": "Enables the open_real_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the pick_video_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-video-file",
+          "markdownDescription": "Enables the pick_video_file command without any pre-configured scope."
+        },
+        {
           "description": "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）",
           "type": "string",
           "const": "allow-restart-app",
           "markdownDescription": "允许调用 restart_app 命令重启 APP（仅 Android 实现；桌面端用 process 插件）"
+        },
+        {
+          "description": "Enables the set_display_orientation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-display-orientation",
+          "markdownDescription": "Enables the set_display_orientation command without any pre-configured scope."
         },
         {
           "description": "禁止调用 apply_in_place_update 命令",
@@ -2395,6 +2419,12 @@
           "type": "string",
           "const": "deny-close-activity-panel",
           "markdownDescription": "Denies the close_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_display_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-display-window",
+          "markdownDescription": "Denies the close_display_window command without any pre-configured scope."
         },
         {
           "description": "Denies the close_real_activity_panel command without any pre-configured scope.",
@@ -2439,10 +2469,22 @@
           "markdownDescription": "Denies the open_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_display_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-display-window",
+          "markdownDescription": "Denies the open_display_window command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_real_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-real-activity-panel",
           "markdownDescription": "Denies the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_video_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-video-file",
+          "markdownDescription": "Denies the pick_video_file command without any pre-configured scope."
         },
         {
           "description": "禁止调用 restart_app 命令",

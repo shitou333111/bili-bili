@@ -356,3 +356,14 @@ body {
   opacity: 0 !important;
   pointer-events: none !important;
 }
+
+/* ===== 展示模块自定义下拉框：彻底去掉浏览器原生箭头（含 WebView2 左侧渲染），
+   统一由右侧自绘箭头替代 ===== */
+.display-select {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+}
+.display-select::-ms-expand {
+  display: none;
+}

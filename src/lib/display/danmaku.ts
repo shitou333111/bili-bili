@@ -1,0 +1,825 @@
+/**
+ * 展示模块 —— 弹幕监听服务（运行于主窗口）。
+ *
+ * 用 bili-live-listener 监听"当前登录主播自己直播间"的实时弹幕：
+ *  - 入场（INTERACT_WELCOME / 高级入场 ENTRY_EFFECT）→ 按配置过滤 → emit 到展示窗口
+ *  - 礼物（SEND_GIFT）→ 累加记录到 .data/display-gifts-<mid>.json → 组装达标礼物清单 → emit
+ *
+ * 仅 Tauri（桌面）环境使用；Web 下不 emit 到独立窗口。
+ */
+import { getPlatform, type Platform } from "@/lib/platform";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  type DisplayConfig,
+  type DisplayEvent,
+  type DisplayGiftItem,
+} from "./types";
+import {
+  loadDisplayConfig,
+  resolveAnimeVideo,
+  resolveAnimeSegment,
+} from "./config";
+import {
+  appendGiftRecord,
+  loadTodayQualifyingGifts,
+  tryHandleBlindBoxQuery,
+} from "./gift-db";
+import { ensureGiftCatalogLoaded, getGiftImg, getGiftList } from "@/lib/gift-catalog-client";
+
+export type DisplayServiceStatus =
+  | { state: "idle" }
+  | { state: "connecting" }
+  | { state: "connected"; roomId: number }
+  | { state: "error"; message: string };
+
+/** 弹幕调试日志条目（面板展示用，data 为精简可读字段） */
+export interface DanmuDebugEvent {
+  /** HH:mm:ss */
+  time: string;
+  /** 消息命令，如 INTERACT_WORD / SEND_GIFT；业务阶段用 entry/gift */
+  cmd: string;
+  /** raw=原始收到 | 业务处理结果（如 emit/filtered/记录） */
+  action: string;
+  /** 关键数据（已精简） */
+  data: unknown;
+}
+
+/** 落盘用调试记录：含完整时间戳与原始消息全字段（供深层排查弹幕问题） */
+export interface DanmuDebugRecord {
+  /** 事件发生的完整时间戳（UTC ISO，解析后按本地时区取自然天），用于按天归档与过期清理 */
+  t: string;
+  cmd: string;
+  action: string;
+  /** 原始消息完整字段（raw 阶段为未精简的原始对象；业务阶段与展示 data 一致） */
+  data: unknown;
+}
+
+/** 本地自然天 YYYY-MM-DD */
+function localDayStr(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** 允许保留的最早自然天 = 昨天（保留"今天 + 昨天"两个自然天，非 48 小时窗口） */
+function minKeepDay(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return localDayStr(d);
+}
+
+/** 按自然天过滤：仅保留最近两天（本地时间今天 + 昨天）；无法解析/旧格式记录直接丢弃。 */
+function filterRecentDays(records: DanmuDebugRecord[]): DanmuDebugRecord[] {
+  const min = minKeepDay();
+  return records.filter((r) => {
+    const d = new Date(r.t);
+    if (Number.isNaN(d.getTime())) return false; // 旧格式（无 t 字段）或损坏记录 → 丢弃
+    return localDayStr(d) >= min; // YYYY-MM-DD 字符串比较即日期比较
+  });
+}
+
+/** 捕获的关键原始命令 */
+const RAW_CMDS = [
+  "INTERACT_WORD",
+  "ENTRY_EFFECT",
+  "SEND_GIFT",
+  "DANMU_MSG",
+  "GUARD_BUY",
+  "WELCOME_GUARD",
+  "SUPER_CHAT_MESSAGE",
+];
+
+/** 把原始弹幕包精简为可读的关键字段（避免 JSON 里塞满无用字段） */
+function summarizeRaw(cmd: string, raw: any): any {
+  try {
+    if (cmd === "INTERACT_WORD") {
+      const d = raw?.data ?? {};
+      return {
+        uid: d.uid,
+        uname: d.uname,
+        type: d.type,
+        guardType: d.guard_type,
+        medalLevel: d.fans_medal?.medal_level,
+        timestamp: d.timestamp,
+      };
+    }
+    if (cmd === "ENTRY_EFFECT") {
+      const d = raw?.data ?? {};
+      return {
+        uid: d.uid,
+        uname: d.uname,
+        guardLevel: d.guard_level,
+        copy: d.copy_writing,
+        timestamp: d.timestamp,
+      };
+    }
+    if (cmd === "SEND_GIFT") {
+      const d = raw?.data ?? {};
+      return {
+        uid: d.uid,
+        uname: d.uname,
+        giftId: d.giftId,
+        giftName: d.giftName,
+        price: d.price,
+        num: d.num,
+        coinType: d.coin_type,
+        timestamp: d.timestamp,
+      };
+    }
+    if (cmd === "DANMU_MSG") {
+      const info = raw?.info ?? raw?.data?.info;
+      if (Array.isArray(info)) {
+        const u = info[2] ?? [];
+        const medal = (info[3] ?? [])[0] ?? {};
+        return { uid: u[0], uname: u[1], content: info[1], medalLevel: medal?.medal_level, timestamp: info[0]?.[4] };
+      }
+      return { info };
+    }
+    if (cmd === "GUARD_BUY") {
+      const d = raw?.data ?? {};
+      return { uid: d.uid, uname: d.username, guardLevel: d.guard_level, giftName: d.gift_name, price: d.price, num: d.num };
+    }
+    if (cmd === "WELCOME_GUARD") {
+      const d = raw?.data ?? {};
+      return { uid: d.uid, uname: d.uname, guardLevel: d.guard_level, copy: d.copy_writing };
+    }
+    if (cmd === "SUPER_CHAT_MESSAGE") {
+      const d = raw?.data ?? {};
+      return { uid: d.uid, uname: d.user_info?.uname, price: d.price, content: d.message };
+    }
+  } catch {
+    /* 精简失败则回退原始对象 */
+  }
+  return raw;
+}
+
+type StatusListener = (s: DisplayServiceStatus) => void;
+
+/** 带超时的 Promise，避免底层 IPC/HTTP 挂起导致状态永久卡住 */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}超时(>${Math.round(ms / 1000)}s)`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+class DisplayDanmakuService {
+  private roomId = 0;
+  /** 当前监听的主播 uid（供画布就绪后补推礼物清单） */
+  private mid = 0;
+  private live: any = null;
+  private removeHandlers: Array<() => void> = [];
+  private active = false;
+  /** 全局"画布就绪 → 补推今日礼物清单"监听是否已注册（会话内只注册一次） */
+  private readyListened = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private retry = 0;
+  private statusListeners = new Set<StatusListener>();
+  // 弹幕 token 缓存：弹幕接口有风控，不能每次重连都重新拉取；
+  // 首次进房间拉一次，后续断线重连直接复用，避免高频请求把 IP 打成 -352。
+  private cachedToken: string | null = null;
+  private cachedRoomId = 0;
+  /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
+  private wsConnectedAt = 0;
+  /**
+   * 测试模式代际计数：开启测试后会异步拉取礼物清单再 emit；若用户在 await 期间取消测试，
+   * 迟到落回的 gift/anime emit 会覆盖画布已清空的状态（礼物取消后仍残留）。
+   * 每次切换测试都会自增代际，开启测试的异步 deliver 在校验代际变化后直接丢弃。
+   */
+  private testGen = 0;
+  // ---- 调试日志 ----
+  private debugListeners = new Set<(e: DanmuDebugEvent) => void>();
+  private debugEvents: DanmuDebugEvent[] = [];
+  /** 落盘原始记录（含完整时间戳与原始消息全字段） */
+  private debugRecords: DanmuDebugRecord[] = [];
+  private debugPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 调试日志写盘串行链：保证任意时刻只有一个写操作在进行，避免并发写触发底层存储冲突 */
+  private debugPersistChain: Promise<void> = Promise.resolve();
+
+  subscribe(listener: StatusListener): () => void {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  /** 订阅调试事件；返回取消函数。 */
+  subscribeDebug(listener: (e: DanmuDebugEvent) => void): () => void {
+    this.debugListeners.add(listener);
+    return () => this.debugListeners.delete(listener);
+  }
+
+  /** 获取已缓冲的调试事件（最近 20 条，供面板展示）。 */
+  getDebugEvents(): DanmuDebugEvent[] {
+    return this.debugEvents.slice(-20);
+  }
+
+  private pushDebug(cmd: string, action: string, data: unknown, raw?: unknown) {
+    const now = new Date();
+    const ev: DanmuDebugEvent = {
+      time: now.toLocaleTimeString("zh-CN", { hour12: false }),
+      cmd,
+      action,
+      data,
+    };
+    this.debugEvents.push(ev);
+    if (this.debugEvents.length > 300) this.debugEvents.shift();
+    this.debugListeners.forEach((l) => l(ev));
+    // 落盘记录：保存原始消息全字段（raw 阶段传 raw；业务阶段与展示 data 一致）
+    this.debugRecords.push({
+      t: now.toISOString(),
+      cmd,
+      action,
+      data: raw !== undefined ? raw : data,
+    });
+    if (this.debugRecords.length > 400) this.debugRecords.shift();
+    // 节流落盘到 .data/display-danmu-debug.json，避免高频弹幕反复写盘
+    if (!this.debugPersistTimer) {
+      this.debugPersistTimer = setTimeout(() => {
+        this.debugPersistTimer = null;
+        void this.persistDebug();
+      }, 500);
+    }
+  }
+
+  private persistDebug() {
+    // 串行化写盘：前一次写完成前不启动下一次，杜绝并发写导致的
+    // "Compaction failed: Another write batch or compaction is already active"
+    this.debugPersistChain = this.debugPersistChain.then(async () => {
+      try {
+        const platform = await getPlatform();
+        if (!platform.isNative) return;
+        const dir = await platform.getDataDir();
+        await platform.writeFile(
+          `${dir}/display-danmu-debug.json`,
+          JSON.stringify(this.debugRecords.slice(-300), null, 2),
+        );
+      } catch {
+        /* 调试文件写入失败忽略 */
+      }
+    });
+  }
+
+  /**
+   * 启动时清理历史调试日志：仅保留最近两个自然天（今天 + 昨天）。
+   * 写入时不做清理（避免每次写盘的开销）；即使应用长时间运行导致日志跨多天，
+   * 影响也不大，下次启动（或跨天重启）时这里会统一清理。
+   */
+  private async cleanupExpiredDebugLog() {
+    try {
+      const platform = await getPlatform();
+      if (!platform.isNative) return;
+      const dir = await platform.getDataDir();
+      const path = `${dir}/display-danmu-debug.json`;
+      const raw = JSON.parse(await platform.readFile(path));
+      if (!Array.isArray(raw)) return;
+      const kept = filterRecentDays(raw as DanmuDebugRecord[]);
+      if (kept.length === (raw as unknown[]).length) return; // 无过期记录，无需写盘
+      await platform.writeFile(path, JSON.stringify(kept.slice(-300), null, 2));
+    } catch {
+      /* 文件不存在/损坏/非 Tauri 环境时忽略 */
+    }
+  }
+
+  private emitStatus(s: DisplayServiceStatus) {
+    this.statusListeners.forEach((l) => l(s));
+  }
+
+  isActive() {
+    return this.active;
+  }
+
+  /** 启动监听：拉取弹幕 token → 建立 WS → 绑定事件。 */
+  async start(roomId: number, mid: number) {
+    // 确保已注册"画布就绪 → 补推今日礼物清单"的全局监听：归属本服务而非"展示"面板，
+    // 这样由 auto-start 打开的画布（用户未打开"展示"页面）也能在就绪后立即拿到礼物数据。
+    this.ensureDisplayReadyListener();
+    // 若已连同一房间，忽略重复启动
+    if (this.active && this.roomId === roomId) return;
+    this.retry = 0;
+    // 启动即清理过期调试日志（保留最近两个自然天），处理"长期离线后重新打开"的残留
+    void this.cleanupExpiredDebugLog();
+    await this.connect(roomId, mid);
+  }
+
+  /** 全局注册一次"display-ready"监听：画布页面加载完（事件监听就绪）即补推今日达标礼物清单，
+   *  兜底画布创建首推被丢弃的情况，保证"已有礼物记录也能立即显示"。会话内只注册一次；
+   *  推送时按当前监听房间(this.mid)执行，且 pushGiftUpdate 内部有 active/config 双重守卫。 */
+  private ensureDisplayReadyListener() {
+    if (this.readyListened) return;
+    this.readyListened = true;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        await listen("display-ready", () => {
+          void this.pushGiftUpdate(this.mid);
+        });
+      } catch {
+        /* 非 Tauri 环境（浏览器预览）忽略 */
+      }
+    })();
+  }
+
+  /** 实际连接（无重入保护）：start() 与重连定时器共用；重连必须走这里才能绕过 start 的同房保护。 */
+  private async connect(roomId: number, mid: number) {
+    this.stopListeners();
+    this.active = true;
+    this.roomId = roomId;
+    this.mid = mid;
+
+    // Tauri 环境：预热本地礼物目录（解析礼物图标）
+    const platform = await getPlatform();
+    if (platform.isNative) {
+      try {
+        await ensureGiftCatalogLoaded(platform);
+      } catch {
+        /* 礼物目录加载失败不阻塞监听 */
+      }
+    }
+
+    this.emitStatus({ state: "connecting" });
+
+    try {
+      // 复用缓存的 token；仅首次进该房间或 token 缺失时才请求 getDanmuInfo
+      let token = this.cachedToken;
+      if (!token || this.cachedRoomId !== roomId) {
+        token = await this.fetchDanmuToken(platform, roomId);
+        this.cachedToken = token;
+        this.cachedRoomId = roomId;
+      }
+      const { BiliLive } = (await import("bili-live-listener")) as {
+        BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
+      };
+      this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
+
+      this.bindHandlers(mid);
+      this.live.onOpen(() => {
+        this.retry = 0;
+        this.wsConnectedAt = Date.now();
+        console.log("[展示]WS open（底层连接建立）", { roomId });
+        this.pushDebug("ws", "open", { roomId });
+        this.emitStatus({ state: "connected", roomId });
+      });
+      this.live.onLive(() => {
+        console.log("[展示]WS 认证成功（auth code=0）", { roomId });
+        this.pushDebug("ws", "auth", { roomId });
+      });
+      this.live.onHeartbeat((online: number) => {
+        console.log("[展示]WS 心跳", { online });
+      });
+      this.live.onClose((code?: number, reason?: any) => {
+        const ageSec = this.wsConnectedAt ? Math.round((Date.now() - this.wsConnectedAt) / 1000) : 0;
+        console.log("[展示]WS close", { code, reason: reason?.message ?? reason, ageSec });
+        this.pushDebug("ws", "close", { ageSec, code, reason: reason?.message ?? reason });
+        this.scheduleReconnect(roomId, mid);
+      });
+      this.live.onError((err: any) => {
+        const msg = err?.message || String(err);
+        console.log("[展示]WS error", JSON.stringify(err), "->", msg);
+        this.pushDebug("ws", "error", { msg });
+        this.emitStatus({ state: "error", message: msg });
+        this.scheduleReconnect(roomId, mid, msg);
+      });
+
+      this.emitStatus({ state: "connected", roomId });
+      console.log("[展示]WS 建立成功", { roomId });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      console.log("[展示]start 异常", e?.stack || e);
+      this.emitStatus({ state: "error", message: msg });
+      this.scheduleReconnect(roomId, mid, msg);
+    }
+  }
+
+  /** 停止：断开 WS、取消重连、释放事件。 */
+  stop() {
+    this.active = false;
+    this.roomId = 0;
+    this.cachedToken = null;
+    this.cachedRoomId = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopListeners();
+    this.emitStatus({ state: "idle" });
+  }
+
+  private stopListeners() {
+    this.removeHandlers.forEach((rm) => {
+      try {
+        rm();
+      } catch {}
+    });
+    this.removeHandlers = [];
+    try {
+      this.live?.close();
+    } catch {}
+    this.live = null;
+  }
+
+  private scheduleReconnect(roomId: number, mid: number, errMsg?: string) {
+    if (!this.active) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    // -352 是风控/限流：必须大幅退避，否则高频重试会把 IP 一直锁在风控里。
+    // 普通断线：较快重连。指数退避，封顶 5 分钟。
+    const isRisk = /-352|风控|限流/.test(errMsg ?? "");
+    const base = isRisk ? 60_000 : 5_000;
+    const max = isRisk ? 300_000 : 120_000;
+    const delay = Math.min(max, base * 2 ** Math.min(this.retry, 4));
+    this.retry = Math.min(this.retry + 1, 6);
+    console.log(`[展示]${isRisk ? "风控" : "断线"}退避重连 ${delay}ms 后（第 ${this.retry} 次）`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.active) this.connect(roomId, mid);
+    }, delay);
+  }
+
+  /** 获取弹幕服务器的 token（须携带登录 Cookie + buvid3，否则可能触发风控 -352）。 */
+  private async fetchDanmuToken(platform: Platform, roomId: number): Promise<string> {
+    const state = await platform.getSessionState();
+    const session = (state.sessions || []).find((s: any) => s.sid === state.currentSid);
+    const cookie: string[] = [];
+    if (session) {
+      if (session.biliCookies?.length) cookie.push(...session.biliCookies);
+      if (session.biliSessdata && !cookie.some((c) => c.startsWith("SESSDATA="))) {
+        cookie.push(`SESSDATA=${session.biliSessdata}`);
+      }
+    }
+    // 弹幕服务器配置/token 用旧版 Danmu/getConf 接口：
+    // getDanmuInfo 虽自 2025-05 起要求 WBI 签名（见 blivechat issue #264），但经实测：
+    //   - 走 Tauri reqwest/rustls 客户端仍被 getDanmuInfo 的浏览器指纹风控拦截（-352）
+    //   - getConf 在应用客户端可正常获取 token，且其 token 对弹幕 WS 认证有效（auth code=0）
+    // 故保留 getConf；WBI 不适用于当前客户端的 token 获取路径。
+    if (!cookie.some((c) => c.toLowerCase().startsWith("buvid3="))) {
+      const buvid = await platform.getBuvidCookie();
+      if (buvid) cookie.push(buvid);
+    }
+    const flat = cookie.flatMap((c) => c.split(";").map((s) => s.trim().split("=")[0]));
+    console.log(
+      "[展示]getConf 请求",
+      JSON.stringify({ roomId, cookieKeys: flat, hasSess: flat.some((k) => k.toLowerCase() === "sessdata") }),
+    );
+    const data = await withTimeout(
+      platform.fetchBilibiliJson<any>({
+        url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
+        cookie: cookie.join("; "),
+        live: true, // 必须用 live 域 Referer/Origin
+      }),
+      10000,
+      "获取弹幕服务器",
+    );
+    console.log(
+      "[展示]getConf 返回",
+      JSON.stringify({ code: data?.code, message: data?.message, msg: data?.msg, hasToken: !!data?.data?.token }),
+    );
+    if (data?.code !== 0 || !data?.data?.token) {
+      const errMsg = data?.message || data?.msg;
+      console.log("[展示]getConf 失败: code=", data?.code, "message=", data?.message, "msg=", data?.msg);
+      throw new Error(String(errMsg ?? "获取弹幕服务器失败"));
+    }
+    return data.data.token;
+  }
+
+  private bindHandlers(mid: number) {
+    // ---- 调试：捕获原始关键事件 ----
+    for (const cmd of RAW_CMDS) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, (raw: any) => {
+          // 面板展示精简字段，落盘保存原始消息全字段（便于深层排查）
+          this.pushDebug(cmd, "raw", summarizeRaw(cmd, raw), raw);
+        }),
+      );
+    }
+
+    // ---- 入场 ----
+    this.removeHandlers.push(
+      this.live.onInteract(async (message: any) => {
+        // Enter=1；Follow=2；Share=3；Like=4
+        if (!message?.data || message.data.type !== 1) return;
+        await this.handleEntry(mid, message.data.user);
+      }),
+    );
+    this.removeHandlers.push(
+      this.live.onEntryEffect(async (message: any) => {
+        // 高级入场特效（通常是舰长/高等级用户），同样作为入场来源
+        if (!message?.data?.user) return;
+        await this.handleEntry(mid, message.data.user);
+      }),
+    );
+
+    // ---- 礼物 ----
+    this.removeHandlers.push(
+      this.live.onGift(async (message: any) => {
+        const d = message?.data;
+        if (!d || d.coinType !== "gold") return; // 仅统计金瓜子（有价）礼物
+        // 图标位于 message.raw（原始 SEND_GIFT 包）而非 message.data（库解析后的 GiftData），需一并传给 handleGift
+        await this.handleGift(mid, d, message?.raw);
+      }),
+    );
+
+    // ---- 盲盒盈亏 · 弹幕查询 ----
+    this.removeHandlers.push(
+      this.live.onDanmu(async (message: any) => {
+        const d = message?.data;
+        if (!d || !d.user?.uid) return;
+        const content = String(d.content || "").trim();
+        if (!content) return;
+
+        const config = await loadDisplayConfig();
+        if (!config.blindBoxQuery?.enabled) return;
+        const senderUid = Number(d.user.uid);
+        // 当前主播账号查询为特例：不返回其自身盲盒记录，而是返回"全部粉丝"的盲盒数据（uid=0 = 不按用户过滤）
+        const queryUid = senderUid === mid ? 0 : senderUid;
+        try {
+          const reply = await tryHandleBlindBoxQuery(mid, queryUid, content, this.roomId);
+          if (reply) {
+            this.pushDebug("danmu", "盲盒查询", {
+              uid: senderUid,
+              uname: d.user.uname || "",
+              content,
+              queryUid: queryUid === 0 ? "全部粉丝" : queryUid,
+              reply,
+            });
+          }
+        } catch (e) {
+          console.warn("[展示]盲盒查询处理异常", (e as Error)?.message || e);
+        }
+      }),
+    );
+  }
+
+  /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。 */
+  private async handleEntry(mid: number, user: any) {
+    if (!this.active || !user || !user.uid) return;
+    const config = await loadDisplayConfig();
+    const guardType = Number(user.guardType) || 0;
+    const medalLevel = Number(user.fansMedal?.level) || 0;
+
+    // 高级用户自定义入场动画：命中名单且启用 → 额外播放视频动画
+    const animeCfg = Object.values(config.animeList).find(
+      (a) => a.enabled && (a.videoLandscape || a.videoPortrait) && a.uid === user.uid,
+    );
+    if (config.anime && animeCfg && this.isNative()) {
+      const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
+      const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
+      this.pushDebug("entry", "anime", {
+        uid: Number(user.uid),
+        uname: user.uname || "",
+        video,
+        startSec: seg.startSec,
+        endSec: seg.endSec,
+      });
+      this.emitTo({
+        type: "anime",
+        user: { uid: Number(user.uid), uname: user.uname || "", face: user.face || "" },
+        videoSrc: toDisplayVideoSrc(video),
+        startSec: seg.startSec,
+        endSec: seg.endSec,
+      });
+      // 不 return：高级用户同样走普通入场提示
+    }
+
+    // 入场提示模块：应用筛选
+    if (!config.entry || !this.matchesEntryFilter(config, guardType, medalLevel)) {
+      this.pushDebug("entry", "filtered", {
+        uid: Number(user.uid),
+        uname: user.uname || "",
+        guardType,
+        medalLevel,
+        entryOn: !!config.entry,
+        matched: this.matchesEntryFilter(config, guardType, medalLevel),
+      });
+      return;
+    }
+    this.pushDebug("entry", "emit", { uid: Number(user.uid), uname: user.uname || "", guardType, medalLevel });
+    this.emitTo({
+      type: "entry",
+      user: {
+        uid: Number(user.uid),
+        uname: user.uname || "",
+        face: user.face || "",
+        guardType: guardType as any,
+        medalLevel,
+      },
+    });
+  }
+
+  /** 处理一条送礼信息：追加到礼物逐条记录 → 组装达标礼物清单 → emit。
+   *  礼物记录（display-gift-records-<mid>.json）同时供"礼物展示"与盲盒"今日/昨日"查询使用，
+   *  是单一来源，不再各自维护一份今日聚合。
+   *  @param d   — bili-live-listener 解析后的 GiftData（无图标字段）
+   *  @param raw — 原始 SEND_GIFT 包 {cmd, danmu, data:{...}}；礼物图标在 raw.data.gift_info */
+  private async handleGift(mid: number, d: any, raw?: any) {
+    if (!this.active) return;
+    const ts = Number(d.timestamp) || Math.floor(Date.now() / 1000);
+    const giftId = Number(d.giftId) || 0;
+    // price 单位 = 金瓜子；1 电池 = 100 金瓜子 → 换算为电池（与入库的电池口径一致）
+    const priceBattery = (Number(d.price) || 0) / 100;
+    // 送礼人信息在 d.user 内（uid/uname/face）
+    const guser = d.user || {};
+    const uid = Number(guser.uid) || 0;
+    const uname = guser.uname || "";
+    // 礼物图标直链：优先取 gif（动画），没有则用 img_basic（静态 png）。
+    // 原始 SEND_GIFT 包中图标位于 data.gift_info（已在真实弹幕样本确认字段）。
+    const payload = raw?.data || {};
+    const gi = payload?.gift_info || {};
+    const rawImg = String(gi.gif || gi.img_basic || "");
+    // 少数老版本/特殊礼物可能不带 gift_info，回退礼物目录现查（Map 读取，非网络），保证记录图标不空
+    const giftImg = rawImg || getGiftImg(giftId);
+
+    // 逐条落盘（含 uid，供按用户聚合/盲盒盈亏查询；写盘串行、失败不影响直播展示）
+    await appendGiftRecord(mid, {
+      date: localDayStr(new Date(ts * 1000)),
+      ts,
+      uid,
+      uname,
+      giftId,
+      giftName: d.giftName || "",
+      price: priceBattery,
+      num: Number(d.num) || 1,
+      img: giftImg,
+    });
+    this.pushDebug("gift", "记录", { uid, uname, giftId, giftName: d.giftName, num: Number(d.num) || 1, hasImg: !!giftImg });
+
+    if (!this.isNative()) return;
+
+    const config = await loadDisplayConfig();
+    if (!config.gift) return;
+
+    // 从礼物逐条记录聚合今日达标清单（单价 > 阈值；阈值 0 = 不限制）
+    const qualifying: DisplayGiftItem[] = await loadTodayQualifyingGifts(
+      mid,
+      config.giftPriceThreshold,
+    );
+    this.pushDebug("gift", qualifying.length ? "emit" : "未达阈值", {
+      threshold: config.giftPriceThreshold,
+      list: qualifying.map((q) => ({ name: q.giftName, count: q.count })),
+    });
+    // 每次送礼都重发当前达标清单（含空清单 → 清空画布），保证画布与阈值始终一致
+    this.emitTo({ type: "gift", gifts: qualifying });
+  }
+
+  /**
+   * 配置变化（如修改礼物阈值）后，用当前配置重算今日达标礼物并即时重发到展示窗口，
+   * 让阈值修改立刻生效，无需等下一次送礼。
+   */
+  async pushGiftUpdate(mid: number) {
+    if (!this.active || !mid || !this.isNative()) return;
+    const config = await loadDisplayConfig();
+    if (!config.gift) return;
+    const qualifying = await loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
+    this.pushDebug("gift", qualifying.length ? "emit" : "清空", {
+      threshold: config.giftPriceThreshold,
+      list: qualifying.map((q) => ({ name: q.giftName, count: q.count })),
+    });
+    this.emitTo({ type: "gift", gifts: qualifying });
+  }
+
+  /**
+   * 测试模式开关：进入后画布三个模块元素常驻并循环播放（供布局调整/拖动/缩放）。
+   *  - 入场提示：由画布自行渲染常驻的循环 EntryBadge（无需事件）
+   *  - 礼物展示：发一份达标礼物清单（今日没有则用礼物目录示例）
+   *  - 高级用户动画：发一条 anime 事件（配置了视频则取第一个用户的视频循环播放；否则画布显示提示文案）
+   */
+  async setTestMode(on: boolean, mid: number) {
+    if (!this.isNative()) return;
+    if (on) {
+      // 每次开启测试自增代际；后面 await 拉取礼物/配置后再 emit 时要校验代际未变，
+      // 否则（用户在此期间已取消）直接丢弃，避免迟到事件把画布已清空的状态又填回来。
+      const gen = ++this.testGen;
+      this.pushDebug("test", "start", { manual: true });
+      this.emitTo({ type: "test", active: true });
+
+      // 礼物：今日达标礼物，没有则用礼物目录示例
+      const platform = await getPlatform();
+      try {
+        await ensureGiftCatalogLoaded(platform);
+      } catch {}
+      const gifts = await getTodayQualifyingGifts(mid);
+      if (gen !== this.testGen) return; // 已取消测试，丢弃迟到的礼物
+      const list: DisplayGiftItem[] = gifts.length
+        ? gifts
+        : (() => {
+            const pick = getGiftList().find((g) => g.img_basic || g.webp || g.gif);
+            return [
+              {
+                giftId: Number(pick?.id) || 1,
+                giftName: pick?.name || "测试礼物",
+                price: 1,
+                count: 1,
+                img: pick?.img_basic || pick?.webp || pick?.gif || "",
+              },
+            ];
+          })();
+      this.emitTo({ type: "gift", gifts: list });
+
+      // 高级用户动画：已配置视频则取第一个用户的入场动画循环播放作为示例；未配置任何视频时
+      // 不播放示例动画（示例视频无法打包发行），改由画布显示提示文案
+      const config = await loadDisplayConfig();
+      if (gen !== this.testGen) return; // 已取消测试，丢弃迟到的动画
+      const item = config.animeList.find((a) => a.videoLandscape || a.videoPortrait);
+      if (item) {
+        const video = resolveAnimeVideo(item, config.screenOrientation);
+        const seg = resolveAnimeSegment(item, config.screenOrientation);
+        this.pushDebug("test", "anime", {
+          manual: true,
+          video,
+          startSec: seg.startSec,
+          endSec: seg.endSec,
+        });
+        this.emitTo({
+          type: "anime",
+          user: { uid: item.uid, uname: item.uname, face: item.face },
+          videoSrc: toDisplayVideoSrc(video),
+          startSec: seg.startSec,
+          endSec: seg.endSec,
+        });
+      } else {
+        this.pushDebug("test", "anime", { manual: true, video: "" });
+        this.emitTo({
+          type: "anime",
+          user: { uid: 0, uname: "", face: "" },
+          videoSrc: "",
+          startSec: 0,
+          endSec: 0,
+        });
+      }
+    } else {
+      // 取消测试：自增代际，使正在进行的异步开始事件（若有）全部作废；
+      // 画布收到 test:false 后会清空测试触发的礼物/入场/动画。
+      this.testGen++;
+      this.pushDebug("test", "stop", { manual: true });
+      this.emitTo({ type: "test", active: false });
+    }
+  }
+
+  private matchesEntryFilter(config: DisplayConfig, guardType: number, medalLevel: number): boolean {
+    const f = config.entryFilter;
+    if (guardType === 3 && f.jianzhang) return true;
+    if (guardType === 2 && f.tidu) return true;
+    if (guardType === 1 && f.zongdu) return true;
+    if (f.medalLevelThreshold > 0 && medalLevel >= f.medalLevelThreshold) return true;
+    // 未勾选任何条件 → 放行所有入场
+    if (!f.zongdu && !f.tidu && !f.jianzhang && f.medalLevelThreshold <= 0) return true;
+    return false;
+  }
+
+  private isNative(): boolean {
+    try {
+      return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    } catch {
+      return false;
+    }
+  }
+
+  /** emit 到展示画布。展示画布与主窗口同进程（独立窗口），直接用 Tauri emitTo("display",...)。
+   *  画布尚未打开/不存在时 emit 静默丢弃（Tauri 对不存在的窗口事件无副作用）。 */
+  private async emitTo(event: DisplayEvent) {
+    try {
+      const { emitTo } = await import("@tauri-apps/api/event");
+      await emitTo("display", "display-event", event);
+    } catch {
+      /* 非 Tauri（如浏览器预览）下无事件总线，静默跳过 */
+    }
+  }
+}
+
+/** Windows 绝对路径 → 可被 <video>/fetch 加载的 URL。
+ *  之前用自定义 displayvideo:/// 协议，但 Chromium 对非特殊自定义 scheme 的 fetch 一律
+ *  报 "TypeError: Failed to fetch"（且媒体栈不走该协议 handler）。改用 Tauri 内置 asset
+ *  协议（convertFileSrc → http://asset.localhost/...）：它是 http-like scheme，fetch 可用，
+ *  并天然支持 Range 供 <video> 分段加载。 */
+export function toDisplayVideoSrc(path: string): string {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    try {
+      return convertFileSrc(path);
+    } catch {
+      /* 回退 */
+    }
+  }
+  // 非 Tauri 环境（Web 预览）无 asset 协议，返回原路径（展示视频本为 Tauri 专属功能）
+  return path;
+}
+
+/** 主窗口 UI 读取今日达标礼物（供"展示"页预览 + 关闭窗口后仍可查看）。 */
+export async function getTodayQualifyingGifts(mid: number): Promise<DisplayGiftItem[]> {
+  const platform = await getPlatform();
+  if (platform.isNative) {
+    try {
+      await ensureGiftCatalogLoaded(platform);
+    } catch {}
+  }
+  const config = await loadDisplayConfig();
+  return loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
+}
+
+/** 全局单例服务 */
+export const displayDanmaku = new DisplayDanmakuService();

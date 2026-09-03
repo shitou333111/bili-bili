@@ -496,11 +496,19 @@ async function acquireLock(): Promise<boolean> {
 
 export async function fetchAnchorGifts(
   platform: Platform,
-  opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler; probe?: boolean } = {},
+  opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler; probe?: boolean; fast?: boolean } = {},
 ): Promise<{ code: number; message: string; data?: AnchorGiftsResult | null }> {
-  const ok = await acquireLock();
-  if (!ok) {
-    return { code: -1, message: "already fetching", data: null };
+  const { fast = false } = opts;
+
+  // fast/cached：仅基于本地 records 计算统计，不拉 B站、不起锁、不刷新凭证（无任何网络副作用）。
+  // 供主播页启动时先展示缓存数据再静默更新。
+  let acquired = false;
+  if (!fast) {
+    const ok = await acquireLock();
+    if (!ok) {
+      return { code: -1, message: "already fetching", data: null };
+    }
+    acquired = true;
   }
 
   try {
@@ -516,7 +524,7 @@ export async function fetchAnchorGifts(
   let cookie = buildCookie(session);
   let csrf = cookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
 
-  if (session.source !== "server") {
+  if (!fast && session.source !== "server") {
     const credResult = await ensureValidCredentialClient(platform, session);
     if (!credResult.valid) {
       console.warn("[AnchorGifts-Tauri] 凭证失效且刷新失败，需重新登录:", credResult.reason);
@@ -542,7 +550,10 @@ export async function fetchAnchorGifts(
     // 大多数用户并未开播或未持续开播：仅"扫码登录触发的全量探测"（probe=true，且 roomStatus=1）
     // 才会做有容错的全量收益探测；冷启动/绿色刷新不再重复全量探测。
     let skipPull = false;
-    if (session.source === "server") {
+    if (fast) {
+      // 快速/缓存路径：仅用本地记录计算统计，绝不拉 B站
+      skipPull = true;
+    } else if (session.source === "server") {
       // 纯服务器收集账号（source=server）本机无 B站 Cookie，根本无法从 B站 拉取增量，
       // 只能基于已从自建服务器拉取到本地的记录计算统计。
       // 绝不能带着空凭证去打 B站（会得到 -101 → 误触发 needs-relogin → 被强制跳登录页）。
@@ -562,6 +573,22 @@ export async function fetchAnchorGifts(
     // 即使昨日无收礼记录也应可点击；ready=0 表示官方尚未更新，需置灰）。
     // 无 API 返回（source=server / 离线 / 未拉取到昨日分段）时回退到本地记录判断。
     let yesterdayApiReady: boolean | null = null;
+
+    // B站仅保留近3年数据。月初时"3年前的当月"已过期，最早可拉月份应为"3年前的下个月"。
+    // 该边界仅用于对 end_date / 旧缓存起始 做下限收拢；首次全量/回退分支已内置同样的计算。
+    // 若不收拢，持久化的 end_date 若指向已过期月份，就会在月初去请求 3 年前当月 → B站 返回
+    // 1301000"数据已过期"，白白浪费一次请求且延缓 end_date 推进。
+    const retentionBoundary = (() => {
+      const d = new Date();
+      const utc = d.getTime() + d.getTimezoneOffset() * 60000;
+      const bj = new Date(utc + 8 * 3600000);
+      const sy = bj.getFullYear() - 3;
+      const sm = bj.getMonth() + 1;
+      const by = sm === 12 ? sy + 1 : sy;
+      const bm = sm === 12 ? 1 : sm + 1;
+      return `${by}${String(bm).padStart(2, "0")}01`;
+    })();
+    const clampStart = (d: string) => (d < retentionBoundary ? retentionBoundary : d);
 
     // 起始日期：
     // - probe=true（扫码登录触发）：允许有容错的全量探测——无基线时从3年前开始，
@@ -600,7 +627,7 @@ export async function fetchAnchorGifts(
               }
             } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
           }
-          return meta.end_date;
+          return clampStart(meta.end_date);
         }
         if (existingRecords.length > 0) {
           let maxTime = existingRecords[0].time;
@@ -608,7 +635,7 @@ export async function fetchAnchorGifts(
             if (r.time > maxTime) maxTime = r.time;
           }
           // "YYYY-MM-DD HH:mm:ss" -> YYYYMMDD
-          return maxTime.slice(0, 10).replace(/-/g, "");
+          return clampStart(maxTime.slice(0, 10).replace(/-/g, ""));
         }
         // 首次全量探测：B站最多保存3年数据，从3年前的下个月开始
         const now = new Date();
@@ -622,7 +649,7 @@ export async function fetchAnchorGifts(
       }
       // 非登录（冷启动/绿色刷新）：仅增量追赶，绝不全量探测
       if (meta?.end_date && existingRecords.length > 0) {
-        return meta.end_date; // 有数据基线 → 从 end_date 增量
+        return clampStart(meta.end_date); // 有数据基线 → 从 end_date 增量
       }
       if (existingRecords.length > 0) {
         let maxTime = existingRecords[0].time;
@@ -630,7 +657,7 @@ export async function fetchAnchorGifts(
           if (r.time > maxTime) maxTime = r.time;
         }
         // "YYYY-MM-DD HH:mm:ss" -> YYYYMMDD
-        return maxTime.slice(0, 10).replace(/-/g, "");
+        return clampStart(maxTime.slice(0, 10).replace(/-/g, ""));
       }
       // 一条记录都没有（含旧版遗留：end_date 已被推到昨天的 0 记录账号）：
       // 非登录拉取只会重查昨天 1 天 + 伪空重试，纯属浪费且无新数据可追。
@@ -933,10 +960,22 @@ export async function fetchAnchorGifts(
             delete nextEmptyCounts[start];
           }
         }
+        // 只保留"本次获取范围内、且位于首个有数据月份之后"的可疑空月份。
+        // 其余（开播前的无历史月份、或已超出本次范围的过期残留）一律清除——
+        // 否则历史残留会永久钉住 end_date 为最早月份，导致每次重开都从3年前全量重拉，
+        // 甚至手动改写 end_date 也会被残留计数重新覆盖回旧月份。
+        const rangeStarts = new Set(chunks.map((c) => c.start));
+        const minDataStart = firstDataIndex !== -1 ? chunks[firstDataIndex].start : null;
+        const prunedEmptyCounts: Record<string, number> = {};
+        for (const [s, c] of Object.entries(nextEmptyCounts)) {
+          if (s && rangeStarts.has(s) && (minDataStart === null || s >= minDataStart)) {
+            prunedEmptyCounts[s] = c;
+          }
+        }
         const suspiciousEmptyStarts = chunks
           .map((c) => c.start)
           .filter((s) => {
-            const c = nextEmptyCounts[s] ?? 0;
+            const c = prunedEmptyCounts[s] ?? 0;
             // 只有真正被判空过的月份（次数>=1）且仍低于上限的，才需要挡住 end_date 补拉。
             // 有数据的月份不在 empty_counts 里（count=0），绝不能当作可疑空，否则 end_date 会被钉在最早月份导致每次全量重拉。
             return s && c >= 1 && c < MAX_CONSECUTIVE_EMPTY_RUNS;
@@ -958,7 +997,7 @@ export async function fetchAnchorGifts(
           end_date: nextEndDate,
           total_page: (meta?.total_page ?? 0) + fetchedNewPages,
           last_fetch: getBeijingTime(),
-          empty_counts: nextEmptyCounts,
+          empty_counts: prunedEmptyCounts,
           noRevenue: markNoRevenue || (meta?.noRevenue ?? false),
         });
         if (markNoRevenue) {
@@ -1020,7 +1059,7 @@ export async function fetchAnchorGifts(
         !info.blind_box_name ||
         info.blind_price <= 0 ||
         info.blind_box_name === `盲盒_${blindBoxId}`;
-      if (needsBlindBoxInfo && session.source !== "server") {
+      if (needsBlindBoxInfo && !fast && session.source !== "server") {
         try {
           const checkResult = await checkBlindBox(platform, blindBoxId, cookie);
           if (checkResult) {
@@ -1271,6 +1310,6 @@ export async function fetchAnchorGifts(
     return { code: 500, message: `获取礼物流水失败: ${err?.message || String(err)}`, data: null };
   }
   } finally {
-    _fetchingGlobal = false;
+    if (acquired) _fetchingGlobal = false;
   }
 }

@@ -68,6 +68,12 @@ console.log(`[build-tauri] 构建日期: ${buildDate}`);
 console.log("[build-tauri] 应用 FoamTree 补丁...");
 execSync("node scripts/patch-foamtree.mjs", { stdio: "inherit", cwd: root });
 
+// 粒子入场提示依赖 react-particle-effect-button 的本地补丁（重用入口/StrictMode/卸载清理等），
+// 必须在 next build 打包前端前应用，否则产物会用未打补丁的库导致粒子动画失效/崩溃。
+// 该补丁同样已并入 postinstall（npm ci 会自动执行），这里幂等重复保证 CI 一定能打上。
+console.log("[build-tauri] 应用 react-particle-effect-button 补丁...");
+execSync("node scripts/patch-particle-effect-button.mjs", { stdio: "inherit", cwd: root });
+
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 
 execSync(

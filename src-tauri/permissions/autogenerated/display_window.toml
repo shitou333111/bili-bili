@@ -1,0 +1,36 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-display-window"
+description = "Enables the open_display_window command without any pre-configured scope."
+commands.allow = ["open_display_window"]
+
+[[permission]]
+identifier = "deny-open-display-window"
+description = "Denies the open_display_window command without any pre-configured scope."
+commands.deny = ["open_display_window"]
+
+[[permission]]
+identifier = "allow-close-display-window"
+description = "Enables the close_display_window command without any pre-configured scope."
+commands.allow = ["close_display_window"]
+
+[[permission]]
+identifier = "allow-set-display-orientation"
+description = "Enables the set_display_orientation command without any pre-configured scope."
+commands.allow = ["set_display_orientation"]
+
+[[permission]]
+identifier = "deny-close-display-window"
+description = "Denies the close_display_window command without any pre-configured scope."
+commands.deny = ["close_display_window"]
+
+[[permission]]
+identifier = "allow-pick-video-file"
+description = "Enables the pick_video_file command without any pre-configured scope."
+commands.allow = ["pick_video_file"]
+
+[[permission]]
+identifier = "deny-pick-video-file"
+description = "Denies the pick_video_file command without any pre-configured scope."
+commands.deny = ["pick_video_file"]

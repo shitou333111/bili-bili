@@ -15,6 +15,7 @@ import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleCha
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import GiftReplayPanel from "@/components/GiftReplayPanel";
 import PieTooltip from "@/components/PieTooltip";
+import DisplayPanel from "@/components/display/DisplayPanel";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import Dropdown from "@/components/Dropdown";
@@ -273,7 +274,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [loading, setLoading] = useState(true);
   // 收益记录按月获取进度（首次拉取时展示进度条）
   const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "gift_screenshot" | "other">("revenue");
+  const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "display" | "gift_screenshot" | "other">("revenue");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedFan, setSelectedFan] = useState<string>("");
@@ -298,6 +299,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
 
   // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
   const fetchingRef = useRef(false);
+  // 缓存快显只执行一次（挂载/账号 key 变更），避免重复读取本地
+  const cacheShownRef = useRef(false);
 
   // 每次渲染把最新 fetchData 注册到父级 ref，供页面统一刷新时调用（收益随页面一起更新）
   // 加载时机完全由父组件掌控：初始化 loadAllData → finishRefresh、绿色刷新按钮 → refreshData → finishRefresh、
@@ -307,6 +310,40 @@ const AnchorDataModule = memo(function AnchorDataModule({
       onFetchRequest.current = fetchData;
     }
   });
+
+  // 挂载即用本地缓存快速填充主播页统计（fast 路径只读本地、不拉 B站、无遮罩）。
+  // 关键：若等父级完整启动序列（首次 fetchData accounts+pay-record 约1-2s）结束才由 finishRefresh
+  // 触发缓存填充，首次显示会出现 ~2s 空白。此处提前到组件一挂载就填充，空白即可消除。
+  useEffect(() => {
+    if (!cacheShownRef.current) {
+      cacheShownRef.current = true;
+      loadCachedStats();
+    }
+    // 仅在挂载/账号 key 变更时执行一次，避免重复填充
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 仅从本地缓存立即展示主播统计（不拉 B站、不涉网络等待）；常规拉取完成后会静默覆盖为最新。 */
+  async function loadCachedStats() {
+    try {
+      const cachedRes = await dataFetch("/api/anchor/gifts?fast=1", { cache: "no-store" });
+      const cachedData = await cachedRes.json();
+      if (cachedData.code === 0 && cachedData.data) {
+        setStats(cachedData.data);
+        setYesterdayAvailable(cachedData.data.yesterdayAvailable ?? true);
+        setBlindBoxProfits(cachedData.data.blindBoxProfits);
+        if (cachedData.data.blindBoxProfits) {
+          const anchors: Record<number, Array<{ ruid: number; rname: string; count: number }>> = {};
+          for (const bb of cachedData.data.blindBoxProfits) {
+            anchors[bb.gift_id] = bb.anchors;
+          }
+          setFullBlindBoxAnchors(anchors);
+        }
+      }
+    } catch {
+      // 快速读取本地缓存失败则忽略，走常规拉取
+    }
+  }
 
   async function fetchData() {
     if (fetchingRef.current) {
@@ -332,6 +369,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
         await ensureGiftCatalogLoaded(platform);
       } catch {
         // Web 模式下 getPlatform 可能抛错，忽略，走 stats.giftSummary 已带图标即可
+      }
+      // 首次/尚未有缓存统计时，先快速读取本地缓存立即展示（不拉 B站、无遮罩），
+      // 主播页避免空白；随后常规拉取完成后再静默覆盖为最新数据。
+      if (!stats) {
+        await loadCachedStats();
       }
       // 登录触发的全量探测标记：扫码登录跳转主页时由 /login 页写入，仅消费一次。
       // 置位时向收益接口传 probe=true，仅在该账号 roomStatus=1 时做一次有容错的全量探测；
@@ -593,10 +635,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
         </div>
       )}
 
-      {/* Loading state：组件自身 stats 未加载（首次）+ 父组件 syncLoading（强制全屏遮罩场景）都显示 */}
+      {/* Loading state：仅父组件 syncLoading（首次/重建全屏遮罩）驱动加载遮罩；
+          正常重开时的后台同步（syncLoading=false）不展示遮罩，属于静默加载 */}
       {/* fetchData() 开头已设置统一起始提示（"正在获取主播收益..."），后续由月份进度回调更新，
           因此这里不再重复写死的"加载中..."文字，全部统一走 fetchProgress 提示 */}
-      {(loading || syncLoading) && !stats && (
+      {syncLoading && !stats && (
         <div className="flex-1 flex items-center justify-center px-8 min-h-[55vh]">
           <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
             <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
@@ -631,7 +674,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
             <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
               {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
               <div className="flex items-center rounded-full border border-black/10 bg-white/85 p-1 shadow-sm shrink-0 w-[80%] max-w-[800px]">
-                {(["revenue", "blindbox", "gift_screenshot", "other"] as const).map((tab) => (
+                {(["revenue", "blindbox", "display", "gift_screenshot", "other"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
@@ -641,7 +684,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                         : "text-black/65 hover:bg-black/5"
                     }`}
                   >
-                    {tab === "revenue" ? "收入" : tab === "blindbox" ? "盲盒" : tab === "gift_screenshot" ? "大礼物" : "其他"}
+                    {tab === "revenue" ? "收入" : tab === "blindbox" ? "盲盒" : tab === "display" ? "展示" : tab === "gift_screenshot" ? "大礼物" : "其他"}
                   </button>
                 ))}
               </div>
@@ -681,7 +724,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
               </div>
             </div>
 
-            <section className="grid gap-6">
+            <section className="grid grid-cols-1 gap-6 w-full min-w-0">
               {/* 收入统计 tab */}
               {activeTab === "revenue" && (
                 <article className="rounded-xl border border-black/10 bg-white/80 p-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] overflow-visible">
@@ -1225,6 +1268,11 @@ const AnchorDataModule = memo(function AnchorDataModule({
                     </div>
                   )}
                 </>
+              )}
+
+              {/* 展示 tab（直播展示画布：入场/礼物/高级动画） */}
+              {activeTab === "display" && (
+                <DisplayPanel mid={mid} isLocalAccount={isLocalAccount} showToast={showToast} />
               )}
 
               {/* 礼物截图 tab */}

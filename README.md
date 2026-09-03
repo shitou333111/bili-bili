@@ -45,6 +45,7 @@
 - **合成活动分析**：合成包、星石抽奖、翻牌等活动的盈亏与记录明细。
 - **其他统计**：礼物清单汇总、连续签到天数、房间/主播维度的天数统计。
 - **主播数据模块**：查看主播维度的收入统计，以及"消费主播分布图"（把每个主播按消费金额大小呈现为气泡/泡泡图）。
+- **直播投屏展示面板（展示）**：把直播间入场与礼物实时投屏到独立画布窗口（主播页"盲盒"与"大礼物"之间），含入场提示粒子胶囊、今日礼物轮换、高级用户自定义入场动画、盲盒盈亏弹幕查询、定时发弹幕，软件启动即按配置自动启用全部监听。
 - **大礼物录屏**：在主播的"大礼物"页，从近 7 天直播场次中多选大礼物（按电池档位/粉丝筛选），把礼物的录播片段与官方特效动画合成为一个竖屏视频（720×1280），可播放预览并一键保存到相册/下载。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需要登录凭证才能使用）。
 - **复活区截图工具**：托管在网站服务器上的工具页面，帮助直播多人局投屏复活曲倒计时、解决医药费争议。
@@ -353,13 +354,38 @@ bili_live/
 - 保存视频：`canvas.captureStream(30)` + MediaRecorder 录制真实播放一遍；桌面/Web 用 `<a download>` 下载，移动端通过 `tauri-plugin-pldownloader` **边录边分块写入相册**（避免 iOS 长视频内存吃紧）。固定码率 6Mbps，帧率按时长调整（≤120s 为 30fps，超过为 24fps）。
 - 特效合成用 `requestVideoFrameCallback` **事件驱动**（视频真正出新帧才做像素级 alpha 合成，每个特效元素独立结果画布），既消除 `willReadFrequently` 警告又保证帧率。
 
-### 3. 帮助
+### 3. 展示（直播投屏面板）
+
+> 作用对象是**主播本人开的直播间**：把入场与礼物实时投屏到**独立画布窗口**（Tauri 桌面）。入口在主播页「盲盒」与「大礼物」**之间**；**服务器账号禁用总开关**。
+
+**画布窗口**（[DisplayCanvas.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/display/DisplayCanvas.tsx)，独立页面 `/display`）：
+- 窗口标题「B瓜直播间投屏面板」，无边框、不可缩放；默认**横屏 960×540**，可切换**竖屏 540×960**，横/竖各自独立记住元素位置。
+- 背景色 `#B7EBA4`；元素用 [MovableBox.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/display/MovableBox.tsx) 拖动/缩放（普通模式无虚线框与手柄，**仅测试模式**可编辑）。
+- 本地入场视频通过 Tauri asset 协议（`http://asset.localhost/...`）播放入场动画。
+
+**面板模块**（[DisplayPanel.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/display/DisplayPanel.tsx)，各卡片带独立开关 + 总开关）：
+
+| 卡片 | 说明 |
+|------|------|
+| **直播间投屏面板总开关** | 默认关闭、**记住上次选择**；开启后**软件启动即自动打开画布并启用全部监听**（无需手动打开展示页，进程繁忙时指数退避重试不阻塞启动）。内含横/竖屏切换、首次使用设置、测试按钮（测试中三元素常驻循环、虚线框可编辑）。 |
+| **礼物展示** | 实时轮换展示今日达标礼物（单价 > 自定义阈值参与轮换），**8 秒间隔** + 渐隐渐显；数量放在黑色正圆 badge 外紧贴右下缘。**画布一打开立即推送今日礼物清单**。 |
+| **入场提示** | 粒子上帝胶囊（react-particle-effect-button，B站 demo"Refresh"效果：暖色调、聚合→停留→消散）。高级用户（中大航海 / 灯牌等级≥阈值）触发粒子胶囊 + 自定义动画双路提示。连接状态点：绿=连接且直播中、黄=未开播、红=异常、灰=连接中。 |
+| **入场动画** | 按 UID 添加用户，分别配置**横屏/竖屏**两支入场视频（只配一个则共用）；视频 >30s 默认播最后 30s，点文件名可设置播放时间段（支持中英文冒号 / 纯 4 位数字格式 + "整段/前30秒/后30秒"快捷选项）。 |
+| **盲盒盈亏 · 弹幕查询** | 观众在直播间发特定查询弹幕（时间段：今日/昨日/本周/本月/历史 + 盲盒名：心动/幸运/活动，心动可省略名），由**当前主播账号**回复该用户盲盒盈亏；口径与"盲盒"页一致（弹幕记录是用实际电池价，不再 ×50，见 [gift-db.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/display/gift-db.ts)）。 |
+| **弹幕互动** | 向直播间按间隔循环发送自定义弹幕（每行一条），发送前检查开播状态，未开播跳过。 |
+| **弹幕调试日志** | 近 20 条原始弹幕，只保留最近两天（本地自然天），实时打印；画布侧日志经内存缓冲批量转发主窗口（`[画布]` 前缀）。 |
+
+**监听服务**：[danmaku.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/display/danmaku.ts) 用 **bili-live-listener** 监听当前主播直播间：入场 / 高级入场 / 送礼 / 盲盒查询等全部监听统一注册，按各模块配置过滤后 `emitTo` 到画布窗口。弹幕连接心跳改为**固定 30 秒**（不依赖服务器回应，避免 60 秒被踢）。
+
+**数据与配置**：配置存 `.data/display-config.json`；礼物逐条流水存 `.data/display-gift-records-<mid>.json`（仅保留今天+昨天），作为"礼物展示"与"盲盒今日/昨日查询"的**单一数据源**。
+
+### 4. 帮助
 - **检查更新**：检测热更新（前端资源 OTA）和原生包更新，支持下载进度显示、一键应用、重启生效。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需登录凭证；服务器账号置灰）。
 - **复活区截图**：跳转到服务器托管的截图工具页。
 - **账号管理**：查看当前账号、切换本机账号、退出登录。
 
-### 4. 模拟（B站直播送礼模拟器）
+### 5. 模拟（B站直播送礼模拟器）
 核心组件 [BiliSimulator.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/BiliSimulator.tsx)。纯 UI/动画演示，**无真实送礼、不扣电池**：
 
 - **入口**：底部托盘"模拟"页签，输入主播 UID（或从历史记录选择）进入。
@@ -575,6 +601,8 @@ cross-env NEXT_PUBLIC_SERVER_URL=http://192.168.1.2:3000 npm run build:tauri
    - GitHub Secrets `NEXT_PUBLIC_SERVER_URL`
    - 默认值 `http://192.168.1.2:3000`
 
+> **依赖补丁在 CI 自动生效**：`npm ci` 会自动执行 `postinstall`（package.json：`patch-foamtree` → `patch-bilibili-ws` → `patch-particle-effect-button`），它们就地 patch `node_modules`（弹幕心跳固定 30s、粒子库生命周期修复等）。所有作业（server / exe / apk / ipa / hot-update）都用 `npm ci`，因此每次构建都会先 patch 再编译，**无需额外步骤**；但新增/修改 patch 脚本后要记得同步 `package.json` 的 `postinstall`。
+
 ### 应用更新（热更新 + 原生包更新）
 
 采用**两层更新策略**，版本显示格式为 `V1.0.0 (2026-08-18)`（原生版本 + 构建日期）。
@@ -711,3 +739,7 @@ minisign -G -p hot-update.pub -s hot-update.key
 - **热更新覆盖范围**：只改 `src/` 或 `public/` 下的前端代码可走热更新（commit message 含 `hot`）；改 Rust 或 Tauri 配置必须发原生包（commit message 含 `exe apk ipa`）。
 - **notifyAppReady 必须调用**：每次 APP 冷启动后调用一次 `notifyAppReady()`（page.tsx useEffect 中），否则 OTA bundle 会被判定为"启动失败"而自动回滚。
 - **`/moniqi` 活动镜像页**：①地址栏保持干净 `/moniqi`，B站 活动页用 540px iframe 当手机视口（rem=54），避免桌面视口过宽导致溢出；②镜像目录 id 必须与服务器「第一个启用的 simulator_activity」id 一致，否则报「镜像未生成」；③hdslb CDN 防盗链会 403 掉带 Referer 的背景图——背景/图片都要走本地镜像或 `no-referrer`，否则外部浏览器显示错误背景；④成名之路/玲珑宝斋扣费用 `price×100` 转 gold，余额读 `.balance-value`；⑤admin 切活动立即生效（配置按请求读取、无缓存），只要新活动的镜像目录已部署，无需改代码；只有全新玩法算法才需热更新。
+- **展示（投屏）面板**：主播页直播间投屏，模块顺序=总开关/礼物展示/入场提示/入场动画/盲盒盈亏弹幕查询/弹幕互动/调试日志，服务器账号禁用总开关。总开关默认关、记住上次选择；开启后**软件启动即自动开画布+全部监听**（auto-start 非阻塞指数退避重试）。画布 `/display` 窗口 960×540 / 540×960、无边框、普通模式不可编辑；元素坐标横竖屏分别记忆。画布"display-ready"→ 补推今日礼物清单的监听归属**弹幕服务**（非面板），才能脱离展示页使用。数据源 `display-gift-records-<mid>.json`（今天+昨天）为礼物展示/盲盒今日昨日查询单一数据源，改聚合逻辑别破。
+- **盲盒盈亏口径（弹幕路径）**：弹幕礼物记录里 `price` 已是**实际电池价**，算花费 = 抽数 × 盲盒单价（`blind_price`）**不要 ×50**；只有收入记录路径（hamster 折算记账）才 ×50。改盲盒计算时认准"弹幕记录=实际价、收入记录=折算价"之别。
+- **礼物图标字段**：送礼弹幕原始图标在 `data.gift_info`（`.gif` 为动画、`.img_basic` 为静态 png），优先取 gif、其次 img_basic；若缺失回退礼物目录。不要再从 `data.img/gif/gift_pic` 等叶级字段取。
+- **依赖补丁依赖 postinstall**：patch-foamtree / patch-bilibili-ws（弹幕心跳固定 30s）/ patch-particle-effect-button（粒子库组件卸载与动画）。改这些库源码或新增 patch 必须同步 `package.json` 的 `postinstall`（CI 用 `npm ci` 会自动执行，无需额外步骤）。

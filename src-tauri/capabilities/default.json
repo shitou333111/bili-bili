@@ -1,14 +1,19 @@
 {
   "identifier": "default",
-  "windows": ["main", "activity", "activity-panel", "real-activity", "real-activity-panel"],
+  "windows": ["main", "activity", "activity-panel", "real-activity", "real-activity-panel", "display"],
   "remote": {
     "urls": ["http://*:*", "https://*:*"]
   },
   "permissions": [
     "core:default",
+    "core:event:allow-emit-to",
     "core:window:allow-set-always-on-top",
     "core:window:allow-minimize",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "allow-fetch-json",
     "allow-debug-acl",
@@ -16,6 +21,10 @@
     "allow-close-activity-panel",
     "allow-open-real-activity-panel",
     "allow-close-real-activity-panel",
+    "allow-open-display-window",
+    "allow-close-display-window",
+    "allow-set-display-orientation",
+    "allow-pick-video-file",
     "allow-check-native-update",
     "allow-download-apk",
     "allow-download-ipa",

@@ -104,7 +104,9 @@ async function dispatchNative(
       const fan = query.get("fan") ?? "";
       // probe=true：扫码登录触发的全量探测（仅登录后首次加载会带上）
       const probe = query.get("probe") === "true";
-      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, onProgress }));
+      // fast=1：仅从本地记录计算统计，不拉 B站（用于主播页启动先展示缓存再静默更新）
+      const fast = query.get("fast") === "1";
+      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, fast, onProgress }));
     }
     case "/api/anchor/gift-replay": {
       const { fetchGiftReplay } = await import("./gift-replay-client");

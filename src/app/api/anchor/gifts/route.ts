@@ -589,10 +589,14 @@ export async function GET(request: Request) {
   }
 
   const offline = isOffline(url);
+  // fast=1：仅基于本地记录计算统计，不拉 B站（用于主播页启动先展示缓存数据再静默更新）
+  const fast = url.searchParams.get("fast") === "1";
+  // 本地直出（fast 或 离线）：跳过凭证校验与 B站 拉取，仅用本地缓存
+  const localOnly = offline || fast;
   // 服务器账号（source=server）本机无 B站 凭证：跳过凭证校验（与原生端一致），
   // 否则缺失/空凭证会被 ensureValidCredential 判为失效 → 误触发 needs-relogin → 强制跳扫码登录页。
   const isServerAccount = session.source === "server";
-  if (!offline && !isServerAccount) {
+  if (!localOnly && !isServerAccount) {
     const credentialResult = await ensureValidCredential(session);
     if (!credentialResult.valid) {
       console.log(`[AnchorGifts] B站凭证失效，需要重新登录`);
@@ -604,7 +608,7 @@ export async function GET(request: Request) {
   }
 
   const validSession = session;
-  const biliCookie = offline || isServerAccount ? "" : buildCookieHeader(session);
+  const biliCookie = localOnly || isServerAccount ? "" : buildCookieHeader(session);
   const csrf = biliCookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
   console.log(`[AnchorGifts] 认证通过${offline ? " (离线模式，使用本地缓存)" : ""}: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
 
@@ -830,9 +834,9 @@ export async function GET(request: Request) {
       return yesterdayStr;
     })();
 
-    if (offline) {
-      // 离线模式：不抓取 B 站，仅使用本地缓存记录
-      console.log(`[AnchorGifts] 离线模式，使用本地缓存 ${existingRecords.length} 条记录`);
+    if (localOnly) {
+      // 本地直出（fast 或离线模式）：不抓取 B 站，仅使用本地缓存记录
+      console.log(`[AnchorGifts] ${fast ? "fast" : "离线"}模式，使用本地缓存 ${existingRecords.length} 条记录`);
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
       fetchedNewPages = 0;
     } else if (meta?.noRevenue) {
@@ -1031,7 +1035,7 @@ export async function GET(request: Request) {
     // 如果本地没有盲盒信息，尝试从B站API获取（离线时跳过）
     // 注意：名称/图标/价格已从 gift-catalog 获取，此处仅获取盲盒内 gift_id 列表用于反向映射
     for (const blindBoxId of blindBoxIds) {
-      if (!offline && !allBlindBoxInfo[blindBoxId]) {
+      if (!localOnly && !allBlindBoxInfo[blindBoxId]) {
         try {
           console.log(`[AnchorGifts] 本地无盲盒 ${blindBoxId} 信息，尝试从B站API获取...`);
           const checkResult = await checkBlindBox(blindBoxId, biliCookie);
