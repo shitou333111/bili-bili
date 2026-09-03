@@ -361,8 +361,8 @@ const PERIOD_TEXT: Record<BlindBoxPeriod, string> = {
 /**
  * 查询弹幕采用【完全匹配】：弹幕内容必须与某个"查询短语"一字不差。
  * - 时间段前缀：空 / 今日 / 昨日 / 本周 / 本月 / 历史
- * - 盲盒名：幸运盲盒 / 当前活动盲盒名 / 盲盒（= 心动盲盒，默认）
- * 例如："今日盲盒""历史幸运盲盒""羁绊宝盒"均有效；
+ * - 盲盒名：幸运盲盒 / 当前活动盲盒名 / 心动盲盒（支持"心动盲盒"名称与"盲盒"快捷语）
+ * 例如："今日盲盒""今日心动盲盒""历史幸运盲盒""羁绊宝盒"均有效；
  * 而"今日盲盒快来""盲盒多少钱"这类带额外文本的普通弹幕一律不触发。
  * 完全匹配同时天然避免了自动回复弹幕（内容带"[吃瓜]××盈亏"）被再次识别为查询 → 消除回复自己死循环。
  */
@@ -391,6 +391,9 @@ function matchQueryPhrase(
   }
   // 心动盲盒（默认，去除"盲盒"名即匹配）
   boxWords.push(["盲盒", BLIND_BOX_CONFIG.xindong]);
+  // 心动盲盒的真实名称（与"盲盒"快捷语并存）：与其他盲盒一致，输入"心动盲盒"也能查询
+  const xn = boxName(ctx.info, BLIND_BOX_CONFIG.xindong);
+  if (xn) boxWords.push([xn, BLIND_BOX_CONFIG.xindong]);
 
   for (const [word, boxId] of boxWords) {
     for (const { label, period } of PERIOD_PREFIXES) {
