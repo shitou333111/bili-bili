@@ -2737,10 +2737,9 @@ export default function HomePage() {
         <div className="px-3 pt-2">
           <button
             onClick={() => window.location.reload()}
-            className="w-full flex items-center gap-2.5 rounded-xl bg-yellow-50 border border-yellow-200 px-3.5 py-2.5 text-left shadow-[0_8px_30px_rgba(202,138,4,0.15)]"
+            className="w-full flex items-center gap-2.5 rounded-xl bg-yellow-50 border border-yellow-200 px-3.5 py-2.5 text-center shadow-[0_8px_30px_rgba(202,138,4,0.15)]"
           >
-            <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效 →</span>
-            <span className="shrink-0 text-sm font-semibold text-[#eab308]">↻</span>
+            <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效 ↻</span>
           </button>
         </div>
       )}

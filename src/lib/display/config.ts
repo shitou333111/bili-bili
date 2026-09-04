@@ -119,11 +119,11 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     layout: normalizeLayout((r as any).layout),
     danmaku: {
       enabled: !!r.danmaku?.enabled,
+      // 发送间隔最小 60 秒：小于 60 自动改为 60（非法/缺失用默认）
       intervalSec:
         typeof r.danmaku?.intervalSec === "number" &&
-        Number.isFinite(r.danmaku.intervalSec) &&
-        r.danmaku.intervalSec >= 1
-          ? Math.floor(r.danmaku.intervalSec)
+        Number.isFinite(r.danmaku.intervalSec)
+          ? Math.max(60, Math.floor(r.danmaku.intervalSec))
           : d.danmaku.intervalSec,
       text: r.danmaku?.text ?? d.danmaku.text,
     },

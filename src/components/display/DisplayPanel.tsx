@@ -32,7 +32,7 @@ import {
   type DanmuDebugEvent,
   type DisplayServiceStatus,
 } from "@/lib/display/danmaku";
-import { sendDanmaku } from "@/lib/barrage";
+import { sendDanmakuWithRetry } from "@/lib/barrage";
 import { dataFetch } from "@/lib/client-fetch";
 import {
   getEffectiveBlindBoxConfig,
@@ -352,6 +352,11 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   // 弹幕互动 · 发送状态与定时器
   const [danmakuStatus, setDanmakuStatus] = useState("");
+  // 弹幕发送间隔输入框的"编辑态"文本：输入时自由编辑，失焦时钳制到 >=60 再保存
+  const [intervalText, setIntervalText] = useState(String(DEFAULT_DISPLAY_CONFIG.danmaku.intervalSec));
+  useEffect(() => {
+    setIntervalText(String(config.danmaku.intervalSec));
+  }, [config.danmaku.intervalSec]);
   const danmakuTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const danmakuIdxRef = useRef(0);
   const danmakuRoomRef = useRef<number | null>(null);
@@ -756,6 +761,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           orient === "portrait"
             ? { startSec: a.portraitStartSec, endSec: a.portraitEndSec }
             : { startSec: a.landscapeStartSec, endSec: a.landscapeEndSec };
+        // 起止时间文本 = 实际将播放的片段（与 VideoOverlay 播放逻辑一致），避免打开时为空：
+        //  - 已配置片段：开始为 0 显示 "00:00"（0 是明确时刻，不显示空）；结束为 0（播到末尾）显示总时长
+        //  - 未配置片段（0,0）：>30s 默认播放最后30秒 → 预填该片段起止时刻；<=30s 为整段（此分支不会打开）
+        const segUnset = seg.startSec === 0 && seg.endSec === 0;
+        const effStart = segUnset ? (total > 30 ? total - 30 : 0) : seg.startSec;
+        const effEnd = segUnset ? total : seg.endSec > 0 ? seg.endSec : total;
         setSegmentErr("");
         setSegmentModal({
           idx,
@@ -763,8 +774,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           path,
           total,
           busy: false,
-          startText: seg.startSec > 0 ? secToTime(seg.startSec) : "",
-          endText: seg.endSec > 0 ? secToTime(seg.endSec) : "",
+          startText: secToTime(effStart),
+          endText: secToTime(effEnd),
         });
       } catch {
         /* 探测失败：无反应 */
@@ -902,7 +913,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         const line = lines[danmakuIdxRef.current % lines.length];
         danmakuIdxRef.current += 1;
         setDanmakuStatus(`正在发送：${line}`);
-        const res = await sendDanmaku(danmakuRoomRef.current, line);
+        const res = await sendDanmakuWithRetry(
+          danmakuRoomRef.current,
+          line,
+          (_code, _msg, waitMs) => {
+            // 首次发送失败（多为撞上 B站 频率冷却）时提示正在自动重试
+            if (alive) setDanmakuStatus(`发送失败，${Math.round(waitMs / 1000)}秒后自动重试：${line}`);
+          },
+        );
         if (!alive) return;
         if (res.code === 0) {
           setDanmakuStatus(`已发送：${line}`);
@@ -1336,7 +1354,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div>
               <span className="font-mono text-black/70">今日盲盒，昨日盲盒，本周盲盒，本月盲盒，历史盲盒</span>
             </div>
-            <div className="font-medium text-black/75">当前活动盲盒为：{activityBoxName || <span className="text-black/35">（暂无活动盲盒）</span>}</div>
+            <div className="font-medium text-black/75">当前活动盲盒也可以查询：{activityBoxName || <span className="text-black/35">（暂无活动盲盒）</span>}</div>
           </div>
           <p className="mt-2 text-[11px] text-black/40 leading-relaxed">
             今日盲盒使用监听弹幕实现，开播时需打开软件一直监听，否则数据不准。
@@ -1370,20 +1388,28 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           <div className="mt-2 flex items-center gap-2 text-xs text-black/60">
             <span className="shrink-0">弹幕发送间隔</span>
             <input
-              type="number"
-              min={1}
-              value={config.danmaku.intervalSec}
-              onChange={(e) =>
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={intervalText}
+              onChange={(e) => setIntervalText(e.target.value.replace(/\D/g, ""))}
+              onBlur={() => {
+                // 失焦时统一处理：小于 60 自动改为 60（最小 60 秒），空值回退默认 300
+                const sec = Math.max(60, Math.floor(Number(intervalText) || 300));
+                setIntervalText(String(sec));
                 update({
                   danmaku: {
                     ...config.danmaku,
-                    intervalSec: Math.max(1, Math.floor(Number(e.target.value) || 300)),
+                    intervalSec: sec,
                   },
-                })
-              }
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
               className={`${inputBase} w-16`}
             />
-            <span className="shrink-0 text-black/35">秒（默认 5 分钟）</span>
+            <span className="shrink-0 text-black/35">秒（默认5分钟，最短60秒）</span>
           </div>
           {danmakuStatus && (
             <div className="mt-2 flex items-center gap-2 rounded-lg bg-white/60 px-3 py-2 text-xs text-black/60">

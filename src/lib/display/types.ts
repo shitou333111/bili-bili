@@ -49,12 +49,14 @@ export interface DisplayLayout {
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   gift: {
-    landscape: { x: 40, y: 40, scale: 1 },
-    portrait: { x: 40, y: 40, scale: 1 },
+    // 默认距上/左边界：横屏 50px、竖屏 60px（向画面内部偏移，避免贴边）
+    landscape: { x: 50, y: 50, scale: 1 },
+    portrait: { x: 60, y: 60, scale: 1 },
   },
   entry: {
-    landscape: { x: (960 - 160) / 2, y: 60, scale: 1 },
-    portrait: { x: (540 - 160) / 2, y: 60, scale: 1 },
+    // 默认水平居中，距上边界：横屏 70px、竖屏 80px
+    landscape: { x: (960 - 160) / 2, y: 70, scale: 1 },
+    portrait: { x: (540 - 160) / 2, y: 80, scale: 1 },
   },
   anime: {
     landscape: { x: 0, y: 0, scale: 1 },

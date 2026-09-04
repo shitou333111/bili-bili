@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * POST /api/barrage/send
  * 代理 B站 msg/send 接口（Web 模式：浏览器受 CORS 限制，由服务器转发）。
  * 使用当前登录会话的 B站 Cookie + bili_jct 作为 CSRF 发送弹幕。
- * 必要参数：csrf、roomid、msg、rnd（当前秒时间戳，缺失冷却 90s，携带 5s）、fontsize、color。
+ * 必要参数：csrf、roomid、msg、rnd（当前时间戳×1000000 即 16 位，缺失或格式不符冷却 90s，正确携带 5s）、fontsize、color。
  */
 export async function POST(request: NextRequest) {
   let body: { roomid?: unknown; message?: unknown } = {};
@@ -48,14 +48,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ code: -1, message: "未找到登录凭证(csrf)，请重新登录" });
   }
 
-  const rnd = Math.floor(Date.now() / 1000);
+  // rnd 必须用官方 16 位格式（当前时间戳×1000000），与客户端实现保持一致：
+  // 秒级时间戳与官方客户端（16 位）混用时会被判定无效，冷却被拉长到 90s。
+  const rnd = Date.now() * 1000;
+  // 与官方 Web 客户端一致的其余字段：mode=1 普通弹幕、bubble=0 无气泡、csrf_token 与 csrf 相同、
+  // statistics 客户端标识（appId=100 直播 web 端、platform=5）。
+  const statistics = JSON.stringify({ appId: 100, platform: 5 });
   const payload = new URLSearchParams({
     roomid: String(roomid),
     msg: message,
     rnd: String(rnd),
     fontsize: "25",
     color: "16777215",
+    mode: "1",
+    bubble: "0",
+    statistics,
     csrf,
+    csrf_token: csrf,
   }).toString();
 
   try {

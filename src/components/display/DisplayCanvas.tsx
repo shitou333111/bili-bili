@@ -17,7 +17,7 @@
  *
  * 背景完全透明：直播姬「浏览器源」可一键抠背景叠加到直播画面（本容器无任何背景色）。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type DisplayEvent,
   type DisplayFlags,
@@ -339,21 +339,28 @@ export default function DisplayCanvas() {
   // 入场动画视频画面实际尺寸（natural 像素，VideoOverlay loadedmetadata 后上报）；
   // 未加载完成/无视频时为 null → 元素退回画布尺寸（占位提示铺满画布）。
   const [animeVideoSize, setAnimeVideoSize] = useState<{ w: number; h: number } | null>(null);
-  // VideoOverlay 上报视频画面尺寸 → 更新元素尺寸（包装成稳定回调，直接传 setState 类型不匹配）
+  // VideoOverlay 上报视频画面尺寸 → 更新元素尺寸（尺寸未变时返回原引用，避免无谓重渲染）
   const onAnimeVideoSize = useCallback((w: number, h: number) => {
-    setAnimeVideoSize({ w, h });
+    setAnimeVideoSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
   }, []);
 
   // 编辑模式的常驻动画：优先 animeSample，否则占位（VideoOverlay 空 src 显示提示）
-  const editAnime: AnimeEvent | null = animeSample
-    ? {
-        type: "anime",
-        user: animeSample.user,
-        videoSrc: animeSample.videoSrc,
-        startSec: animeSample.startSec,
-        endSec: animeSample.endSec,
-      }
-    : null;
+  // 必须用 useMemo 保持对象引用稳定：若每次渲染新建对象，VideoOverlay 的 gen 代际会
+  // 随任何无关重渲染自增、强制 video 重挂载（key 变化→重新加载 src），与 animeVideoSize
+  // 上报形成"重挂载→上报尺寸→重渲染→重挂载"死循环，导致编辑页视频闪烁 + 页面/APP 严重卡顿。
+  const editAnime: AnimeEvent | null = useMemo<AnimeEvent | null>(
+    () =>
+      animeSample
+        ? {
+            type: "anime",
+            user: animeSample.user,
+            videoSrc: animeSample.videoSrc,
+            startSec: animeSample.startSec,
+            endSec: animeSample.endSec,
+          }
+        : null,
+    [animeSample],
+  );
 
   // 当前是否有真实视频内容（非编辑看事件、编辑看样本；无内容 → 占位/无 → 元素铺满画布）
   const hasAnimeContent = isEdit ? Boolean(editAnime) : Boolean(anime);

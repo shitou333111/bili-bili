@@ -11,7 +11,9 @@
  *   - 爆出 = 爆出礼物价值合计（电池）
  *   - 盈亏 = 爆出 - 花费
  * 弹幕记录的花费/爆出价格即实际电池价，**不乘 50**；
- * 仅收入记录路径（computeFromIncome）因 hamster 为折算记账才 × 50。
+ * 收入记录路径（computeFromIncome）的 hamster 是金仓鼠（主播收益）需折算电池：
+ * 爆出 = Σhamster×2/100；花费 = 抽数×盲盒单价（电池），由金仓鼠口径
+ * drawCount×blind_price×50 折算而来（×50×2/100 抵消）。
  * 所有金额单位均为电池。
  *
  * 数据来源按时间段优先级：
@@ -274,8 +276,9 @@ function activityBoxIds(config: EffectiveBlindBoxConfig): number[] {
 }
 
 /** 按收入记录计算：给定时间段 + 用户 + 盲盒的盈亏（电池）。range=null 表示历史全量。
- *  口径与 anchor-gifts-client 的 blindBoxProfits 完全一致：
- *    cost(电池) = drawCount × blind_price × 50；earned(电池) = Σ hamster；profit = earned - cost。 */
+ *  与 anchor-gifts-client 的 blindBoxProfits 同源（hamster 为金仓鼠），但折算成电池：
+ *    cost(电池)   = drawCount × blind_price × 50 × 2/100 = drawCount × blind_price
+ *    earned(电池) = Σ hamster × 2/100；profit = earned - cost。 */
 export async function computeFromIncome(
   mid: number,
   uid: number,
@@ -297,9 +300,12 @@ export async function computeFromIncome(
     }
     if (ctx.giftIdToBoxId.get(r.gift_id) !== boxId) continue;
     drawCount += r.num;
-    totalEarned += r.hamster; // hamster 即电池
+    // 金仓鼠 → 电池：主播收益 ×2 = 礼物单价（金仓鼠），再 ÷100 转电池（与 GiftScreenshotPanel 一致）
+    totalEarned += (r.hamster * 2) / 100;
   }
-  const cost = drawCount * blindPrice * 50; // 电池；与 anchor-gifts-client: blindPrice*50, cost=drawCount*blindPrice
+  // 电池：收入记录口径 drawCount×blind_price×50 得到的是金仓鼠，按 ×2/100 折算电池后
+  // 恰好等于 drawCount × blind_price，与"盲盒"页面/弹幕路径的成本口径一致
+  const cost = drawCount * blindPrice;
   return {
     blindBoxId: boxId,
     blindBoxName: boxName(ctx.info, boxId),
@@ -408,7 +414,8 @@ function matchQueryPhrase(
 }
 
 /** 回复弹幕最小发送间隔（毫秒），防止触发 B站"发送频率过快" */
-const REPLY_COOLDOWN_MS = 4000;
+// 盲盒查询回复最小发送间隔：B站 文档/社区实测直播弹幕最短间隔为 5s，留 1s 余量防抖动，避免自身超频。
+const REPLY_COOLDOWN_MS = 6000;
 let lastReplyAt = 0;
 
 /** 时间段起始边界（北京时间/本地时区）；返回 null 表示历史全量 */
@@ -516,8 +523,9 @@ export async function tryHandleBlindBoxQuery(
   if (now - lastReplyAt < REPLY_COOLDOWN_MS) return null;
   lastReplyAt = now;
 
-  const { sendDanmaku } = await import("@/lib/barrage");
-  const res = await sendDanmaku(roomId, reply);
+  // 发送弹幕：遇"发送频率过快/风控"（多为主播在别处刚发过弹幕占用 B站 冷却窗口）时自动逐级等待重试
+  const { sendDanmakuWithRetry } = await import("@/lib/barrage");
+  const res = await sendDanmakuWithRetry(roomId, reply);
   if (res.code !== 0) {
     console.warn("[展示]盲盒查询回复弹幕发送失败", res.message || res.msg || res.code);
   }
