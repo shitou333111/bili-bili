@@ -35,15 +35,18 @@ export interface MovableRect {
 }
 
 /** 可编辑布局的元素 ID */
-export type LayoutElementId = "gift" | "entry";
+export type LayoutElementId = "gift" | "entry" | "anime";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
   gift: Record<ScreenOrientation, MovableRect>;
   entry: Record<ScreenOrientation, MovableRect>;
+  anime: Record<ScreenOrientation, MovableRect>;
 }
 
-/** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用） */
+/** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用）。
+ *  anime 默认 {0,0,1} 表示"尚未自定义"：渲染时元素尺寸贴合视频画面（按宽高比在画布内
+ *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   gift: {
     landscape: { x: 40, y: 40, scale: 1 },
@@ -52,6 +55,10 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   entry: {
     landscape: { x: (960 - 160) / 2, y: 60, scale: 1 },
     portrait: { x: (540 - 160) / 2, y: 60, scale: 1 },
+  },
+  anime: {
+    landscape: { x: 0, y: 0, scale: 1 },
+    portrait: { x: 0, y: 0, scale: 1 },
   },
 };
 
@@ -95,7 +102,7 @@ export interface BlindBoxQueryConfig {
   enabled: boolean;
 }
 
-/** 展示模块整体配置（持久化到 .data/display-config.json） */
+/** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
   /** 总开关：开启才创建展示窗口并启动监听 */
   master: boolean;

@@ -1057,6 +1057,11 @@ export default function HomePage() {
       if (res.code === 0) {
         showToast(res.message || "数据库已重建，即将重新加载...");
         setShowRebuildDbConfirm(false);
+        // 重建后必须重新全量拉取主播收益记录：置位登录探测标记（与扫码登录后一致），
+        // 让 reload 后的首次收益拉取走 probe=true，从3年前重新全量获取。
+        // 否则删光记录后（无 records、无 end_date 基线）冷启动路径会 skipPull，
+        // 导致重建后不再重新获取主播收益记录。
+        localStorage.setItem("bili_live_anchor_probe", "1");
         // 稍等片刻让 Toast 显示，然后重新加载页面从空数据启动初始化流程
         setTimeout(() => {
           window.location.reload();
@@ -2769,7 +2774,7 @@ export default function HomePage() {
             <div className="w-10 h-10 border-[3px] border-[#1f1c17] border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
             <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
             <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会变快。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会很快。</p>
             {fetchProgress && (
               <div className="mt-5">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">

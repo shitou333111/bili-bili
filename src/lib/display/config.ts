@@ -1,8 +1,9 @@
 /**
  * 展示模块 —— 配置与今日礼物记录持久化。
  *
- * - 配置：.data/display-config.json（全局一份，主窗口 UI 编辑）。
- * - 今日礼物记录：.data/display-gifts-<mid>.json（按登录主播 uid 分开，跨天自动重置）。
+ * - 配置：<dataDir>/uid_<mid>/display-config.json（按登录主播 uid 分目录，用户私有）。
+ * - 展示相关三个用户文件（config / 弹幕调试日志 / 礼物记录）均在 uid_<mid>/ 下，
+ *   属于本地运行配置，不上传服务器。
  */
 import { getPlatform } from "@/lib/platform";
 import {
@@ -33,7 +34,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "entry", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "gift" | "entry" | "anime", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -44,6 +45,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
   return {
     gift: norm("gift", r.gift),
     entry: norm("entry", r.entry),
+    anime: norm("anime", r.anime),
   };
 }
 /** 把片段秒数规整为非负有限数（0 = 未设置/从头/播到尾），非法值归 0。 */
@@ -132,27 +134,33 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
   };
 }
 
-let cachedConfig: DisplayConfig | null = null;
+/** 各账号展示配置的内存缓存（按 mid 分开，避免账号切换串配置） */
+const configCache = new Map<number, DisplayConfig>();
 
-/** 读取展示配置（内存缓存，避免频繁读盘） */
-export async function loadDisplayConfig(): Promise<DisplayConfig> {
-  if (cachedConfig) return cachedConfig;
+/** 读取某账号的展示配置（内存缓存，避免频繁读盘） */
+export async function loadDisplayConfig(mid: number): Promise<DisplayConfig> {
+  const cached = configCache.get(mid);
+  if (cached) return cached;
   const platform = await getPlatform();
-  const dir = await platform.getDataDir();
-  const path = `${dir}/${CONFIG_NAME}`;
+  const path = `${await platform.getDataDir()}/uid_${mid}/${CONFIG_NAME}`;
+  let cfg: DisplayConfig;
   try {
     const raw = JSON.parse(await platform.readFile(path));
-    cachedConfig = normalizeConfig(raw);
+    cfg = normalizeConfig(raw);
   } catch {
-    cachedConfig = DEFAULT_DISPLAY_CONFIG;
+    // 文件不存在/损坏 → 全新默认配置（新对象，避免外部误改共享默认值）
+    cfg = normalizeConfig(undefined);
   }
-  return cachedConfig;
+  configCache.set(mid, cfg);
+  return cfg;
 }
 
-/** 保存展示配置并刷新内存缓存。 */
-export async function saveDisplayConfig(config: DisplayConfig): Promise<void> {
-  cachedConfig = normalizeConfig(config);
+/** 保存某账号的展示配置并刷新该账号内存缓存。 */
+export async function saveDisplayConfig(mid: number, config: DisplayConfig): Promise<void> {
+  const normalized = normalizeConfig(config);
+  configCache.set(mid, normalized);
   const platform = await getPlatform();
-  const dir = await platform.getDataDir();
-  await platform.writeFile(`${dir}/${CONFIG_NAME}`, JSON.stringify(cachedConfig, null, 2));
+  const dir = `${await platform.getDataDir()}/uid_${mid}`;
+  await platform.mkdir(dir);
+  await platform.writeFile(`${dir}/${CONFIG_NAME}`, JSON.stringify(normalized, null, 2));
 }

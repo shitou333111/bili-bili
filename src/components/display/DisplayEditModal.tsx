@@ -9,7 +9,7 @@
  * 主进程持久化并广播，iframe 内的画布自动翻转，同时本组件按新朝向算出新的 iframe 展示尺寸。
  *
  * iframe 同源（http://127.0.0.1:<port>/display?mode=edit），内部走与浏览器源一致的 WS，
- * 拖动/缩放经 {type:"saveLayout"} 落盘 .data/display-config.json。为把大画布塞进模态框，
+ * 拖动/缩放经 {type:"saveLayout"} 落盘 uid_<mid>/display-config.json。为把大画布塞进模态框，
  * 用 CSS transform scale 等比缩放展示（指针坐标会被浏览器折算进 iframe 文档坐标系，
  * 因此内部拖动仍按 1:1 画布坐标精确换算）。
  */

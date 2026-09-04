@@ -25,11 +25,14 @@ export default function VideoOverlay({
   anime,
   onEnd,
   loop = false,
+  onVideoSize,
 }: {
   anime: Extract<DisplayEvent, { type: "anime" }>;
   onEnd: () => void;
   /** 测试循环模式：视频循环播放，不自动释放（供"测试中"布局调整） */
   loop?: boolean;
+  /** 视频画面实际尺寸（natural 像素，loadedmetadata 后回调）——父级据此让元素贴合视频画面 */
+  onVideoSize?: (w: number, h: number) => void;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -38,6 +41,8 @@ export default function VideoOverlay({
   const [muted, setMuted] = useState(true);
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
+  const onVideoSizeRef = useRef(onVideoSize);
+  onVideoSizeRef.current = onVideoSize;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   // 是否显式设置了播放片段：设置了则严格按 start/end 播；两者为 0（播整段）时，
   // 若视频实际时长 >30s，改为默认播放最后 30 秒。
@@ -155,6 +160,10 @@ export default function VideoOverlay({
               const end = userSegmented && anime.endSec > 0 ? anime.endSec : el.duration;
               endSecRef.current = end > 0 ? end : 0;
             }
+            // 上报视频画面实际尺寸（natural 像素）：父级据此让元素容器贴合视频画面
+            if (el && el.videoWidth > 0 && el.videoHeight > 0) {
+              onVideoSizeRef.current?.(el.videoWidth, el.videoHeight);
+            }
             // 未显式设置片段且视频时长 >30s：默认播放最后 30 秒
             if (!userSegmented && el && Number.isFinite(el.duration) && el.duration > 30) {
               const last = Math.max(0, el.duration - 30);
@@ -195,6 +204,7 @@ export default function VideoOverlay({
       {anime.videoSrc && !loadError && (
         <button
           type="button"
+          onPointerDown={(e) => e.stopPropagation()} // 编辑模式下不触发外层拖动，仅切换声音
           onClick={() =>
             setMuted((m) => {
               const next = !m;

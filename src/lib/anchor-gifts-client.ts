@@ -104,8 +104,10 @@ export type AnchorGiftsResult = {
 
 // ==================== 常量 ====================
 
-// 正常翻页之间的请求间隔；B 站反爬阈值实测 ~ 1 次/秒，400ms 留有余量
-const REQUEST_INTERVAL_MS = 0;
+// 正常翻页之间的请求间隔；B 站反爬阈值实测 ~ 1 次/秒，400ms 留有余量。
+// 注意：设为 0 会让并发月份高速翻页、极易触发 412 软限流/假空，导致部分月份数据缺失，
+// 故至少保留 400ms（与注释表述一致）以降低触发风控概率。
+const REQUEST_INTERVAL_MS = 400;
 // 遇到 412 限流冷却后恢复阶段的请求间隔（更保守）
 const SLOW_REQUEST_INTERVAL_MS = 1500;
 const PAGE_RETRY_COUNT = 3;
@@ -120,7 +122,9 @@ const CONSECUTIVE_MATCH_THRESHOLD = 5;
 const EMPTY_RETRY_INTERVAL_MS = [5000, 15000, 30000];
 // 可疑空月份连续判定上限：同一空月份连续 N 次运行仍为空 → 视为真无数据并放行 end_date（防死循环）。
 // 上限越大，持续软限流/冷缓存时伪空越不容易被误判丢弃（但真空月份冗余补拉轮数越多）。
-const MAX_CONSECUTIVE_EMPTY_RUNS = 5;
+// 从 5 提到 8：风控持续时真实有数据的月份更容易在"满 N 次"前被软限流误判为真无数据
+// 而永久跳过（end_date 越过该月后不再回头补拉），提高上限可显著减少这类缺数据。
+const MAX_CONSECUTIVE_EMPTY_RUNS = 8;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
 
@@ -696,12 +700,18 @@ export async function fetchAnchorGifts(
       let firstDataIndex = -1; // 按时间顺序本批第一个有数据的月份下标
       let totalValidMonths = -1; // 固定分母；-1 表示探测未完成
       let validDone = 0; // 已完成全部翻页的有效月份数
+      // 分母 = 首个有数据月份 → 当前时间 的月数；与已有记录推算的基准取较大者。
+      const recomputeTotalMonths = () => {
+        if (firstDataIndex === -1) return 0;
+        return Math.max(chunks.length - firstDataIndex, baseTotalMonths);
+      };
       const probeMonthHasData = (index: number, hasData: boolean) => {
         probedCount++;
         if (hasData && (firstDataIndex === -1 || index < firstDataIndex)) firstDataIndex = index;
         if (probedCount >= chunks.length) {
-          const probeSpan = firstDataIndex === -1 ? 0 : chunks.length - firstDataIndex;
-          totalValidMonths = Math.max(probeSpan, baseTotalMonths);
+          // 只上修不下修：避免与 onTaskDone 的最终结果互相覆盖导致分母回跳
+          const recomputed = recomputeTotalMonths();
+          if (recomputed > totalValidMonths) totalValidMonths = recomputed;
         }
       };
 
@@ -858,6 +868,15 @@ export async function fetchAnchorGifts(
             return;
           }
           validDone++;
+          // 修正分母：早期探测按 page0 首次响应判断有无数据，软限流假空时会把真实有数据的
+          // 月份误判为空（首个有数据月份下标偏后）→ 分母偏小（如实际3个有数据月份只显示2）。
+          // 该 chunk 实际翻页完成后若发现比当前首个有数据月份更早的月份有数据，
+          // 就把分母上修到真实跨度，保证"已获取月份/总的有数据的月份"显示正确总数。
+          if (firstDataIndex === -1 || i < firstDataIndex) {
+            firstDataIndex = i;
+            const recomputed = recomputeTotalMonths();
+            if (recomputed > totalValidMonths) totalValidMonths = recomputed;
+          }
           // 探测尚未完成（极端情况，通常 page0 探测先于翻页完成）时维持"探测中"，
           // 避免分母漂移；探测完成后分母固定为 totalValidMonths。
           if (totalValidMonths < 0) {
@@ -866,7 +885,7 @@ export async function fetchAnchorGifts(
           }
           onProgress?.({
             text: `正在获取收益记录 ${item.chunk.start.slice(0, 6)}（${validDone}/${totalValidMonths}）`,
-            ratio: validDone / totalValidMonths,
+            ratio: Math.min(1, validDone / totalValidMonths),
             current: validDone,
             total: totalValidMonths,
           });

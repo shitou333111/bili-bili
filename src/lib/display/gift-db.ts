@@ -75,11 +75,11 @@ function minKeepDayStr(): string {
   return localDayStr(d);
 }
 
-const GIFT_DB_NAME = (mid: number) => `display-gift-records-${mid}.json`;
+const GIFT_DB_NAME = "display-gift-records.json";
 
 async function loadGiftDb(platform: Platform, mid: number): Promise<GiftDb> {
-  const dir = await platform.getDataDir();
-  const path = `${dir}/${GIFT_DB_NAME(mid)}`;
+  const dir = `${await platform.getDataDir()}/uid_${mid}`;
+  const path = `${dir}/${GIFT_DB_NAME}`;
   try {
     const raw = JSON.parse(await platform.readFile(path)) as GiftDb;
     if (Array.isArray(raw?.records)) return raw;
@@ -90,9 +90,9 @@ async function loadGiftDb(platform: Platform, mid: number): Promise<GiftDb> {
 }
 
 async function saveGiftDb(platform: Platform, mid: number, db: GiftDb): Promise<void> {
-  const dir = await platform.getDataDir();
+  const dir = `${await platform.getDataDir()}/uid_${mid}`;
   await platform.mkdir(dir);
-  await platform.writeFile(`${dir}/${GIFT_DB_NAME(mid)}`, JSON.stringify(db, null, 2));
+  await platform.writeFile(`${dir}/${GIFT_DB_NAME}`, JSON.stringify(db, null, 2));
 }
 
 /** 串行写盘链，避免高频礼物并发写导致底层存储冲突 */

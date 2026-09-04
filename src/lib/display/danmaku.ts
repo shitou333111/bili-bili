@@ -281,8 +281,8 @@ class DisplayDanmakuService {
     this.debugPersistChain = this.debugPersistChain.then(async () => {
       try {
         const platform = await getPlatform();
-        if (!platform.isNative) return;
-        const dir = await platform.getDataDir();
+        if (!platform.isNative || !this.mid) return;
+        const dir = `${await platform.getDataDir()}/uid_${this.mid}`;
         await platform.writeFile(
           `${dir}/display-danmu-debug.json`,
           JSON.stringify(this.debugRecords.slice(-300), null, 2),
@@ -298,11 +298,11 @@ class DisplayDanmakuService {
    * 写入时不做清理（避免每次写盘的开销）；即使应用长时间运行导致日志跨多天，
    * 影响也不大，下次启动（或跨天重启）时这里会统一清理。
    */
-  private async cleanupExpiredDebugLog() {
+  private async cleanupExpiredDebugLog(mid: number) {
     try {
       const platform = await getPlatform();
-      if (!platform.isNative) return;
-      const dir = await platform.getDataDir();
+      if (!platform.isNative || !mid) return;
+      const dir = `${await platform.getDataDir()}/uid_${mid}`;
       const path = `${dir}/display-danmu-debug.json`;
       const raw = JSON.parse(await platform.readFile(path));
       if (!Array.isArray(raw)) return;
@@ -329,7 +329,7 @@ class DisplayDanmakuService {
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
     // 启动即清理过期调试日志（保留最近两个自然天），处理"长期离线后重新打开"的残留
-    void this.cleanupExpiredDebugLog();
+    void this.cleanupExpiredDebugLog(mid);
     await this.connect(roomId, mid);
   }
 
@@ -363,9 +363,9 @@ class DisplayDanmakuService {
    * 持久化展示朝向并广播到所有浏览器源客户端（画布据此切换横/竖屏）。与浏览器源
    * 编辑 iframe 发来的 {type:"orientation"} 走同一套持久化 + 广播逻辑。
    */
-  async setOrientation(v: ScreenOrientation): Promise<void> {
-    const cfg = await loadDisplayConfig();
-    await saveDisplayConfig({ ...cfg, screenOrientation: v });
+  async setOrientation(v: ScreenOrientation, mid: number): Promise<void> {
+    const cfg = await loadDisplayConfig(mid);
+    await saveDisplayConfig(mid, { ...cfg, screenOrientation: v });
     this.broadcast({ type: "orientation", v });
   }
 
@@ -393,16 +393,16 @@ class DisplayDanmakuService {
       } else if (msg.type === "saveLayout") {
         const { id, orientation, rect } = msg;
         if (!id || !orientation || !rect) return;
-        const cfg = await loadDisplayConfig();
+        const cfg = await loadDisplayConfig(this.mid);
         const layout = cfg.layout;
         layout[id][orientation] = rect;
-        await saveDisplayConfig({ ...cfg, layout });
+        await saveDisplayConfig(this.mid, { ...cfg, layout });
         // 回放已保存的布局给所有端（含发送者）
         this.broadcast({ type: "layout", id, orientation, rect });
       } else if (msg.type === "orientation") {
         const v: ScreenOrientation = msg.v === "portrait" ? "portrait" : "landscape";
-        const cfg = await loadDisplayConfig();
-        await saveDisplayConfig({ ...cfg, screenOrientation: v });
+        const cfg = await loadDisplayConfig(this.mid);
+        await saveDisplayConfig(this.mid, { ...cfg, screenOrientation: v });
         this.broadcast({ type: "orientation", v });
       } else if (msg.type === "log") {
         const fn = msg.level === "error" ? console.error : console.log;
@@ -418,7 +418,7 @@ class DisplayDanmakuService {
    * 这些信息全部持久化在主进程侧（.data/display-config.json），由主窗口组装后广播。
    */
   private async broadcastInit() {
-    const cfg = await loadDisplayConfig();
+    const cfg = await loadDisplayConfig(this.mid);
     const orientation = cfg.screenOrientation;
     // 礼物：今日达标清单
     let gifts: DisplayGiftItem[] = [];
@@ -462,7 +462,7 @@ class DisplayDanmakuService {
   /** 广播当前各模块开关状态（master/entry/gift/anime）到浏览器源，画布据此即时显隐元素。
    *  在面板切换总开关或各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。 */
   async broadcastFlags(): Promise<void> {
-    const cfg = await loadDisplayConfig();
+    const cfg = await loadDisplayConfig(this.mid);
     await this.broadcast({
       type: "flags",
       flags: {
@@ -690,7 +690,7 @@ class DisplayDanmakuService {
         const content = String(d.content || "").trim();
         if (!content) return;
 
-        const config = await loadDisplayConfig();
+        const config = await loadDisplayConfig(mid);
         if (!config.blindBoxQuery?.enabled) return;
         const senderUid = Number(d.user.uid);
         // 当前主播账号查询为特例：不返回其自身盲盒记录，而是返回"全部粉丝"的盲盒数据（uid=0 = 不按用户过滤）
@@ -716,7 +716,7 @@ class DisplayDanmakuService {
   /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。 */
   private async handleEntry(mid: number, user: any) {
     if (!this.active || !user || !user.uid) return;
-    const config = await loadDisplayConfig();
+    const config = await loadDisplayConfig(mid);
     const guardType = Number(user.guardType) || 0;
     const medalLevel = Number(user.fansMedal?.level) || 0;
 
@@ -770,7 +770,7 @@ class DisplayDanmakuService {
   }
 
   /** 处理一条送礼信息：追加到礼物逐条记录 → 组装达标礼物清单 → emit。
-   *  礼物记录（display-gift-records-<mid>.json）同时供"礼物展示"与盲盒"今日/昨日"查询使用，
+   *  礼物记录（uid_<mid>/display-gift-records.json）同时供"礼物展示"与盲盒"今日/昨日"查询使用，
    *  是单一来源，不再各自维护一份今日聚合。
    *  @param d   — bili-live-listener 解析后的 GiftData（无图标字段）
    *  @param raw — 原始 SEND_GIFT 包 {cmd, danmu, data:{...}}；礼物图标在 raw.data.gift_info */
@@ -808,7 +808,7 @@ class DisplayDanmakuService {
 
     if (!this.isNative()) return;
 
-    const config = await loadDisplayConfig();
+    const config = await loadDisplayConfig(mid);
     if (!config.gift) return;
 
     // 从礼物逐条记录聚合今日达标清单（单价 > 阈值；阈值 0 = 不限制）
@@ -830,7 +830,7 @@ class DisplayDanmakuService {
    */
   async pushGiftUpdate(mid: number) {
     if (!this.active || !mid || !this.isNative()) return;
-    const config = await loadDisplayConfig();
+    const config = await loadDisplayConfig(mid);
     if (!config.gift) return;
     const qualifying = await loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
     this.pushDebug("gift", qualifying.length ? "emit" : "清空", {
@@ -880,7 +880,7 @@ export async function getTodayQualifyingGifts(mid: number): Promise<DisplayGiftI
       await ensureGiftCatalogLoaded(platform);
     } catch {}
   }
-  const config = await loadDisplayConfig();
+  const config = await loadDisplayConfig(mid);
   return loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
 }
 

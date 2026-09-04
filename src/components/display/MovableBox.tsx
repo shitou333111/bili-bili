@@ -11,7 +11,7 @@
  * 抬起（onPointerUp）时把最终的 rect 交给 onCommit（由父级经 WS 持久化并广播）。
  * 父级 rect 变化（如服务端回放 layout）且不在拖动时，同步回推到内部 state。
  * 位置/缩放的持久化不再依赖 localStorage（直播姬 CEF 与 APP iframe 不同存储域），
- * 统一由主进程维护 .data/display-config.json，WS 下发。
+ * 统一由主进程维护 uid_<mid>/display-config.json，WS 下发。
  */
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent, ReactNode } from "react";
@@ -26,6 +26,7 @@ export default function MovableBox({
   children,
   className = "",
   editable = false,
+  zIndex = 3,
 }: {
   id: string;
   /** 当前位置/缩放（受控，来自主进程下发并随拖动提交更新） */
@@ -36,6 +37,8 @@ export default function MovableBox({
   className?: string;
   /** 可编辑（调整位置/大小）：仅编辑模式为 true。非编辑时无虚线边框、不可拖动/缩放 */
   editable?: boolean;
+  /** 层级：同一画布内多个元素重叠时，点击/显示优先上层（入场动画=1，礼物/入场提示=3） */
+  zIndex?: number;
 }) {
   // 拖动中的即时显示值；未拖动态时与受控 rect 保持一致
   const [dragRect, setDragRect] = useState<MovableRect>(rect);
@@ -122,9 +125,9 @@ export default function MovableBox({
 
   return (
     <div
-      className={`absolute z-[3] ${editable ? "cursor-move" : ""} ${className}`}
+      className={`absolute ${editable ? "cursor-move" : ""} ${className}`}
       data-window-movable
-      style={{ left: display.x, top: display.y, touchAction: "none" }}
+      style={{ left: display.x, top: display.y, touchAction: "none", zIndex }}
       onPointerDown={editable ? (e) => onPointerDown(e, "move") : undefined}
       onPointerMove={editable ? onPointerMove : undefined}
       onPointerUp={editable ? onPointerUp : undefined}

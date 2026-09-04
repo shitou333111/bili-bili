@@ -336,6 +336,14 @@ export default function DisplayCanvas() {
     return () => window.removeEventListener("resize", update);
   }, [orientation]);
 
+  // 入场动画视频画面实际尺寸（natural 像素，VideoOverlay loadedmetadata 后上报）；
+  // 未加载完成/无视频时为 null → 元素退回画布尺寸（占位提示铺满画布）。
+  const [animeVideoSize, setAnimeVideoSize] = useState<{ w: number; h: number } | null>(null);
+  // VideoOverlay 上报视频画面尺寸 → 更新元素尺寸（包装成稳定回调，直接传 setState 类型不匹配）
+  const onAnimeVideoSize = useCallback((w: number, h: number) => {
+    setAnimeVideoSize({ w, h });
+  }, []);
+
   // 编辑模式的常驻动画：优先 animeSample，否则占位（VideoOverlay 空 src 显示提示）
   const editAnime: AnimeEvent | null = animeSample
     ? {
@@ -346,6 +354,34 @@ export default function DisplayCanvas() {
         endSec: animeSample.endSec,
       }
     : null;
+
+  // 当前是否有真实视频内容（非编辑看事件、编辑看样本；无内容 → 占位/无 → 元素铺满画布）
+  const hasAnimeContent = isEdit ? Boolean(editAnime) : Boolean(anime);
+
+  // 入场动画元素尺寸：按视频宽高比在画布内等比缩放（object-contain 等效），使虚线边框 /
+  // 拖拽缩放区域贴合视频画面而非整个画布；无视频/未加载完成时取画布尺寸（占位提示铺满）。
+  const animeDisp = (() => {
+    if (!hasAnimeContent || !animeVideoSize) return { w: canvas.w, h: canvas.h };
+    const s = Math.min(canvas.w / animeVideoSize.w, canvas.h / animeVideoSize.h);
+    return {
+      w: Math.max(1, Math.round(animeVideoSize.w * s)),
+      h: Math.max(1, Math.round(animeVideoSize.h * s)),
+    };
+  })();
+
+  // 布局 rect 为默认 {0,0,1}（尚未自定义）时，将画面居中于画布（与视频 letterbox 视觉一致）；
+  // 用户拖动/缩放后保存的是绝对坐标，走自定义位置。
+  const animeRect: MovableRect = (() => {
+    const base = layouts.anime[orientation];
+    if (base.x === 0 && base.y === 0 && base.scale === 1) {
+      return {
+        x: Math.round((canvas.w - animeDisp.w) / 2),
+        y: Math.round((canvas.h - animeDisp.h) / 2),
+        scale: 1,
+      };
+    }
+    return base;
+  })();
 
   // 服务端不可达（APP/本地服务已退出）：浏览器源清空不渲染任何内容，
   // 避免关闭 APP 后直播姬仍残留上一帧画面；服务恢复重连成功后自动恢复显示。
@@ -367,22 +403,39 @@ export default function DisplayCanvas() {
         transform: `scale(${fit})`,
       }}
     >
-      {/* 动画：正常模式播事件；编辑模式常驻播放样本；未配置视频时显示占位提示 */}
-      {!isEdit && flags.anime && anime && <VideoOverlay anime={anime} onEnd={onAnimeEnd} />}
-      {isEdit && flags.anime && (
-        <div className="absolute inset-0 z-[1]">
-          {editAnime ? (
-            <VideoOverlay anime={editAnime} onEnd={() => {}} loop />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center px-6 text-center">
-              <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-base font-semibold leading-relaxed shadow-sm">
-                入场动画（视频）将覆盖整个画布
-                <br />
-                尚未配置入场动画，前往「入场动画」卡片添加后可预览
-              </span>
-            </div>
-          )}
-        </div>
+      {/* 动画：正常模式播事件；编辑模式常驻播放样本；未配置视频时显示占位提示。
+          与礼物/入场提示一样可拖动/缩放（仅编辑模式）；层级最底（zIndex=1），
+          礼物(3)与入场提示(3)在其上，重叠时点击优先选中上层元素。
+          元素尺寸贴合视频画面（按宽高比在画布内等比缩放），虚线边框只包视频画面。 */}
+      {flags.anime && (isEdit || anime) && (
+        <MovableBox
+          id="anime"
+          rect={animeRect}
+          onCommit={commitLayout("anime")}
+          editable={isEdit}
+          zIndex={1}
+        >
+          <div className="relative" style={{ width: animeDisp.w, height: animeDisp.h }}>
+            {!isEdit && anime && (
+              <VideoOverlay anime={anime} onEnd={onAnimeEnd} onVideoSize={onAnimeVideoSize} />
+            )}
+            {isEdit && (
+              <div className="absolute inset-0">
+                {editAnime ? (
+                  <VideoOverlay anime={editAnime} onEnd={() => {}} loop onVideoSize={onAnimeVideoSize} />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center px-6 text-center">
+                    <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-base font-semibold leading-relaxed shadow-sm">
+                      入场动画（视频）将覆盖整个画布
+                      <br />
+                      尚未配置入场动画，前往「入场动画」卡片添加后可预览
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </MovableBox>
       )}
 
       {/* 礼物展示：编辑模式常驻显示（无礼物时也显示控件便于摆放）；否则有礼品才显示 */}

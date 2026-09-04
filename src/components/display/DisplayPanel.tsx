@@ -6,7 +6,7 @@
  * 总开关：创建展示窗口 + 启动弹幕监听；关闭则销毁窗口 + 停止监听。
  * 三个信息模块各有开关：①入场提示（粒子 pill）②礼物展示（今日礼物轮换）③入场动画（高级用户自定义动画）。
  * 附加"弹幕互动"模块：向直播间按间隔循环发送自定义弹幕。
- * 所有配置持久化到 .data/display-config.json。
+ * 所有配置持久化到 <dataDir>/uid_<mid>/display-config.json（按账号分开）。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
@@ -378,7 +378,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       if (!alive) return;
       // 展示投屏仅 Windows 桌面 Tauri 可用（Web/Android/iOS 等一律禁用）
       setIsNative(isWindowsDisplaySupported(platform));
-      const cfg = await loadDisplayConfig();
+      const cfg = await loadDisplayConfig(mid);
       if (alive) {
         setConfig(cfg);
         setLoaded(true);
@@ -435,9 +435,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     async (patch: Partial<DisplayConfig>) => {
       const next = { ...config, ...patch };
       setConfig(next);
-      await saveDisplayConfig(next);
+      await saveDisplayConfig(mid, next);
     },
-    [config],
+    [config, mid],
   );
 
   // 模块开关变化：持久化后广播 flags，让浏览器源即时显隐对应元素（无需重连）；
@@ -476,12 +476,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       const orientation: ScreenOrientation = v ? "portrait" : "landscape";
       await update({ screenOrientation: orientation });
       try {
-        await displayDanmaku.setOrientation(orientation);
+        await displayDanmaku.setOrientation(orientation, mid);
       } catch (e: any) {
         toast(`切换朝向失败：${e?.message || e}`);
       }
     },
-    [update, toast],
+    [update, toast, mid],
   );
 
   // 总开关开启：解析房间号 → 开窗口 → 启动监听
@@ -515,10 +515,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           // 浏览器源就绪后还会因 ready 消息再做一次 broadcastInit 兜底推送。
           void displayDanmaku.pushGiftUpdate(mid);
           // 落盘 master=true 后广播 flags，让已加载的浏览器源立即恢复显示
-          const cfg = await loadDisplayConfig();
+          const cfg = await loadDisplayConfig(mid);
           const next = { ...cfg, master: true };
           setConfig(next);
-          await saveDisplayConfig(next);
+          await saveDisplayConfig(mid, next);
           await displayDanmaku.broadcastFlags();
         } catch (e: any) {
           console.error("[展示]开启展示失败", e);
@@ -530,10 +530,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         // 关闭总开关：先落盘并广播 master=false，让浏览器源整体清空（显示空白）；
         // 再停止弹幕监听。本地浏览器源服务保持运行——直播姬浏览器源保持已加载状态仅显示
         // 空白，重新开启后立即恢复内容，无需在直播姬中重加源。
-        const cfg = await loadDisplayConfig();
+        const cfg = await loadDisplayConfig(mid);
         const next = { ...cfg, master: false };
         setConfig(next);
-        await saveDisplayConfig(next);
+        await saveDisplayConfig(mid, next);
         await displayDanmaku.broadcastFlags();
         displayDanmaku.stop();
         setEditOpen(false);
@@ -630,10 +630,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           },
         ],
       };
-      saveDisplayConfig(next);
+      saveDisplayConfig(mid, next);
       return next;
     });
-  }, [guards, selectedGuardMid, toast]);
+  }, [guards, selectedGuardMid, toast, mid]);
 
   // 按 UID 添加：查询昵称与头像（走统一 dataFetch → /api/tools/user-info：Web 走服务器、Tauri 走本地直连），
   // 查询成功后自动加入入场动画名单
@@ -669,7 +669,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             { uid, uname: info.name, face: info.face || "", videoLandscape: "", videoPortrait: "", enabled: true, landscapeStartSec: 0, landscapeEndSec: 0, portraitStartSec: 0, portraitEndSec: 0 },
           ],
         };
-        saveDisplayConfig(next);
+        saveDisplayConfig(mid, next);
         return next;
       });
       setUidInput("");
@@ -679,25 +679,25 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     } finally {
       setUidQuerying(false);
     }
-  }, [uidInput, config.animeList, toast]);
+  }, [uidInput, config.animeList, toast, mid]);
 
   const updateAnime = useCallback((idx: number, patch: Partial<EntryAnimeConfig>) => {
     setConfig((c) => {
       const list = c.animeList.map((a, i) => (i === idx ? { ...a, ...patch } : a));
       const next = { ...c, animeList: list };
-      saveDisplayConfig(next);
+      saveDisplayConfig(mid, next);
       return next;
     });
-  }, []);
+  }, [mid]);
 
   const removeAnime = useCallback((idx: number) => {
     setConfig((c) => {
       const list = c.animeList.filter((_, i) => i !== idx);
       const next = { ...c, animeList: list };
-      saveDisplayConfig(next);
+      saveDisplayConfig(mid, next);
       return next;
     });
-  }, []);
+  }, [mid]);
 
   const pickVideo = useCallback(
     async (idx: number, orient: "landscape" | "portrait") => {
@@ -982,10 +982,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 </button>
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-black/45">
-                使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️把这个链接粘贴到 URL 输入框➡️高级设置➡️宽度 1920 高度 1080➡️确认
+                使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️上面链接粘贴到URL输入框➡️高级设置➡️宽度1920 高度1080➡️确认
               </p>
               <p className="mt-1 text-[11px] leading-relaxed text-black/45">
-                竖屏：步骤一致，仅 宽度=1080 高度=1920。想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
+                竖屏：步骤一致，仅改变 宽度1080 高度1920。
+                <br />
+                想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
+                <br />
+                “编辑布局”中的显示效果并不等于直播姬中的显示效果，直播姬中的显示效果也不等于直播间效果，因为有画面缩放的影响。所以，需要以最终的直播间观看效果为准。
               </p>
             </div>
           )}
@@ -1412,7 +1416,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             >
               ▶
             </span>
-            <h3 className="text-sm font-bold text-black/75">弹幕调试日志</h3>
+            <h3 className="text-sm font-bold text-black/75">弹幕调试日志（用户不必关心）</h3>
           </div>
           {debugOpen && (
             <div className="mt-2 max-h-72 overflow-y-auto rounded-xl bg-white/60 p-2 text-[11px] font-mono space-y-1">

@@ -36,7 +36,7 @@ async function autoStartOnce(mid: number, isLocalAccount: boolean): Promise<void
   // 前置条件即时判定（本地账号 / 未开总开关）→ 不需要重试
   const platform = await getPlatform().catch(() => null);
   if (!platform || !platform.isNative || !isLocalAccount) return;
-  const cfg = await loadDisplayConfig().catch(() => null);
+  const cfg = await loadDisplayConfig(mid).catch(() => null);
   if (!cfg || !cfg.master) return;
 
   inFlight = true;

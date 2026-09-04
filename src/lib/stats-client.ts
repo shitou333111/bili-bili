@@ -221,6 +221,14 @@ async function writeSpecialGiftDb(platform: Platform, db: SpecialGiftDb): Promis
  */
 let _uploadChain: Promise<void> = Promise.resolve();
 
+/** 展示模块的用户本地配置文件（uid_<mid>/ 下）：仅本机运行状态（布局/开关/调试日志/礼物记录），
+ *  不随账号数据上传备份。 */
+const DISPLAY_LOCAL_FILES = new Set([
+  "display-config.json",
+  "display-danmu-debug.json",
+  "display-gift-records.json",
+]);
+
 export async function uploadAllUserData(platform: Platform): Promise<void> {
   // 串行排队：快速连续刷新时避免并发上传造成的 upload-state.json 读写竞争与重复上传
   const run = () => doUploadAllUserData(platform);
@@ -239,7 +247,7 @@ async function doUploadAllUserData(platform: Platform): Promise<void> {
     try {
       const names = await platform.readdir(userDir);
       for (const name of names) {
-        if (name.startsWith("_")) continue;
+        if (name.startsWith("_") || DISPLAY_LOCAL_FILES.has(name)) continue;
         try { files[name] = await platform.readFile(`${userDir}/${name}`); } catch { /* 单个文件读取失败则跳过 */ }
       }
     } catch { /* 目录不存在 */ }
