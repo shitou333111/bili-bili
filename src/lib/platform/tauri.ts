@@ -73,9 +73,23 @@ function stableContentHash(content: string): string {
   return contentHash(content);
 }
 
+/** 检测运行系统（Tauri WebView 沿用 navigator 即可，无需额外插件权限） */
+function detectOs(): Platform["os"] {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent || "";
+  const plat = navigator.platform || "";
+  if (/windows|win32|win64/i.test(ua) || /win32|win64/i.test(plat)) return "windows";
+  if (/android/i.test(ua)) return "android";
+  if (/iphone|ipad|ipod/i.test(ua)) return "ios";
+  if (/linux/i.test(ua)) return "linux";
+  if (/macintosh|mac os|darwin/i.test(ua)) return "macos";
+  return "other";
+}
+
 export const tauriPlatform: Platform = {
   name: "tauri",
   isNative: true,
+  os: detectOs(),
 
   async fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T> {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");

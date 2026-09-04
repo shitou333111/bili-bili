@@ -10,7 +10,7 @@ import { dataFetch } from "@/lib/client-fetch";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
 import { ensureGiftCatalogLoaded } from "@/lib/gift-catalog-client";
-import { getPlatform } from "@/lib/platform";
+import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import GiftReplayPanel from "@/components/GiftReplayPanel";
@@ -296,6 +296,20 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const pieIsMobile = mounted && isMobileDevice();
+
+  // 展示（投屏）仅 Windows 桌面 Tauri 可用；非 Windows（Web/Android/iOS 等）不显示"展示"tab 与面板
+  const [displaySupported, setDisplaySupported] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getPlatform()
+      .then((p) => {
+        if (alive) setDisplaySupported(isWindowsDisplaySupported(p));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
   const fetchingRef = useRef(false);
@@ -674,7 +688,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
             <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
               {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
               <div className="flex items-center rounded-full border border-black/10 bg-white/85 p-1 shadow-sm shrink-0 w-[80%] max-w-[800px]">
-                {(["revenue", "blindbox", "display", "gift_screenshot", "other"] as const).map((tab) => (
+                {(["revenue", "blindbox", "display", "gift_screenshot", "other"] as const)
+                  .filter((tab) => tab !== "display" || displaySupported) // 展示仅 Windows 桌面显示
+                  .map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
@@ -1270,8 +1286,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
                 </>
               )}
 
-              {/* 展示 tab（直播展示画布：入场/礼物/高级动画） */}
-              {activeTab === "display" && (
+              {/* 展示 tab（直播展示画布：入场/礼物/高级动画）—— 仅 Windows 桌面可用 */}
+              {displaySupported && activeTab === "display" && (
                 <DisplayPanel mid={mid} isLocalAccount={isLocalAccount} showToast={showToast} />
               )}
 

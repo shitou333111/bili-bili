@@ -50,6 +50,7 @@ function unavailable(name: string): never {
 export const webPlatform: Platform = {
   name: "web",
   isNative: false,
+  os: "web",
 
   async fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T> {
     const { url, cookie, method = "GET", body, mobile = false, live = false } = options;

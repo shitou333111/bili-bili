@@ -35,6 +35,8 @@ export interface Platform {
   readonly name: "web" | "tauri";
   /** 是否是 Tauri 客户端（有原生能力） */
   readonly isNative: boolean;
+  /** 运行系统（用于区分桌面/移动：展示投屏仅 Windows 桌面可用） */
+  readonly os: "web" | "windows" | "android" | "ios" | "linux" | "macos" | "other";
 
   // ---------- B站 API 请求（解决 CORS） ----------
   /** 发起 B站 API 请求（带 UA/Referer 等头） */

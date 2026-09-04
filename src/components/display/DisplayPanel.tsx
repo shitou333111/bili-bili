@@ -9,7 +9,7 @@
  * 所有配置持久化到 .data/display-config.json。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { getPlatform } from "@/lib/platform";
+import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   type DisplayConfig,
@@ -39,6 +39,7 @@ import {
   getAllBlindBoxInfo,
 } from "@/lib/stats-client";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
+import DisplayEditModal from "./DisplayEditModal";
 
 interface GuardItem {
   mid: number;
@@ -317,8 +318,6 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   // 主播昵称 + 开播状态（用于状态提示：已连接 <昵称>的直播间 · 绿/黄/红 状态点）
   const [anchorName, setAnchorName] = useState("");
   const [liveStatus, setLiveStatus] = useState(0);
-  // 测试模式（画布三个元素常驻循环播放）
-  const [testing, setTesting] = useState(false);
   // 弹幕调试日志卡片默认折叠
   const [debugOpen, setDebugOpen] = useState(false);
   // 当前活动盲盒名称（从 admin 配置解析，供使用说明展示）
@@ -377,7 +376,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     (async () => {
       const platform = await getPlatform();
       if (!alive) return;
-      setIsNative(platform.isNative);
+      // 展示投屏仅 Windows 桌面 Tauri 可用（Web/Android/iOS 等一律禁用）
+      setIsNative(isWindowsDisplaySupported(platform));
       const cfg = await loadDisplayConfig();
       if (alive) {
         setConfig(cfg);
@@ -419,81 +419,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     })();
   }, [loaded, config.master, isLocalAccount, isNative, mid]);
 
-  // 用户直接关闭画布窗口（/display 页 onCloseRequested 经 Tauri emitTo("main",...) 发出）
-  // "display-window-closed" → 自动关闭总开关：停弹幕监听、取消测试并持久化 master=false
-  // （保持总开关与画布窗口的存在状态同步）。
-  // 同时监听画布发出的 "display-ready"（画布页面加载完且事件监听就绪）→ 补推一次今日
-  // 礼物清单，兜底画布刚创建时首推被丢弃的情况，保证"已有礼物记录也能立即显示"。
-  useEffect(() => {
-    let cancelled = false;
-    const unlisteners: Array<() => void> = [];
-    (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisteners.push(
-          await listen<null>("display-window-closed", () => {
-            if (cancelled) return;
-            displayDanmaku.stop();
-            setTesting(false);
-            setConfig((c) => {
-              const next = { ...c, master: false };
-              saveDisplayConfig(next);
-              return next;
-            });
-          }),
-        );
-        unlisteners.push(
-          await listen("display-ready", () => {
-            if (cancelled) return;
-            if (mid) void displayDanmaku.pushGiftUpdate(mid);
-          }),
-        );
-        // 画布窗口首次创建/加载完成时，把当前保存的朝向发给画布，确保画布内的尺寸与
-        // 窗口一致（画布默认横屏，竖屏窗口必须等这个事件才切换为 540x960）。
-        // 用 config 引用读取，避免在依赖里加 config 导致重复注册。
-        await emitToCurrentOrientation();
-      } catch {
-        // 非 Tauri（如浏览器预览）下 Tauri 事件 API 不可用，静默跳过
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unlisteners.forEach((u) => u());
-    };
-
-    // 读取当前朝向并 emit 到画布（软件启动、账号切换引用最新配置）
-    async function emitToCurrentOrientation() {
-      try {
-        const current = await loadDisplayConfig();
-        const { emitTo } = await import("@tauri-apps/api/event");
-        await emitTo("display", "display-orientation", current.screenOrientation);
-      } catch {
-        /* 忽略 */
-      }
-    }
-  }, [mid]);
-
-  // 接收 /display 画布窗口转发来的 console 日志，打印到主窗口控制台（便于排查画布侧问题，
-  // 如粒子动画；画布窗口自身 DevTools 不好打开）。
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<{ level: string; text: string }>("display-console", (e) => {
-          const { level, text } = e.payload;
-          if (level === "error") console.error("[画布]", text);
-          else if (level === "warn") console.warn("[画布]", text);
-          else console.log("[画布]", text);
-        });
-      } catch {
-        /* 非 Tauri 忽略 */
-      }
-    })();
-    return () => {
-      unlisten?.();
-    };
-  }, []);
+  // 浏览器源架构下不存在"画布窗口"：画布/编辑 iframe 的朝向、布局、调试日志都经本地
+  // HTTP 服务器的 WS 处理（danmaku.ts 内 handleServerMessage / setOrientation），
+  // 不再需要 display-window-closed / display-ready / display-console 这类 Tauri 事件监听。
 
   // 订阅弹幕调试事件，页面实时展示（仅保留最近 20 条）
   useEffect(() => {
@@ -512,24 +440,48 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     [config],
   );
 
-  // 横屏 / 竖屏切换：持久化朝向并调整已打开的展示画布窗口尺寸（画布监听
-  // "display-orientation" 事件后按新朝向重排元素并读取对应 localStorage 布局）。
-  // 仅在展示窗口已打开（master 开启）时调用 Rust 命令；未打开时仅保存配置，
-  // 下次打开会按保存的朝向创建窗口。
+  // 模块开关变化：持久化后广播 flags，让浏览器源即时显隐对应元素（无需重连）；
+  // 重新开启礼物展示时主动重推今日礼物清单，使画布立即恢复显示
+  const toggleModule = useCallback(
+    async (patch: Partial<DisplayConfig>) => {
+      await update(patch);
+      void displayDanmaku.broadcastFlags();
+      if (patch.gift && mid) void displayDanmaku.pushGiftUpdate(mid);
+    },
+    [update, mid],
+  );
+
+  // 横屏 / 竖屏切换：持久化朝向并广播给已连接的浏览器源画布（canvas 收到 orientation
+  // 消息后切换 540x960 / 960x540）。浏览器源随时可再加，无需先开总开关。
+  const [editOpen, setEditOpen] = useState(false);
+  const serverPort = displayDanmaku.getServerPort();
+
+  // 浏览器源地址：优先用实际端口；未启动时给默认 25100（Rust 端 25100 起端口）
+  const browserSourceUrl = serverPort
+    ? `http://127.0.0.1:${serverPort}/display`
+    : "http://127.0.0.1:25100/display";
+
+  // 一键复制浏览器源地址
+  const copySourceUrl = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(browserSourceUrl);
+      toast("浏览器源地址已复制");
+    } catch {
+      toast("复制失败，请手动选择复制");
+    }
+  }, [browserSourceUrl, toast]);
+
   const handleOrientation = useCallback(
     async (v: boolean) => {
       const orientation: ScreenOrientation = v ? "portrait" : "landscape";
       await update({ screenOrientation: orientation });
-      if (isNative && config.master) {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("set_display_orientation", { orientation });
-        } catch (e: any) {
-          toast(`切换朝向失败：${e?.message || e}`);
-        }
+      try {
+        await displayDanmaku.setOrientation(orientation);
+      } catch (e: any) {
+        toast(`切换朝向失败：${e?.message || e}`);
       }
     },
-    [update, isNative, config.master, toast],
+    [update, toast],
   );
 
   // 总开关开启：解析房间号 → 开窗口 → 启动监听
@@ -555,25 +507,19 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           const roomId = roomInfo.roomId;
           setAnchorName(roomInfo.uname);
           setLiveStatus(roomInfo.liveStatus);
-          const { invoke } = await import("@tauri-apps/api/core");
-          // 打开展示窗口；首次创建 WebView 可能较慢，给足时间（异步命令不阻塞主线程）。
-          // 必须带上当前朝向（横屏/竖屏），Rust 端按朝向创建窗口尺寸；缺失会因"缺少必需参数"报错，
-          // 导致窗口根本创建不出来。
-          await withTimeout(
-            invoke("open_display_window", { orientation: config.screenOrientation }),
-            15000,
-            "打开展示窗口",
-          );
+          // 启动本地浏览器源 HTTP+WS 服务（Rust 端绑定 127.0.0.1:25100 起端口）。
+          // 直播软件（如直播姬）添加浏览器源 http://127.0.0.1:<port>/display 透明叠加。
+          await withTimeout(displayDanmaku.startServer(), 10000, "启动浏览器源服务");
           displayDanmaku.start(roomId, mid);
           // 立即推送一次今日礼物清单：已有礼物记录时无需等下一次送礼即可显示；
-          // 若画布窗口刚创建页面尚未加载完，本次 emit 会被丢弃，随后由画布发出的
-          // "display-ready" 信号兜底再推一次（见本组件 display-ready 监听）。
+          // 浏览器源就绪后还会因 ready 消息再做一次 broadcastInit 兜底推送。
           void displayDanmaku.pushGiftUpdate(mid);
-          setConfig((c) => {
-            const next = { ...c, master: true };
-            saveDisplayConfig(next);
-            return next;
-          });
+          // 落盘 master=true 后广播 flags，让已加载的浏览器源立即恢复显示
+          const cfg = await loadDisplayConfig();
+          const next = { ...cfg, master: true };
+          setConfig(next);
+          await saveDisplayConfig(next);
+          await displayDanmaku.broadcastFlags();
         } catch (e: any) {
           console.error("[展示]开启展示失败", e);
           toast(`开启展示失败：${e?.message || e}`);
@@ -581,21 +527,19 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           setEnabling(false);
         }
       } else {
+        // 关闭总开关：先落盘并广播 master=false，让浏览器源整体清空（显示空白）；
+        // 再停止弹幕监听。本地浏览器源服务保持运行——直播姬浏览器源保持已加载状态仅显示
+        // 空白，重新开启后立即恢复内容，无需在直播姬中重加源。
+        const cfg = await loadDisplayConfig();
+        const next = { ...cfg, master: false };
+        setConfig(next);
+        await saveDisplayConfig(next);
+        await displayDanmaku.broadcastFlags();
         displayDanmaku.stop();
-        setTesting(false);
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("close_display_window");
-        } catch {}
-        setConfig((c) => {
-          const next = { ...c, master: false };
-          saveDisplayConfig(next);
-          return next;
-        });
+        setEditOpen(false);
       }
     },
-    // config.screenOrientation 用于创建展示窗口时指定朝向
-    [mid, isNative, toast, config.screenOrientation],
+    [mid, isNative, toast],
   );
 
   // 加载大航海舰长列表（主播的舰长，官方 guardTab/topList 接口）
@@ -770,7 +714,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         );
         // 仅提示、不在此处理选段：>30s 时轻提示，之后用户点击视频文件名自行设置播放时间段
         if (isNative) {
-          probeVideoDuration(path)
+          probeVideoDuration(path, displayDanmaku.getDisplayBaseUrl())
             .then((d) => {
               if (d > 30) {
                 toast("当前选择视频时长超过30秒，之后点击视频文件名，可以设置播放时间段");
@@ -806,7 +750,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       const path = resolveAnimeVideo(a, orient);
       if (!path) return; // 未配置视频：文件名为"未选择"，点击无反应
       try {
-        const total = await probeVideoDuration(path);
+        const total = await probeVideoDuration(path, displayDanmaku.getDisplayBaseUrl());
         if (total <= 30) return; // 短视频：点击无反应
         const seg =
           orient === "portrait"
@@ -887,14 +831,6 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   useEffect(() => {
     if (loaded && mid) refreshGifts();
   }, [loaded, mid, refreshGifts]);
-
-  // 测试模式开关：开启后画布三个元素常驻并循环播放，再次点击取消
-  const toggleTest = useCallback(async () => {
-    if (!config.master || enabling) return;
-    const next = !testing;
-    setTesting(next);
-    await displayDanmaku.setTestMode(next, mid);
-  }, [config.master, enabling, testing, mid]);
 
   // 已连接时每 60s 刷新一次开播状态（未开播=黄点 / 直播中=绿点），断线重连也会重新刷新
   useEffect(() => {
@@ -1028,9 +964,31 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         <Card bg="bg-slate-300" border="border-slate-400">
           <p className="text-xs text-black/45 leading-relaxed">
             {isNative
-              ? `开启后创建 ${config.screenOrientation === "portrait" ? "540x960" : "960x540"} 展示窗口，在直播姬中使用窗口捕捉（仅首次）`
+              ? "开启后在直播姬添加浏览器源即可叠加显示（地址与步骤见下）"
               : "仅 Windows 客户端支持"}
           </p>
+          {isNative && (
+            <div className="mt-2.5 rounded-xl bg-white/60 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-[11px] font-medium text-black/60">浏览器源地址</span>
+                <code className="min-w-0 flex-1 select-all truncate text-[11px] text-black/80">
+                  {browserSourceUrl}
+                </code>
+                <button
+                  onClick={() => void copySourceUrl()}
+                  className="shrink-0 rounded-md bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-sm transition hover:bg-white/80 active:scale-[0.97]"
+                >
+                  复制
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-black/45">
+                使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️把这个链接粘贴到 URL 输入框➡️高级设置➡️宽度 1920 高度 1080➡️确认
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-black/45">
+                竖屏：步骤一致，仅 宽度=1080 高度=1920。想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
+              </p>
+            </div>
+          )}
           {statusText && (
             <div className="mt-2.5 flex items-center gap-2.5 rounded-xl bg-white/60 px-3 py-2 text-xs text-black/70">
               <span className={`inline-block w-3 h-3 rounded-full ${dotClass}`} />
@@ -1044,22 +1002,28 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               disabled={enabling || !isNative}
               onChange={(v) => void handleOrientation(v === "portrait")}
             />
-            {/* 右：首次使用设置。固定宽度，文案切换不改变布局、不影响左侧朝向按钮位置 */}
+            {/* 右：编辑布局。需先开启总开关（serverPort>0）才能用模态框 iframe 加载编辑页 */}
             <button
-              onClick={() => void toggleTest()}
-              disabled={!config.master || enabling}
-              title="设置中画布三个模块元素常驻并循环播放，便于调整位置和大小"
-              className={`inline-flex w-[170px] items-center justify-center whitespace-nowrap rounded-lg px-4 py-1.5 text-xs font-medium transition active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed ${
-                testing
-                  ? "bg-red-500 text-white shadow-sm hover:bg-red-600"
-                  : "bg-white text-slate-700 shadow-sm hover:bg-white/80"
-              }`}
+              onClick={() => setEditOpen(true)}
+              disabled={!config.master || enabling || !serverPort}
+              title="在 APP 内打开布局编辑框：可切换横/竖屏，分别调整三个模块的位置和大小"
+              className="inline-flex w-[170px] items-center justify-center whitespace-nowrap rounded-lg bg-white text-slate-700 shadow-sm px-4 py-1.5 text-xs font-medium transition active:scale-[0.98] hover:bg-white/80 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {testing ? "● 设置中（再次点击取消）" : "首次使用设置"}
+              编辑布局
             </button>
           </div>
         </Card>
       </section>
+
+      {/* 布局编辑模态框：内嵌展示编辑页（?mode=edit，同源 iframe），可切换横/竖屏 */}
+      {editOpen && serverPort && (
+        <DisplayEditModal
+          port={serverPort}
+          orientation={config.screenOrientation}
+          onOrientationChange={(v) => void handleOrientation(v === "portrait")}
+          onClose={() => setEditOpen(false)}
+        />
+      )}
 
       {/* 模块1：礼物展示 */}
       <section>
@@ -1067,7 +1031,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           title="礼物展示"
           onColor="bg-amber-500"
           checked={config.gift}
-          onToggle={(v) => update({ gift: v })}
+          onToggle={(v) => void toggleModule({ gift: v })}
         />
         <Card bg="bg-amber-200" border="border-amber-400">
           <p className="text-xs text-black/45 leading-relaxed">今日收到的礼物，轮换显示，不区分谁送的</p>
@@ -1107,7 +1071,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           title="入场提示"
           onColor="bg-blue-500"
           checked={config.entry}
-          onToggle={(v) => update({ entry: v })}
+          onToggle={(v) => void toggleModule({ entry: v })}
         />
         <Card bg="bg-blue-200" border="border-blue-400">
           <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
@@ -1161,7 +1125,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           title="入场动画"
           onColor="bg-violet-500"
           checked={config.anime}
-          onToggle={(v) => update({ anime: v })}
+          onToggle={(v) => void toggleModule({ anime: v })}
         />
         <Card bg="bg-violet-200" border="border-violet-400">
           <p className="text-xs text-black/45 leading-relaxed">为指定舰长或用户配置本地视频，入场时播放该视频动画</p>

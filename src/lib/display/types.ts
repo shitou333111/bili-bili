@@ -24,6 +24,37 @@ export interface EntryFilter {
 /** 展示画布朝向 */
 export type ScreenOrientation = "landscape" | "portrait";
 
+/** 画布元素可移动矩形（左上角坐标 + 等比缩放系数） */
+export interface MovableRect {
+  /** 元素左上角 X（画布坐标） */
+  x: number;
+  /** 元素左上角 Y（画布坐标） */
+  y: number;
+  /** 缩放系数（1=原始大小） */
+  scale: number;
+}
+
+/** 可编辑布局的元素 ID */
+export type LayoutElementId = "gift" | "entry";
+
+/** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
+export interface DisplayLayout {
+  gift: Record<ScreenOrientation, MovableRect>;
+  entry: Record<ScreenOrientation, MovableRect>;
+}
+
+/** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用） */
+export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
+  gift: {
+    landscape: { x: 40, y: 40, scale: 1 },
+    portrait: { x: 40, y: 40, scale: 1 },
+  },
+  entry: {
+    landscape: { x: (960 - 160) / 2, y: 60, scale: 1 },
+    portrait: { x: (540 - 160) / 2, y: 60, scale: 1 },
+  },
+};
+
 /** 高级用户自定义入场动画配置（逐用户一份） */
 export interface EntryAnimeConfig {
   /** 用户 UID */
@@ -84,9 +115,15 @@ export interface DisplayConfig {
   animeList: EntryAnimeConfig[];
   /** 弹幕互动 */
   danmaku: DanmakuInteractionConfig;
+  /** 画布元素布局（gift/entry 各按朝向一套，主进程持久化 + WS 下发） */
+  layout: DisplayLayout;
   /** 盲盒盈亏 · 弹幕查询 */
   blindBoxQuery: BlindBoxQueryConfig;
 }
+
+/** 画布各模块显示开关（主进程随配置变化实时广播，浏览器源据此即时显隐元素）。
+ *  master=false 时浏览器源整体不渲染任何内容（关闭总开关 → 显示空白）。 */
+export type DisplayFlags = Pick<DisplayConfig, "master" | "entry" | "gift" | "anime">;
 
 /** 默认展示配置 */
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
@@ -103,6 +140,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   },
   giftPriceThreshold: 10, // 电池（默认约 1 元）
   animeList: [],
+  layout: DEFAULT_DISPLAY_LAYOUT,
   danmaku: {
     enabled: false,
     intervalSec: 300, // 默认 5 分钟
@@ -147,9 +185,4 @@ export type DisplayEvent =
       /** 播放结束秒数（0=播到末尾；配合 startSec 实现选段播放） */
       endSec: number;
     }
-  | { type: "gift"; gifts: DisplayGiftItem[] }
-  /** 测试模式开关：开启后三个模块元素常驻并循环播放（供布局调整） */
-  | { type: "test"; active: boolean };
-
-/** 展示窗口事件频道名 */
-export const DISPLAY_EVENT_CHANNEL = "display-event";
+  | { type: "gift"; gifts: DisplayGiftItem[] };

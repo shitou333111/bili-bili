@@ -1,8 +1,9 @@
 /**
  * 展示模块 —— 启动时自动恢复。
  *
- * 业务规则：当"展示总开关"开启时，软件启动后应自动打开画布窗口并恢复对该账号直播间的
- * 弹幕监听（礼物展示 / 入场提示 / 入场动画 / 盲盒盈亏查询等全部监听），无需用户打开"展示"面板。
+ * 业务规则：当"展示总开关"开启时，软件启动后应自动启动本地浏览器源 HTTP+WS 服务并恢复对该
+ * 账号直播间的弹幕监听（礼物展示 / 入场提示 / 入场动画 / 盲盒盈亏查询等全部监听），无需用户
+ * 打开"展示"面板。浏览器源服务本身无窗口，直播姬添加浏览器源后即可透明叠加。
  *
  * 健壮性：
  *  - 刚启动时各进程 / 网络可能繁忙，网络解析房间号可能失败 → 只把"已成功"标记为完成，
@@ -23,7 +24,7 @@ const MAX_ATTEMPTS = 6;
 const RETRY_BASE_MS = 4000;
 
 /**
- * 在应用启动、账号就绪后调用：若展示总开关开启且为本机本地账号，则自动打开展示窗口
+ * 在应用启动、账号就绪后调用：若展示总开关开启且为本机本地账号，则自动启动浏览器源服务
  * 并恢复全部弹幕监听。整体非阻塞；失败会异步重试。
  */
 export function autoStartDisplay(mid: number, isLocalAccount: boolean): Promise<void> {
@@ -42,13 +43,12 @@ async function autoStartOnce(mid: number, isLocalAccount: boolean): Promise<void
   try {
     attempts += 1;
     const roomInfo = await resolveRoomInfo(mid); // 网络调用，刚启动可能繁忙
-    const { invoke } = await import("@tauri-apps/api/core");
-    // 必须带上当前朝向：Rust 端 open_display_window 的 orientation 是必需参数，缺失会报错
-    await invoke("open_display_window", { orientation: cfg.screenOrientation });
+    // 浏览器源架构下无画布窗口：启动本地 HTTP+WS 服务（Rust 端绑定 127.0.0.1:25100 起端口）。
+    await displayDanmaku.startServer();
     await displayDanmaku.start(roomInfo.roomId, mid); // 开启全部弹幕监听（幂等）
     done = true;
     attempts = 0;
-    console.log("[展示] 启动自动恢复：已打开画布并开始全部监听", { roomId: roomInfo.roomId });
+    console.log("[展示] 启动自动恢复：已启动浏览器源服务并开始全部监听", { roomId: roomInfo.roomId });
   } catch (e) {
     console.warn(`[展示] 启动自动恢复失败（${attempts}/${MAX_ATTEMPTS}），稍后重试`, (e as Error)?.message || e);
     if (attempts < MAX_ATTEMPTS) {

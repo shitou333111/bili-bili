@@ -8,14 +8,17 @@
  * 仅 Tauri（桌面）环境使用；Web 下不 emit 到独立窗口。
  */
 import { getPlatform, type Platform } from "@/lib/platform";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
+  type LayoutElementId,
+  type MovableRect,
+  type ScreenOrientation,
 } from "./types";
 import {
   loadDisplayConfig,
+  saveDisplayConfig,
   resolveAnimeVideo,
   resolveAnimeSegment,
 } from "./config";
@@ -25,6 +28,26 @@ import {
   tryHandleBlindBoxQuery,
 } from "./gift-db";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftList } from "@/lib/gift-catalog-client";
+
+/** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
+interface ServerMessage {
+  type: "ready" | "saveLayout" | "orientation" | "log";
+  mode?: "edit" | "source";
+  id?: LayoutElementId;
+  orientation?: ScreenOrientation;
+  rect?: MovableRect;
+  v?: ScreenOrientation;
+  level?: string;
+  text?: string;
+}
+
+/** 入场动画样本（编辑模式常驻预览用） */
+interface AnimeSample {
+  user: { uid: number; uname: string; face: string };
+  videoSrc: string;
+  startSec: number;
+  endSec: number;
+}
 
 export type DisplayServiceStatus =
   | { state: "idle" }
@@ -179,23 +202,23 @@ class DisplayDanmakuService {
   private live: any = null;
   private removeHandlers: Array<() => void> = [];
   private active = false;
-  /** 全局"画布就绪 → 补推今日礼物清单"监听是否已注册（会话内只注册一次） */
-  private readyListened = false;
+  /** 本地浏览器源服务端口缓存（null=未启动/未知） */
+  private serverPort: number | null = null;
+  /** "display-server-message" 监听是否已注册（会话内只注册一次） */
+  private serverListened = false;
+  /** 重连定时器 */
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retry = 0;
   private statusListeners = new Set<StatusListener>();
+  /** 最近一次状态：供后挂载的面板订阅时立即回放（打开软件自动恢复已连接后，面板再挂载时
+   *  不至于停留在 idle，导致总开关卡片的连接状态行不显示） */
+  private currentStatus: DisplayServiceStatus = { state: "idle" };
   // 弹幕 token 缓存：弹幕接口有风控，不能每次重连都重新拉取；
   // 首次进房间拉一次，后续断线重连直接复用，避免高频请求把 IP 打成 -352。
   private cachedToken: string | null = null;
   private cachedRoomId = 0;
   /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
   private wsConnectedAt = 0;
-  /**
-   * 测试模式代际计数：开启测试后会异步拉取礼物清单再 emit；若用户在 await 期间取消测试，
-   * 迟到落回的 gift/anime emit 会覆盖画布已清空的状态（礼物取消后仍残留）。
-   * 每次切换测试都会自增代际，开启测试的异步 deliver 在校验代际变化后直接丢弃。
-   */
-  private testGen = 0;
   // ---- 调试日志 ----
   private debugListeners = new Set<(e: DanmuDebugEvent) => void>();
   private debugEvents: DanmuDebugEvent[] = [];
@@ -207,6 +230,9 @@ class DisplayDanmakuService {
 
   subscribe(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
+    // 立即回放当前状态：面板可能在自动恢复（autoStartDisplay）已连接后才挂载，
+    // 若订阅时不回放，面板会一直停留在初始 idle，连接状态行永不显示。
+    listener(this.currentStatus);
     return () => this.statusListeners.delete(listener);
   }
 
@@ -289,6 +315,7 @@ class DisplayDanmakuService {
   }
 
   private emitStatus(s: DisplayServiceStatus) {
+    this.currentStatus = s;
     this.statusListeners.forEach((l) => l(s));
   }
 
@@ -298,9 +325,6 @@ class DisplayDanmakuService {
 
   /** 启动监听：拉取弹幕 token → 建立 WS → 绑定事件。 */
   async start(roomId: number, mid: number) {
-    // 确保已注册"画布就绪 → 补推今日礼物清单"的全局监听：归属本服务而非"展示"面板，
-    // 这样由 auto-start 打开的画布（用户未打开"展示"页面）也能在就绪后立即拿到礼物数据。
-    this.ensureDisplayReadyListener();
     // 若已连同一房间，忽略重复启动
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
@@ -309,22 +333,155 @@ class DisplayDanmakuService {
     await this.connect(roomId, mid);
   }
 
-  /** 全局注册一次"display-ready"监听：画布页面加载完（事件监听就绪）即补推今日达标礼物清单，
-   *  兜底画布创建首推被丢弃的情况，保证"已有礼物记录也能立即显示"。会话内只注册一次；
-   *  推送时按当前监听房间(this.mid)执行，且 pushGiftUpdate 内部有 active/config 双重守卫。 */
-  private ensureDisplayReadyListener() {
-    if (this.readyListened) return;
-    this.readyListened = true;
+  /**
+   * 启动本地浏览器源服务（幂等）：Rust 端绑定 127.0.0.1:25100 起端口，并注册
+   * `display-server-message` 全局监听（会话内只注册一次）。该监听按消息类型分发：
+   *  - ready → 组装并广播初始 init（布局 / 朝向 / 今日礼物 / 入场动画样本）
+   *  - saveLayout → 持久化布局并回放 layout
+   *  - orientation → 持久化朝向并回放 orientation
+   *  - log → 打印画布/浏览器源的调试日志
+   */
+  async startServer(): Promise<number> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const port = (await invoke("start_display_server")) as number;
+    this.serverPort = port;
+    this.registerServerListener();
+    return port;
+  }
+
+  /** 已缓存的本地服务端口（null=未启动）。 */
+  getServerPort(): number | null {
+    return this.serverPort;
+  }
+
+  /** 本地浏览器源服务完整地址（含端口）；未启动返回空串。用于外部拼接 /api/video 探测地址。 */
+  getDisplayBaseUrl(): string {
+    return this.serverPort ? `http://127.0.0.1:${this.serverPort}` : "";
+  }
+
+  /**
+   * 持久化展示朝向并广播到所有浏览器源客户端（画布据此切换横/竖屏）。与浏览器源
+   * 编辑 iframe 发来的 {type:"orientation"} 走同一套持久化 + 广播逻辑。
+   */
+  async setOrientation(v: ScreenOrientation): Promise<void> {
+    const cfg = await loadDisplayConfig();
+    await saveDisplayConfig({ ...cfg, screenOrientation: v });
+    this.broadcast({ type: "orientation", v });
+  }
+
+  /** 会话内只注册一次"display-server-message"监听。 */
+  private registerServerListener() {
+    if (this.serverListened) return;
+    this.serverListened = true;
     void (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        await listen("display-ready", () => {
-          void this.pushGiftUpdate(this.mid);
+        await listen<ServerMessage>("display-server-message", (event) => {
+          void this.handleServerMessage(event.payload);
         });
       } catch {
-        /* 非 Tauri 环境（浏览器预览）忽略 */
+        /* 非 Tauri 环境忽略 */
       }
     })();
+  }
+
+  /** 分发浏览器源客户端发来的一个消息（ready/saveLayout/orientation/log）。 */
+  private async handleServerMessage(msg: ServerMessage) {
+    try {
+      if (msg.type === "ready") {
+        await this.broadcastInit();
+      } else if (msg.type === "saveLayout") {
+        const { id, orientation, rect } = msg;
+        if (!id || !orientation || !rect) return;
+        const cfg = await loadDisplayConfig();
+        const layout = cfg.layout;
+        layout[id][orientation] = rect;
+        await saveDisplayConfig({ ...cfg, layout });
+        // 回放已保存的布局给所有端（含发送者）
+        this.broadcast({ type: "layout", id, orientation, rect });
+      } else if (msg.type === "orientation") {
+        const v: ScreenOrientation = msg.v === "portrait" ? "portrait" : "landscape";
+        const cfg = await loadDisplayConfig();
+        await saveDisplayConfig({ ...cfg, screenOrientation: v });
+        this.broadcast({ type: "orientation", v });
+      } else if (msg.type === "log") {
+        const fn = msg.level === "error" ? console.error : console.log;
+        fn(`[画布]${msg.text}`);
+      }
+    } catch (e) {
+      console.warn("[展示]处理画布消息失败", (e as Error)?.message || e);
+    }
+  }
+
+  /**
+   * 浏览器源就绪后组提升级 init：布局 + 当前朝向 + 今日达标礼物 + 入场动画样本。
+   * 这些信息全部持久化在主进程侧（.data/display-config.json），由主窗口组装后广播。
+   */
+  private async broadcastInit() {
+    const cfg = await loadDisplayConfig();
+    const orientation = cfg.screenOrientation;
+    // 礼物：今日达标清单
+    let gifts: DisplayGiftItem[] = [];
+    if (cfg.gift && this.mid) {
+      try {
+        gifts = await loadTodayQualifyingGifts(this.mid, cfg.giftPriceThreshold);
+      } catch {
+        /* 拉取失败则以空清单下发，画布自行占位 */
+      }
+    }
+    // 入场动画样本：首个启用且带视频的 animeList 项（供编辑模式常驻预览）
+    let animeSample: AnimeSample | null = null;
+    const item = (cfg.animeList || []).find(
+      (a) => a.enabled && (a.videoLandscape || a.videoPortrait),
+    );
+    if (item) {
+      const video = resolveAnimeVideo(item, cfg.screenOrientation);
+      const seg = resolveAnimeSegment(item, cfg.screenOrientation);
+      animeSample = {
+        user: { uid: item.uid, uname: item.uname, face: item.face },
+        videoSrc: toDisplayVideoSrc(video),
+        startSec: seg.startSec,
+        endSec: seg.endSec,
+      };
+    }
+    this.broadcast({
+      type: "init",
+      orientation: cfg.screenOrientation,
+      layouts: cfg.layout,
+      gifts,
+      animeSample,
+      flags: {
+        master: cfg.master,
+        entry: cfg.entry,
+        gift: cfg.gift,
+        anime: cfg.anime,
+      },
+    });
+  }
+
+  /** 广播当前各模块开关状态（master/entry/gift/anime）到浏览器源，画布据此即时显隐元素。
+   *  在面板切换总开关或各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。 */
+  async broadcastFlags(): Promise<void> {
+    const cfg = await loadDisplayConfig();
+    await this.broadcast({
+      type: "flags",
+      flags: {
+        master: cfg.master,
+        entry: cfg.entry,
+        gift: cfg.gift,
+        anime: cfg.anime,
+      },
+    });
+  }
+
+  /** 包装 broadcast_display：无服务/非 Tauri 时静默（Rust 端未启动同样是 no-op）。 */
+  private async broadcast(json: unknown) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("broadcast_display", { json });
+    } catch {
+      /* server 未运行 / 非 Tauri（如 Web 预览）时静默跳过 */
+    }
   }
 
   /** 实际连接（无重入保护）：start() 与重连定时器共用；重连必须走这里才能绕过 start 的同房保护。 */
@@ -683,84 +840,6 @@ class DisplayDanmakuService {
     this.emitTo({ type: "gift", gifts: qualifying });
   }
 
-  /**
-   * 测试模式开关：进入后画布三个模块元素常驻并循环播放（供布局调整/拖动/缩放）。
-   *  - 入场提示：由画布自行渲染常驻的循环 EntryBadge（无需事件）
-   *  - 礼物展示：发一份达标礼物清单（今日没有则用礼物目录示例）
-   *  - 高级用户动画：发一条 anime 事件（配置了视频则取第一个用户的视频循环播放；否则画布显示提示文案）
-   */
-  async setTestMode(on: boolean, mid: number) {
-    if (!this.isNative()) return;
-    if (on) {
-      // 每次开启测试自增代际；后面 await 拉取礼物/配置后再 emit 时要校验代际未变，
-      // 否则（用户在此期间已取消）直接丢弃，避免迟到事件把画布已清空的状态又填回来。
-      const gen = ++this.testGen;
-      this.pushDebug("test", "start", { manual: true });
-      this.emitTo({ type: "test", active: true });
-
-      // 礼物：今日达标礼物，没有则用礼物目录示例
-      const platform = await getPlatform();
-      try {
-        await ensureGiftCatalogLoaded(platform);
-      } catch {}
-      const gifts = await getTodayQualifyingGifts(mid);
-      if (gen !== this.testGen) return; // 已取消测试，丢弃迟到的礼物
-      const list: DisplayGiftItem[] = gifts.length
-        ? gifts
-        : (() => {
-            const pick = getGiftList().find((g) => g.img_basic || g.webp || g.gif);
-            return [
-              {
-                giftId: Number(pick?.id) || 1,
-                giftName: pick?.name || "测试礼物",
-                price: 1,
-                count: 1,
-                img: pick?.img_basic || pick?.webp || pick?.gif || "",
-              },
-            ];
-          })();
-      this.emitTo({ type: "gift", gifts: list });
-
-      // 高级用户动画：已配置视频则取第一个用户的入场动画循环播放作为示例；未配置任何视频时
-      // 不播放示例动画（示例视频无法打包发行），改由画布显示提示文案
-      const config = await loadDisplayConfig();
-      if (gen !== this.testGen) return; // 已取消测试，丢弃迟到的动画
-      const item = config.animeList.find((a) => a.videoLandscape || a.videoPortrait);
-      if (item) {
-        const video = resolveAnimeVideo(item, config.screenOrientation);
-        const seg = resolveAnimeSegment(item, config.screenOrientation);
-        this.pushDebug("test", "anime", {
-          manual: true,
-          video,
-          startSec: seg.startSec,
-          endSec: seg.endSec,
-        });
-        this.emitTo({
-          type: "anime",
-          user: { uid: item.uid, uname: item.uname, face: item.face },
-          videoSrc: toDisplayVideoSrc(video),
-          startSec: seg.startSec,
-          endSec: seg.endSec,
-        });
-      } else {
-        this.pushDebug("test", "anime", { manual: true, video: "" });
-        this.emitTo({
-          type: "anime",
-          user: { uid: 0, uname: "", face: "" },
-          videoSrc: "",
-          startSec: 0,
-          endSec: 0,
-        });
-      }
-    } else {
-      // 取消测试：自增代际，使正在进行的异步开始事件（若有）全部作废；
-      // 画布收到 test:false 后会清空测试触发的礼物/入场/动画。
-      this.testGen++;
-      this.pushDebug("test", "stop", { manual: true });
-      this.emitTo({ type: "test", active: false });
-    }
-  }
-
   private matchesEntryFilter(config: DisplayConfig, guardType: number, medalLevel: number): boolean {
     const f = config.entryFilter;
     if (guardType === 3 && f.jianzhang) return true;
@@ -780,33 +859,17 @@ class DisplayDanmakuService {
     }
   }
 
-  /** emit 到展示画布。展示画布与主窗口同进程（独立窗口），直接用 Tauri emitTo("display",...)。
-   *  画布尚未打开/不存在时 emit 静默丢弃（Tauri 对不存在的窗口事件无副作用）。 */
+  /** emit 到展示画布（浏览器源 / 编辑 iframe）。经 Rust 服务器广播 {type:"event",payload}，
+   *  所有 WS 客户端（直播姬源 + 编辑 modal）都会收到。server 未运行 / 非 Tauri 时静默跳过。 */
   private async emitTo(event: DisplayEvent) {
-    try {
-      const { emitTo } = await import("@tauri-apps/api/event");
-      await emitTo("display", "display-event", event);
-    } catch {
-      /* 非 Tauri（如浏览器预览）下无事件总线，静默跳过 */
-    }
+    await this.broadcast({ type: "event", payload: event });
   }
 }
 
-/** Windows 绝对路径 → 可被 <video>/fetch 加载的 URL。
- *  之前用自定义 displayvideo:/// 协议，但 Chromium 对非特殊自定义 scheme 的 fetch 一律
- *  报 "TypeError: Failed to fetch"（且媒体栈不走该协议 handler）。改用 Tauri 内置 asset
- *  协议（convertFileSrc → http://asset.localhost/...）：它是 http-like scheme，fetch 可用，
- *  并天然支持 Range 供 <video> 分段加载。 */
+/** 本地视频绝对路径 → 浏览器源可加载的相对 URL（经 Rust 服务器 /api/video 提供，自带 Range）。
+ *  消费端（直播姬浏览器源 / 编辑 iframe / 主窗口编辑面板）与 server 同源，直接拼接相对路径即可。 */
 export function toDisplayVideoSrc(path: string): string {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    try {
-      return convertFileSrc(path);
-    } catch {
-      /* 回退 */
-    }
-  }
-  // 非 Tauri 环境（Web 预览）无 asset 协议，返回原路径（展示视频本为 Tauri 专属功能）
-  return path;
+  return path ? `/api/video?p=${encodeURIComponent(path)}` : "";
 }
 
 /** 主窗口 UI 读取今日达标礼物（供"展示"页预览 + 关闭窗口后仍可查看）。 */

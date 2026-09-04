@@ -33,6 +33,9 @@ export default function VideoOverlay({
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  // 静音状态：默认 muted 以兼容浏览器/CEEF 的无声自动播放限制（autoplay 默认被静音或被拒绝）。
+  // 用户可点右下角声音按钮解除静音——声音在 Live 直播姬 CEF 中自动播放常无声音，需交互兜底。
+  const [muted, setMuted] = useState(true);
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -135,7 +138,7 @@ export default function VideoOverlay({
           key={`${displaySrc}|${gen}`}
           src={displaySrc}
           autoPlay
-          muted
+          muted={muted}
           loop={loop}
           playsInline
           className="w-full h-full object-contain"
@@ -187,6 +190,24 @@ export default function VideoOverlay({
             ? "视频加载失败"
             : "你还没有配置任何入场动画，先在“入场动画”卡片中添加，才能看到动画播放效果"}
         </div>
+      )}
+      {/* 声音开关：autoplay 默认静音以兼容无声自动播放；点此可开启/关闭视频声音 */}
+      {anime.videoSrc && !loadError && (
+        <button
+          type="button"
+          onClick={() =>
+            setMuted((m) => {
+              const next = !m;
+              if (!next) videoRef.current?.play?.().catch(() => {});
+              return next;
+            })
+          }
+          title={muted ? "开启声音" : "关闭声音"}
+          className="absolute right-2 bottom-2 z-[2] w-8 h-8 rounded-full bg-black/40 text-white text-sm
+            flex items-center justify-center pointer-events-auto opacity-40 hover:opacity-90 transition-opacity"
+        >
+          {muted ? "🔇" : "🔊"}
+        </button>
       )}
     </div>
   );

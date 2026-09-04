@@ -26,7 +26,8 @@ fn is_login_url(url: &str) -> bool {
 /// 全局复用单个 reqwest Client（连接池/TLS 会话跨请求复用，避免每请求重建握手）。
 /// 各命令的超时通过 tokio::time::timeout 单独控制，不影响连接池复用。
 /// 并发安全：reqwest::Client 是 Arc<inner>，可被多个命令并发使用。
-fn shared_client() -> reqwest::Client {
+/// pub(crate)：展示本地服务器（server.rs）的 dev 反向代理也复用该连接池。
+pub(crate) fn shared_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT
         .get_or_init(|| {
@@ -943,92 +944,12 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
-// ==================== 展示画布（Windows 直播投屏面板） ====================
-// 展示画布是一个独立的 960x540 画布窗口，用于叠加"用户入场提示 / 今日礼物 / 高级用户
-// 自定义入场动画"信息。主播用直播软件（直播姬）对其做"窗口捕捉"，叠加到直播画面。
-// 仅 Windows 客户端支持（其他平台无独立窗口捕捉需求）。
-// 入场动画的本地视频通过 Tauri 内置 asset 协议（convertFileSrc → http://asset.localhost/...）
-// 加载，天然支持 fetch 与 Range 分段播放，故不再需要自定义 displayvideo 协议。
-//
-// 展示画布与主窗口同进程（bili-live.exe），只是独立窗口。直播姬判定"是否同一窗口"依据的是
-// 窗口【类名】；因此只要给画布窗口一个与主窗口【不同】的类名，并显式与主窗口区分，直播姬
-// 在画布关闭后不会误切回主窗口，画布重新打开后又能重新被捕捉。
-
-/// 打开（或聚焦）展示画布。
-/// 前端在"展示"页打开总开关时调用。展示画布与主窗口同进程，仅需一个独立的 960x540 无边框
-/// 窗口。async 命令：不在主线程同步构建窗口，避免阻塞主线程导致 IPC 返回被拖慢。
-#[tauri::command]
-async fn open_display_window(app: tauri::AppHandle, orientation: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        const LABEL: &str = "display";
-        // 已存在（可能被隐藏/最小化）→ 显示并聚焦
-        if let Some(win) = app.get_webview_window(LABEL) {
-            let _ = win.unminimize();
-            let _ = win.show();
-            let _ = win.set_focus();
-            return Ok(());
-        }
-        let is_portrait = orientation == "portrait";
-        // 横屏 960x540（16:9）/ 竖屏 540x960（9:16），不可缩放；无边框；关键：与主窗口不同的
-        // 独立窗口类名（主窗口 "BguaMainWindow" ↔ 画布 "BguaDisplayWindow"），避免直播姬按类名误匹配。
-        let (w, h) = if is_portrait { (540.0, 960.0) } else { (960.0, 540.0) };
-        let win = tauri::WebviewWindowBuilder::new(
-            &app,
-            LABEL,
-            WebviewUrl::App("/display".into()),
-        )
-        .window_classname("BguaDisplayWindow")
-        .title("B瓜直播间投屏面板")
-        .inner_size(w, h)
-        .min_inner_size(w, h)
-        .decorations(false)
-        .resizable(false)
-        .visible(true)
-        .build()
-        .map_err(|e| format!("创建展示窗口失败: {e}"))?;
-        let _ = win;
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        Err("展示窗口仅支持 Windows 客户端".into())
-    }
-}
-
-/// 切换展示画布横竖屏：调整已有窗口的内尺寸（不可缩放窗口的 min 尺寸保持一致）并通知画布。
-/// 画布监听 after "display-orientation" 事件后按新朝向重排元素。窗口未打开时仅静默返回，
-/// 下次 open_display_window 会按配置的朝向创建。
-#[tauri::command]
-fn set_display_orientation(app: tauri::AppHandle, orientation: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let is_portrait = orientation == "portrait";
-        let (w, h) = if is_portrait { (540.0, 960.0) } else { (960.0, 540.0) };
-        if let Some(win) = app.get_webview_window("display") {
-            let size = tauri::Size::Logical(tauri::LogicalSize::new(w, h));
-            let _ = win.set_size(size);
-            let _ = win.set_min_size(Some(size));
-        }
-        let _ = app.emit_to("display", "display-orientation", orientation);
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        Err("展示窗口仅支持 Windows 客户端".into())
-    }
-}
-
-/// 关闭展示画布（前端关闭总开关时调用）：关闭同进程的展示窗口。
-#[tauri::command]
-fn close_display_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("display") {
-        let _ = win.close();
-    }
-    Ok(())
-}
+// ==================== 展示画布（直播姬「浏览器源」） ====================
+// 不再是独立 Tauri 窗口，而由 server.rs 的本地 HTTP+WS 服务器静态提供 out/ 下展示页
+// （http://127.0.0.1:25100/display），供直播姬浏览器源加载，实现完全透明叠加。
+// 展示画布布局 / 动态事件由主窗口经 broadcast_display 命令广播到所有 WS 客户端
+// （直播姬源、编辑 iframe）。编辑/测试通过 APP 内模态框 iframe（/display?mode=edit），不再新建窗口。
+mod server;
 
 /// 弹出原生文件选择框，让用户为本账号指定"入场动画"视频文件。
 /// 返回所选文件的绝对路径；用户取消时返回 null。
@@ -1712,6 +1633,8 @@ pub fn run() {
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
         // 窗口初始隐藏，设置尺寸/位置后再 show()，避免先闪默认大小再变形。
         .setup(|app| {
+            // 注册本地展示（浏览器源）服务器状态（server.rs 的幂等启动 / 广播）
+            app.manage(server::DisplayServerState::default());
             if let Some(window) = app.get_webview_window("main") {
                 // 仅桌面端调整窗口尺寸/位置（页面最大宽度来自 page-config.json，单一源头）。
                 // 移动端（iOS/Android）窗口天然全屏，绝不能 set_size/set_position：
@@ -1749,16 +1672,7 @@ pub fn run() {
                     // 面板位置/尺寸，让活动页宽度始终与"模拟器页面"（min(窗口宽, 页面最大宽度) 居中）
                     // 保持一致，避免窗口放大缩小后活动页与模拟器页面错位。
                     let win = window.as_ref().window();
-                    let app_handle = app.handle().clone();
                     window.on_window_event(move |event| {
-                        // 主窗口关闭时一并关闭画布窗口：两个窗口同属一个进程，不显式关闭的话
-                        // 主窗口关掉后画布窗口会残留（进程因仍有一个窗口而不会退出）。
-                        if let tauri::WindowEvent::CloseRequested { .. } = event {
-                            if let Some(dw) = app_handle.get_webview_window("display") {
-                                let _ = dw.close();
-                            }
-                            return;
-                        }
                         if let tauri::WindowEvent::Resized(size) = event {
                             let Ok(scale) = win.scale_factor() else {
                                 return;
@@ -1793,11 +1707,12 @@ pub fn run() {
             close_activity_panel,
             open_real_activity_panel,
             close_real_activity_panel,
-            open_display_window,
-            close_display_window,
-            set_display_orientation,
             pick_video_file,
             check_native_update,
+            // 本地展示（浏览器源）服务器：启动/停止/广播（server.rs）
+            server::start_display_server,
+            server::stop_display_server,
+            server::broadcast_display,
             // 安装 APK 由 tauri-plugin-android-installer 插件处理（不再注册自定义命令）。
             download_apk,
             download_ipa,

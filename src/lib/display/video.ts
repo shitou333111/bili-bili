@@ -3,11 +3,20 @@
  *
  * 时长探测通过加载 <video> 元数据实现，不做整段解码：1 分钟内视频通常 <1s 返回，
  * 超长视频也只会解析头部的 moov/index，避免整段读取。
+ *
+ * 视频不再走 Tauri asset 协议（convertFileSrc），统一由内嵌 HTTP 服务器经
+ * `/api/video?p=<绝对路径>`（自带 Range）提供。探测时用完整 URL（baseUrl + 相对源），
+ * 主窗口（原生）传展示服务器 baseUrl（http://127.0.0.1:<port>）；
+ * 浏览器源/编辑 iframe（同源）baseUrl 为空即可用相对 `/api/video` 地址。
  */
-import { convertFileSrc } from "@tauri-apps/api/core";
+
+/** 本地视频绝对路径 → 浏览器源服务器可加载的相对 URL（与 danmaku.ts 内实现保持一致）。 */
+export function videoServePath(path: string): string {
+  return path ? `/api/video?p=${encodeURIComponent(path)}` : "";
+}
 
 /**
- * 拼接媒体片段 src。WebView2(Chromium) 原生支持媒体片段语法 `#t=start,end`：
+ * 拼接播放片段 src。WebView2(Chromium) 原生支持媒体片段语法 `#t=start,end`：
  *  - end > 0：`#t=start,end`（播 start 到 end）
  *  - 仅 start > 0：`#t=start`（从 start 播到末尾）
  *  - 都为 0：原始 src（播放整段）
@@ -19,8 +28,12 @@ export function srcWithFragment(src: string, startSec: number, endSec: number): 
   return src;
 }
 
-/** 读取本地视频时长（秒）。仅读元数据；失败/超时 reject。 */
-export function probeVideoDuration(path: string, timeoutMs = 8000): Promise<number> {
+/**
+ * 读取本地视频时长（秒）。仅读元数据；失败/超时 reject。
+ * @param path 本地视频绝对路径（经 /api/video 服务器提供）
+ * @param baseUrl 展示服务器的完整 URL（如 http://127.0.0.1:25100）；同源环境可传 "" 用相对地址
+ */
+export function probeVideoDuration(path: string, baseUrl = "", timeoutMs = 8000): Promise<number> {
   return new Promise((resolve, reject) => {
     const v = document.createElement("video");
     v.preload = "metadata";
@@ -46,7 +59,7 @@ export function probeVideoDuration(path: string, timeoutMs = 8000): Promise<numb
     };
     v.onerror = () => finish(new Error("无法读取视频信息"));
     try {
-      v.src = convertFileSrc(path);
+      v.src = baseUrl ? `${baseUrl}${videoServePath(path)}` : videoServePath(path);
     } catch (e) {
       finish(e instanceof Error ? e : new Error("素材地址生成失败"));
     }

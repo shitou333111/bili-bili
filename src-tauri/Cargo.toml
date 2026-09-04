@@ -58,6 +58,15 @@ tauri-plugin-hotswap = "0.0"
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 本地 HTTP+WS 服务器（直播姬"浏览器源"）：serve 静态前端 + /api/video(Range) + /ws 事件广播。
+# axum 的 ws feature 隐式引入 tokio-tungstenite；tower-http 提供 ServeFile(带 Range) 与响应头覆盖。
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+# HMR WebSocket 反向代理（dev 展示页热更新）：axum 的 ws feature 已隐式引入同版本，
+# 此处显式声明为直接依赖，用于 connect_async 连到 next dev 的 HMR 端点。
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
+mime_guess = "2"
 # tokio：with_timeout 用的 tokio::time::timeout（各命令请求超时，配合全局 reqwest Client 复用）
 tokio = { version = "1", features = ["time", "net", "rt-multi-thread", "sync", "io-util", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

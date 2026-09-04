@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>直播姬浏览器源 · 透明测试</title>
+  <style>
+    /* 关键：html/body 背景必须完全透明，才能验证浏览器源是否支持 alpha 直通 */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: transparent !important;
+      overflow: hidden;
+    }
+    * { box-sizing: border-box; }
+
+    /* 800×600 视口，与直播姬浏览器源建议尺寸一致 */
+    .scene {
+      position: relative;
+      width: 800px;
+      height: 600px;
+      /* 不要在此处加背景色，保持透明 */
+    }
+
+    /* 模拟"礼物展示"渐变圆 badge（无背景色，只显示本体） */
+    .badge {
+      position: absolute;
+      left: 80px;
+      top: 80px;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #9926af, #0f0874);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font: 700 46px/1 Arial, sans-serif;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    }
+
+    /* 半透明元素：若真透明生效，应能看到底层素材透过 50% */
+    .semi {
+      position: absolute;
+      left: 260px;
+      top: 80px;
+      width: 210px;
+      height: 120px;
+      border-radius: 14px;
+      background: rgba(30, 144, 255, 0.5);
+      color: #fff;
+      font: 600 14px/1.5 Arial, sans-serif;
+      padding: 12px;
+    }
+
+    /* 模拟"入场提示"胶囊（带圆角 + 阴影） */
+    .pill {
+      position: absolute;
+      left: 80px;
+      top: 280px;
+      height: 72px;
+      padding: 0 34px;
+      border-radius: 36px;
+      background: linear-gradient(90deg, #ff5f3d, #ffc94d);
+      display: flex;
+      align-items: center;
+      color: #1f1c17;
+      font: 700 30px/1 Arial, sans-serif;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    /* 白色文字 + 阴影（模拟入场提示文案） */
+    .text {
+      position: absolute;
+      left: 80px;
+      top: 420px;
+      color: #fff;
+      font: 700 40px/1 Arial, sans-serif;
+      text-shadow: 0 2px 6px rgba(0, 0, 0, 0.75);
+    }
+
+    /* 实心色块（最坏情况下也应有本体） */
+    .solid {
+      position: absolute;
+      left: 520px;
+      top: 380px;
+      width: 170px;
+      height: 92px;
+      border-radius: 12px;
+      background: #1f1c17;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font: 600 16px/1.3 Arial, sans-serif;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="scene">
+    <div class="badge">12</div>
+    <div class="semi">半透明 rgba 50%<br />能透出底色=真透明</div>
+    <div class="pill">入场提示胶囊</div>
+    <div class="text">欢迎来到直播间</div>
+    <div class="solid">实心色块</div>
+  </div>
+</body>
+</html>

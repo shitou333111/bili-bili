@@ -1023,11 +1023,17 @@ export default function HomePage() {
     setLikedToday(loadLikedAnchorsToday(currentAccount.mid));
   }, [currentAccount?.mid]);
 
-  // 启动自动恢复展示模块：总开关开启时自动打开展示窗口并恢复弹幕监听（autoStartDisplay 内部只执行一次）
+  // 启动自动恢复展示模块：仅 Windows 桌面客户端（展示投屏不支持 Web/Android/iOS）。
+  // 总开关开启时自动打开展示窗口并恢复弹幕监听（autoStartDisplay 内部只执行一次，且自身再做平台校验）
   useEffect(() => {
     if (!currentAccount?.mid) return;
     import("@/lib/display/auto-start")
-      .then((m) => m.autoStartDisplay(currentAccount.mid!, isLocalAccount))
+      .then(async (m) => {
+        const { getPlatform, isWindowsDisplaySupported } = await import("@/lib/platform");
+        const platform = await getPlatform().catch(() => null);
+        if (!platform || !isWindowsDisplaySupported(platform)) return; // 非 Windows 不自动开画布/监听
+        await m.autoStartDisplay(currentAccount.mid!, isLocalAccount);
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAccount?.mid]);

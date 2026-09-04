@@ -46,3 +46,11 @@ export function getPlatformSync(): Platform {
 
 // 导出类型
 export type { Platform, FetchJsonOptions, RawResponse } from "./types";
+
+/**
+ * 展示（直播投屏）功能是否可用：仅 **Windows 桌面 Tauri** 客户端。
+ * Web / Android / iOS / 其它桌面系统均不支持 → 界面不展示、功能不启用。
+ */
+export function isWindowsDisplaySupported(platform: Platform): boolean {
+  return platform.isNative && platform.os === "windows";
+}

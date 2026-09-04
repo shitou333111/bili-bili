@@ -106,7 +106,7 @@ export default function EntryBadge({
           与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢，消散时反向退色。
           inline-flex：宽度严格按"头像+昵称+内边距"收缩自适应，不被父级 block 拉伸成固定宽 */}
       <div
-        className="inline-flex items-center gap-3 rounded-full py-0.5 border border-white/30 shadow-[0_3px_14px_rgba(0,0,0,0.30)]"
+        className="inline-flex items-center gap-3 rounded-full py-[1px] border border-white/30 shadow-[0_3px_14px_rgba(0,0,0,0.30)]"
         style={{
           background:
             "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))",

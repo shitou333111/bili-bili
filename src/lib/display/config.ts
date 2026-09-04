@@ -8,12 +8,44 @@ import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   type DisplayConfig,
+  type DisplayLayout,
   type EntryAnimeConfig,
+  type MovableRect,
   type ScreenOrientation,
 } from "./types";
 
 const CONFIG_NAME = "display-config.json";
 
+/** 把布局矩形规整为合法数值：非法/缺失回退默认。 */
+function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
+  const r = (v ?? {}) as Partial<MovableRect>;
+  const x = Number(r.x);
+  const y = Number(r.y);
+  const scale = Number(r.scale);
+  return {
+    x: Number.isFinite(x) && x >= 0 ? Math.round(x) : fallback.x,
+    y: Number.isFinite(y) && y >= 0 ? Math.round(y) : fallback.y,
+    scale: Number.isFinite(scale) && scale > 0 ? Math.min(3, Math.max(0.3, Math.round(scale * 100) / 100)) : fallback.scale,
+  };
+}
+
+/** 归一化元素布局：逐元素×朝向补默认，数值非法回退。 */
+function normalizeLayout(raw: unknown): DisplayLayout {
+  const d = DEFAULT_DISPLAY_CONFIG.layout;
+  const r = (raw ?? {}) as Partial<DisplayLayout>;
+  const norm = (el: "gift" | "entry", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+    const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
+    const def = d[el];
+    return {
+      landscape: normalizeRect(re?.landscape, def.landscape),
+      portrait: normalizeRect(re?.portrait, def.portrait),
+    };
+  };
+  return {
+    gift: norm("gift", r.gift),
+    entry: norm("entry", r.entry),
+  };
+}
 /** 把片段秒数规整为非负有限数（0 = 未设置/从头/播到尾），非法值归 0。 */
 function clampSec(v: unknown): number {
   const n = Number(v);
@@ -82,6 +114,7 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
           };
         })
       : d.animeList,
+    layout: normalizeLayout((r as any).layout),
     danmaku: {
       enabled: !!r.danmaku?.enabled,
       intervalSec:

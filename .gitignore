@@ -56,6 +56,9 @@ minisign.pub
 # test scratch files
 .fttest/
 
+# 个人辅助脚本（舰长入场动画抓取），不进 git
+/scripts/fetch-guard-effects.mjs
+
 # notes
 TO DO.txt
 

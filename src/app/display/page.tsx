@@ -1,45 +1,24 @@
 "use client";
 
 /**
- * 展示窗口页面（/display）：1080x720 画布，供直播软件"窗口捕捉"叠加到直播画面。
+ * 展示页面（/display）：960x540 / 540x960 画布，供直播软件「浏览器源」透明叠加到直播画面，
+ * 或由 APP 内「编辑布局」模态框 iframe（?mode=edit）加载做编排。
  *
- * 注意：该页面只加载画布（不含主应用导航/头部），画布自适应缩放铺满窗口。
+ * 与旧「独立 Tauri 窗口 + 窗口捕捉」不同：本页面不再有任何窗口逻辑（无标题栏拖动、
+ * 无关闭事件、无 convertFileSrc），浏览器源通过 http://127.0.0.1:<port>/display 访问，
+ * 直播姬设置透明背景后直接叠加即可，无需窗口捕捉。
  *
- * 窗口无系统标题栏（decorations:false），因此点击画布空白区域按住时可拖动窗口；
- * 两个可拖动元素（礼物/入场提示）带 data-window-movable 标记，点击它们交给元素自身拖动，
- * 不触发窗口拖动（实现细节见页面底部的 onPointerDown）。
+ * 容器背景完全透明（bg-transparent）：浏览器源一键抠除透明背景叠加到直播画面。
+ *
+ * 调试辅助：把画布/浏览器源的 console 日志兜底转发到 WS（{type:"log"}），由主进程
+ * 侧打印（[画布] 前缀）。仅在 WS 已连接时发送，避免页面就绪前或服务未启动时误发。
  */
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import DisplayCanvas from "@/components/display/DisplayCanvas";
 
 export default function DisplayPage() {
-  // 展示画布与主窗口同进程（独立窗口）：允许真实关闭，不拦截（任务栏红叉 / Alt+F4 /
-  // 标题栏 × 都发 WM_CLOSE → close-requested）。关闭后窗口即销毁；总开关再次开启时
-  // 主进程重新 show 出一个全新画布，直播姬按类名自动重新捕捉。不 preventDefault，
-  // 仅顺手经 Tauri emitTo("main",...) 通知主面板"画布已关"，让总开关置为关（兜底同步状态）。
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        const win = getCurrentWindow();
-        unlisten = await win.onCloseRequested(() => {
-          import("@tauri-apps/api/event").then(({ emitTo }) => {
-            emitTo("main", "display-window-closed");
-          });
-        });
-      } catch {
-        /* 非 Tauri（如浏览器预览）下无窗口，忽略 */
-      }
-    })();
-    return () => {
-      unlisten?.();
-    };
-  }, []);
-
-  // 调试辅助：把本窗口（/display 画布）的 console 日志转发到主窗口（label=main）。
-  // 逐条异步 emit 在高频时易丢，这里用内存缓冲 + 定时批量 flush，保证阶段性日志零丢失地
-  // 送达主窗口（emitTo "display-console"），供主面板打印（[画布] 前缀）。
+  // 调试辅助：把本页面（浏览器源画布）的 console 日志转发到主进程（经 WS）。
+  // 逐条高频日志易丢，这里内存缓冲 + 定时批量 flush，保证阶段性日志零丢失地送达。
   useEffect(() => {
     const levels = ["log", "info", "warn", "error"] as const;
     const orig = levels.map((l) => [l, (console as any)[l]] as const);
@@ -52,8 +31,20 @@ export default function DisplayPage() {
       }
     };
     const buf: string[] = [];
+    let ws: WebSocket | null = null;
+    // 懒连 WS：首次有日志时才建立，且只在同源提供服务时可用
+    const ensureWs = () => {
+      if (ws && ws.readyState <= WebSocket.OPEN) return;
+      try {
+        const proto = window.location.protocol === "https:" ? "wss" : "ws";
+        ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+      } catch {
+        ws = null;
+      }
+    };
     const forward = (level: string) => (...args: unknown[]) => {
-      buf.push(`[${level}] ${args.map(safeString).join(" ")}`);
+      const text = args.map(safeString).join(" ");
+      buf.push(`[${level}] ${text}`);
       const origFn = (orig.find(([l]) => l === level)?.[1] as (...a: unknown[]) => void) ?? console.log;
       origFn.apply(console, args);
     };
@@ -61,43 +52,48 @@ export default function DisplayPage() {
     (console as any).info = forward("info");
     (console as any).warn = forward("warn");
     (console as any).error = forward("error");
-    // 每 500ms 把缓冲一次性批量转发
+    // 每 500ms 把缓冲批量转发到 WS
     const flush = setInterval(() => {
       if (!buf.length) return;
       const batch = buf.splice(0, buf.length);
       const text = batch.join("\n");
-      import("@tauri-apps/api/event").then(({ emitTo }) => {
-        emitTo("main", "display-console", { level: "log", text });
-      });
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        try {
+          ensureWs();
+        } catch {
+          return;
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      }
+      ws.send(JSON.stringify({ type: "log", level: "log", text }));
     }, 500);
     return () => {
       clearInterval(flush);
       orig.forEach(([l, fn]) => {
         (console as any)[l] = fn;
       });
+      if (ws) ws.close();
     };
   }, []);
 
-  // 无标题栏窗口的空白区域拖动：点中可拖动元素（带 data-window-movable）时跳过，
-  // 其余位置按住即调用 Tauri 的 startDragging 移动窗口。
-  const onPointerDown = useCallback(async (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    // 点中礼物/入场提示等可拖动元素时不做窗口拖动
-    const target = e.target as HTMLElement;
-    if (target.closest && target.closest("[data-window-movable]")) return;
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().startDragging();
-    } catch {
-      /* 非 Tauri / Web 模式下无拖窗能力，忽略 */
-    }
+  // 画布需完全透明（浏览器源抠底叠加）：全局样式把 html/body 背景设为 #f5f5f5，
+  // 直播姬浏览器源会把这层不透明近白底显示出来（纯白画面）无法抠除，
+  // 这里在 /display 页面上强制把文档背景改为透明，让元素之外全部为 alpha=0。
+  useEffect(() => {
+    const de = document.documentElement;
+    const body = document.body;
+    const prevHtml = de.style.background;
+    const prevBody = body.style.background;
+    de.style.background = "transparent";
+    body.style.background = "transparent";
+    return () => {
+      de.style.background = prevHtml;
+      body.style.background = prevBody;
+    };
   }, []);
 
   return (
-    <div
-      className="w-screen h-screen bg-[#B7EBA4] overflow-hidden flex items-center justify-center select-none"
-      onPointerDown={onPointerDown}
-    >
+    <div className="w-screen h-screen bg-transparent overflow-hidden flex items-center justify-center select-none">
       <DisplayCanvas />
     </div>
   );
