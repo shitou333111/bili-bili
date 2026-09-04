@@ -402,7 +402,15 @@ async fn static_fallback(uri: Uri, State(ctx): State<Arc<ServerContext>>) -> Res
             // 5) 内嵌 / hotswap asset 兜底
             let key = if empty_root { "index.html" } else { rel };
             if let Some(bytes) = asset_bytes(&ctx.app, key) {
-                let ct = mime_of(key).to_owned();
+                // 无扩展名路由（如 /display）对应的是页面 HTML，必须按 .html 计算
+                // Content-Type；否则 mime_guess 对无扩展名文件名返回
+                // application/octet-stream，浏览器会把页面当文件下载而不是渲染
+                // （独立安装的 EXE 无磁盘 out/，全部走此内嵌兜底，必中此问题）。
+                let ct_key = match Path::new(key).extension() {
+                    Some(_) => key.to_string(),
+                    None => format!("{key}.html"),
+                };
+                let ct = mime_of(&ct_key).to_owned();
                 return bytes_response(StatusCode::OK, &ct, bytes);
             }
         }

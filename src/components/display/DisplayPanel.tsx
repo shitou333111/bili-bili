@@ -982,7 +982,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         <Card bg="bg-slate-300" border="border-slate-400">
           <p className="text-xs text-black/45 leading-relaxed">
             {isNative
-              ? "开启后在直播姬添加浏览器源即可叠加显示（地址与步骤见下）"
+              ? "开启后在直播姬添加浏览器源即可（地址与步骤见下）"
               : "仅 Windows 客户端支持"}
           </p>
           {isNative && (

@@ -367,6 +367,9 @@ class DisplayDanmakuService {
     const cfg = await loadDisplayConfig(mid);
     await saveDisplayConfig(mid, { ...cfg, screenOrientation: v });
     this.broadcast({ type: "orientation", v });
+    // 朝向切换会改变入场动画选用的视频（横/竖屏各一套），须重发 init 让画布/编辑页
+    // 更新 animeSample 到新朝向对应的视频源，否则视频源停留在旧朝向。
+    await this.broadcastInit();
   }
 
   /** 会话内只注册一次"display-server-message"监听。 */
@@ -404,6 +407,8 @@ class DisplayDanmakuService {
         const cfg = await loadDisplayConfig(this.mid);
         await saveDisplayConfig(this.mid, { ...cfg, screenOrientation: v });
         this.broadcast({ type: "orientation", v });
+        // 朝向切换 → 重发 init 更新入场动画样本（横/竖屏视频源不同），否则视频不随朝向切换。
+        await this.broadcastInit();
       } else if (msg.type === "log") {
         const fn = msg.level === "error" ? console.error : console.log;
         fn(`[画布]${msg.text}`);
