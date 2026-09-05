@@ -1,14 +1,21 @@
 /**
- * bilibili-live-ws 心跳补丁（postinstall 自动执行）
+ * bilibili-live-ws 补丁（postinstall 自动执行）
  *
- * 问题：B站弹幕服务器在收不到心跳包时会在 ~60s 后强制断开连接。
- * 原库（Live 类）的心跳是"回应驱动"的——只有在收到服务器心跳回应（人气包）后，
- * 才会 setTimeout 安排下一次心跳。当服务器不回应心跳时（如房间未开播），
- * 客户端只发出 welcome 后的那一次心跳，随后不再发送 → 60s 后连接被服务器断开，
- * KeepLive 重连 → 无限 open/auth/close 循环。
+ * 覆盖两类问题：
  *
- * 修复：改为固定间隔心跳（每 30s 发送一次，不依赖服务器回应），
- * 与官方协议建议一致；心跳回应的处理仅保留"更新人气 + 触发事件"。
+ * A. 心跳（原库"回应驱动"，服务器不回时 60s 断连 → 无限重连循环）：
+ *    B站弹幕服务器在收不到心跳包时会在 ~60s 后强制断开连接。
+ *    原库（Live 类）的心跳是"回应驱动"的——只有在收到服务器心跳回应（人气包）后，
+ *    才会 setTimeout 安排下一次心跳。当服务器不回应心跳时（如房间未开播），
+ *    客户端只发出 welcome 后的那一次心跳，随后不再发送 → 60s 后连接被服务器断开，
+ *    KeepLive 重连 → 无限 open/auth/close 循环。
+ *    修复：改为固定间隔心跳（每 30s 发送一次，不依赖服务器回应），
+ *    与官方协议建议一致；心跳回应的处理仅保留"更新人气 + 触发事件"。
+ *
+ * B. op=5 批量消息数组展开（高人气/新协议房间批量推送被整包丢弃）：
+ *    高流量房间的 op=5 包 body 可能是多条命令的 JSON 数组，数组没有 cmd 字段，
+ *    原逻辑静默丢弃整包（含 SEND_GIFT 礼物、DANMU_MSG 弹幕）→ 只有低流量测试房间
+ *    能收到消息。修复：展开数组逐条 emit，行为与单条 JSON 完全一致。
  *
  * 幂等：已打补丁时直接跳过。
  */
@@ -139,6 +146,60 @@ try {
     src = src.replace(OLD_WATCHDOG, NEW_WATCHDOG);
     changed = true;
     console.log("[patch-bilibili-ws] 补丁6: 看门狗按心跳发送复位");
+  }
+
+  // 补丁 7：op=5 批量消息数组展开。高流量房间的 op=5 包 body 可能是多条命令的 JSON 数组
+  // （数组没有 cmd 字段），原逻辑静默丢弃整包（含 SEND_GIFT 礼物、DANMU_MSG 弹幕），
+  // 只有低流量测试房间能收到消息——这就是"测试号能收、主播号收不到"的根因。
+  // 展开后逐条 emit，行为与单条 JSON 完全一致。
+  const OLD_MSG = `                if (type === 'message') {
+                    this.emit('msg', data);
+                    const cmd = data.cmd || (data.msg && data.msg.cmd);
+                    if (cmd) {
+                        if (cmd.includes('DANMU_MSG')) {
+                            this.emit('DANMU_MSG', data);
+                        }
+                        else {
+                            this.emit(cmd, data);
+                        }
+                    }
+                }`;
+  const NEW_MSG = `                if (type === 'message') {
+                    // [patch-bilibili-ws] 批量消息展开：op=5 的 body 可能是多条命令的 JSON 数组
+                    // （高人气房间批量推送）。数组没有 cmd 字段，原逻辑会静默丢弃整包（含
+                    // SEND_GIFT 礼物），这里展开逐条分发，行为与单条 JSON 一致。
+                    if (Array.isArray(data)) {
+                        data.forEach((item) => {
+                            if (!item || typeof item !== 'object') return;
+                            this.emit('msg', item);
+                            const itemCmd = item.cmd || (item.msg && item.msg.cmd);
+                            if (itemCmd) {
+                                if (itemCmd.includes('DANMU_MSG')) {
+                                    this.emit('DANMU_MSG', item);
+                                }
+                                else {
+                                    this.emit(itemCmd, item);
+                                }
+                            }
+                        });
+                    }
+                    else {
+                        this.emit('msg', data);
+                        const cmd = data.cmd || (data.msg && data.msg.cmd);
+                        if (cmd) {
+                            if (cmd.includes('DANMU_MSG')) {
+                                this.emit('DANMU_MSG', data);
+                            }
+                            else {
+                                this.emit(cmd, data);
+                            }
+                        }
+                    }
+                }`;
+  if (src.includes(OLD_MSG) && !src.includes("if (Array.isArray(data))")) {
+    src = src.replace(OLD_MSG, NEW_MSG);
+    changed = true;
+    console.log("[patch-bilibili-ws] 补丁7: op=5 批量消息数组展开");
   }
 
   if (changed) {
