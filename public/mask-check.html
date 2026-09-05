@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  body { background: #111; color: #fff; font-family: monospace; padding: 20px; }
+  .row { margin-bottom: 24px; }
+  .label { font-size: 12px; opacity: .7; margin-bottom: 6px; }
+  /* 复刻库 render：particles(relative) > wrapper(overflow hidden, translateX px) > content(translateX -px) > badge */
+  .particles { position: relative; display: inline-block; }
+  .wrapper { position: relative; display: inline-block; overflow: hidden; }
+  .content { display: inline-block; }
+  .badge { width: 350px; height: 60px; border-radius: 30px;
+           background: linear-gradient(90deg,#e64545,#e6a63c,#e6d93c); }
+  .marker { position: absolute; left: 0; top: 0; width: 350px; height: 60px;
+            border: 1px dashed rgba(255,255,255,.5); pointer-events: none; }
+</style>
+</head>
+<body>
+  <!-- 每个 row：px 从 0 → 350（hiding progress 0→100）。badge 位置应不动，裁剪区右移 -->
+  <div class="row">
+    <div class="label">px=0（progress=0%）· badge 应完整可见</div>
+    <div class="particles"><div class="wrapper" style="transform:translateX(0px)"><div class="content" style="transform:translateX(0px)"><div class="badge"></div></div></div><div class="marker"></div></div>
+  </div>
+  <div class="row">
+    <div class="label">px=87（progress=25%）· 应左侧被裁（左端先消失）</div>
+    <div class="particles"><div class="wrapper" style="transform:translateX(87px)"><div class="content" style="transform:translateX(-87px)"><div class="badge"></div></div></div><div class="marker"></div></div>
+  </div>
+  <div class="row">
+    <div class="label">px=175（progress=50%）· 应只剩右侧一半（右端最后消失）</div>
+    <div class="particles"><div class="wrapper" style="transform:translateX(175px)"><div class="content" style="transform:translateX(-175px)"><div class="badge"></div></div></div><div class="marker"></div></div>
+  </div>
+  <div class="row">
+    <div class="label">px=263（progress=75%）· 应只剩右侧 1/4</div>
+    <div class="particles"><div class="wrapper" style="transform:translateX(263px)"><div class="content" style="transform:translateX(-263px)"><div class="badge"></div></div></div><div class="marker"></div></div>
+  </div>
+  <div class="row">
+    <div class="label">px=350（progress=100%）· 应完全消失</div>
+    <div class="particles"><div class="wrapper" style="transform:translateX(350px)"><div class="content" style="transform:translateX(-350px)"><div class="badge"></div></div></div><div class="marker"></div></div>
+  </div>
+</body>
+</html>

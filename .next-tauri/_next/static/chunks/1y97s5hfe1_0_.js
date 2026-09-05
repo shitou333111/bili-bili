@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,76906,e=>{"use strict";var i=e.i(67464);e.i(22997),e.s(["exists",()=>i.exists,"mkdir",()=>i.mkdir,"readDir",()=>i.readDir,"readTextFile",()=>i.readTextFile,"remove",()=>i.remove,"writeTextFile",()=>i.writeTextFile])}]);

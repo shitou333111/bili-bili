@@ -20,10 +20,17 @@ import type { DisplayEntryPayload } from "@/lib/display/types";
 
 /** 首次出现前的延迟（让粒子动画在挂载后启动） */
 const SHOW_DELAY_MS = 60;
-/** 聚合成型后停留时长 */
+/** 停留时长 */
 const HOLD_MS = 3000;
-/** 完整生命周期（延迟 0.06s + 聚合 1.3s + 停留 3s + 消散 1.3s ≈ 5.7s），供画布兜底移除使用 */
-export const ENTRY_TOTAL_MS = 6000;
+/**
+ * 完整生命周期（自然结束 ≈ 8.6s @60fps）：延迟 0.06s + 聚合滑入 1.3s + 聚合粒子尾巴 1.3s
+ * + 停留 3s + 消散滑出 1.3s + 消散粒子尾巴 ~1.3s。粒子死亡按"帧数"计（库内原库公式
+ * death=frames-20~+20，粒子按生成线渐进生成、死亡顺序=出生顺序），实际耗时随刷新率
+ * 放大（30fps 最坏 ≈11.5s）。
+ * 该值用于：画布兜底移除（防卡死）与测试循环重挂载周期，须大于自然生命周期，
+ * 否则会在粒子尚在飞散时强拆 badge，造成"消散被截断"（之前 6000ms 会在消散中途截断）。
+ */
+export const ENTRY_TOTAL_MS = 12000;
 /** 粒子颜色：仅作 fallback（库内已按时间点映射到红橙黄暖色相区间 0°~60°） */
 const PARTICLE_COLOR = "#003ff1";
 
@@ -32,7 +39,7 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
   const [failed, setFailed] = useState(!face);
   if (failed) {
     return (
-      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] flex items-center justify-center text-white text-sm">
+      <div className="w-14 h-14 rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] flex items-center justify-center text-white text-[28px]">
         {(uname || "?")[0]}
       </div>
     );
@@ -42,7 +49,7 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
       src={face}
       alt=""
       onError={() => setFailed(true)}
-      className="w-7 h-7 rounded-full object-cover"
+      className="w-14 h-14 rounded-full object-cover"
     />
   );
 }
@@ -89,16 +96,23 @@ export default function EntryBadge({
     <ParticleButton
       hidden={hidden}
       onComplete={handleComplete}
-      // 严格使用库 demo 第 5 个 "Refresh" 按钮的参数（duration/easing/size/speed/
-      // particlesAmountCoefficient/oscillationCoefficient/direction 与 demo 完全一致，
-      // direction 不设置使用默认 'left' 水平聚合方向）。content 与粒子的进度由库内同一
-      // duration + easing 驱动，天然同步：粒子先逐渐聚合，badge 随之形成，消散时再随粒子散开。
       color={PARTICLE_COLOR}
       duration={1300}
-      easing="easeInOutCubic"
-      size={2}
-      speed={1}
-      particlesAmountCoefficient={20}
+      // 以下参数除 size/speed 外与库官方 demo 第 5 个 "Refresh" 按钮完全一致
+      // （example/src/demos.js）：duration:1300 / easing:'easeInExpo' / size:3 / speed:1 /
+      // particlesAmountCoefficient:10 / oscillationCoefficient:1 / direction 默认 'left'。
+      //
+      // size 与 speed 有意改回"原库默认随机函数"（defaultProps 中 size=1~3 随机、
+      // speed=rand(4)≈±2 随机）：demo #5 的固定 speed=1 会让同一帧生成的所有粒子
+      // x 位移完全同步（初始位移 -speed×frames 与逐帧增量 +speed 都相同），整帧上千
+      // 粒子堆在同一 x 坐标、铺满 badge 高度 → 视觉上呈"竖直对齐成一条竖线"水平扫过，
+      // 没有原库 demo 的分散飘逸感（已用 _probe_js/line-check.cjs 复刻粒子运动模拟证实：
+      // 固定 speed 首帧仅 1 个不同 x 坐标，随机 speed 有上千个）。恢复随机后粒子速度
+      // 各异、大小参差，水平散开成片，还原原库 demo 的粒子聚散效果。
+      easing="easeInExpo"
+      size={() => Math.floor(Math.random() * 4 + 3)}
+      speed={() => Math.random() * 4 - 2}
+      particlesAmountCoefficient={15}
       oscillationCoefficient={1}
       className="pointer-events-none"
     >
@@ -106,7 +120,7 @@ export default function EntryBadge({
           与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢，消散时反向退色。
           inline-flex：宽度严格按"头像+昵称+内边距"收缩自适应，不被父级 block 拉伸成固定宽 */}
       <div
-        className="inline-flex items-center gap-3 rounded-full py-[1px] border border-white/30 shadow-[0_3px_14px_rgba(0,0,0,0.30)]"
+        className="inline-flex items-center gap-6 rounded-full py-[2px] border border-white/30"
         style={{
           background:
             "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))",
@@ -117,13 +131,13 @@ export default function EntryBadge({
           backgroundOrigin: "border-box",
           // padding 用内联 style（不依赖 Tailwind 类）：pr-6 等新增类未被打包进
           // Tailwind v4 JIT 产物，实测 paddingRight 为 0 导致昵称紧贴右边界；
-          // pr-6 = 24px（昵称末字到 badge 右边界间距）
-          paddingLeft: "8px",
-          paddingRight: "24px",
+          // 48px = 昵称末字到 badge 右边界间距（1920 设计坐标）
+          paddingLeft: "16px",
+          paddingRight: "48px",
         }}
       >
         <Avatar face={user.face} uname={user.uname} />
-        <span className="text-sm font-bold text-white whitespace-nowrap tracking-wider">
+        <span className="text-[28px] font-bold text-white whitespace-nowrap tracking-wider">
           {user.uname}
         </span>
       </div>

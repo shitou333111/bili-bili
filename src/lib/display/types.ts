@@ -1,9 +1,8 @@
 /**
  * 展示模块 —— 共享类型定义。
  *
- * 展示模块 = 主窗口（弹幕监听 + 配置持久化） + 独立展示窗口（1080x720 画布，直播姬窗口捕捉）。
- * 主窗口监听自己直播间弹幕 → 过滤 → 组装 payload → emitTo("display", ...)；
- * 展示窗口 listen 事件并渲染。
+ * 展示模块 = 主窗口（弹幕监听 + 配置持久化） + 展示画布页（/display，直播姬「浏览器源」透明叠加）。
+ * 主窗口监听自己直播间弹幕 → 过滤 → 组装 payload → WS 广播；画布页 listen 事件并渲染。
  */
 
 /** 大航海类型（B站 guardType：1=总督 2=提督 3=舰长 0=无） */
@@ -49,14 +48,15 @@ export interface DisplayLayout {
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   gift: {
-    // 默认距上/左边界：横屏 50px、竖屏 60px（向画面内部偏移，避免贴边）
-    landscape: { x: 50, y: 50, scale: 1 },
-    portrait: { x: 60, y: 60, scale: 1 },
+    // 水平居中（礼物容器基准宽 192px），距上边界：横屏 100px、竖屏 120px
+    landscape: { x: (1920 - 192) / 2, y: 100, scale: 1 },
+    portrait: { x: (1080 - 192) / 2, y: 120, scale: 1 },
   },
   entry: {
-    // 默认水平居中，距上边界：横屏 70px、竖屏 80px
-    landscape: { x: (960 - 160) / 2, y: 70, scale: 1 },
-    portrait: { x: (540 - 160) / 2, y: 80, scale: 1 },
+    // 水平居中（入场提示基准宽 320px，按 scale 后的视觉宽度居中），距上边界：横屏 300px、竖屏 440px；
+    // 默认大小：横屏 1.8 倍、竖屏 1.6 倍
+    landscape: { x: (1920 - 320 * 1.8) / 2, y: 300, scale: 1.8 },
+    portrait: { x: (1080 - 320 * 1.6) / 2, y: 440, scale: 1.6 },
   },
   anime: {
     landscape: { x: 0, y: 0, scale: 1 },
@@ -108,7 +108,7 @@ export interface BlindBoxQueryConfig {
 export interface DisplayConfig {
   /** 总开关：开启才创建展示窗口并启动监听 */
   master: boolean;
-  /** 画布朝向（横屏 960x540 / 竖屏 540x960） */
+  /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
   screenOrientation: ScreenOrientation;
   /** 模块1 · 入场提示 开关 */
   entry: boolean;

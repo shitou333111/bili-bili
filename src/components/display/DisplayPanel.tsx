@@ -438,11 +438,15 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   const update = useCallback(
     async (patch: Partial<DisplayConfig>) => {
-      const next = { ...config, ...patch };
+      // 以主进程侧最新配置（含浏览器源/编辑 iframe 经 saveLayout 刚保存的布局）为基准合并，
+      // 否则用本页缓存的旧 config 整体覆盖磁盘会把 iframe 里刚拖动的元素位置一并冲掉
+      // （表现为切换横/竖屏后布局恢复默认值）。
+      const latest = await loadDisplayConfig(mid);
+      const next = { ...latest, ...patch };
       setConfig(next);
       await saveDisplayConfig(mid, next);
     },
-    [config, mid],
+    [mid],
   );
 
   // 模块开关变化：持久化后广播 flags，让浏览器源即时显隐对应元素（无需重连）；
@@ -457,7 +461,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   );
 
   // 横屏 / 竖屏切换：持久化朝向并广播给已连接的浏览器源画布（canvas 收到 orientation
-  // 消息后切换 540x960 / 960x540）。浏览器源随时可再加，无需先开总开关。
+  // 消息后切换 1080x1920 / 1920x1080）。浏览器源随时可再加，无需先开总开关。
   const [editOpen, setEditOpen] = useState(false);
   const serverPort = displayDanmaku.getServerPort();
 
@@ -567,19 +571,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           // 需要直播间 roomid（主播 UID → 房间号，失败直接报错）
           const roomId = (await resolveRoomInfo(mid)).roomId;
           const all: GuardItem[] = [];
-          const PAGE_SIZE = 30; // 该接口单页最大 30
-          for (let page = 1; page <= 30; page++) {
-            const data = await platform.fetchBilibiliJson<any>({
-              url: `https://api.live.bilibili.com/xlive/app-room/v2/guardTab/topList?roomid=${roomId}&ruid=${mid}&page=${page}&page_size=${PAGE_SIZE}`,
-              cookie: cookie.join("; "),
-              live: true,
-            });
-            if (data?.code !== 0) {
-              throw new Error(data?.message || data?.msg || "获取舰长列表失败");
-            }
-            const list = data?.data?.list || [];
-            if (!list.length) break;
-            for (const g of list) {
+          // 前三名舰长在接口的独立 top3 字段（list 里不含他们），需先并入，避免漏人
+          const collect = (gs: any[]) => {
+            for (const g of gs || []) {
               const gid = Number(g.uid);
               if (gid && !all.some((a) => a.mid === gid)) {
                 all.push({
@@ -590,6 +584,21 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 });
               }
             }
+          };
+          const PAGE_SIZE = 30; // 该接口单页最大 30
+          for (let page = 1; page <= 30; page++) {
+            const data = await platform.fetchBilibiliJson<any>({
+              url: `https://api.live.bilibili.com/xlive/app-room/v2/guardTab/topList?roomid=${roomId}&ruid=${mid}&page=${page}&page_size=${PAGE_SIZE}`,
+              cookie: cookie.join("; "),
+              live: true,
+            });
+            if (data?.code !== 0) {
+              throw new Error(data?.message || data?.msg || "获取舰长列表失败");
+            }
+            if (page === 1) collect(data?.data?.top3); // 前三名舰长单独字段
+            const list = data?.data?.list || [];
+            if (!list.length) break;
+            collect(list);
           }
           setGuards(all);
           if (!all.length) toast("未获取到舰长列表，请确认直播间与登录状态");
@@ -1007,7 +1016,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 <br />
                 想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
                 <br />
-                “编辑布局”中的显示效果并不等于直播姬中的显示效果，直播姬中的显示效果也不等于直播间效果，因为有画面缩放的影响。所以，需要以最终的直播间观看效果为准。
+                “编辑布局”与直播姬浏览器源均为 1920x1080（竖屏 1080x1920）原生 1:1 渲染，
+                两者显示效果一致；直播姬内请勿再对源做缩放/拉伸，保持 1920x1080 原尺寸叠加。
               </p>
             </div>
           )}

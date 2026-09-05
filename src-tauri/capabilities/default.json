@@ -47,6 +47,7 @@
     "pldownloader:default",
     "sharekit:default",
     "hotswap:default",
-    "android-installer:default"
+    "android-installer:default",
+    "autostart:default"
   ]
 }

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 展示画布（横屏 960x540 / 竖屏 540x960）—— 浏览器源客户端 + 三个信息模块渲染。
+ * 展示画布（横屏 1920x1080 / 竖屏 1080x1920）—— 浏览器源客户端 + 三个信息模块渲染。
  *
  * 由直播姬「浏览器源」或 APP 内「编辑」模态框 iframe 加载（同源 http://127.0.0.1:<port>/display）。
  * 所有数据走 WebSocket：onopen 发 {type:"ready",mode}，onmessage 分发：
@@ -47,12 +47,13 @@ const TEST_ENTRY_USER: DisplayEntryPayload = {
 /** 测试循环：一轮完整生命周期（聚合→停留→消散）结束后的间隔（重新挂载前） */
 const LOOP_GAP_MS = 1500;
 
-/** 画布设计坐标：横屏 960x540 / 竖屏 540x960（16:9 / 9:16）。
- *  渲染时按视口等比缩放填满：直播姬浏览器源设为 1920x1080 / 1080x1920 即全分辨率铺满，
- *  编辑 iframe 内视口=画布尺寸故 fit=1 不缩放。 */
+/** 画布设计坐标：横屏 1920x1080 / 竖屏 1080x1920（16:9 / 9:16）。
+ *  设计分辨率 = 浏览器源目标分辨率：浏览器源设 1920x1080（竖屏 1080x1920）时 fit=1、
+ *  全程 1:1 原生渲染（主流浏览器源做法，无整页缩放）；编辑 iframe 视口 960x540 时
+ *  fit=0.5 缩小预览。 */
 export const CANVAS_SIZE: Record<ScreenOrientation, { w: number; h: number }> = {
-  landscape: { w: 960, h: 540 },
-  portrait: { w: 540, h: 960 },
+  landscape: { w: 1920, h: 1080 },
+  portrait: { w: 1080, h: 1920 },
 };
 
 /** 入场动画样本（编辑模式常驻预览用） */
@@ -85,13 +86,16 @@ type ServerMsg =
  * 后通过对 hidden 再翻转触发"消散"，后续状态翻转不稳定。改为按固定周期（一轮全周期 + 间隙）重挂载。
  * 组件常驻不卸载（粒子隐藏间隙内容仍占位，外层虚线框仍可拖动/缩放）。
  */
-function TestEntryLoop() {
+function TestEntryLoop({ scale }: { scale: number }) {
   const [cycle, setCycle] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setCycle((c) => c + 1), ENTRY_TOTAL_MS + LOOP_GAP_MS);
     return () => clearTimeout(t);
   }, [cycle]);
-  return <EntryBadge key={cycle} user={TEST_ENTRY_USER} onDone={() => {}} />;
+  // key 含 scale：编辑模式下拖动缩放后布局 scale 变化 → 重新挂载 EntryBadge，
+  // 使粒子库重新测量视觉缩放比（canvas 分辨率跟随放大后的 badge），否则位图被
+  // transform:scale 整体拉伸 → 粒子范围错位 + 模糊。
+  return <EntryBadge key={`${cycle}-${scale}`} user={TEST_ENTRY_USER} onDone={() => {}} />;
 }
 
 export default function DisplayCanvas() {
@@ -322,9 +326,9 @@ export default function DisplayCanvas() {
   }, [currentEntry, onEntryDone]);
 
   const canvas = CANVAS_SIZE[orientation];
-  // 视口自适应缩放：画布固定 960x540 / 540x960 设计坐标，按浏览器源/iframe 视口等比放大填满，
-  // 使直播姬浏览器源设为 1920x1080（横屏）或 1080x1920（竖屏）时画布正好铺满全分辨率。
-  // 编辑 iframe 内视口恰为画布尺寸 → fit=1 不缩放；仅浏览器源（非编辑）才 fit>1。
+  // 视口自适应缩放：画布固定 1920x1080 / 1080x1920 设计坐标（= 浏览器源目标分辨率），
+  // 浏览器源设成同分辨率时 fit=1 不缩放（1:1 原生渲染）；编辑 iframe 视口 960x540 时
+  // fit=0.5 等比缩小预览，保证整画布可见可摆放。
   const [fit, setFit] = useState(1);
   useEffect(() => {
     const update = () => {
@@ -407,7 +411,13 @@ export default function DisplayCanvas() {
       style={{
         width: canvas.w,
         height: canvas.h,
-        transform: `scale(${fit})`,
+        // 用 CSS zoom 而非 transform:scale(fit) 缩放设计画布（仅编辑预览 fit=0.5 生效；
+        // 浏览器源与设计同分辨率时 fit=1、zoom:1，全程原生 1:1，无任何缩放）：
+        // transform 缩放会把整棵子树按 1x 栅格化再拉伸（合成器按布局尺寸贴图放大），
+        // 视频画面、文字在缩放预览下直接发糊（分辨率低）；zoom 是布局级缩放，浏览器按
+        // 真实分辨率重绘，视频元素按缩放尺寸采样自身画面、文字矢量重栅格化。粒子 canvas
+        // 位图已由视觉缩放补丁按缩放比等比重绘（上限 2x），zoom 下同样 1:1 清晰。
+        zoom: fit,
       }}
     >
       {/* 动画：正常模式播事件；编辑模式常驻播放样本；未配置视频时显示占位提示。
@@ -466,7 +476,7 @@ export default function DisplayCanvas() {
           editable={isEdit}
         >
           {isEdit ? (
-            <TestEntryLoop />
+            <TestEntryLoop scale={layouts.entry[orientation].scale} />
           ) : currentEntry ? (
             <EntryBadge key={currentEntry.uid} user={currentEntry} onDone={onEntryDone} />
           ) : null}

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>particle repro</title>
+<style>
+  body { background: #333; margin: 40px; font-family: sans-serif; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px;
+    padding: 1px 24px 1px 8px; color: #fff; font-size: 14px; font-weight: 700;
+    background: linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%));
+    background-origin: border-box; border: 1px solid rgba(255,255,255,0.3);
+    box-shadow: 0 3px 14px rgba(0,0,0,0.3); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+import React, { useCallback, useEffect, useRef, useState } from "https://esm.sh/react@18";
+import { createRoot } from "https://esm.sh/react-dom@18/client";
+import ParticleButton from "/particle-lib.mjs";
+
+const SHOW_DELAY_MS = 60;
+const HOLD_MS = 3000;
+
+function Badge({ uname }) {
+  const [hidden, setHidden] = useState(true);
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+  const holdTimerRef = useRef(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setHidden(false), SHOW_DELAY_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  const handleComplete = useCallback(() => {
+    if (!hiddenRef.current) {
+      if (holdTimerRef.current) return;
+      holdTimerRef.current = setTimeout(() => {
+        holdTimerRef.current = null;
+        setHidden(true);
+      }, HOLD_MS);
+    } else {
+      window.__doneCount = (window.__doneCount || 0) + 1;
+    }
+  }, []);
+
+  return React.createElement(
+    ParticleButton,
+    {
+      hidden: hidden,
+      onComplete: handleComplete,
+      color: "#003ff1",
+      duration: 1300,
+      easing: "easeInExpo",
+      size: () => Math.floor(Math.random() * 3 + 1),
+      speed: () => Math.random() * 4 - 2,
+      particlesAmountCoefficient: 10,
+      oscillationCoefficient: 1,
+    },
+    React.createElement("div", { className: "badge" },
+      React.createElement("span", null, uname))
+  );
+}
+
+function Loop() {
+  const [cycle, setCycle] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setCycle((c) => c + 1), 6000 + 1500);
+    return () => clearTimeout(t);
+  }, [cycle]);
+  return React.createElement(Badge, { key: cycle, uname: "Test User" });
+}
+
+createRoot(document.getElementById("root")).render(React.createElement(Loop));
+</script>
+</body>
+</html>

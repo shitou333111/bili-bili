@@ -194,7 +194,7 @@ export default function VideoOverlay({
           onError={handleVideoError}
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center px-6 text-center text-black/60 text-xl font-bold leading-relaxed">
+        <div className="w-full h-full flex items-center justify-center px-12 text-center text-black/60 text-[40px] font-bold leading-relaxed">
           {loadError
             ? "视频加载失败"
             : "你还没有配置任何入场动画，先在“入场动画”卡片中添加，才能看到动画播放效果"}
@@ -213,7 +213,7 @@ export default function VideoOverlay({
             })
           }
           title={muted ? "开启声音" : "关闭声音"}
-          className="absolute right-2 bottom-2 z-[2] w-8 h-8 rounded-full bg-black/40 text-white text-sm
+          className="absolute right-4 bottom-4 z-[2] w-16 h-16 rounded-full bg-black/40 text-white text-[28px]
             flex items-center justify-center pointer-events-auto opacity-40 hover:opacity-90 transition-opacity"
         >
           {muted ? "🔇" : "🔊"}

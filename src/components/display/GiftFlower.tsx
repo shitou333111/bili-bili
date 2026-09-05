@@ -58,16 +58,16 @@ export default function GiftFlower({
   // 让编辑模式下该元素仍可见可摆放，尺寸与实际展示完全一致。
   if (!gifts.length) {
     return (
-      <div className="relative w-24 h-24 pointer-events-none">
+      <div className="relative w-48 h-48 pointer-events-none">
         <div
-          className="absolute inset-0 rounded-full border border-black/10 shadow-[0_6px_18px_rgba(0,0,0,0.30)]"
+          className="absolute inset-0 rounded-full border border-black/10 shadow-[0_12px_36px_rgba(0,0,0,0.30)]"
           style={{ background: "linear-gradient(135deg, #9926AF, #0F0874)" }}
         >
           <div className="absolute inset-0 flex items-center justify-center">
             {/* 白色礼物盒图标（SVG，非 emoji，避免平台字体差异） */}
             <svg
               viewBox="0 0 24 24"
-              className="w-10 h-10"
+              className="w-20 h-20"
               fill="none"
               stroke="white"
               strokeWidth="1.6"
@@ -88,13 +88,13 @@ export default function GiftFlower({
   if (!shown) return null;
 
   // 礼物展示：紫渐变正圆 badge（仅图标）+ 数量置于圆外右下角（无白底，仅数字）。
-  // 容器 96x96 与圆同大 → 虚线框右/下与圆的最右/最下相切；数字放容器右下角，
+  // 容器 192x192 与圆同大 → 虚线框右/下与圆的最右/最下相切；数字放容器右下角，
   // 该角落在圆盘外（45° 弧线之外），数字即显示在圆外并紧贴弧线。
   return (
-    <div className="relative w-24 h-24 pointer-events-none">
+    <div className="relative w-48 h-48 pointer-events-none">
       {/* 紫渐变正圆 badge（仅图标）：铺满容器，背景 #9926AF → #0F0874 */}
       <div
-        className="absolute inset-0 rounded-full border border-black/10 shadow-[0_6px_18px_rgba(0,0,0,0.30)]"
+        className="absolute inset-0 rounded-full border border-black/10 shadow-[0_12px_36px_rgba(0,0,0,0.30)]"
         style={{ background: "linear-gradient(135deg, #9926AF, #0F0874)" }}
       >
         {/* 礼物图标：尽可能大，居中 */}
@@ -106,16 +106,16 @@ export default function GiftFlower({
           <img
             src={shown.img}
             alt={shown.giftName}
-            className="w-[5.5rem] h-[5.5rem] object-contain drop-shadow-[0_2px_6px_rgba(0,0,0,0.20)]"
+            className="w-[11rem] h-[11rem] object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.20)]"
           />
         </div>
       </div>
-      {/* 数量：置于圆外右下角、虚线框内，贴圆的下右弧；仅数字，无“×”与白底板。
-          bottom-0/right-0 基础上再向下、向右各 2px（底/右用负值外移）。
+      {/* 数量：置于圆外右下角、虚线框内，贴圆的下右弧；仅数字，无"×"与白底板。
+          bottom-0/right-0 基础上再向下、向右各 4px（底/右用负值外移）。
           与图标使用同一 fadeIn 状态 + 相同 duration → 切换时完全同步渐隐渐显。
           数量为 1 时不显示（单个礼物无需计数） */}
       <span
-        className={`absolute -right-[2px] -bottom-[2px] text-xl font-bold text-black/90 leading-none transition-opacity duration-1000 ${
+        className={`absolute -right-[4px] -bottom-[4px] text-[40px] font-bold text-black/90 leading-none transition-opacity duration-1000 ${
           fadeIn ? "opacity-100" : "opacity-0"
         }`}
       >

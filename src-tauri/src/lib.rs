@@ -1626,6 +1626,15 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_android_installer::init());
     }
+    // Windows：注册开机自启动插件（写注册表 HKCU\...\Run，指向当前 exe 绝对路径，
+    // 单文件免安装同样生效）。MacOSLauncher 参数仅 macOS 使用，Windows 忽略，直接传 None 即可。
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
+    }
 
     builder
         // 启动时调整主窗口：

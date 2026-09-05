@@ -16,6 +16,7 @@ import { getPlatform } from "@/lib/platform";
 import { refreshGiftData } from "@/lib/gift-local-store";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
+import AutostartCard from "@/components/AutostartCard";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 import PieTooltip from "@/components/PieTooltip";
@@ -3123,6 +3124,8 @@ export default function HomePage() {
                 </button>
                 {/* 主播推荐卡片 */}
                 <RecommendedAnchors />
+                {/* 开机自启动卡片（仅 Windows 桌面展示） */}
+                <AutostartCard />
                 {/* 反馈卡片 */}
                 <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">

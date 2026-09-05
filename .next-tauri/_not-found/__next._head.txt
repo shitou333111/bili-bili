@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[97367,["/_next/static/chunks/3g-lrawzbn2_z.js","/_next/static/chunks/1-8s9_t85wwr4.js"],"ViewportBoundary"]
+3:I[97367,["/_next/static/chunks/3g-lrawzbn2_z.js","/_next/static/chunks/1-8s9_t85wwr4.js"],"MetadataBoundary"]
+4:"$Sreact.suspense"
+5:I[27201,["/_next/static/chunks/3g-lrawzbn2_z.js","/_next/static/chunks/1-8s9_t85wwr4.js"],"IconMark"]
+0:{"rsc":["$","$1","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"Bili Live Revenue Viewer"}],["$","meta","1",{"name":"description","content":"Browser-first Bilibili live consumption dashboard with QR fallback login."}],["$","meta","2",{"name":"referrer","content":"no-referrer"}],["$","link","3",{"rel":"icon","href":"/orig_icon.png"}],["$","link","4",{"rel":"apple-touch-icon","href":"/orig_icon.png"}],["$","$L5","5",{}]]}]}]}],null]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"BfNGPeS9sJ3xRSbRv9z4D"}

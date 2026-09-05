@@ -29,6 +29,8 @@ tauri-plugin-ios-webview-insets = "=0.1.0"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 # 仅 Windows：展示模块"选择入场动画视频"用原生文件选择框。
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+# 仅 Windows：开机自启动（写入 HKCU\...\Run 注册表，指向当前 exe 绝对路径，单文件免安装同样生效）。
+tauri-plugin-autostart = "2"
 
 [dependencies]
 tauri = { version = "2", features = ["unstable", "protocol-asset"] }

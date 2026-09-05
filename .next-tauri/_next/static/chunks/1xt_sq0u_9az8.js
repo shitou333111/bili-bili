@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,6135,i=>{"use strict";var e=i.i(86682);async function t(i,t){await (0,e.invoke)("plugin:sharekit|share_file",{url:i,...t})}i.s(["shareFile",0,t])}]);

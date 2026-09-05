@@ -135,11 +135,11 @@ export default function MovableBox({
     >
       <div style={{ transform: `scale(${display.scale})`, transformOrigin: "top left", width: "max-content" }}>
         {editable ? (
-          <div className="relative border-2 border-dashed border-black/40 rounded-lg">
+          <div className="relative border-4 border-dashed border-black/40 rounded-lg">
             {children}
             {/* 等比缩放手柄：右下角（仅编辑模式可见） */}
             <div
-              className="absolute -right-1.5 -bottom-1.5 w-4 h-4 rounded-full bg-white border-2 border-[#007aff] cursor-nwse-resize shadow-md"
+              className="absolute -right-3 -bottom-3 w-8 h-8 rounded-full bg-white border-4 border-[#007aff] cursor-nwse-resize shadow-md"
               onPointerDown={(e) => onPointerDown(e, "resize")}
             />
           </div>

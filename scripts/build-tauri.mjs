@@ -74,6 +74,13 @@ execSync("node scripts/patch-foamtree.mjs", { stdio: "inherit", cwd: root });
 console.log("[build-tauri] 应用 react-particle-effect-button 补丁...");
 execSync("node scripts/patch-particle-effect-button.mjs", { stdio: "inherit", cwd: root });
 
+// 弹幕监听依赖 bilibili-live-ws 的本地补丁（固定 30s 心跳 + op=5 批量消息数组展开），
+// 未打补丁时：服务器不回心跳 → 60s 后断开 → open/auth/close 死循环（新主播号收不到消息）；
+// 高人气房间批量推送（op=5 JSON 数组）会被整包丢弃（含 SEND_GIFT 礼物）。与 postinstall
+// 保持幂等，保证 CI 构建产物一定包含。
+console.log("[build-tauri] 应用 bilibili-live-ws 补丁...");
+execSync("node scripts/patch-bilibili-ws.mjs", { stdio: "inherit", cwd: root });
+
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 
 execSync(

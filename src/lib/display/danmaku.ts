@@ -106,6 +106,8 @@ const RAW_CMDS = [
   "INTERACT_WORD",
   "ENTRY_EFFECT",
   "SEND_GIFT",
+  "SEND_GIFT_V2",
+  "UNIVERSAL_EVENT_GIFT_V2",
   "DANMU_MSG",
   "GUARD_BUY",
   "WELCOME_GUARD",
@@ -149,6 +151,23 @@ function summarizeRaw(cmd: string, raw: any): any {
         timestamp: d.timestamp,
       };
     }
+    if (cmd === "SEND_GIFT_V2" || cmd === "UNIVERSAL_EVENT_GIFT_V2") {
+      // 新协议：SEND_GIFT_V2 为 protobuf（data.pb，base64），其他为 JSON 变体，这里展示解析结果与关键字段
+      const parsed = parseGiftV2Pb(raw?.data) ?? parseNewGift(raw);
+      return {
+        parsed: parsed.map((g) => ({
+          uid: g.user?.uid,
+          uname: g.user?.uname,
+          giftId: g.giftId,
+          giftName: g.giftName,
+          price: g.price,
+          num: g.num,
+          coinType: g.coinType,
+        })),
+        isPb: typeof raw?.data?.pb === "string",
+        dataKeys: Object.keys(raw?.data ?? {}),
+      };
+    }
     if (cmd === "DANMU_MSG") {
       const info = raw?.info ?? raw?.data?.info;
       if (Array.isArray(info)) {
@@ -174,6 +193,168 @@ function summarizeRaw(cmd: string, raw: any): any {
     /* 精简失败则回退原始对象 */
   }
   return raw;
+}
+
+// ==================== protobuf 最小解码（SEND_GIFT_V2 专用） ====================
+// SEND_GIFT_V2 的 data.pb 是 base64 编码的 protobuf（SendGiftBroadcast），不是 JSON。
+// 字段号取自 blivedm（xfgryujk/blivedm，2026-08 仍活跃维护，models/pb.py），并经
+// _probe_js/pb-decode.cjs 用真实抓包样本逐一验证一致。
+
+interface PbField {
+  field: number;
+  /** 0=varint 1=64位固定 2=len-delimited 5=32位固定 */
+  wire: number;
+  value: bigint | Uint8Array;
+}
+
+/** 读一个 varint，返回 {value, next} */
+function pbReadVarint(buf: Uint8Array, pos: number): { value: bigint; next: number } {
+  let value = BigInt(0);
+  let shift = BigInt(0);
+  while (pos < buf.length) {
+    const b = buf[pos++];
+    value |= BigInt(b & 0x7f) << shift;
+    if (!(b & 0x80)) break;
+    shift += BigInt(7);
+  }
+  return { value, next: pos };
+}
+
+/** 把字节流解码为字段数组（遇到未知 wire type 即停止） */
+function pbDecode(buf: Uint8Array, pos: number, end: number): PbField[] {
+  const out: PbField[] = [];
+  while (pos < end) {
+    const tag = pbReadVarint(buf, pos);
+    pos = tag.next;
+    const field = Number(tag.value >> BigInt(3));
+    const wire = Number(tag.value & BigInt(7));
+    if (wire === 0) {
+      const v = pbReadVarint(buf, pos);
+      pos = v.next;
+      out.push({ field, wire, value: v.value });
+    } else if (wire === 2) {
+      const len = pbReadVarint(buf, pos);
+      pos = len.next;
+      const start = pos;
+      pos += Number(len.value);
+      out.push({ field, wire, value: buf.slice(start, pos) });
+    } else if (wire === 1) {
+      const start = pos;
+      pos += 8;
+      out.push({ field, wire, value: buf.slice(start, pos) });
+    } else if (wire === 5) {
+      const start = pos;
+      pos += 4;
+      out.push({ field, wire, value: buf.slice(start, pos) });
+    } else {
+      break;
+    }
+  }
+  return out;
+}
+
+/** 取字段的 varint 数值（不存在/非数值 → 0） */
+function pbInt(fields: PbField[], field: number): number {
+  const f = fields.find((x) => x.field === field);
+  if (!f || f.wire !== 0) return 0;
+  const n = f.value as bigint;
+  return n > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(n);
+}
+
+/** 取字段的字符串（不存在/非字符串 → ""） */
+function pbStr(fields: PbField[], field: number): string {
+  const f = fields.find((x) => x.field === field);
+  if (!f || f.wire !== 2) return "";
+  return new TextDecoder().decode(f.value as Uint8Array);
+}
+
+/** 取字段的嵌套子消息（不存在/非嵌套 → null） */
+function pbMsg(fields: PbField[], field: number): PbField[] | null {
+  const f = fields.find((x) => x.field === field);
+  if (!f || f.wire !== 2) return null;
+  const sub = f.value as Uint8Array;
+  return pbDecode(sub, 0, sub.length);
+}
+
+/** 解析 SEND_GIFT_V2 的 protobuf 礼物包（data.pb）为一个或多个礼物对象。
+ *  字段号与 blivedm 一致：顶层 uid=1 uname=2 face=3 guard_level=5 medal_info=8
+ *  blind_gift=9 gift_list=10；gift_list 项 gift_id=1 gift_name=2 num=3 gift_type=4
+ *  price=5 total_coin=7 coin_type=8 tid=9 timestamp=10 rnd=12 action=18
+ *  gift_info=35（内含 img_basic=1）。盲盒一次打包多条 gift_list（爆出礼物逐条）。
+ *  输出与 bili-live-listener 的 GiftData 对齐（d.user.uid/uname/face、d.giftId、
+ *  d.giftName、d.price、d.num、d.coinType、d.timestamp），并附 d.img 直链图标，
+ *  可直接复用 handleGift。data 非 pb 结构（无 data.pb）返回 null，由调用方回退 JSON。 */
+function parseGiftV2Pb(data: any): any[] | null {
+  const pbB64 = data?.pb;
+  if (typeof pbB64 !== "string" || !pbB64) return null;
+  let fields: PbField[];
+  try {
+    const raw = Uint8Array.from(atob(pbB64), (c) => c.charCodeAt(0));
+    fields = pbDecode(raw, 0, raw.length);
+  } catch {
+    return null; // base64 损坏 → 交给 JSON 回退分支（会记"解析失败"便于排查）
+  }
+  const uid = pbInt(fields, 1);
+  const uname = pbStr(fields, 2);
+  const face = pbStr(fields, 3);
+  const items = fields.filter((f) => f.field === 10 && f.wire === 2);
+  if (!items.length) return [];
+  const out: any[] = [];
+  for (const it of items) {
+    const sub = it.value as Uint8Array;
+    const gf = pbDecode(sub, 0, sub.length);
+    const gi = pbMsg(gf, 35);
+    out.push({
+      user: { uid, uname, face },
+      giftId: pbInt(gf, 1),
+      giftName: pbStr(gf, 2),
+      price: pbInt(gf, 5),
+      num: pbInt(gf, 3) || 1,
+      coinType: pbStr(gf, 8) || "gold",
+      timestamp: pbInt(gf, 10),
+      img: gi ? pbStr(gi, 1) : "",
+    });
+  }
+  return out;
+}
+
+/** 解析新协议礼物包（JSON 变体）为一个或多个礼物对象。
+ *  背景：bili-live-listener 的 onGift 只订阅旧协议 SEND_GIFT/POPULARITY_RED_POCKET_NEW，
+ *  B站对新主播/高人气房间灰度推送新协议（SEND_GIFT_V2 为 protobuf，见 parseGiftV2Pb；
+ *  UNIVERSAL_EVENT_GIFT_V2 等可能为 JSON）。JSON 变体字段结构不稳定：
+ *  扁平（data.uid/uname/giftId...）/ asset 嵌套（data.asset.gift_id...）/ user 嵌套
+ *  （data.user.uid/uname）/ items 批量数组均有出现，这里自适应兼容，
+ *  输出对象字段与 bili-live-listener 的 GiftData 对齐（d.user.uid、d.giftId、d.giftName、
+ *  d.price、d.num、d.coinType、d.timestamp），可直接复用 handleGift。 */
+function parseNewGift(raw: any): any[] {
+  const d = raw?.data ?? {};
+  if (!d || typeof d !== "object") return [];
+  const items = Array.isArray(d.items) ? d.items : Array.isArray(d.gifts) ? d.gifts : null;
+  const sources = items && items.length ? items : [d];
+  const out: any[] = [];
+  for (const s of sources) {
+    if (!s || typeof s !== "object") continue;
+    const asset = s.asset ?? {};
+    const user = s.user ?? {};
+    const uid = Number(s.uid ?? user.uid ?? asset.payer ?? 0) || 0;
+    const uname = String(s.uname ?? user.uname ?? asset.uname ?? "");
+    const giftId = Number(s.giftId ?? s.gift_id ?? asset.gift_id ?? 0) || 0;
+    const giftName = String(s.giftName ?? s.gift_name ?? asset.gift_name ?? "");
+    const price = Number(s.price ?? asset.price ?? 0) || 0;
+    const num = Number(s.num ?? asset.num ?? 1) || 1;
+    const coinType = String(s.coin_type ?? asset.coin_type ?? "gold");
+    if (!uid && !giftId) continue; // 关键字段全部缺失 → 视为解析失败跳过
+    out.push({
+      user: { uid, uname },
+      giftId,
+      giftName,
+      price,
+      num,
+      coinType,
+      timestamp: Number(s.timestamp ?? d.timestamp) || 0,
+    });
+  }
+  return out;
 }
 
 type StatusListener = (s: DisplayServiceStatus) => void;
@@ -687,6 +868,29 @@ class DisplayDanmakuService {
       }),
     );
 
+    // ---- 礼物（新协议）：SEND_GIFT_V2 / UNIVERSAL_EVENT_GIFT_V2 ----
+    // bili-live-listener 的 onGift 只订阅 SEND_GIFT/POPULARITY_RED_POCKET_NEW；B站对新主播/
+    // 高人气房间灰度推送新协议（SEND_GIFT_V2 为 protobuf、data.pb 编码，经抓包验证；盲盒
+    // 一次打包多条爆出礼物），未订阅则礼物静默丢失（表现为"测试号能收到、新主播号收不到
+    // 送礼、无礼物记录文件"）。这里在底层 ws 直接监听原始包：SEND_GIFT_V2 走 pb 解码，
+    // 其他 JSON 变体走 parseNewGift 自适应解析，逐条复用 handleGift，与旧协议走同一
+    // 落盘/展示路径。解析失败时记录原始包便于排查。
+    for (const cmd of ["SEND_GIFT_V2", "UNIVERSAL_EVENT_GIFT_V2"]) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, async (raw: any) => {
+          const list = parseGiftV2Pb(raw?.data) ?? parseNewGift(raw);
+          if (!list.length) {
+            this.pushDebug(cmd, "解析失败", summarizeRaw(cmd, raw), raw);
+            return;
+          }
+          for (const g of list) {
+            if (g.coinType !== "gold") continue;
+            await this.handleGift(mid, g, raw);
+          }
+        }),
+      );
+    }
+
     // ---- 盲盒盈亏 · 弹幕查询 ----
     this.removeHandlers.push(
       this.live.onDanmu(async (message: any) => {
@@ -790,10 +994,12 @@ class DisplayDanmakuService {
     const uid = Number(guser.uid) || 0;
     const uname = guser.uname || "";
     // 礼物图标直链：优先取 gif（动画），没有则用 img_basic（静态 png）。
-    // 原始 SEND_GIFT 包中图标位于 data.gift_info（已在真实弹幕样本确认字段）。
+    // 旧协议 SEND_GIFT 的图标位于 raw.data.gift_info；新协议 SEND_GIFT_V2 的图标在
+    // protobuf 的 gift_info.img_basic（parseGiftV2Pb 已解出到 d.img）。
     const payload = raw?.data || {};
     const gi = payload?.gift_info || {};
-    const rawImg = String(gi.gif || gi.img_basic || "");
+    const asset = payload?.asset || {};
+    const rawImg = String(gi.gif || gi.img_basic || asset.gif || asset.img_basic || asset.gift_img || d.img || "");
     // 少数老版本/特殊礼物可能不带 gift_info，回退礼物目录现查（Map 读取，非网络），保证记录图标不空
     const giftImg = rawImg || getGiftImg(giftId);
 
