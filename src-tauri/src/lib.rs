@@ -1642,6 +1642,19 @@ pub fn run() {
         // 高度按 16:9 计算，但不超过可用区域（排除任务栏）高度的 90%。
         // 窗口初始隐藏，设置尺寸/位置后再 show()，避免先闪默认大小再变形。
         .setup(|app| {
+            // Windows：开机自启动默认开启（首次启动写标志后 enable，之后尊重帮助页开关选择，
+            // 不再每次启动强制覆盖用户手动关闭）。
+            #[cfg(target_os = "windows")]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                if let Ok(cfg_dir) = app.path().app_config_dir() {
+                    let flag = cfg_dir.join("autostart-initialized.flag");
+                    if !flag.exists() {
+                        let _ = app.autolaunch().enable();
+                        let _ = std::fs::write(&flag, "1");
+                    }
+                }
+            }
             // 注册本地展示（浏览器源）服务器状态（server.rs 的幂等启动 / 广播）
             app.manage(server::DisplayServerState::default());
             if let Some(window) = app.get_webview_window("main") {

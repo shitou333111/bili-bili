@@ -29,8 +29,6 @@ tauri-plugin-ios-webview-insets = "=0.1.0"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 # 仅 Windows：展示模块"选择入场动画视频"用原生文件选择框。
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
-# 仅 Windows：开机自启动（写入 HKCU\...\Run 注册表，指向当前 exe 绝对路径，单文件免安装同样生效）。
-tauri-plugin-autostart = "2"
 
 [dependencies]
 tauri = { version = "2", features = ["unstable", "protocol-asset"] }
@@ -51,6 +49,12 @@ tauri-plugin-android-installer = "0.1"
 # 把已下载的 IPA 文件交给自签工具（Esign/Feather）覆盖安装（替代 opener 的 UIApplication.open，
 # 后者无法处理 IPA 格式，报"格式不正确"）。
 tauri-plugin-sharekit = "0.3"
+# 开机自启动（写注册表 HKCU\...\Run，指向当前 exe 绝对路径，单文件免安装同样生效）。
+# 须作为全局依赖声明：否则 Android/iOS 构建时 tauri-build 不认识 autostart:default 权限，
+# capabilities 校验报错（与 android-installer 同一先例）。插件在移动端 lib 为编译期空实现
+# （crate 级 cfg 空掉），仅 build.rs 注册权限；运行时仅 Windows 注册（lib.rs 中
+# cfg(target_os="windows")）。
+tauri-plugin-autostart = "2"
 # 热更新（三平台通用）：前端资源 OTA，类似 CodePush，仅更新 JS/CSS/HTML。
 # tauri-plugin-hotswap：运行时替换 asset provider，apply/activate 后
 # window.location.reload() 立即生效（无需重启进程，iOS/Android 均可）。
