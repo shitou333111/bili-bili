@@ -89,7 +89,13 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       zongdu: !!r.entryFilter?.zongdu,
       tidu: !!r.entryFilter?.tidu,
       jianzhang: !!r.entryFilter?.jianzhang,
-      medalLevelThreshold: Math.max(0, Math.floor(Number(r.entryFilter?.medalLevelThreshold) || 0)),
+      // 灯牌等级阈值：合法数字保留，缺失/非法回退默认（31）
+      medalLevelThreshold:
+        typeof r.entryFilter?.medalLevelThreshold === "number" &&
+        Number.isFinite(r.entryFilter.medalLevelThreshold) &&
+        r.entryFilter.medalLevelThreshold >= 0
+          ? Math.floor(r.entryFilter.medalLevelThreshold)
+          : d.entryFilter.medalLevelThreshold,
     },
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:

@@ -1187,3 +1187,6 @@ jobs:
               esac
               rm -rf "${dir}"
             done
+            # webapp 热更新包同样只保留最近 5 个（与其他安装包保留数目一致）；
+            # hotswap.json 为最新 manifest 会被覆盖，无需清理。
+            ls -1t "${ARTIFACTS_DIR}"/webapp/frontend-*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f

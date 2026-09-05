@@ -14,7 +14,7 @@
  * 而是由父组件在 onDone 后用新的 key 重新挂载本组件，每轮都是全新一轮动画；
  * 组件常驻不卸载，粒子隐藏间隙内容仍占位，外层虚线框不消失。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ParticleButton from "react-particle-effect-button";
 import type { DisplayEntryPayload } from "@/lib/display/types";
 
@@ -57,9 +57,12 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
 export default function EntryBadge({
   user,
   onDone,
+  onMeasure,
 }: {
   user: DisplayEntryPayload;
   onDone: () => void;
+  /** 测量 badge 实际宽度（挂载后同步回调，供父级按昵称长度动态水平居中；无延迟） */
+  onMeasure?: (width: number) => void;
 }) {
   const [hidden, setHidden] = useState(true);
   const hiddenRef = useRef(hidden);
@@ -67,6 +70,16 @@ export default function EntryBadge({
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // badge 内容引用：粒子动画开始前（隐藏状态）即可测得内容宽度（transform 位移不影响 offsetWidth）
+  const badgeRef = useRef<HTMLDivElement | null>(null);
+
+  // 挂载后同步测量 badge 宽度并上报（useLayoutEffect 在浏览器绘制前执行，动画 60ms 后才开始，
+  // 父级据此重算居中 x 不会产生闪烁/延迟）
+  useLayoutEffect(() => {
+    if (onMeasure && badgeRef.current) {
+      onMeasure(badgeRef.current.offsetWidth);
+    }
+  }, [onMeasure]);
 
   // 挂载后触发"聚合"动画（每次挂载都是全新一轮：聚合 → 停留 → 消散 → onDone）
   useEffect(() => {
@@ -120,6 +133,7 @@ export default function EntryBadge({
           与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢，消散时反向退色。
           inline-flex：宽度严格按"头像+昵称+内边距"收缩自适应，不被父级 block 拉伸成固定宽 */}
       <div
+        ref={badgeRef}
         className="inline-flex items-center gap-6 rounded-full py-[2px] border border-white/30"
         style={{
           background:

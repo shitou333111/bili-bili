@@ -48,15 +48,16 @@ export interface DisplayLayout {
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   gift: {
-    // 水平居中（礼物容器基准宽 192px），距上边界：横屏 100px、竖屏 120px
-    landscape: { x: (1920 - 192) / 2, y: 100, scale: 1 },
-    portrait: { x: (1080 - 192) / 2, y: 120, scale: 1 },
+    // 恢复迁移前（960 坐标系）的默认位置：左上角（50,50），不水平居中
+    landscape: { x: 50, y: 50, scale: 1 },
+    portrait: { x: 60, y: 60, scale: 1 },
   },
   entry: {
-    // 水平居中（入场提示基准宽 320px，按 scale 后的视觉宽度居中），距上边界：横屏 300px、竖屏 440px；
+    // 水平居中（入场提示实际宽度 ≈ 头像56 + gap24 + 昵称28px×字数 + padding64，4字昵称约262px，
+    // 按 scale 后的视觉宽度居中；旧基准 320px 偏大导致默认位置偏左），距上边界：横屏 300px、竖屏 440px；
     // 默认大小：横屏 1.8 倍、竖屏 1.6 倍
-    landscape: { x: (1920 - 320 * 1.8) / 2, y: 300, scale: 1.8 },
-    portrait: { x: (1080 - 320 * 1.6) / 2, y: 440, scale: 1.6 },
+    landscape: { x: Math.round((1920 - 262 * 1.8) / 2), y: 300, scale: 1.8 },
+    portrait: { x: Math.round((1080 - 262 * 1.6) / 2), y: 440, scale: 1.6 },
   },
   anime: {
     landscape: { x: 0, y: 0, scale: 1 },
@@ -145,9 +146,9 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
     zongdu: false,
     tidu: false,
     jianzhang: false,
-    medalLevelThreshold: 0,
+    medalLevelThreshold: 31,
   },
-  giftPriceThreshold: 10, // 电池（默认约 1 元）
+  giftPriceThreshold: 100, // 电池（默认 100 电池）
   animeList: [],
   layout: DEFAULT_DISPLAY_LAYOUT,
   danmaku: {

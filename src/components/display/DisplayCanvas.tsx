@@ -86,7 +86,13 @@ type ServerMsg =
  * 后通过对 hidden 再翻转触发"消散"，后续状态翻转不稳定。改为按固定周期（一轮全周期 + 间隙）重挂载。
  * 组件常驻不卸载（粒子隐藏间隙内容仍占位，外层虚线框仍可拖动/缩放）。
  */
-function TestEntryLoop({ scale }: { scale: number }) {
+function TestEntryLoop({
+  scale,
+  onMeasure,
+}: {
+  scale: number;
+  onMeasure: (w: number) => void;
+}) {
   const [cycle, setCycle] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setCycle((c) => c + 1), ENTRY_TOTAL_MS + LOOP_GAP_MS);
@@ -95,7 +101,14 @@ function TestEntryLoop({ scale }: { scale: number }) {
   // key 含 scale：编辑模式下拖动缩放后布局 scale 变化 → 重新挂载 EntryBadge，
   // 使粒子库重新测量视觉缩放比（canvas 分辨率跟随放大后的 badge），否则位图被
   // transform:scale 整体拉伸 → 粒子范围错位 + 模糊。
-  return <EntryBadge key={`${cycle}-${scale}`} user={TEST_ENTRY_USER} onDone={() => {}} />;
+  return (
+    <EntryBadge
+      key={`${cycle}-${scale}`}
+      user={TEST_ENTRY_USER}
+      onDone={() => {}}
+      onMeasure={onMeasure}
+    />
+  );
 }
 
 export default function DisplayCanvas() {
@@ -105,6 +118,9 @@ export default function DisplayCanvas() {
   const [anime, setAnime] = useState<AnimeEvent | null>(null);
   // 布局（受控：经主进程持久化 + WS 下发；gift/entry 各按朝向一套）
   const [layouts, setLayouts] = useState<DisplayLayout>(DEFAULT_DISPLAY_LAYOUT);
+  // 入场提示实际宽度（EntryBadge 挂载后同步测量上报）：默认位置（未定制）时按该宽度
+  // 动态水平居中，昵称长短都能居中；用户拖动/缩放后布局不再等于默认，尊重用户保存位置。
+  const [entryMeasuredW, setEntryMeasuredW] = useState(0);
   // 进门动画样本（编辑模式常驻预览；未封装进 init 时为 null）
   const [animeSample, setAnimeSample] = useState<AnimeSample | null>(null);
   // 朝向：由 init/orientation 消息驱动
@@ -394,6 +410,26 @@ export default function DisplayCanvas() {
     return base;
   })();
 
+  // 入场提示：默认位置（layout 等于 DEFAULT，用户未拖动/缩放）时按 badge 实际宽度动态
+  // 水平居中——昵称长短都能居中（固定基准宽对长昵称会偏）。测量在 EntryBadge 挂载后
+  // 同步完成（useLayoutEffect），粒子动画 60ms 后才开始，不会闪烁或延迟。
+  const entryBase = layouts.entry[orientation];
+  const entryDefault = DEFAULT_DISPLAY_LAYOUT.entry[orientation];
+  const entryRect = useMemo(() => {
+    if (
+      entryMeasuredW > 0 &&
+      entryBase.x === entryDefault.x &&
+      entryBase.y === entryDefault.y &&
+      entryBase.scale === entryDefault.scale
+    ) {
+      return {
+        ...entryBase,
+        x: Math.round((CANVAS_SIZE[orientation].w - entryMeasuredW * entryBase.scale) / 2),
+      };
+    }
+    return entryBase;
+  }, [entryBase, entryDefault, entryMeasuredW, orientation]);
+
   // 服务端不可达（APP/本地服务已退出）：浏览器源清空不渲染任何内容，
   // 避免关闭 APP 后直播姬仍残留上一帧画面；服务恢复重连成功后自动恢复显示。
   if (serverDown) {
@@ -471,14 +507,19 @@ export default function DisplayCanvas() {
       {flags.entry && (isEdit || currentEntry) && (
         <MovableBox
           id="entry"
-          rect={layouts.entry[orientation]}
+          rect={entryRect}
           onCommit={commitLayout("entry")}
           editable={isEdit}
         >
           {isEdit ? (
-            <TestEntryLoop scale={layouts.entry[orientation].scale} />
+            <TestEntryLoop scale={entryRect.scale} onMeasure={setEntryMeasuredW} />
           ) : currentEntry ? (
-            <EntryBadge key={currentEntry.uid} user={currentEntry} onDone={onEntryDone} />
+            <EntryBadge
+              key={currentEntry.uid}
+              user={currentEntry}
+              onDone={onEntryDone}
+              onMeasure={setEntryMeasuredW}
+            />
           ) : null}
         </MovableBox>
       )}

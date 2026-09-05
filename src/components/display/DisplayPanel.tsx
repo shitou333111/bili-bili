@@ -128,6 +128,10 @@ const btnGhost =
 const inputBase =
   "rounded-lg bg-white/70 px-2.5 py-1.5 text-sm text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#1f1c17]/15";
 
+/** 隐藏 number 输入框的上下箭头（WebKit/Blink 的 spin button） */
+const noSpin =
+  "[appearance:textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none";
+
 /** iOS 风格开关（on 状态颜色可随卡片背景适配） */
 function Switch({
   checked,
@@ -1211,7 +1215,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 if (e.key === "Enter") void addUidByInput();
               }}
               placeholder="输入用户 UID"
-              className={`${inputBase} w-36`}
+              className={`${inputBase} ${noSpin} w-36`}
             />
             <button className={btnPrimary} onClick={() => void addUidByInput()} disabled={uidQuerying}>
               {uidQuerying ? "添加中…" : "添加"}
