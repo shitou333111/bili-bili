@@ -394,7 +394,10 @@ const AnchorDataModule = memo(function AnchorDataModule({
       // 冷启动/绿色刷新（无此标记）不做全量探测，避免对无收益账号反复试探。
       const probe = typeof window !== "undefined" && localStorage.getItem("bili_live_anchor_probe") === "1";
       if (probe) localStorage.removeItem("bili_live_anchor_probe");
-      const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts", { cache: "no-store" }, (p) => {
+      // 本函数仅由页面统一刷新触发（冷启动初始化 / 绿色刷新按钮，见 page.tsx finishRefresh）。
+      // 必须带 refresh=true：否则会被客户端/服务器当作"打开页面"的本地直出（不拉 B站），
+      // 导致冷启动/手动刷新永远拿不到新数据。筛选切换等页面内交互走独立请求，不带此参数。
+      const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts?refresh=true", { cache: "no-store" }, (p) => {
         // 模块内进度条 + 透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
         setFetchProgress({ text: p.text, ratio: p.ratio });
         onFetchProgress?.({ text: p.text, ratio: p.ratio });

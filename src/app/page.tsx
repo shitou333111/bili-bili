@@ -34,6 +34,7 @@ import BiliSimulator from "@/components/bili-simulator/BiliSimulator";
 import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type StreamerInfo, type HistoryEntry } from "@/components/bili-simulator/liveStream";
 import RealActivityModal from "@/components/RealActivityModal";
 import RecommendedAnchors from "@/components/RecommendedAnchors";
+import LotteryPage from "@/components/LotteryPage";
 import WindowTitleBar from "@/components/WindowTitleBar";
 import {
   getVersionDisplay,
@@ -857,6 +858,10 @@ export default function HomePage() {
   const [simError, setSimError] = useState("");
   const [currentStreamer, setCurrentStreamer] = useState<StreamerInfo | null>(null);
   const [realActivityModalOpen, setRealActivityModalOpen] = useState(false);
+  // 抽奖页面（帮助页入口卡片打开；登录账号可抽，服务器账号置灰）
+  const [lotteryOpen, setLotteryOpen] = useState(false);
+  // 服务器当前抽奖概率分母（admin 可改，卡片与抽奖页都显示服务器真实概率；未取到前用默认 20）
+  const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
   // 黑抽（真实合成活动）页面URL模板：从服务器公开配置读取；为空/未配置时卡片变灰不可点击
   const [realActivityUrl, setRealActivityUrl] = useState<string>("");
   // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框
@@ -892,6 +897,23 @@ export default function HomePage() {
         // 忽略网络错误：realActivityUrl 保持空字符串 → 黑抽卡片变灰不可点击
       }
     })();
+  }, []);
+
+  // 加载服务器当前抽奖概率（admin 修改后所有平台一致；失败保持默认 20）
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await dataFetch("/api/lottery/config", { cache: "no-store" });
+        const data = await res.json();
+        if (alive && data.code === 0 && data.data?.config?.oddsDenom) {
+          setLotteryOddsDenom(data.data.config.oddsDenom);
+        }
+      } catch {
+        // 忽略：抽奖卡片保持默认概率显示
+      }
+    })();
+    return () => { alive = false; };
   }, []);
 
   // 进入模拟器（通过 UID 查询主播信息；uid=0 时不选主播，使用默认背景）
@@ -3122,6 +3144,41 @@ export default function HomePage() {
                     )}
                   </div>
                 </button>
+                {/* 抽奖卡片：登录账号可抽奖（中奖率1/20，奖品为一个月舰长，每人一次）；服务器账号/未登录置灰不可点击 */}
+                <button
+                  onClick={() => {
+                    if (!isLoggedIn || serverAccount) {
+                      if (serverAccount) showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+                      else showOfflineToast("请先登录账号");
+                      return;
+                    }
+                    setLotteryOpen(true);
+                  }}
+                  className={
+                    !isLoggedIn || serverAccount
+                      ? "rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+                      : "rounded-xl border border-amber-200 bg-amber-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-amber-300 hover:shadow-lg"
+                  }
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`text-3xl ${!isLoggedIn || serverAccount ? "grayscale opacity-50" : ""}`}>🎟️</span>
+                    <div>
+                      <h3 className={!isLoggedIn || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-amber-700"}>抽奖</h3>
+                      <p className={!isLoggedIn || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-amber-600/60"}>
+                        {!isLoggedIn || serverAccount
+                          ? serverAccount
+                            ? "服务器账号无登录凭证，无法参与抽奖"
+                            : "请先登录账号后再参与抽奖"
+                          : `中奖率 1/${lotteryOddsDenom}，奖品为一个月舰长，每人仅一次机会`}
+                      </p>
+                    </div>
+                    {!isLoggedIn || serverAccount ? (
+                      <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+                    ) : (
+                      <svg className="w-4 h-4 text-amber-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    )}
+                  </div>
+                </button>
                 {/* 主播推荐卡片 */}
                 <RecommendedAnchors />
                 {/* 开机自启动卡片（仅 Windows 桌面展示） */}
@@ -3799,6 +3856,16 @@ export default function HomePage() {
         onClose={() => setRealActivityModalOpen(false)}
         activityUrlTemplate={realActivityUrl}
       />
+
+      {/* 抽奖页面：登录账号可抽奖（中奖率1/20，奖品为一个月舰长）；服务器账号入口已置灰，此处兜底 */}
+      {lotteryOpen && (
+        <LotteryPage
+          mid={currentAccount?.mid ?? 0}
+          uname={currentAccount?.uname ?? ""}
+          isServerAccount={serverAccount}
+          onBack={() => setLotteryOpen(false)}
+        />
+      )}
     </main>
   );
 }

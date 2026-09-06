@@ -104,8 +104,10 @@ async function dispatchNative(
       const fan = query.get("fan") ?? "";
       // probe=true：扫码登录触发的全量探测（仅登录后首次加载会带上）
       const probe = query.get("probe") === "true";
-      // fast=1：仅从本地记录计算统计，不拉 B站（用于主播页启动先展示缓存再静默更新）
-      const fast = query.get("fast") === "1";
+      // 数据拉取与页面展示完全解耦：只有用户手动刷新（refresh=true）或扫码登录探测（probe=true）
+      // 才触发 B站 拉取；其余场景（打开/切换页面、切换时间段/粉丝，包括"全部"）一律仅基于
+      // 本地记录重新统计，不拉 B站。本地数据的最新由冷启动增量更新/手动刷新保障。
+      const fast = query.get("fast") === "1" || (!refresh && !probe);
       return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, fast, onProgress }));
     }
     case "/api/anchor/gift-replay": {

@@ -591,10 +591,19 @@ export async function GET(request: Request) {
   }
 
   const offline = isOffline(url);
-  // fast=1：仅基于本地记录计算统计，不拉 B站（用于主播页启动先展示缓存数据再静默更新）
+  // fast=1：仅基于本地记录计算统计，不拉 B站（用于主播页启动先展示缓存再静默更新）
   const fast = url.searchParams.get("fast") === "1";
-  // 本地直出（fast 或 离线）：跳过凭证校验与 B站 拉取，仅用本地缓存
-  const localOnly = offline || fast;
+  // 解析查询参数（需在 localOnly 判定之前）
+  const refresh = url.searchParams.get("refresh") === "true";
+  // probe=true：扫码登录触发的全量收益探测（仅登录后首次加载会带上）；
+  // 冷启动/绿色刷新不传此参数，不做全量探测（避免对无收益账号反复试探）。
+  const probe = url.searchParams.get("probe") === "true";
+  const dateRangeFilter = url.searchParams.get("dateRange") ?? "all";
+  const fanFilter = url.searchParams.get("fan") ?? "";
+  // 数据拉取与页面展示完全解耦：只有用户手动刷新（refresh=true）或扫码登录探测（probe=true）
+  // 才触发 B站 拉取；其余场景（打开/切换页面、切换时间段/粉丝，包括"全部"）一律仅基于
+  // 本地记录重新统计，不拉 B站。本地数据的最新由冷启动增量更新/手动刷新保障。
+  const localOnly = offline || fast || (!refresh && !probe);
   // 服务器账号（source=server）本机无 B站 凭证：跳过凭证校验（与原生端一致），
   // 否则缺失/空凭证会被 ensureValidCredential 判为失效 → 误触发 needs-relogin → 强制跳扫码登录页。
   const isServerAccount = session.source === "server";
@@ -613,14 +622,6 @@ export async function GET(request: Request) {
   const biliCookie = localOnly || isServerAccount ? "" : buildCookieHeader(session);
   const csrf = biliCookie.match(/bili_jct=([a-f0-9]+)/)?.[1] || "";
   console.log(`[AnchorGifts] 认证通过${offline ? " (离线模式，使用本地缓存)" : ""}: mid=${validSession.mid} uname=${validSession.uname} csrf=${csrf ? "***" : "(空)"} cookie_len=${biliCookie.length}`);
-
-  // 解析查询参数
-  const refresh = url.searchParams.get("refresh") === "true";
-  const dateRangeFilter = url.searchParams.get("dateRange") ?? "all";
-  const fanFilter = url.searchParams.get("fan") ?? "";
-  // probe=true：扫码登录触发的全量收益探测（仅登录后首次加载会带上）；
-  // 冷启动/绿色刷新不传此参数，不做全量探测（避免对无收益账号反复试探）。
-  const probe = url.searchParams.get("probe") === "true";
 
   try {
     // 读取已有记录和元数据（合并存储）
@@ -1164,6 +1165,32 @@ export async function GET(request: Request) {
       }
     }
 
+    // 盲盒粉丝下拉列表：仅按时间段过滤（不受已选粉丝影响）。
+    // 否则选中某位粉丝后 filteredRecords 只剩该粉丝，anchors 也只剩一条，
+    // 再次点开下拉框就无法看到其他粉丝（修复：下拉列表只剩一位的问题）。
+    const blindBoxFanMapAll = new Map<number, Map<number, { uname: string; count: number }>>();
+    if (fanUids.length > 0) {
+      for (const r of allRecords) {
+        if (dateFilter) {
+          const t = new Date(r.time).getTime();
+          if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) continue;
+        }
+        const bbIdAll = giftIdToBlindBoxId.get(r.gift_id);
+        if (bbIdAll === undefined) continue;
+        let fanMapForBBAll = blindBoxFanMapAll.get(bbIdAll);
+        if (!fanMapForBBAll) {
+          fanMapForBBAll = new Map();
+          blindBoxFanMapAll.set(bbIdAll, fanMapForBBAll);
+        }
+        const fanBBAll = fanMapForBBAll.get(r.uid);
+        if (fanBBAll) {
+          fanBBAll.count += r.num;
+        } else {
+          fanMapForBBAll.set(r.uid, { uname: r.uname, count: r.num });
+        }
+      }
+    }
+
     // 加载礼物图标目录（来自 B站 giftConfig API，无需登录；仅用于展示图标）
     await ensureGiftCatalogLoaded();
 
@@ -1212,8 +1239,11 @@ export async function GET(request: Request) {
         }
       }
 
-      // 粉丝列表（按次数降序）
-      const fanMapForBB = blindBoxFanMap.get(blindBoxId);
+      // 粉丝列表（按次数降序）：选中粉丝时用"仅按时间段过滤"的列表，
+      // 保证下拉框仍能显示该时间段内全部粉丝
+      const fanMapForBB = fanUids.length > 0
+        ? (blindBoxFanMapAll.get(blindBoxId) ?? blindBoxFanMap.get(blindBoxId))
+        : blindBoxFanMap.get(blindBoxId);
       const anchors = fanMapForBB
         ? Array.from(fanMapForBB.entries())
             .map(([ruid, v]) => ({ ruid: Number(ruid), rname: v.uname, count: v.count }))

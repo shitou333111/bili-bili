@@ -1197,6 +1197,32 @@ export async function fetchAnchorGifts(
       }
     }
 
+    // 盲盒粉丝下拉列表：仅按时间段过滤（不受已选粉丝影响）。
+    // 否则选中某位粉丝后 filteredRecords 只剩该粉丝，anchors 也只剩一条，
+    // 再次点开下拉框就无法看到其他粉丝（修复：下拉列表只剩一位的问题）。
+    const blindBoxFanMapAll = new Map<number, Map<number, { uname: string; count: number }>>();
+    if (fanUids.length > 0) {
+      for (const r of allRecords) {
+        if (dateFilter) {
+          const t = new Date(r.time).getTime();
+          if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) continue;
+        }
+        const bbIdAll = giftIdToBlindBoxId.get(r.gift_id);
+        if (bbIdAll === undefined) continue;
+        let fanMapForBBAll = blindBoxFanMapAll.get(bbIdAll);
+        if (!fanMapForBBAll) {
+          fanMapForBBAll = new Map();
+          blindBoxFanMapAll.set(bbIdAll, fanMapForBBAll);
+        }
+        const fanBBAll = fanMapForBBAll.get(r.uid);
+        if (fanBBAll) {
+          fanBBAll.count += r.num;
+        } else {
+          fanMapForBBAll.set(r.uid, { uname: r.uname, count: r.num });
+        }
+      }
+    }
+
     // 构建盲盒盈亏
     const blindBoxProfits: BlindBoxProfit[] = [];
     for (const blindBoxId of blindBoxIds) {
@@ -1224,7 +1250,9 @@ export async function fetchAnchorGifts(
         }
       }
 
-      const fanMapForBB = blindBoxFanMap.get(blindBoxId);
+      const fanMapForBB = fanUids.length > 0
+        ? (blindBoxFanMapAll.get(blindBoxId) ?? blindBoxFanMap.get(blindBoxId))
+        : blindBoxFanMap.get(blindBoxId);
       const anchors = fanMapForBB
         ? Array.from(fanMapForBB.entries())
             .map(([ruid, v]) => ({ ruid: Number(ruid), rname: v.uname, count: v.count }))

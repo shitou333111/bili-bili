@@ -145,6 +145,15 @@ export default function AdminPage() {
   const [paramsEditIndex, setParamsEditIndex] = useState<number | null>(null);
   const [paramsEditText, setParamsEditText] = useState("");
   const [paramsEditError, setParamsEditError] = useState("");
+  // 抽奖记录（管理后台左下角模块）
+  const [lotteryRecords, setLotteryRecords] = useState<
+    Array<{ mid: number; uname: string; drawnAt: string; won: boolean; prize: string; odds: string; rewardGranted: boolean }>
+  >([]);
+  // 服务器当前抽奖概率配置（admin 可改，改后所有平台立即生效）
+  const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
+  const [lotteryDenomInput, setLotteryDenomInput] = useState("20");
+  const [lotterySavingConfig, setLotterySavingConfig] = useState(false);
+  const [lotteryGrantingMid, setLotteryGrantingMid] = useState<number | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -393,6 +402,74 @@ export default function AdminPage() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminLoggedIn, users]);
+
+  // 加载抽奖记录 + 当前概率配置（管理后台左下角抽奖模块）
+  useEffect(() => {
+    if (!adminLoggedIn) return;
+    (async () => {
+      try {
+        const res = await adminFetch(serverApiUrl("/api/admin/lottery"));
+        const data = await res.json();
+        if (data.code === 0 && Array.isArray(data.data?.records)) {
+          setLotteryRecords(data.data.records);
+        }
+        if (data.code === 0 && data.data?.config?.oddsDenom) {
+          setLotteryOddsDenom(data.data.config.oddsDenom);
+          setLotteryDenomInput(String(data.data.config.oddsDenom));
+        }
+      } catch { /* 抽奖记录加载失败不影响其他模块 */ }
+    })();
+  }, [adminLoggedIn]);
+
+  /** 保存抽奖概率（格式 "1/n"，n≥2 整数），改后所有平台立即生效 */
+  const saveLotteryConfig = async () => {
+    const denom = Math.floor(Number(lotteryDenomInput));
+    if (!Number.isInteger(denom) || denom < 2) {
+      window.alert("概率分母必须是大于等于 2 的整数（格式 1/n）");
+      return;
+    }
+    setLotterySavingConfig(true);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/lottery/config"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oddsDenom: denom }),
+      });
+      const data = await res.json();
+      if (data.code === 0 && data.data?.config?.oddsDenom) {
+        setLotteryOddsDenom(data.data.config.oddsDenom);
+        setLotteryDenomInput(String(data.data.config.oddsDenom));
+      } else {
+        window.alert(data.message || "保存失败");
+      }
+    } catch {
+      window.alert("网络错误，保存失败");
+    } finally {
+      setLotterySavingConfig(false);
+    }
+  };
+
+  /** 标记中奖用户奖品已发放（避免重复发放） */
+  const grantLotteryReward = async (mid: number) => {
+    setLotteryGrantingMid(mid);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/lottery/grant"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mid }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        setLotteryRecords((prev) => prev.map((r) => (r.mid === mid ? { ...r, rewardGranted: true } : r)));
+      } else {
+        window.alert(data.message || "标记失败");
+      }
+    } catch {
+      window.alert("网络错误，标记失败");
+    } finally {
+      setLotteryGrantingMid(null);
+    }
+  };
 
   const handleLogin = async () => {
     setLoginLoading(true);
@@ -1487,6 +1564,89 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* 抽奖记录（页面左下方） */}
+        <div className="rounded-xl border border-black/10 bg-white/80 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold">抽奖记录</h2>
+            <span className="text-[10px] text-black/40">
+              共 {lotteryRecords.length} 次
+              {lotteryRecords.some((r) => r.won) && (
+                <span className="ml-1 text-[#f59e0b]">· 中奖 {lotteryRecords.filter((r) => r.won).length} 次</span>
+              )}
+            </span>
+          </div>
+
+          {/* 概率设置：格式 1/n，改后所有平台立即生效 */}
+          <div className="flex items-center gap-2 mb-3 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2">
+            <span className="text-[11px] text-black/50 flex-shrink-0">中奖概率</span>
+            <span className="text-[11px] text-black/70 flex-shrink-0">1/</span>
+            <input
+              value={lotteryDenomInput}
+              onChange={(e) => setLotteryDenomInput(e.target.value.replace(/[^\d]/g, ""))}
+              placeholder="20"
+              inputMode="numeric"
+              className="w-16 rounded border border-black/10 bg-white px-1.5 py-1 text-[11px] text-black/80 outline-none focus:border-[#00a1d6]"
+            />
+            <button
+              onClick={saveLotteryConfig}
+              disabled={lotterySavingConfig || lotteryDenomInput === String(lotteryOddsDenom)}
+              className="ml-auto rounded bg-[#00a1d6] px-3 py-1 text-[11px] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              {lotterySavingConfig ? "保存中…" : "保存概率"}
+            </button>
+          </div>
+
+          {lotteryRecords.length === 0 ? (
+            <p className="text-xs text-black/30 py-3 text-center">暂无抽奖记录</p>
+          ) : (
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {lotteryRecords.map((rec) => (
+                <div
+                  key={`${rec.mid}_${rec.drawnAt}`}
+                  className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 ${
+                    rec.won
+                      ? "border-[#f59e0b]/40 bg-gradient-to-r from-[#fef3c7]/70 to-[#fde68a]/50"
+                      : "border-black/10"
+                  }`}
+                >
+                  <span className="text-base flex-shrink-0">{rec.won ? "🎉" : "🎟️"}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium truncate">
+                      {rec.uname || "未知用户"}
+                      {rec.won && (
+                        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#f59e0b] text-white text-[10px] font-semibold align-middle">中奖</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-black/35 mt-0.5">UID {rec.mid} · 概率 {rec.odds}</div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className={`text-[10px] font-medium ${rec.won ? "text-[#b45309]" : "text-black/40"}`}>
+                      {rec.won ? `获得${rec.prize}` : "未中奖"}
+                    </div>
+                    <div className="text-[10px] text-black/30 mt-0.5">{new Date(rec.drawnAt).toLocaleString("zh-CN")}</div>
+                  </div>
+                  {/* 发放状态：仅中奖记录，标记后不可重复发放 */}
+                  {rec.won && (
+                    rec.rewardGranted ? (
+                      <span className="flex-shrink-0 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600">
+                        已发放
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => grantLotteryReward(rec.mid)}
+                        disabled={lotteryGrantingMid === rec.mid}
+                        className="flex-shrink-0 rounded-full border border-[#f59e0b]/50 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-[#b45309] hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        {lotteryGrantingMid === rec.mid ? "标记中…" : "标记已发放"}
+                      </button>
+                    )
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 算法参数全屏编辑器：PC 端避开顶部窗口标题栏（DESKTOP_TITLEBAR_H），移动端/浏览器全屏 */}

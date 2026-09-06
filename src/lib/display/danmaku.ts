@@ -318,6 +318,19 @@ function parseGiftV2Pb(data: any): any[] | null {
   return out;
 }
 
+/** 判断 JSON 变体是否携带礼物特征字段。
+ *  B站会把"互动会话汇总/房间统计"类包（biz_session_id、members、room_status、channel_users
+ *  等，无任何礼物字段）也通过 UNIVERSAL_EVENT_GIFT_V2 通道推送——它们不是礼物事件，
+ *  parseNewGift 必然返回空（无 uid/giftId），导致误报"解析失败"。此处区分：无任何礼物
+ *  特征字段 → 非礼物事件，调用处静默跳过。 */
+function isGiftJson(d: any): boolean {
+  if (!d || typeof d !== "object") return false;
+  if (Array.isArray(d.items) || Array.isArray(d.gifts)) return true;
+  return [
+    "uid", "uname", "giftId", "gift_id", "gift_name", "asset", "user", "price", "num",
+  ].some((k) => d[k] !== undefined && d[k] !== null);
+}
+
 /** 解析新协议礼物包（JSON 变体）为一个或多个礼物对象。
  *  背景：bili-live-listener 的 onGift 只订阅旧协议 SEND_GIFT/POPULARITY_RED_POCKET_NEW，
  *  B站对新主播/高人气房间灰度推送新协议（SEND_GIFT_V2 为 protobuf，见 parseGiftV2Pb；
@@ -878,8 +891,13 @@ class DisplayDanmakuService {
     for (const cmd of ["SEND_GIFT_V2", "UNIVERSAL_EVENT_GIFT_V2"]) {
       this.removeHandlers.push(
         this.live.onRawMessage(cmd, async (raw: any) => {
-          const list = parseGiftV2Pb(raw?.data) ?? parseNewGift(raw);
+          const pbList = parseGiftV2Pb(raw?.data);
+          const jsonList = parseNewGift(raw);
+          const list = pbList ?? jsonList;
           if (!list.length) {
+            // JSON 变体且无任何礼物特征字段 → 非礼物事件（互动会话/房间统计等混入
+            // 该通道的统计包），静默跳过，不误报"解析失败"
+            if (!pbList && !isGiftJson(raw?.data)) return;
             this.pushDebug(cmd, "解析失败", summarizeRaw(cmd, raw), raw);
             return;
           }
