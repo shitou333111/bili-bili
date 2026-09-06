@@ -32,9 +32,11 @@ export type LotteryRecord = {
   rewardGranted: boolean; // 奖品是否已发放（admin 标记，避免重复发放）
 };
 
-/** 服务器端抽奖配置（概率分母） */
+/** 服务器端抽奖配置（概率分母 + 活动开关） */
 export type LotteryConfig = {
   oddsDenom: number;
+  /** 活动开关：false 时抽奖暂停（APP 内可打开抽奖页但不可抽奖，admin 可恢复） */
+  enabled: boolean;
 };
 
 /** "1/n" 文案 */
@@ -85,30 +87,46 @@ async function writeLotteryRecords(records: LotteryRecord[]) {
   await fs.writeFile(LOTTERY_FILE, JSON.stringify(records, null, 2), "utf-8");
 }
 
-/** 读取服务器当前抽奖配置（无配置时用默认 1/20） */
+/** 读取服务器当前抽奖配置（无配置时默认：1/20、开启） */
 export async function readLotteryConfig(): Promise<LotteryConfig> {
   await ensureDir();
   try {
     const raw = await fs.readFile(LOTTERY_CONFIG_FILE, "utf-8");
     const parsed = JSON.parse(raw);
     const denom = Number(parsed?.oddsDenom);
-    if (Number.isInteger(denom) && denom >= 2) return { oddsDenom: denom };
+    if (Number.isInteger(denom) && denom >= 2) {
+      return {
+        oddsDenom: denom,
+        enabled: parsed?.enabled !== false,
+      };
+    }
   } catch {
     // 无配置或格式错误 → 默认
   }
-  return { oddsDenom: DEFAULT_ODDS_DENOM };
+  return { oddsDenom: DEFAULT_ODDS_DENOM, enabled: true };
 }
 
-/** 更新服务器抽奖配置（admin 调用，格式 "1/n"，n≥2 整数），改后所有平台立即生效 */
-export async function updateLotteryConfig(oddsDenom: number): Promise<LotteryConfig> {
-  const denom = Math.floor(Number(oddsDenom));
-  if (!Number.isInteger(denom) || denom < 2) {
-    throw new Error("概率分母必须是大于等于 2 的整数");
+/**
+ * 更新服务器抽奖配置（admin 调用）：
+ * - oddsDenom：概率分母（格式 "1/n"，n≥2 整数），改后所有平台立即生效；
+ * - enabled：活动开关，false 时抽奖暂停。
+ */
+export async function updateLotteryConfig(partial: { oddsDenom?: number; enabled?: boolean }): Promise<LotteryConfig> {
+  const current = await readLotteryConfig();
+  const next: LotteryConfig = { ...current };
+  if (partial.oddsDenom !== undefined) {
+    const denom = Math.floor(Number(partial.oddsDenom));
+    if (!Number.isInteger(denom) || denom < 2) {
+      throw new Error("概率分母必须是大于等于 2 的整数");
+    }
+    next.oddsDenom = denom;
+  }
+  if (partial.enabled !== undefined) {
+    next.enabled = !!partial.enabled;
   }
   await ensureDir();
-  const cfg: LotteryConfig = { oddsDenom: denom };
-  await fs.writeFile(LOTTERY_CONFIG_FILE, JSON.stringify(cfg, null, 2), "utf-8");
-  return cfg;
+  await fs.writeFile(LOTTERY_CONFIG_FILE, JSON.stringify(next, null, 2), "utf-8");
+  return next;
 }
 
 /** 获取某用户（mid）的抽奖记录，未抽过返回 null */
@@ -120,6 +138,7 @@ export async function getUserLotteryRecord(mid: number): Promise<LotteryRecord |
 /**
  * 执行抽奖：按服务器当前概率判定（1/n），奖品为一个月舰长。
  * 同一 mid 只能抽取一次，重复抽取直接返回已有记录。
+ * 活动暂停（enabled=false）时抛错，前端展示"抽奖活动当前已暂停"。
  * 记录会保存抽奖当时的概率，供长期查看。
  */
 export async function drawLottery(mid: number, uname: string): Promise<{ record: LotteryRecord; alreadyDrawn: boolean }> {
@@ -130,6 +149,9 @@ export async function drawLottery(mid: number, uname: string): Promise<{ record:
       return { record: existing, alreadyDrawn: true };
     }
     const cfg = await readLotteryConfig();
+    if (!cfg.enabled) {
+      throw new Error("抽奖活动当前已暂停");
+    }
     const won = Math.floor(Math.random() * cfg.oddsDenom) === 0;
     const record: LotteryRecord = {
       mid,

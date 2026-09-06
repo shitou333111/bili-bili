@@ -153,6 +153,9 @@ export default function AdminPage() {
   const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
   const [lotteryDenomInput, setLotteryDenomInput] = useState("20");
   const [lotterySavingConfig, setLotterySavingConfig] = useState(false);
+  // 抽奖活动开关：false 时 APP 内抽奖页可打开但不可抽奖
+  const [lotteryEnabled, setLotteryEnabled] = useState(true);
+  const [lotteryToggling, setLotteryToggling] = useState(false);
   const [lotteryGrantingMid, setLotteryGrantingMid] = useState<number | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
@@ -417,6 +420,9 @@ export default function AdminPage() {
           setLotteryOddsDenom(data.data.config.oddsDenom);
           setLotteryDenomInput(String(data.data.config.oddsDenom));
         }
+        if (data.code === 0 && typeof data.data?.config?.enabled === "boolean") {
+          setLotteryEnabled(data.data.config.enabled);
+        }
       } catch { /* 抽奖记录加载失败不影响其他模块 */ }
     })();
   }, [adminLoggedIn]);
@@ -446,6 +452,28 @@ export default function AdminPage() {
       window.alert("网络错误，保存失败");
     } finally {
       setLotterySavingConfig(false);
+    }
+  };
+
+  /** 开启/关闭抽奖活动：关闭时 APP 内抽奖页可打开但不可抽奖 */
+  const toggleLotteryEnabled = async () => {
+    setLotteryToggling(true);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/lottery/config"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !lotteryEnabled }),
+      });
+      const data = await res.json();
+      if (data.code === 0 && typeof data.data?.config?.enabled === "boolean") {
+        setLotteryEnabled(data.data.config.enabled);
+      } else {
+        window.alert(data.message || "操作失败");
+      }
+    } catch {
+      window.alert("网络错误，操作失败");
+    } finally {
+      setLotteryToggling(false);
     }
   };
 
@@ -1577,7 +1605,7 @@ export default function AdminPage() {
             </span>
           </div>
 
-          {/* 概率设置：格式 1/n，改后所有平台立即生效 */}
+          {/* 概率设置：格式 1/n，改后所有平台立即生效 + 抽奖活动开关 */}
           <div className="flex items-center gap-2 mb-3 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2">
             <span className="text-[11px] text-black/50 flex-shrink-0">中奖概率</span>
             <span className="text-[11px] text-black/70 flex-shrink-0">1/</span>
@@ -1594,6 +1622,17 @@ export default function AdminPage() {
               className="ml-auto rounded bg-[#00a1d6] px-3 py-1 text-[11px] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
             >
               {lotterySavingConfig ? "保存中…" : "保存概率"}
+            </button>
+            <button
+              onClick={toggleLotteryEnabled}
+              disabled={lotteryToggling}
+              className={`flex-shrink-0 rounded px-3 py-1 text-[11px] font-medium border transition ${
+                lotteryEnabled
+                  ? "border-green-200 bg-green-50 text-green-600 hover:bg-green-100"
+                  : "border-[#e74c3c]/40 bg-[#fdf0ef] text-[#e74c3c] hover:bg-[#fde3e0]"
+              } disabled:opacity-50`}
+            >
+              {lotteryToggling ? "切换中…" : lotteryEnabled ? "● 抽奖中" : "■ 已暂停"}
             </button>
           </div>
 

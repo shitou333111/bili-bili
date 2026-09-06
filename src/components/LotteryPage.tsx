@@ -34,6 +34,8 @@ export default function LotteryPage({
 }) {
   const [record, setRecord] = useState<LotteryRecord | null>(null);
   const [oddsDenom, setOddsDenom] = useState(20);
+  // 活动开关：false 时抽奖暂停（可打开页面查看，但不可抽奖）
+  const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [error, setError] = useState("");
@@ -49,10 +51,11 @@ export default function LotteryPage({
     try {
       const data = await serverFetch<{
         code: number;
-        data?: { drawn: boolean; record: LotteryRecord | null; config?: { oddsDenom: number } };
+        data?: { drawn: boolean; record: LotteryRecord | null; config?: { oddsDenom: number; enabled: boolean } };
       }>(`/api/lottery/records?mid=${encodeURIComponent(String(mid))}`);
       if (data.code === 0 && data.data) {
         if (data.data.config?.oddsDenom) setOddsDenom(data.data.config.oddsDenom);
+        if (typeof data.data.config?.enabled === "boolean") setEnabled(data.data.config.enabled);
         if (data.data.record) setRecord(data.data.record);
       }
     } catch {
@@ -68,6 +71,11 @@ export default function LotteryPage({
 
   const handleDraw = async () => {
     if (drawing || record || isServerAccount) return;
+    // 活动暂停：禁止抽奖（防御：即使前端状态未同步到，服务器也会拒绝）
+    if (!enabled) {
+      setError("不好意思，抽奖活动当前已暂停");
+      return;
+    }
     setDrawing(true);
     setError("");
     // 先展示约 800ms 的"开奖中"动画，再请求结果
@@ -172,8 +180,8 @@ export default function LotteryPage({
                 </div>
                 <p className="mt-4 text-center text-xs text-black/30">每个用户只能抽取一次，以上为你的抽奖结果</p>
               </div>
-            ) : (
-              /* 未抽奖：展示规则与抽奖按钮 */
+            ) : enabled ? (
+              /* 未抽奖且活动开启：展示规则与抽奖按钮 */
               <>
                 <div className="mt-8 w-full rounded-2xl border border-black/10 bg-white/80 p-5 text-center shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
                   <div className="text-xs text-black/50 leading-relaxed">
@@ -206,6 +214,16 @@ export default function LotteryPage({
                 </button>
                 <p className="mt-4 text-xs text-black/35">点击抽奖，即开即中</p>
               </>
+            ) : (
+              /* 未抽奖且活动暂停：可打开查看，但不可抽奖 */
+              <div className="mt-8 w-full rounded-2xl border border-black/10 bg-white/80 p-6 text-center shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
+                <div className="text-4xl opacity-60">⏸️</div>
+                <div className="mt-3 text-sm font-bold text-black/60">抽奖活动当前已暂停</div>
+                <p className="mt-1.5 text-xs text-black/40 leading-relaxed">
+                  不好意思，抽奖活动当前已暂停<br />
+                  请耐心等待活动重新开启
+                </p>
+              </div>
             )}
 
             {/* 错误提示 */}

@@ -139,8 +139,9 @@ export type DisplayFlags = Pick<DisplayConfig, "master" | "entry" | "gift" | "an
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   master: false,
   screenOrientation: "landscape",
-  entry: true,
-  gift: true,
+  // 各模块开关默认状态：入场提示 / 礼物展示 / 入场动画 默认关闭，盲盒盈亏弹幕查询默认开启，弹幕互动默认关闭
+  entry: false,
+  gift: false,
   anime: false,
   entryFilter: {
     zongdu: false,
