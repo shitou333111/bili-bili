@@ -153,7 +153,7 @@ export default function LotteryPage({
                 >
                   <div className={`text-5xl ${record.won ? "" : "opacity-70"}`}>{record.won ? "🎉" : "😢"}</div>
                   <div className={`mt-3 text-base font-bold ${record.won ? "text-amber-700" : "text-black/70"}`}>
-                    {record.won ? "恭喜中奖！" : "很遗憾，未中奖"}
+                    {record.won ? "恭喜中奖！请用中奖账号主动B站私信" : "很遗憾，未中奖"}
                   </div>
                   {record.won ? (
                     <>

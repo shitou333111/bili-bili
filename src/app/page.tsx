@@ -2797,6 +2797,10 @@ export default function HomePage() {
             <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
             <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
             <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会很快。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">播的久数据多的主播，要先检查数据是否完整。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">看数据日期范围，看收入是否符合自己的估计。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">如果数据不全，先尝试点击绿色圆圈按钮刷新。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">如果仍然不全，就点击帮助里的重建数据按钮。</p>
             {fetchProgress && (
               <div className="mt-5">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
