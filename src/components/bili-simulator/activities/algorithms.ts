@@ -273,6 +273,57 @@ function buildProgressiveLightConfig(params: Record<string, unknown>): Record<st
   };
 }
 
+/**
+ * 同数间隔合成（星座回响）默认配置。
+ *
+ * 玩法：8 个空槽，每次付费从剩余库存随机抽 1 个【星座】顺时针填充空槽，库存中该星座数量 -1。
+ * 库存固定：9 种星座各 2 个（共 18 个）。已召唤数量决定继续召唤的价格（res_price_schedule）。
+ * 结束与结算（N 决定奖励，prize_config 按 N 取，price/gift_value 单位为分）：
+ *   ① 出现 2 个相同星座 → 结束，N = 两相同星座间的星座数量 + 1；
+ *   ② 主动退出 → N = 已召唤的星座数量；
+ *   ③ 出现 8 个不同的星座 → N = 8；
+ *   ④ 活动结束 → 按现有星座数量结算。
+ * 字段与 mock-shim.js 的 res_* 分派（/resonance/* 接口）一一对应，可被算法参数覆盖。
+ */
+const RESONANCE_START = 1788753600; // 2026-09-07 12:00 (+08:00)
+const RESONANCE_END = 1789315200; // 2026-09-14 00:00 (+08:00) = 9月13日24:00
+
+// 9 种星座（id 1..9，与 HalfInit style_config_map 的 heart_1..heart_9 一一对应）
+const RESONANCE_CONSTELLATIONS = [
+  "双鱼座", "猎户座", "天琴座", "双子座", "狮子座",
+  "射手座", "大熊座", "天蝎座", "英仙座",
+];
+
+// 已召唤数量(0..7) → 继续召唤价格（电池）。第 n+1 次召唤按"已召唤 n 个"查表。
+const RESONANCE_PRICE_SCHEDULE = [50, 50, 85, 220, 420, 800, 1820, 3360];
+
+// N=1..8 → 奖励礼物（price/gift_value 单位为分 = 电池×100；gift_id 为真实礼物目录 id）
+const RESONANCE_PRIZES = [
+  { n: 1, price: 5000, gift_id: 35849, gift_name: "初遇引星", gift_img: "https://s1.hdslb.com/bfs/live/c66229300d107e844596d65c6ec4d00b6ae0233e.png" },
+  { n: 2, price: 10000, gift_id: 35850, gift_name: "驻听星语", gift_img: "https://s1.hdslb.com/bfs/live/2d7b22c2f6e18f085b82d286068718720ec40f81.png" },
+  { n: 3, price: 20000, gift_id: 35851, gift_name: "并蒂双星", gift_img: "https://s1.hdslb.com/bfs/live/e07053b8a91b36722c276de12cc87e985f37bec9.png" },
+  { n: 4, price: 50000, gift_id: 35852, gift_name: "欢跃星阵", gift_img: "https://s1.hdslb.com/bfs/live/78de897903ce5dc79f550ae9066bae7f988b3482.png" },
+  { n: 5, price: 120000, gift_id: 35853, gift_name: "引路同星", gift_img: "https://s1.hdslb.com/bfs/live/2a0b00ccfe94f8017725c76e2cac5f08429ce3c8.png" },
+  { n: 6, price: 300000, gift_id: 35854, gift_name: "守护星盾", gift_img: "https://s1.hdslb.com/bfs/live/e5176ff862e02474b1b9c3dae887ff531bacc790.png" },
+  { n: 7, price: 880000, gift_id: 35856, gift_name: "星烙徽印", gift_img: "https://s1.hdslb.com/bfs/live/8b1fbfe2b401d608cc32edf53a855aa397ed95c9.png" },
+  { n: 8, price: 3000000, gift_id: 35857, gift_name: "长明星河", gift_img: "https://s1.hdslb.com/bfs/live/77ad18c4403ae1b89f10a5ca7dc52561ec1f21a4.png" },
+];
+
+/** 组装同数间隔合成算法的默认 CONFIG（可在参数中覆盖 prize_config/carousel_pool/时间等） */
+function buildResonanceConfig(params: Record<string, unknown>): Record<string, unknown> {
+  return {
+    start_time: typeof params.start_time === "number" ? params.start_time : RESONANCE_START,
+    end_time: typeof params.end_time === "number" ? params.end_time : RESONANCE_END,
+    res_slot_count: 8,
+    res_price_schedule: RESONANCE_PRICE_SCHEDULE,
+    res_inventory_per_type: 2,
+    res_constellations: RESONANCE_CONSTELLATIONS,
+    res_gift_ids: RESONANCE_PRIZES.map((p) => p.gift_id),
+    prize_config: Array.isArray(params.prize_config) ? params.prize_config : RESONANCE_PRIZES,
+    res_carousel_pool: Array.isArray(params.carousel_pool) ? params.carousel_pool : undefined,
+  };
+}
+
 /** 算法注册表：键 = algorithmType，与 mock-shim.js 的分派一致 */
 export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
   /** 晶石工坊（山海工坊）：6 槽位抽取/替换/合成 */
@@ -304,6 +355,15 @@ export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
     label: "逐级点亮",
     description: "成名之路玩法：5档顺序点亮，失败则上一档熄灭并累计人气，人气满则保底成功",
     buildMockConfig: buildProgressiveLightConfig,
+  },
+  /**
+   * 同数间隔合成（星座回响）：8 槽位顺时针填充星座，库存 9 种各 2 个；
+   * 出现相同星座 / 主动退出 / 8 个全不同 / 活动结束按 N 结算（N=两相同星座间隔+1 或已召唤数）。
+   */
+  "number_between_same": {
+    label: "同数间隔合成",
+    description: "星座回响玩法：8槽位抽星座填槽，相同星座间隔决定N值，按N结算奖励",
+    buildMockConfig: buildResonanceConfig,
   },
 };
 

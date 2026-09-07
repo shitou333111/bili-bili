@@ -7,6 +7,21 @@ export const dynamic = "force-dynamic";
 
 const MIRROR_ROOT = path.join(process.cwd(), "public", "moniqi", "mirror");
 
+/* * "在哪一步停手最赚？"卡片数据：最优停止策略分析
+ * 当前不同星座k个时，"现在收手"获得的奖励 vs "继续召唤"的最优期望收益(EV)。
+ * 数据来自权威精确计算，固定在 moniqi 页面实现中。
+ */
+// [当前星座数k, 现在收手(电池), 最优继续EV(电池), 继续多出EV(电池)]
+const SIM_ROWS: Array<[number, number, number, number]> = [
+  [1, 50, 51, 1],
+  [2, 100, 104, 4],
+  [3, 200, 206, 6],
+  [4, 500, 503, 3],
+  [5, 1200, 1207, 7],
+  [6, 3000, 3005, 5],
+  [7, 8800, 8808, 8],
+];
+
 /**
  * /moniqi —— 活动模拟镜像页（公开、无密码、无入口路由）。
  *
@@ -43,6 +58,13 @@ export async function GET(req: Request) {
   const hashMatch = act.urlTemplate?.match(/#([^]*)/);
   const tplHash = hashMatch ? `#${hashMatch[1].trim()}` : "";
 
+  // 玩法区隔离选择器：不同算法类型对应不同 DOM 容器（成名之路=.road-to-fame-play，
+  // 星座回响/同数间隔合成=.heart-embed）。隔离时把该容器提升为全屏、隐藏外壳其余元素。
+  const isolateSelector =
+    act.algorithmType === "number_between_same" || /resonance/i.test(String(act.id))
+      ? ".heart-embed"
+      : ".road-to-fame-play";
+
   // 兼容直接带参访问：query 可覆盖模板值；不带参访问时用模板值。
   const sp = new URL(req.url).searchParams;
   const appName = sp.get("app_name") || tplAppName;
@@ -60,18 +82,86 @@ export async function GET(req: Request) {
   // 原因：B站 页面的 rem 与组件宽度都按 document.documentElement.clientWidth（=视口宽）计算，
   // 桌面浏览器视口太宽会导致内容溢出；iframe 视口=540 时 clientWidth=540、rem=54，一切自动正确。
   // 同时 iframe 内的参数与 hash 都在 iframe 里，外部地址栏永远是干净的 /moniqi。
+  // 在哪一步停手最赚？" / "更多功能"按钮与卡片固定在壳页面底部（iframe 外），不遮挡游戏区。
   if (!sp.get("app_name")) {
     const frameSrc = `/moniqi${fullSearch}${fullHash}`;
+    const costRows = SIM_ROWS.map(
+      (r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="pos">+${r[3]}</td></tr>`
+    ).join("");
     return new NextResponse(
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width,initial-scale=1">` +
         `<meta name="referrer" content="no-referrer"><title>活动模拟</title>` +
         `<link rel="icon" href="/orig_icon.png">` +
-        `<style>html,body{margin:0;height:100%;background:#1b1533;overflow:hidden}` +
-        `.frame-wrap{width:100%;height:100%;display:flex;justify-content:center}` +
-        `iframe{width:540px;max-width:100vw;height:100vh;border:0;background:#342a85}` +
+        `<style>` +
+        `html,body{margin:0;height:100%;background:#1b1533;overflow:hidden}` +
+        `body{display:flex;flex-direction:column}` +
+        `.frame-wrap{flex:1;min-height:0;display:flex;justify-content:center}` +
+        `iframe{width:540px;max-width:100vw;height:100%;border:0;background:#342a85}` +
+        `.bar{flex:none;min-height:52px;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px;padding:8px 12px;` +
+        `background:rgba(16,12,36,.92);border-top:1px solid rgba(255,255,255,.08);` +
+        `-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}` +
+        `.badge{font:12px/1 -apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.9);` +
+        `padding:8px 14px;border:1px solid rgba(255,255,255,.22);border-radius:99px;` +
+        `white-space:nowrap;display:inline-flex;align-items:center;gap:4px;` +
+        `background:rgba(255,255,255,.08);flex-shrink:0}` +
+        `.btn{font:12px/1 -apple-system,'PingFang SC',sans-serif;padding:8px 14px;border-radius:99px;` +
+        `cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,.22);` +
+        `color:#fff;background:rgba(255,255,255,.08);transition:transform .12s ease,background .2s ease;white-space:nowrap;flex-shrink:0}` +
+        `.btn:active{transform:scale(.96)}` +
+        `.btn-main{background:linear-gradient(135deg,#8a5cff,#5b8cff);border-color:transparent;font-weight:600}` +
+        `.btn-home{background:linear-gradient(135deg,#4ecdc4,#44a08d);border-color:transparent}` +
+        `.btn-fire{background:linear-gradient(135deg,#ff6b6b,#ee5a24);border-color:transparent}` +
+        `.btn-fire-active{background:linear-gradient(135deg,#c0392b,#e74c3c);border-color:transparent;font-weight:600}` +
+        `.mask{position:fixed;inset:0;background:rgba(8,6,22,.55);display:none;align-items:center;` +
+        `justify-content:center;z-index:99}` +
+        `.mask.show{display:flex}` +
+        `.card{width:min(560px,92vw);max-height:82vh;overflow:auto;background:#fff;color:#111;` +
+        `border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:20px 22px 16px;` +
+        `box-sizing:border-box}` +
+        `.card h3{margin:0 0 12px;font:600 17px/1.4 -apple-system,'PingFang SC',sans-serif;` +
+        `display:flex;align-items:center;justify-content:space-between}` +
+        `.card .close{cursor:pointer;width:28px;height:28px;border-radius:50%;display:flex;` +
+        `align-items:center;justify-content:center;color:#999;font-size:15px}` +
+        `.card .close:hover{background:#f0f0f5;color:#555}` +
+        `table{width:100%;border-collapse:collapse;font:13px/1.5 -apple-system,'PingFang SC',sans-serif}` +
+        `th{background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;` +
+        `position:sticky;top:0}` +
+        `td{padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#222}` +
+        `tr:last-child td{border-bottom:none}` +
+        `td.num{color:#7b46f0;font-weight:600}` +
+        `td.pos{color:#16a34a;font-weight:700}` +
+        `.tip{margin:12px 0 0;font:11px/1.6 -apple-system,'PingFang SC',sans-serif;color:#999}` +
         `</style></head><body>` +
         `<div class="frame-wrap"><iframe src="${frameSrc}" title="活动模拟"></iframe></div>` +
+        `<div class="bar">` +
+        `<a class="btn btn-home" href="/"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>更多功能</a>` +
+        `<button class="btn btn-main" id="costBtn" type="button">在哪一步停手最赚？</button>` +
+        `<button class="btn btn-fire" id="unlimitedBtn" type="button">破防了😭我要开挂</button>` +
+        `<span class="badge">仅模拟 无消费</span>` +
+        `</div>` +
+        `<div class="mask" id="costMask">` +
+        `<div class="card">` +
+        `<h3>在哪一步停手最赚？<span class="close" id="costClose" role="button">✕</span></h3>` +
+        `<p class="tip" style="color:black;font-weight:1000;margin:0 0 8px">结论：每一步都是继续下去会更划算，但也只有几个电池的差别，算是不亏不赚，所以这是B站设计好的。继续还是停手完全看你自己的心情（单位：电池）</p>` +
+        `<table><thead><tr><th>第几个</th><th>现在收手</th><th>继续的平均收益</th><th>继续比收手多出</th></tr></thead>` +
+        `<tbody>${costRows}</tbody></table>` +
+        `</div></div>` +
+        `<script>(function(){` +
+        `var btn=document.getElementById('costBtn'),mask=document.getElementById('costMask'),cl=document.getElementById('costClose');` +
+        `var unlimitedBtn=document.getElementById('unlimitedBtn'),frame=document.querySelector('iframe');` +
+        `var unlimited=false;` +
+        `function show(){mask.classList.add('show')}function hide(){mask.classList.remove('show')}` +
+        `btn.addEventListener('click',show);cl.addEventListener('click',hide);` +
+        `mask.addEventListener('click',function(e){if(e.target===mask)hide()});` +
+        `document.addEventListener('keydown',function(e){if(e.key==='Escape')hide()});` +
+        `unlimitedBtn.addEventListener('click',function(){` +
+        `unlimited=!unlimited;` +
+        `unlimitedBtn.textContent=unlimited?'点击关闭开挂模式':'破防了😭我要开挂';` +
+        `unlimitedBtn.className=unlimited?'btn btn-fire-active':'btn btn-fire';` +
+        `try{frame.contentWindow.postMessage({type:'unlimited',value:unlimited},'*');}catch(e){}` +
+        `});` +
+        `})();</script>` +
         `</body></html>`,
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
@@ -87,32 +177,38 @@ export async function GET(req: Request) {
     );
   }
 
-  // mock 配置：算法类型 + 活动参数（与 native 注入同构，shim 会合并到默认 CONFIG 之上）
+  // mock 配置：算法类型 + 活动参数（与 native 注入同构，shim 会合并到默认 CONFIG 之上）。
+  // local_image_base：镜像模式下把 style_config_map / prize_config 里的 B站 CDN 图片 URL
+  // 改写为本地镜像同源路径（避免跨域请求被浏览器 ORB 拦截导致背景图/按钮图缺失）。
   const mockConfig = {
     algorithmType: act.algorithmType || "stone-gongfang",
     ...(act.algorithmParams ?? {}),
+    local_image_base: `/moniqi/mirror/${id}`,
   };
 
-  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=3`;
+  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=10`;
+  // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置，
+  // 并以内联 background-image 引用 B站 CDN(https://i0.hdslb.com/bfs/live/048ae887…png)。
+  // 但 B站 CDN 是黑名单式防盗链：背景图请求一旦携带 Referer(如 external Chrome 发送
+  // localhost:3000 源)就返回 403 → 图片加载失败 → 玩法区背景透明，露出外壳深紫底(h5-bg，错误背景)。
+  // 这里把 CDN 背景改为指向本地镜像(同源 localhost:3000，才无 Referer 防盗链问题)，用 !important
+  // 覆盖内联 CDN 背景，并强制 background-size 铺满整个玩法区。仅成名之路(road-to-fame)需要此覆盖，
+  // 星座回响等玩法区背景走 no-referrer 直连即可。
+  const roadBgCss =
+    isolateSelector === ".road-to-fame-play"
+      ? `.road-to-fame-play{` +
+        `background-image:url('/moniqi/mirror/${id}/i0.hdslb.com/bfs/live/048ae887feff96ddf5cc03c2158d99388e663f00.png')!important;` +
+        `background-size:cover!important;background-position:center!important;` +
+        `background-repeat:no-repeat!important}` +
+        ``
+      : "";
   const injection =
-    `<style>#__moniqi_badge__{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);` +
-    `z-index:2147483647;padding:8px 16px;font:12px/1.6 -apple-system,'PingFang SC',sans-serif;` +
-    `color:#fff;background:rgba(0,0,0,.55);border-radius:99px;white-space:nowrap;` +
-    `pointer-events:none;user-select:none}` +
     // 桌面浏览器下保持 B站 原始 H5 窄屏宽度（flexible 脚本 rem=37.5 对应 526px），居中显示，
     // 避免 body 100% 宽导致背景铺满全屏。
+    `<style>` +
     `html{background:#1b1533!important}` +
     `body{max-width:540px!important;margin:0 auto!important;min-height:100vh}` +
-    // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置，
-    // 并以内联 background-image 引用 B站 CDN(https://i0.hdslb.com/bfs/live/048ae887…png)。
-    // 但 B站 CDN 是黑名单式防盗链：背景图请求一旦携带 Referer(如 external Chrome 发送
-    // localhost:3000 源)就返回 403 → 图片加载失败 → 玩法区背景透明，露出外壳深紫底(h5-bg，错误背景)。
-    // 这里把 CDN 背景改为指向本地镜像(同源 localhost:3000，才无 Referer 防盗链问题)，用 !important
-    // 覆盖内联 CDN 背景，并强制 background-size 铺满整个玩法区，保证任何浏览器/视口下都显示目标背景。
-    `.road-to-fame-play{` +
-    `background-image:url('/moniqi/mirror/${id}/i0.hdslb.com/bfs/live/048ae887feff96ddf5cc03c2158d99388e663f00.png')!important;` +
-    `background-size:cover!important;background-position:center!important;` +
-    `background-repeat:no-repeat!important}` +
+    `${roadBgCss}` +
     `</style>` +
     `<meta name="robots" content="noindex,nofollow">` +
     // B站 hdslb CDN 为黑名单式防盗链：拒绝已知外部域 Referer(如 localhost:3000)，
@@ -134,8 +230,8 @@ export async function GET(req: Request) {
     `})();</script>` +
     `<script>window.__BILI_MIRROR__=true;window.__BILI_MIRROR_PREFIX__="/moniqi/mirror/${id}";window.__BILI_ACTIVITY_MOCK_CONFIG__=${JSON.stringify(mockConfig)}</script>` +
     `<script src="${shimUrl}"></script>` +
-    // 只显示玩法元素：把 .road-to-fame-play(成名之路玩法区)提升为全屏内容，
-    // 隐藏 B站 外壳的 tab 栏/其他玩法等兄弟元素，让页面只呈现玩法本体。
+    // 只显示玩法元素：把玩法区容器（成名之路=.road-to-fame-play / 星座回响=.heart-embed）
+    // 提升为全屏内容，隐藏 B站 外壳的 tab 栏/其他玩法等兄弟元素，让页面只呈现玩法本体。
     // 特例：含背景图（background / KV 横幅）的元素不隐藏，保证页面背景图片正常显示。
     `<script>(function(){` +
     `function isBg(c){try{` +
@@ -150,21 +246,17 @@ export async function GET(req: Request) {
     `el.style.position='fixed';el.style.left='0';el.style.top='0';el.style.right='0';el.style.bottom='0';` +
     `el.style.width='100%';el.style.height='100%';el.style.maxWidth='100%';el.style.margin='0';` +
     `el.style.overflowY='auto';el.style.overflowX='hidden';` +
-    // 不强制背景色：让成名之路玩法区自带的整页背景(activity_bg)正常显示。
+    // 不强制背景色：让玩法区自带的整页背景正常显示。
     // 之前强制透明导致外壳的 KV 背景透出，出现错误的背景图。
     // 同时不给玩法区设超大 z-index（让弹窗/确认框能浮在其上层），按 DOM 顺序自然叠放。
     `}catch(e){}}` +
-    `function apply(){var el=document.querySelector('.road-to-fame-play');if(el){isolate(el);}}` +
+    `function apply(){var el=document.querySelector('${isolateSelector}');if(el){isolate(el);}}` +
     `apply();` +
     `new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});` +
     `})();</script>`;
 
   const out = html
-    .replace(/<\/head>/i, injection + "</head>")
-    .replace(
-      /<\/body>/i,
-      `<div id="__moniqi_badge__">模拟演示 · 无真实消费</div></body>`
-    );
+    .replace(/<\/head>/i, injection + "</head>");
 
   return new NextResponse(out, {
     headers: {

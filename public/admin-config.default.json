@@ -46,9 +46,23 @@
       "urlTemplate": "https://live.bilibili.com/activity/live-activity-battle/index.html?app_name=fans_autumn_2026&show_close=0&room_id={roomId}&uid={uid}#/play?fans_autumn_2026_user_play_tab=1",
       "roomId": 0,
       "uid": 0,
-      "enabled": true,
+      "enabled": false,
       "algorithmType": "linglong-open-box",
       "algorithmParams": {}
+    },
+    {
+      "id": "resonance_2026",
+      "title": "星座回响",
+      "entryImage": "https://i0.hdslb.com/bfs/live/14aed08d0c6887cfcb73a2f1e1e148368cf58ab5.png@0e_80q.avif",
+      "urlTemplate": "https://live.bilibili.com/activity/live-activity-battle/index.html?app_name=fans_autumn_2026&show_refresh=1&show_close=0&room_id={roomId}&uid={uid}#/play",
+      "roomId": 1844040969,
+      "uid": 3546967191849918,
+      "enabled": true,
+      "algorithmType": "number_between_same",
+      "algorithmParams": {
+        "start_time": 1788753600,
+        "end_time": 1789315200
+      }
     }
   ],
   "recommended_anchors": [
