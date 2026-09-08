@@ -16,9 +16,11 @@ interface Props {
   /** 原生活动面板是否打开（面板占下方 2/3，仅上方 1/3 可见）。
    *  为 true 时横屏视频贴顶显示，避免顶部留出黑色空隙。 */
   panelOpen?: boolean;
+  /** 是否静音直播流 */
+  muted?: boolean;
 }
 
-export default function LiveStreamBackground({ roomId, panelOpen = false }: Props) {
+export default function LiveStreamBackground({ roomId, panelOpen = false, muted = false }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<any>(null);
   const [status, setStatus] = useState<"loading" | "playing" | "error">("loading");
@@ -64,7 +66,7 @@ export default function LiveStreamBackground({ roomId, panelOpen = false }: Prop
         // 原生 HLS 支持（Safari/iOS）
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = streamUrl;
-          video.muted = false;
+          video.muted = muted;
           video.play().catch(() => {
             // 自动播放被阻止时降级为静音播放
             video.muted = true;
@@ -87,7 +89,7 @@ export default function LiveStreamBackground({ roomId, panelOpen = false }: Prop
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (cancelled) return;
-            video.muted = false;
+            video.muted = muted;
             video.play().catch(() => {
               // 自动播放被阻止时降级为静音播放
               video.muted = true;
@@ -126,6 +128,12 @@ export default function LiveStreamBackground({ roomId, panelOpen = false }: Prop
       }
     };
   }, [roomId]);
+
+  // 同步 muted prop 到 video 元素（用户在入口页切换静音时实时生效）
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.muted = muted;
+  }, [muted]);
 
   return (
     <div className="absolute inset-0 z-0 overflow-hidden bg-[#1a1a2e]">

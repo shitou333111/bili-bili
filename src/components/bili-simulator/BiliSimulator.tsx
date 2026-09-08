@@ -20,7 +20,7 @@ import type { StreamerInfo } from "./liveStream";
 const COMBO_TIMEOUT = 5000; // 5秒连击窗口
 const QUICK_GIFT_ID = 33988; // 人气票
 
-export default function BiliSimulator({ onBack, userName, userFace, streamerInfo }: { onBack: () => void; userName?: string; userFace?: string; streamerInfo?: StreamerInfo | null }) {
+export default function BiliSimulator({ onBack, userName, userFace, streamerInfo, muted }: { onBack: () => void; userName?: string; userFace?: string; streamerInfo?: StreamerInfo | null; muted?: boolean }) {
   const [giftPanelOpen, setGiftPanelOpen] = useState(false);
   const [currentGift, setCurrentGift] = useState<Gift | null>(null);
   const [comboGift, setComboGift] = useState<Gift | null>(null);
@@ -735,7 +735,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   return (
     <div className="fixed inset-0 z-[9999] bg-[#2B1F2B] flex flex-col overflow-hidden" style={{ maxWidth: "var(--page-max-width)", margin: "0 auto" }}>
       {/* 直播流背景（最底层） */}
-      {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} panelOpen={nativePanelOpen} />}
+      {streamerInfo && <LiveStreamBackground roomId={streamerInfo.roomId} panelOpen={nativePanelOpen} muted={muted} />}
       {!streamerInfo && <div className="absolute inset-0 bg-[#2B1F2B]" />}
 
       {/* 顶部栏（安全区 padding-top 移到此处，让视频可铺满全屏） */}
@@ -768,9 +768,6 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
           </div>
         </div>
       </div>
-
-      {/* 底部栏改为绝对定位，不再需要 flex-1 占位 */}
-      <div className="relative z-10" />
 
       {/* 大礼物特效 - 在活动卡片/横幅之上，礼物面板之下，可遮住横幅 */}
       {playingEffect && (

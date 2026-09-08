@@ -1053,11 +1053,93 @@
   var resState = { _v: RES_STATE_VERSION, game_id: 0, hearts: [] };
   // "我要开无双"模式：开启后每次召唤不同星座，直接获得最终大奖（N=8）
   var resUnlimited = false;
+  // 本次会话累计获得的礼物总价值（电池），用于 shell 页面 badge 显示
+  var resTotalGiftValue = 0;
+  // 指定主播状态
+  var resAnchorFace = "";
+  var resAnchorName = "";
+  var resAnchorObserver = null;
+  // 拦截 img.src 赋值：指定主播后，头像类 URL（含 /bfs/face/）在赋值的瞬间就被改写为目标头像，
+  // 页面（包括动态弹出的模态框）从一开始就渲染指定主播，杜绝"先显示原主播再替换"的跳变。
+  (function () {
+    try {
+      var _p = HTMLImageElement.prototype;
+      var _desc = Object.getOwnPropertyDescriptor(_p, "src");
+      if (_desc && _desc.set) {
+        var _origSet = _desc.set;
+        var _origGet = _desc.get;
+        Object.defineProperty(_p, "src", {
+          configurable: true,
+          enumerable: _desc.enumerable,
+          get: function () { return _origGet.call(this); },
+          set: function (v) {
+            if (resAnchorFace && typeof v === "string" && /\/bfs\/face\//.test(v)) {
+              _origSet.call(this, resAnchorFace);
+              return;
+            }
+            _origSet.call(this, v);
+          },
+        });
+      }
+    } catch (e) {}
+  })();
+  // 页面框架（Vue/React/jQuery）多数用 setAttribute('src', url) 而不是 img.src= 属性赋值，
+  // 属性拦截覆盖不到，需再拦截 setAttribute，保证动态弹窗头像从赋值起就是指定主播。
+  (function () {
+    try {
+      var _origSetAttr = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (name === "src" && this instanceof HTMLImageElement &&
+            resAnchorFace && typeof value === "string" && /\/bfs\/face\//.test(value)) {
+          value = resAnchorFace;
+        }
+        return _origSetAttr.call(this, name, value);
+      };
+    } catch (e) {}
+  })();
+  function resApplyAnchor() {
+    if (resAnchorFace) {
+      var imgs = document.querySelectorAll("img.avatar_avatarImage, .avatar_ui img, .avatar img");
+      for (var i = 0; i < imgs.length; i++) {
+        if (imgs[i].src !== resAnchorFace) {
+          // 换图期间先隐藏，等新头像加载完成（或失败）再显示，避免旧头像闪一下
+          imgs[i].style.visibility = "hidden";
+          imgs[i].onload = (function (img) { return function () { img.style.visibility = "visible"; }; })(imgs[i]);
+          imgs[i].onerror = (function (img) { return function () { img.style.visibility = "visible"; }; })(imgs[i]);
+          imgs[i].src = resAnchorFace;
+        }
+      }
+    }
+    if (resAnchorName) {
+      var nicks = document.querySelectorAll(".nick-name-root.nickname, .nick-name-root, .nick-name");
+      for (var j = 0; j < nicks.length; j++) {
+        if (nicks[j].textContent.trim() !== resAnchorName) nicks[j].textContent = resAnchorName;
+      }
+    }
+  }
   try {
     window.addEventListener("message", function (e) {
       if (e.data && e.data.type === "unlimited") {
         resUnlimited = !!e.data.value;
         console.log("[RES-MOCK] Unlimited mode:", resUnlimited ? "ON" : "OFF");
+      }
+      // 指定主播：替换页面中所有主播头像和昵称（包括动态创建的弹窗）
+      if (e.data && e.data.type === "set-anchor") {
+        var face = e.data.face || "";
+        var name = e.data.name || "";
+        if (!face && !name) return;
+        // 存储主播信息，供 MutationObserver 持续替换
+        resAnchorFace = String(face).replace(/^\/\//, "https://").replace(/^http:\/\//, "https://");
+        resAnchorName = name;
+        // 立即替换现有元素
+        resApplyAnchor();
+        if (!resAnchorObserver) {
+          resAnchorObserver = new MutationObserver(function () { resApplyAnchor(); });
+          // 同时监听 class/style 变化：模态框通过 class 切换显示/隐藏，
+          // 若在显示后才替换头像会闪一下原主播，需在显示瞬间同步替换。
+          resAnchorObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "class", "style"] });
+        }
+        console.log("[RES-MOCK] Anchor set:", name);
       }
     });
   } catch (e) {}
@@ -1139,16 +1221,13 @@
     }
     return pool[randInt(0, pool.length - 1)];
   }
-  // 结算：把奖励礼物推入前端"包裹"（所有合成活动共用 activity-compose 通道）
+  // 结算：累计礼物总价值并通知 shell 页面工具条（不推包裹，避免B站页面重复触发导致3倍）。
   function resNotifyPrize(prize) {
     if (!prize) return;
-    var giftId = (CONFIG.res_gift_ids && CONFIG.res_gift_ids[prize.n - 1]) || 0;
-    notifyCompose({
-      gift_id: giftId,
-      gift_name: prize.gift_name,
-      gift_img: prize.gift_img,
-      gift_price: prize.gift_value,
-    });
+    var price = Math.round(prize.gift_value / 100);
+    resTotalGiftValue += price;
+    var cost = Math.round((10000000 - batteryBalance) / 100);
+    try { window.parent.postMessage({ type: "res-total-value", value: resTotalGiftValue, cost: cost }, "*"); } catch (e) {}
   }
   // 页面初始化：必须返回完整 style_config_map（背景/星座卡片/礼物图等全部 UI 资源），
   // 否则页面缺少背景图等资源无法完整加载。下方为抓包到的真实响应原文（config_id=3, act_id=110504）。

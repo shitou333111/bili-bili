@@ -111,6 +111,7 @@ export async function GET(req: Request) {
         `.btn:active{transform:scale(.96)}` +
         `.btn-main{background:linear-gradient(135deg,#8a5cff,#5b8cff);border-color:transparent;font-weight:600}` +
         `.btn-home{background:linear-gradient(135deg,#4ecdc4,#44a08d);border-color:transparent}` +
+        `.btn-anchor{background:linear-gradient(135deg,#f093fb,#f5576c);border-color:transparent}` +
         `.btn-fire{background:linear-gradient(135deg,#ff6b6b,#ee5a24);border-color:transparent}` +
         `.btn-fire-active{background:linear-gradient(135deg,#c0392b,#e74c3c);border-color:transparent;font-weight:600}` +
         `.mask{position:fixed;inset:0;background:rgba(8,6,22,.55);display:none;align-items:center;` +
@@ -136,8 +137,10 @@ export async function GET(req: Request) {
         `<div class="frame-wrap"><iframe src="${frameSrc}" title="活动模拟"></iframe></div>` +
         `<div class="bar">` +
         `<a class="btn btn-home" href="/"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>更多功能</a>` +
+        `<button class="btn btn-anchor" id="anchorBtn" type="button">指定主播</button>` +
         `<button class="btn btn-main" id="costBtn" type="button">在哪一步停手最赚？</button>` +
         `<button class="btn btn-fire" id="unlimitedBtn" type="button">破防了😭我要开挂</button>` +
+        `<span class="badge" id="totalValueBadge" style="display:none">总价值 0 电池</span>` +
         `<span class="badge">仅模拟 无消费</span>` +
         `</div>` +
         `<div class="mask" id="costMask">` +
@@ -147,7 +150,18 @@ export async function GET(req: Request) {
         `<table><thead><tr><th>第几个</th><th>现在收手</th><th>继续的平均收益</th><th>继续比收手多出</th></tr></thead>` +
         `<tbody>${costRows}</tbody></table>` +
         `</div></div>` +
+        `<div class="mask" id="anchorMask">` +
+        `<div class="card" style="max-width:320px">` +
+        `<h3>指定主播<span class="close" id="anchorClose" role="button">✕</span></h3>` +
+        `<p class="tip" style="color:#666;margin:0 0 8px">输入主播 UID，页面中的主播信息将被替换</p>` +
+        `<input id="uidInput" type="text" placeholder="输入 UID" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;box-sizing:border-box;margin-bottom:8px">` +
+        `<button class="btn btn-main" id="uidConfirm" style="width:100%;justify-content:center">确认</button>` +
+        `</div></div>` +
         `<script>(function(){` +
+        // 去重：B站 页面 JS 可能往父文档追加重复的 bar，用 MutationObserver 持续清理
+        `function dedupBars(){var bars=document.querySelectorAll('.bar');` +
+        `if(bars.length>1){for(var i=1;i<bars.length;i++)bars[i].remove();}}` +
+        `dedupBars();new MutationObserver(dedupBars).observe(document.body,{childList:true,subtree:true});` +
         `var btn=document.getElementById('costBtn'),mask=document.getElementById('costMask'),cl=document.getElementById('costClose');` +
         `var unlimitedBtn=document.getElementById('unlimitedBtn'),frame=document.querySelector('iframe');` +
         `var unlimited=false;` +
@@ -161,6 +175,32 @@ export async function GET(req: Request) {
         `unlimitedBtn.className=unlimited?'btn btn-fire-active':'btn btn-fire';` +
         `try{frame.contentWindow.postMessage({type:'unlimited',value:unlimited},'*');}catch(e){}` +
         `});` +
+        // 监听 iframe 内 mock-shim 发送的总价值更新
+        `var totalBadge=document.getElementById('totalValueBadge');` +
+        `window.addEventListener('message',function(e){` +
+        `if(e.data&&e.data.type==='res-total-value'){` +
+        `var v=e.data.value||0,c=e.data.cost||0,d=v-c;` +
+        `var label=d>=0?'赚'+d:'亏'+Math.abs(d);` +
+        `totalBadge.style.display='inline-flex';` +
+        `totalBadge.textContent='总价值'+v+'电池 · '+label;` +
+        `totalBadge.style.borderColor=d>=0?'rgba(22,163,74,.5)':'rgba(220,38,38,.5)';` +
+        `}});` +
+        // 指定主播功能
+        `var anchorBtn=document.getElementById('anchorBtn'),anchorMask=document.getElementById('anchorMask'),anchorClose=document.getElementById('anchorClose'),uidInput=document.getElementById('uidInput'),uidConfirm=document.getElementById('uidConfirm');` +
+        `function showAnchor(){anchorMask.classList.add('show');uidInput.focus();}` +
+        `function hideAnchor(){anchorMask.classList.remove('show');}` +
+        `anchorBtn.addEventListener('click',showAnchor);` +
+        `anchorClose.addEventListener('click',hideAnchor);` +
+        `anchorMask.addEventListener('click',function(e){if(e.target===anchorMask)hideAnchor();});` +
+        `uidConfirm.addEventListener('click',function(){` +
+        `var uid=uidInput.value.trim();if(!uid||isNaN(uid))return;` +
+        `fetch('/api/tools/user-info?uids='+uid).then(function(r){return r.json();}).then(function(res){` +
+        `var info=res.data&&res.data[uid];if(!info)return alert('未找到该用户');` +
+        `hideAnchor();` +
+        `try{frame.contentWindow.postMessage({type:'set-anchor',uid:Number(uid),name:info.name,face:info.face},'*');}catch(e){}` +
+        `}).catch(function(){alert('获取用户信息失败');});` +
+        `});` +
+        `uidInput.addEventListener('keydown',function(e){if(e.key==='Enter')uidConfirm.click();});` +
         `})();</script>` +
         `</body></html>`,
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }

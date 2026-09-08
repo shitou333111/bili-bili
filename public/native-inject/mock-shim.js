@@ -1053,11 +1053,92 @@
   var resState = { _v: RES_STATE_VERSION, game_id: 0, hearts: [] };
   // "我要开无双"模式：开启后每次召唤不同星座，直接获得最终大奖（N=8）
   var resUnlimited = false;
+  // 本次会话累计获得的礼物总价值（电池），用于 shell 页面 badge 显示
+  var resTotalGiftValue = 0;
+  // 指定主播状态
+  var resAnchorFace = "";
+  var resAnchorName = "";
+  var resAnchorObserver = null;
+  // 拦截 img.src 赋值：指定主播后，头像类 URL（含 /bfs/face/）在赋值的瞬间就被改写为目标头像，
+  // 页面（包括动态弹出的模态框）从一开始就渲染指定主播，杜绝"先显示原主播再替换"的跳变。
+  (function () {
+    try {
+      var _p = HTMLImageElement.prototype;
+      var _desc = Object.getOwnPropertyDescriptor(_p, "src");
+      if (_desc && _desc.set) {
+        var _origSet = _desc.set;
+        var _origGet = _desc.get;
+        Object.defineProperty(_p, "src", {
+          configurable: true,
+          enumerable: _desc.enumerable,
+          get: function () { return _origGet.call(this); },
+          set: function (v) {
+            if (resAnchorFace && typeof v === "string" && /\/bfs\/face\//.test(v)) {
+              _origSet.call(this, resAnchorFace);
+              return;
+            }
+            _origSet.call(this, v);
+          },
+        });
+      }
+    } catch (e) {}
+  })();
+  // 页面框架（Vue/React/jQuery）多数用 setAttribute('src', url) 而不是 img.src= 属性赋值，
+  // 属性拦截覆盖不到，需再拦截 setAttribute，保证动态弹窗头像从赋值起就是指定主播。
+  (function () {
+    try {
+      var _origSetAttr = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (name === "src" && this instanceof HTMLImageElement &&
+            resAnchorFace && typeof value === "string" && /\/bfs\/face\//.test(value)) {
+          value = resAnchorFace;
+        }
+        return _origSetAttr.call(this, name, value);
+      };
+    } catch (e) {}
+  })();
+  function resApplyAnchor() {
+    if (resAnchorFace) {
+      var imgs = document.querySelectorAll("img.avatar_avatarImage, .avatar_ui img, .avatar img");
+      for (var i = 0; i < imgs.length; i++) {
+        if (imgs[i].src !== resAnchorFace) {
+          // 换图期间先隐藏，等新头像加载完成（或失败）再显示，避免旧头像闪一下
+          imgs[i].style.visibility = "hidden";
+          imgs[i].onload = (function (img) { return function () { img.style.visibility = "visible"; }; })(imgs[i]);
+          imgs[i].onerror = (function (img) { return function () { img.style.visibility = "visible"; }; })(imgs[i]);
+          imgs[i].src = resAnchorFace;
+        }
+      }
+    }
+    if (resAnchorName) {
+      var nicks = document.querySelectorAll(".nick-name-root.nickname, .nick-name-root, .nick-name");
+      for (var j = 0; j < nicks.length; j++) {
+        if (nicks[j].textContent.trim() !== resAnchorName) nicks[j].textContent = resAnchorName;
+      }
+    }
+  }
   try {
     window.addEventListener("message", function (e) {
       if (e.data && e.data.type === "unlimited") {
         resUnlimited = !!e.data.value;
         console.log("[RES-MOCK] Unlimited mode:", resUnlimited ? "ON" : "OFF");
+      }
+      // 指定主播：替换页面中所有主播头像和昵称（包括动态创建的弹窗）
+      if (e.data && e.data.type === "set-anchor") {
+        var face = e.data.face || "";
+        var name = e.data.name || "";
+        if (!face && !name) return;
+        // 存储主播信息，供 MutationObserver 持续替换
+        resAnchorFace = String(face).replace(/^\/\//, "https://").replace(/^http:\/\//, "https://");
+        resAnchorName = name;
+        // 立即替换现有元素
+        resApplyAnchor();
+        // 启动 MutationObserver 持续替换新创建的元素
+        if (!resAnchorObserver) {
+          resAnchorObserver = new MutationObserver(function () { resApplyAnchor(); });
+          resAnchorObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "class", "style"] });
+        }
+        console.log("[RES-MOCK] Anchor set:", name);
       }
     });
   } catch (e) {}
@@ -1139,16 +1220,14 @@
     }
     return pool[randInt(0, pool.length - 1)];
   }
-  // 结算：把奖励礼物推入前端"包裹"（所有合成活动共用 activity-compose 通道）
+  // 结算：累计礼物总价值并通知 shell 页面工具条（不推包裹，避免B站页面重复触发导致3倍）。
+  var resTotalGiftValue = 0;
   function resNotifyPrize(prize) {
     if (!prize) return;
-    var giftId = (CONFIG.res_gift_ids && CONFIG.res_gift_ids[prize.n - 1]) || 0;
-    notifyCompose({
-      gift_id: giftId,
-      gift_name: prize.gift_name,
-      gift_img: prize.gift_img,
-      gift_price: prize.gift_value,
-    });
+    var price = Math.round(prize.gift_value / 100);
+    resTotalGiftValue += price;
+    var cost = Math.round((10000000 - batteryBalance) / 100);
+    try { window.parent.postMessage({ type: "res-total-value", value: resTotalGiftValue, cost: cost }, "*"); } catch (e) {}
   }
   // 页面初始化：必须返回完整 style_config_map（背景/星座卡片/礼物图等全部 UI 资源），
   // 否则页面缺少背景图等资源无法完整加载。下方为抓包到的真实响应原文（config_id=3, act_id=110504）。
@@ -1374,6 +1453,99 @@
   function makeResPlayRecord() {
     return { code: 0, message: "OK", ttl: 1, data: { list: [] } };
   }
+
+  // ===== 原生活动窗口底部工具条（仅原生模式 + 星座回响）=====
+  // 与 moniqi 壳页底部按钮一致（去掉"更多功能"/"指定主播"）：
+  // "在哪一步停手最赚？" / "破防了😭我要开挂" / 总价值badge(含盈亏) / "仅模拟 无消费"。
+  // 按钮与 mock 逻辑通过 window.postMessage 互通（与 moniqi 壳页同机制）。
+  function resBuildToolbar() {
+    if (MIRROR) return; // moniqi 镜像由壳页 route.ts 提供按钮，避免重复
+    try { if (algType() !== "number_between_same") return; } catch (e) { return; }
+    if (document.getElementById("res-toolbar")) return;
+    // 统一按钮高度34px，badge 同高
+    var h = "height:34px;";
+    var btnBase = "border:0;cursor:pointer;padding:0 14px;border-radius:99px;color:#fff;white-space:nowrap;flex-shrink:0;font-weight:normal;" + h + "display:inline-flex;align-items:center;";
+    var badgeBase = "padding:0 14px;border:1px solid rgba(255,255,255,.22);border-radius:99px;color:rgba(255,255,255,.9);white-space:nowrap;flex-shrink:0;background:rgba(255,255,255,.08);" + h + "display:inline-flex;align-items:center;";
+    var bar = document.createElement("div");
+    bar.id = "res-toolbar";
+    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;padding:8px 12px;background:rgba(16,12,36,.92);border-top:1px solid rgba(255,255,255,.08);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font:12px/1 -apple-system,'PingFang SC',sans-serif;box-sizing:border-box;";
+    // 按钮组（可折叠）+ 右下角收纳图标
+    bar.innerHTML =
+      '<div id="resBtnGroup" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px">' +
+        '<button id="resCostBtn" type="button" style="' + btnBase + 'background:linear-gradient(135deg,#8a5cff,#5b8cff);font-weight:600">在哪一步停手最赚？</button>' +
+        '<button id="resUnlimitedBtn" type="button" style="' + btnBase + 'background:linear-gradient(135deg,#ff6b6b,#ee5a24)">破防了😭我要开挂</button>' +
+        '<span id="resTotalBadge" style="display:none;' + badgeBase + '">总价值 0 电池</span>' +
+        '<span style="' + badgeBase + '">仅模拟 无消费</span>' +
+      '</div>' +
+      '<button id="resFoldBtn" type="button" style="position:absolute;right:12px;bottom:8px;border:0;cursor:pointer;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;transition:transform .25s ease" aria-label="收纳工具栏">' +
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15l8-8 8 8"/></svg>' +
+      '</button>';
+    document.body.appendChild(bar);
+    // 停手分析弹窗（数据与 moniqi 壳页一致，来自权威精确计算）
+    var rows = [[1, 50, 51, 1], [2, 100, 104, 4], [3, 200, 206, 6], [4, 500, 503, 3], [5, 1200, 1207, 7], [6, 3000, 3005, 5], [7, 8800, 8808, 8]];
+    var trs = "";
+    for (var ri = 0; ri < rows.length; ri++) {
+      trs += "<tr><td style='padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#222'>" + rows[ri][0] + "</td>" +
+        "<td style='padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#7b46f0;font-weight:600'>" + rows[ri][1] + "</td>" +
+        "<td style='padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#7b46f0;font-weight:600'>" + rows[ri][2] + "</td>" +
+        "<td style='padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#16a34a;font-weight:700'>+" + rows[ri][3] + "</td></tr>";
+    }
+    var mask = document.createElement("div");
+    mask.id = "resCostMask";
+    mask.style.cssText = "position:fixed;inset:0;background:rgba(8,6,22,.55);display:none;align-items:center;justify-content:center;z-index:2147483001;";
+    mask.innerHTML =
+      "<div style='width:min(560px,92vw);max-height:82vh;overflow:auto;background:#fff;color:#111;border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:20px 22px 16px;box-sizing:border-box'>" +
+      "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:12px'><h3 style='margin:0;font:600 17px/1.4 -apple-system,\"PingFang SC\",sans-serif'>在哪一步停手最赚？</h3><span id='resCostClose' style='cursor:pointer;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:15px'>✕</span></div>" +
+      "<p style='margin:0 0 8px;font:12px/1.6 -apple-system,\"PingFang SC\",sans-serif;color:#111;font-weight:700'>结论：每一步都是继续下去会更划算，但也只有几个电池的差别，算是不亏不赚，所以这是B站设计好的。继续还是停手完全看你自己的心情（单位：电池）</p>" +
+      "<table style='width:100%;border-collapse:collapse;font:13px/1.5 -apple-system,\"PingFang SC\",sans-serif'><thead><tr>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>第几个</th>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>现在收手</th>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>继续的平均收益</th>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>继续比收手多出</th>" +
+      "</tr></thead><tbody>" + trs + "</tbody></table></div>";
+    document.body.appendChild(mask);
+    var costBtn = document.getElementById("resCostBtn");
+    var unlimitedBtn = document.getElementById("resUnlimitedBtn");
+    var totalBadge = document.getElementById("resTotalBadge");
+    var costClose = document.getElementById("resCostClose");
+    var unlimited = false;
+    costBtn.addEventListener("click", function () { mask.style.display = "flex"; });
+    costClose.addEventListener("click", function () { mask.style.display = "none"; });
+    mask.addEventListener("click", function (e) { if (e.target === mask) mask.style.display = "none"; });
+    unlimitedBtn.addEventListener("click", function () {
+      unlimited = !unlimited;
+      unlimitedBtn.style.background = unlimited ? "linear-gradient(135deg,#c0392b,#e74c3c)" : "linear-gradient(135deg,#ff6b6b,#ee5a24)";
+      unlimitedBtn.textContent = unlimited ? "点击关闭开挂模式" : "破防了😭我要开挂";
+      try { window.postMessage({ type: "unlimited", value: unlimited }, "*"); } catch (e) {}
+    });
+    // 收纳/展开工具栏按钮（默认展开）
+    var btnGroup = document.getElementById("resBtnGroup");
+    var foldBtn = document.getElementById("resFoldBtn");
+    var resFolded = false;
+    if (foldBtn && btnGroup) {
+      foldBtn.addEventListener("click", function () {
+        resFolded = !resFolded;
+        btnGroup.style.display = resFolded ? "none" : "flex";
+        foldBtn.style.transform = resFolded ? "rotate(180deg)" : "none";
+      });
+    }
+    // 总价值badge：监听 mock 结算广播（与 moniqi 壳页同一事件）
+    window.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "res-total-value") {
+        var v = e.data.value || 0, c = e.data.cost || 0, d = v - c;
+        var label = d >= 0 ? "赚" + d : "亏" + Math.abs(d);
+        totalBadge.style.display = "inline-flex";
+        totalBadge.textContent = "总价值" + v + "电池 · " + label;
+        totalBadge.style.borderColor = d >= 0 ? "rgba(22,163,74,.5)" : "rgba(220,38,38,.5)";
+      }
+    });
+  }
+  var resToolbarReady = false;
+  function resEnsureToolbar() {
+    if (document.body) resBuildToolbar();
+    else if (!resToolbarReady) { resToolbarReady = true; document.addEventListener("DOMContentLoaded", resBuildToolbar); }
+  }
+  resEnsureToolbar();
 
   // ===== 算法分派 =====
   // 不同 algorithmType 使用不同的拦截规则与 mock 逻辑（各活动玩法背后的算法）。

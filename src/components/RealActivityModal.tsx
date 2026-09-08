@@ -81,7 +81,7 @@ export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate
       }
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("open_real_activity_panel", {
-        config: { url, title: "山海工坊", cookies },
+        config: { url, title: "真实合成活动", cookies },
       });
       onClose();
     } catch (e: any) {

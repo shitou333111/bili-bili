@@ -856,6 +856,11 @@ export default function HomePage() {
   const [simUidInput, setSimUidInput] = useState("");
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState("");
+  const [simMuted, setSimMuted] = useState(false);
+  // 挂载后从 localStorage 同步静音状态，避免 SSR/客户端首帧不一致触发 Hydration 报错
+  useEffect(() => {
+    try { setSimMuted(localStorage.getItem("sim_muted") === "true"); } catch {}
+  }, []);
   const [currentStreamer, setCurrentStreamer] = useState<StreamerInfo | null>(null);
   const [realActivityModalOpen, setRealActivityModalOpen] = useState(false);
   // 抽奖页面（帮助页入口卡片打开；登录账号可抽，服务器账号置灰）
@@ -3735,6 +3740,18 @@ export default function HomePage() {
               >
                 {simLoading ? "加载中..." : "进入模拟器"}
               </button>
+              {/* 静音开关 */}
+              <button
+                onClick={() => {
+                  const next = !simMuted;
+                  setSimMuted(next);
+                  localStorage.setItem("sim_muted", String(next));
+                }}
+                className="w-full mt-2 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-black/10 bg-white/60 text-sm text-black/60 active:scale-98 transition-all"
+              >
+                <span>{simMuted ? "🔇" : "🔊"}</span>
+                <span>{simMuted ? "直播静音（点击开启）" : "直播声音已开启（点击静音）"}</span>
+              </button>
             </div>
 
             {/* 历史记录 */}
@@ -3851,6 +3868,7 @@ export default function HomePage() {
           userName={currentAccount?.uname ?? currentAccount?.mid?.toString() ?? "我"}
           userFace={fixImageUrl(currentAccount?.face ?? "")}
           streamerInfo={currentStreamer}
+          muted={simMuted}
         />
       )}
 
