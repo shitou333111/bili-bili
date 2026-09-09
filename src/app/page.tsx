@@ -35,6 +35,7 @@ import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type Strea
 import RealActivityModal from "@/components/RealActivityModal";
 import RecommendedAnchors from "@/components/RecommendedAnchors";
 import LotteryPage from "@/components/LotteryPage";
+import AutoLotteryPage from "@/components/AutoLotteryPage";
 import WindowTitleBar from "@/components/WindowTitleBar";
 import {
   getVersionDisplay,
@@ -848,7 +849,7 @@ export default function HomePage() {
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
-  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical" | "like">("home");
+  const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical" | "like" | "lottery">("home");
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState<string>("");
   const [simulatorOpen, setSimulatorOpen] = useState(false);
@@ -3071,6 +3072,7 @@ export default function HomePage() {
                 )}
                 {[
                   { icon: "👍", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
+                  { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "自动扫描热门直播间天选福袋，定时进入直播间参与抽奖", needsLogin: true },
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
@@ -3088,6 +3090,7 @@ export default function HomePage() {
                         return;
                       }
                       if (tool.title === "助力主播 自动点赞") { pushView("screenshot", "like"); loadLikeAnchors(); }
+                      else if (tool.title === "自动抢天选和红包") { pushView("screenshot", "lottery"); }
                       else if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
                       else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
                       else if (tool.title === "多人接力PK医药费") { pushView("screenshot", "medical"); }
@@ -3678,6 +3681,13 @@ export default function HomePage() {
                   <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/35">点击上方按钮加载主播列表</div>
                 )}
               </div>
+            )}
+
+            {/* 自动抢天选福袋 */}
+            {activeModule === "screenshot" && toolsPage === "lottery" && (
+              <AutoLotteryPage
+                onBack={() => pushView("screenshot", "home")}
+              />
             )}
 
             {/* 多人接力PK医药费 */}

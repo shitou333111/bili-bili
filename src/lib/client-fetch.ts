@@ -175,6 +175,25 @@ async function dispatchNative(
       }
       return jsonResponse({ code: 0 });
     }
+    // ===== 自动抢天选福袋 =====
+    case "/api/lottery/check": {
+      const { checkLotteryNative } = await import("./lottery-client");
+      const body = parseBody(init) as { room_id?: number } | null;
+      const roomId = Number(body?.room_id ?? 0);
+      if (!roomId) return jsonResponse({ code: -1, message: "缺少 room_id" });
+      const anchor = await checkLotteryNative(platform, roomId);
+      return jsonResponse({ code: 0, data: { anchor } });
+    }
+    case "/api/lottery/join": {
+      const { joinLotteryNative } = await import("./lottery-client");
+      const body = parseBody(init) as { id?: number; room_id?: number } | null;
+      return jsonResponse(await joinLotteryNative(platform, Number(body?.id ?? 0), Number(body?.room_id ?? 0)));
+    }
+    case "/api/lottery/enter-room": {
+      const { enterRoomNative } = await import("./lottery-client");
+      const body = parseBody(init) as { room_id?: number } | null;
+      return jsonResponse(await enterRoomNative(platform, Number(body?.room_id ?? 0)));
+    }
     default:
       // 未客户端化的辅助路径回退到服务器（带超时，避免服务器不可达时长时间挂起）
       const ctrl = new AbortController();
