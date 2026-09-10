@@ -53,12 +53,12 @@ export const webPlatform: Platform = {
   os: "web",
 
   async fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T> {
-    const { url, cookie, method = "GET", body, mobile = false, live = false } = options;
+    const { url, cookie, method = "GET", body, json = false, mobile = false, live = false } = options;
     const headers = new Headers(
       mobile ? BILIBILI_MOBILE_HEADERS : live ? BILIBILI_LIVE_HEADERS : BILIBILI_WEB_HEADERS
     );
     if (cookie) headers.set("Cookie", cookie);
-    if (body) headers.set("Content-Type", "application/x-www-form-urlencoded");
+    if (body) headers.set("Content-Type", json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded");
 
     const response = await fetch(url, { method, headers, body, cache: "no-store" });
     if (!response.ok) {

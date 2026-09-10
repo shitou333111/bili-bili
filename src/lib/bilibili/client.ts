@@ -30,6 +30,8 @@ type FetchJsonOptions = {
   cookie?: string;
   method?: "GET" | "POST";
   body?: string;
+  /** 以 application/json 作为 body 的 Content-Type（默认 x-www-form-urlencoded） */
+  json?: boolean;
   mobile?: boolean;
   live?: boolean;
 };
@@ -39,6 +41,7 @@ export async function fetchBilibiliJson<T>({
   cookie,
   method = "GET",
   body,
+  json = false,
   mobile = false,
   live = false,
 }: FetchJsonOptions): Promise<T> {
@@ -49,7 +52,7 @@ export async function fetchBilibiliJson<T>({
     headers.set("Cookie", cookie);
   }
   if (body) {
-    headers.set("Content-Type", "application/x-www-form-urlencoded");
+    headers.set("Content-Type", json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded");
   }
 
   const response = await fetch(url, {

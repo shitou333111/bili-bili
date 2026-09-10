@@ -112,19 +112,6 @@ export type LotteryInfo = {
   ruid: number;
 };
 
-/** 天选福袋房间（含倒计时信息） */
-export type LotteryRoom = {
-  roomid: number;
-  uname: string;
-  title: string;
-  face: string;
-  online: number;
-  /** 抽奖信息 */
-  lottery: LotteryInfo;
-  /** 开奖时间戳（秒） */
-  end_time: number;
-};
-
 /** API 通用返回 */
 export type ApiResult<T = unknown> = {
   code: number;
@@ -171,7 +158,8 @@ export async function checkLotteryNative(platform: Platform, roomId: number): Pr
     console.log(`[Lottery] room=${roomId} code=${data.code} anchor=${data.data?.anchor ? "有" : "无"} status=${data.data?.anchor?.status}`);
     if (data.code !== 0) return null;
     const anchor = data.data?.anchor;
-    if (!anchor || anchor.status !== 1) return null;
+    // status 可能是 1（进行中可参与）或 2（已参与）。只要存在天选都返回，由调用方决定是否 join
+    if (!anchor || !anchor.id) return null;
     return anchor;
   } catch (err) {
     console.warn(`[Lottery] room=${roomId} 异常:`, err);
@@ -279,40 +267,150 @@ export async function joinLottery(lotteryId: number, roomId: number): Promise<Ap
   return joinLotteryServer(lotteryId, roomId);
 }
 
-// ===== 进入直播间（需要登录） =====
+// ===== 直播间在场连接（维持"账号在直播间"的在线状态） =====
+
+// B站 判定"是否在直播间/在线"靠的是弹幕 WebSocket 长连接（认证 + 心跳）。
+// roomEntryAction 实测无效（返回 data:null，不产生任何在场凭证），因此不再调用它，
+// 而是复用展示模块已验证可用的 bili-live-listener（getConf 取 token + BiliLive 弹幕长连接）
+// 对目标房间建立弹幕连接，心跳持续在线，账号才算"在直播间"，这是开奖能否中奖的关键。
+//
+// 支持同时在多个直播间保持在线（各房开奖时间不同，需要并行在场）。每个房间一条连接，
+// 幂等复用：同房间只延长断开时间、不重复建连；连接在该房间所有抽奖（天选/红包）
+// 结束后 3 秒自动断开，避免长时间占用触发风控。
+
+type PresenceConn = {
+  live: any;
+  room: number;
+  /** 断开时间戳（ms）：该房间最后一个抽奖开奖后 3 秒 */
+  deadline: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** 是否已被主动关闭（主动关闭不触发重连） */
+  closed: boolean;
+};
+
+const presenceMap = new Map<number, PresenceConn>();
+/** 单条连接意外断开后的最大重连次数，避免被风控持续拒绝时无限重试 */
+const MAX_PRESENCE_RETRY = 3;
+
+/** 断开指定房间（不传则全部）的弹幕在场连接 */
+export function closeRoomPresence(roomId?: number) {
+  const destroy = (conn: PresenceConn) => {
+    conn.closed = true;
+    if (conn.timer) clearTimeout(conn.timer);
+    try { conn.live?.close(); } catch {}
+  };
+  if (roomId == null) {
+    for (const conn of presenceMap.values()) destroy(conn);
+    presenceMap.clear();
+    return;
+  }
+  const conn = presenceMap.get(roomId);
+  if (conn) { presenceMap.delete(roomId); destroy(conn); }
+}
+
+/** 该房间当前是否已保持在弹幕在线连接 */
+export function hasRoomPresence(roomId: number): boolean {
+  return presenceMap.has(roomId);
+}
+
+/** 按截止时间安排断开（房间所有抽奖结束后 3 秒） */
+function schedulePresenceClose(conn: PresenceConn, deadline: number) {
+  if (conn.timer) clearTimeout(conn.timer);
+  conn.deadline = deadline;
+  conn.timer = setTimeout(() => closeRoomPresence(conn.room), Math.max(0, deadline - Date.now()));
+}
 
 /**
- * Tauri 直连进入直播间（roomEntryAction）
+ * 建立一条弹幕在场连接（不做幂等判断，调用方负责登记）。
+ * 连接被意外中断（非主动关闭）时，在截止时间前自动重连并重新登记，保证开奖时仍在线。
  */
-export async function enterRoomNative(platform: Platform, roomId: number): Promise<ApiResult> {
-  const session = await resolveSession(platform);
-  if (!session || session.source === "server") {
-    return { code: -1, message: "服务器账号无法进入直播间" };
+async function createPresence(platform: Platform, roomId: number, deadline: number, retries = 0): Promise<PresenceConn | null> {
+  try {
+    const session = await resolveSession(platform);
+    if (!session || session.source === "server") return null;
+    const cred = await ensureValidCredentialClient(platform, session);
+    if (!cred.valid) return null;
+    const uid = Number(cred.cookie.match(/DedeUserID=(\d+)/i)?.[1] ?? 0);
+    if (!uid) return null;
+    const reqCookie = await ensureBuvidCookie(platform, cred.cookie);
+    // 弹幕服务器 token：getConf 已在客户端验证可避开 getDanmuInfo 的浏览器风控（同展示模块弹幕服务）
+    const conf = await platform.fetchBilibiliJson<{ code: number; data?: { token: string } }>({
+      url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
+      cookie: reqCookie,
+      live: true,
+    });
+    if (conf?.code !== 0 || !conf?.data?.token) {
+      console.warn(`[Lottery] getConf 失败 room=${roomId} code=${conf?.code}`);
+      return null;
+    }
+    const { BiliLive } = (await import("bili-live-listener")) as {
+      BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
+    };
+    const live = new BiliLive(roomId, { key: conf.data.token, uid, isBrowser: true });
+    const conn: PresenceConn = { live, room: roomId, deadline, timer: null, closed: false };
+    // 等待认证通过（onLive）后再返回：调用方"先建在场连接再参与抽奖"的顺序才真正生效，
+    // 否则参与请求可能早于在线状态生效而失败。最长等待 5 秒，超时也照常返回，不阻塞参与。
+    const ready = new Promise<void>((resolve) => {
+      live.onLive(() => {
+        console.log(`[Lottery] 弹幕在场连接已建立 room=${roomId}（认证通过，账号计为在线）`);
+        resolve();
+      });
+      setTimeout(resolve, 5000);
+    });
+    live.onError((e: any) => console.warn(`[Lottery] 弹幕在场连接异常 room=${roomId}`, e?.message || e));
+    live.onClose(() => {
+      // 主动关闭（到点断开/停止）不重连
+      if (conn.closed) return;
+      // 已被新连接取代时不再处理
+      if (presenceMap.get(roomId) !== conn) return;
+      presenceMap.delete(roomId);
+      if (conn.timer) { clearTimeout(conn.timer); conn.timer = null; }
+      if (Date.now() >= deadline || retries >= MAX_PRESENCE_RETRY) return;
+      console.log(`[Lottery] 弹幕在场连接中断，重连 room=${roomId}（第 ${retries + 1} 次）`);
+      createPresence(platform, roomId, deadline, retries + 1).then((c) => {
+        if (c && !c.closed) presenceMap.set(roomId, c);
+      });
+    });
+    schedulePresenceClose(conn, deadline);
+    await ready;
+    return conn;
+  } catch (e) {
+    console.warn("[Lottery] 建立弹幕在场连接失败", e);
+    return null;
   }
-  const cred = await ensureValidCredentialClient(platform, session);
-  if (!cred.valid) return { code: -1, message: "登录凭证失效" };
+}
 
-  const csrf = extractCookieValue(cred.session.biliCookies ?? [], "bili_jct")
-    || cred.cookie.match(/bili_jct=([a-f0-9]+)/i)?.[1]
-    || "";
-  // Wbi 签名（csrf/room_id/platform 参与签名，query 放 csrf+w_rid+wts，同用户提供的示例）
-  const wbi = await signWbiParams(platform, {
-    csrf,
-    room_id: String(roomId),
-    platform: "pc",
-  });
-  const url = `https://api.live.bilibili.com/xlive/web-room/v1/index/roomEntryAction?csrf=${encodeURIComponent(csrf)}&w_rid=${encodeURIComponent(wbi.w_rid)}&wts=${wbi.wts}`;
-  // B站 风控要求 Cookie 携带 buvid3 设备指纹
-  const reqCookie = await ensureBuvidCookie(platform, cred.cookie);
+/**
+ * 建立/延长指定房间的弹幕在场连接。
+ * - 幂等：同一房间已连接时只延长断开时间，不重复建连
+ * - untilTsSec：该房间最后一个抽奖（天选/红包）的开奖时间（秒），连接在结束后 3 秒断开
+ * 失败静默返回 false，不影响参与抽奖
+ */
+async function ensureRoomPresence(platform: Platform, roomId: number, untilTsSec: number): Promise<boolean> {
+  const deadline = untilTsSec * 1000 + 3000;
+  const existing = presenceMap.get(roomId);
+  if (existing) {
+    if (deadline > existing.deadline) {
+      schedulePresenceClose(existing, deadline);
+      console.log(`[Lottery] 弹幕在场连接已延长 room=${roomId} 至 ${new Date(deadline).toLocaleTimeString()}`);
+    }
+    return true;
+  }
+  const conn = await createPresence(platform, roomId, deadline);
+  if (!conn) return false;
+  presenceMap.set(roomId, conn);
+  return true;
+}
 
-  const data = await platform.fetchBilibiliJson<ApiResult>({
-    url,
-    method: "POST",
-    body: new URLSearchParams({ room_id: String(roomId), platform: "pc" }).toString(),
-    cookie: reqCookie,
-    live: true,
-  });
-  return data;
+/**
+ * Tauri 直连：在直播间保持在线（弹幕 WS 长连接）
+ * @param untilTsSec 该房间最后一个抽奖的开奖时间（秒），连接在结束后 3 秒断开
+ */
+export async function enterRoomNative(platform: Platform, roomId: number, untilTsSec?: number): Promise<ApiResult> {
+  const until = untilTsSec ?? Math.floor(Date.now() / 1000);
+  const ok = await ensureRoomPresence(platform, roomId, until);
+  console.log(`[Lottery] enterRoom room=${roomId} presence=${ok ? "已建立弹幕在线" : "未建立在场"}`);
+  return ok ? { code: 0 } : { code: -1, message: "建立弹幕在场连接失败" };
 }
 
 /**
@@ -323,14 +421,236 @@ export async function enterRoomServer(roomId: number): Promise<ApiResult> {
 }
 
 /**
- * 统一入口：进入直播间
+ * 统一入口：在直播间保持在线。
+ * @param untilTsSec 该房间最后一个抽奖的开奖时间（秒），连接在结束后 3 秒自动断开
  */
-export async function enterRoom(roomId: number): Promise<ApiResult> {
+export async function enterRoom(roomId: number, untilTsSec: number): Promise<boolean> {
   const platform: Platform = await getPlatform();
   if (platform.isNative) {
-    return enterRoomNative(platform, roomId);
+    const r = await enterRoomNative(platform, roomId, untilTsSec);
+    return r.code === 0;
   }
-  return enterRoomServer(roomId);
+  const r = await enterRoomServer(roomId);
+  return r?.code === 0;
+}
+
+// ===== 红包（人气红包）检测与参与 =====
+
+/** 红包奖品 */
+export type RedPocketAward = {
+  gift_id: number;
+  num: number;
+  gift_name: string;
+  gift_pic: string;
+};
+
+/** 红包信息（RedPocketActiveList 列表项） */
+export type RedPocketInfo = {
+  lot_id: number;
+  awards: RedPocketAward[];
+  end_time: number;
+  current_time: number;
+  lot_status: number;
+  user_status: number;
+  /** 红包类型：0=礼物 3=电池 4=亲密度（不抢不显示），另有上舰红包 */
+  rp_type?: number;
+  /** 总价值（分），电池红包需 /100 */
+  total_price?: number;
+  /** 红包发送者 UID */
+  sender_uid?: number;
+  icon_url?: string;
+  need_follow?: boolean;
+};
+
+/** 红包房间（含倒计时信息） */
+export type RedPocketRoom = {
+  roomid: number;
+  uname: string;
+  redPocket: RedPocketInfo;
+  end_time: number;
+};
+
+/** 客户端红包参与使用的固定 statistics 参数（Android App 9.8.0） */
+const RED_POCKET_STATISTICS = JSON.stringify({ appId: 1, version: "9.8.0", abtest: "", platform: 3 });
+
+/** 从活跃列表里筛出所有进行中的红包（lot_status=1） */
+function pickActiveRedPockets(list: RedPocketInfo[] | undefined | null): RedPocketInfo[] {
+  if (!list || list.length === 0) return [];
+  // 亲密度红包（rp_type=4）不抢不显示
+  return list.filter((rp) => rp.lot_status === 1 && rp.rp_type !== 4);
+}
+
+/** 取红包内数量最大的礼物（用于节省空间只显示一个） */
+export function pickLargestGift(awards?: RedPocketAward[]): RedPocketAward | null {
+  if (!awards || awards.length === 0) return null;
+  return [...awards].sort((a, b) => b.num - a.num)[0];
+}
+
+/** 提取红包参与请求的 csrf */
+function extractCsrf(cred: { cookie: string; session: { biliCookies?: string[] } }): string {
+  return extractCookieValue(cred.session.biliCookies ?? [], "bili_jct")
+    || cred.cookie.match(/bili_jct=([a-f0-9]+)/i)?.[1]
+    || "";
+}
+
+/**
+ * Tauri 直连检测指定房间的所有红包
+ */
+export async function checkRedPocketNative(platform: Platform, roomId: number): Promise<RedPocketInfo[]> {
+  const session = await resolveSession(platform);
+  if (!session || session.source === "server") {
+    console.warn(`[RedPocket] check room=${roomId}: 未登录或服务器账号`);
+    return [];
+  }
+  const cred = await ensureValidCredentialClient(platform, session);
+  if (!cred.valid) return [];
+  const csrf = extractCsrf(cred);
+  if (!csrf) return [];
+
+  // Wbi 签名（含 csrf/mobi_app/platform/room_id/statistics/web_location，同用户提供的示例）
+  const signedParams = await signWbiParams(platform, {
+    csrf,
+    mobi_app: "android",
+    platform: "android",
+    room_id: String(roomId),
+    statistics: RED_POCKET_STATISTICS,
+    web_location: "444.248",
+  });
+  const url = `https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketActiveList?${new URLSearchParams(signedParams).toString()}`;
+  const reqCookie = await ensureBuvidCookie(platform, cred.cookie);
+  try {
+    const data = await platform.fetchBilibiliJson<ApiResult<{ list: RedPocketInfo[] }>>({
+      url,
+      cookie: reqCookie,
+      live: true,
+    });
+    const active = pickActiveRedPockets(data.data?.list);
+    console.log(`[RedPocket] room=${roomId} code=${data.code} list=${active.length} statuses=${active.map((rp) => rp.user_status).join(",")} types=${active.map((rp) => rp.rp_type).join(",")} total=${active.map((rp) => rp.total_price).join(",")}`);
+    if (data.code !== 0) return [];
+    return active;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Tauri 直连参与红包抽奖
+ */
+export async function drawRedPocketNative(platform: Platform, roomId: number, lotId: number, ruid: number): Promise<ApiResult> {
+  const session = await resolveSession(platform);
+  if (!session || session.source === "server") return { code: -1, message: "服务器账号无法参与红包" };
+  const cred = await ensureValidCredentialClient(platform, session);
+  if (!cred.valid) return { code: -1, message: "登录凭证失效" };
+  const csrf = extractCsrf(cred);
+  if (!csrf) return { code: -1, message: "未找到 csrf" };
+
+  const uid = Number(cred.cookie.match(/DedeUserID=(\d+)/i)?.[1] ?? 0);
+
+  // query：Wbi 签名参数（同抓包请求），POST body 放参与参数
+  const signedParams = await signWbiParams(platform, {
+    csrf,
+    mobi_app: "android",
+    platform: "android",
+    statistics: RED_POCKET_STATISTICS,
+  });
+  const query = new URLSearchParams(signedParams).toString();
+  const url = `https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDraw?${query}`;
+  const reqCookie = await ensureBuvidCookie(platform, cred.cookie);
+  const buvid = reqCookie.match(/buvid3=([^;]+)/i)?.[1] ?? "";
+  const body = JSON.stringify({
+    uid,
+    room_id: roomId,
+    ruid,
+    lot_id: lotId,
+    spm_id: "live.live-room-detail.red-envelope.extract",
+    jump_from: "27007",
+    session_id: "-99998",
+    statistics: JSON.stringify({ appId: 0, platform: 3, version: "9.8.0", abtest: "" }),
+    live_statistics: JSON.stringify({
+      pc_client: "pink",
+      jumpfrom: "-99998",
+      source_event: "0",
+      room_category: "0",
+      official_channel: "-99998",
+      screen_status: "-99998",
+      room_id: "-99998",
+      up_id: "-99998",
+      parent_area_id: "-99998",
+      area_id: "-99998",
+      live_status: "-99998",
+      spm_id: "-99998",
+      session_id: "-99998",
+      launch_id: "-99998",
+      simple_id: "-99998",
+      av_id: "-99998",
+      flow_extend: "-99998",
+      bussiness_extend: "-99998",
+      data_extend: "-99998",
+      trackid: "-99998",
+      action_id: "-99998",
+      user_status: "2",
+      buvid,
+    }),
+  });
+  console.log(`[RedPocket] draw room=${roomId} lot=${lotId} query=${query} body=${body}`);
+  const data = await platform.fetchBilibiliJson<ApiResult>({
+    url,
+    method: "POST",
+    body,
+    json: true,
+    cookie: reqCookie,
+    live: true,
+  });
+  console.log(`[RedPocket] draw room=${roomId} lot=${lotId} code=${data.code} msg=${data.message || data.msg || ""}`);
+  return data;
+}
+
+/**
+ * Web 模式检测红包（走服务器代理）
+ */
+export async function checkRedPocketServer(roomId: number): Promise<RedPocketInfo[]> {
+  const r = await serverPost<ApiResult<{ red_pockets: RedPocketInfo[] }>>("/api/lottery/redpocket", {
+    _action: "check",
+    room_id: roomId,
+  });
+  if (r.code !== 0) return [];
+  const list = r.data?.red_pockets ?? [];
+  return list.filter((rp) => rp.lot_status === 1);
+}
+
+/**
+ * Web 模式参与红包（走服务器代理）
+ */
+export async function drawRedPocketServer(roomId: number, lotId: number, ruid: number): Promise<ApiResult> {
+  return serverPost<ApiResult>("/api/lottery/redpocket", {
+    _action: "draw",
+    room_id: roomId,
+    lot_id: lotId,
+    ruid,
+  });
+}
+
+/**
+ * 统一入口：检测指定房间的所有红包
+ */
+export async function checkRedPocket(roomId: number): Promise<RedPocketInfo[]> {
+  const platform: Platform = await getPlatform();
+  if (platform.isNative) return checkRedPocketNative(platform, roomId);
+  return checkRedPocketServer(roomId);
+}
+
+/**
+ * 统一入口：参与红包抽奖
+ */
+export async function drawRedPocket(roomId: number, lotId: number, ruid: number): Promise<ApiResult> {
+  const platform: Platform = await getPlatform();
+  if (platform.isNative) return drawRedPocketNative(platform, roomId, lotId, ruid);
+  return drawRedPocketServer(roomId, lotId, ruid);
+}
+
+/** 计算红包开奖时间戳（秒） */
+export function calcRedPocketEndTime(rp: RedPocketInfo): number {
+  return rp.end_time;
 }
 
 // ===== 工具函数 =====
@@ -341,26 +661,8 @@ export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * 计算开奖时间戳（秒）
  */
 export function calcEndTime(lottery: LotteryInfo): number {
-  return lottery.current_time + lottery.time;
-}
-
-/**
- * 过滤间隔太近的天选（< 6秒的跳过第二个）
- */
-export function filterCloseLotteries(lotteries: LotteryRoom[]): LotteryRoom[] {
-  if (lotteries.length <= 1) return lotteries;
-  const sorted = [...lotteries].sort((a, b) => a.end_time - b.end_time);
-  const result: LotteryRoom[] = [sorted[0]];
-  let lastEndTime = sorted[0].end_time;
-  for (let i = 1; i < sorted.length; i++) {
-    const gap = sorted[i].end_time - lastEndTime;
-    if (gap >= 6) {
-      result.push(sorted[i]);
-      lastEndTime = sorted[i].end_time;
-    }
-    // gap < 6: 跳过这个，不更新 lastEndTime
-  }
-  return result;
+  // 已参与(status=2)时 B站 可能不返回剩余秒 time，取 0 保证仍能算出时间戳用于显示
+  return (lottery.current_time || 0) + (lottery.time || 0);
 }
 
 /**

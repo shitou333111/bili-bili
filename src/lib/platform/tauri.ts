@@ -93,11 +93,11 @@ export const tauriPlatform: Platform = {
 
   async fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T> {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    const { url, cookie, method = "GET", body, mobile = false, live = false } = options;
+    const { url, cookie, method = "GET", body, json = false, mobile = false, live = false } = options;
     const headerMap = mobile ? BILIBILI_MOBILE_HEADERS : live ? BILIBILI_LIVE_HEADERS : BILIBILI_WEB_HEADERS;
     const headers: Record<string, string> = { ...headerMap };
     if (cookie) headers["Cookie"] = cookie;
-    if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    if (body) headers["Content-Type"] = json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded";
 
     const response = await tauriFetch(url, {
       method,

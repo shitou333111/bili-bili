@@ -12,6 +12,8 @@ export type FetchJsonOptions = {
   cookie?: string;
   method?: "GET" | "POST";
   body?: string;
+  /** 以 application/json 作为 body 的 Content-Type（默认 x-www-form-urlencoded） */
+  json?: boolean;
   mobile?: boolean;
   live?: boolean;
 };
