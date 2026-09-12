@@ -68,22 +68,11 @@ export async function POST(request: NextRequest) {
   for (let i = 0; i < fids.length; i++) {
     const fid = fids[i];
     try {
-      // 尝试移除粉丝 (act=5)
-      let result = await modifyRelation(fid, 5);
-
-      // 如果失败(如已注销账号22013)，尝试 act=2(取关) 作为备选
-      if (result.code !== 0) {
-        console.log(`[remove-fan] fid=${fid} act=5 failed (${result.code}: ${result.message}), trying act=2`);
-        await new Promise((r) => setTimeout(r, 300));
-        const result2 = await modifyRelation(fid, 2);
-        if (result2.code === 0) {
-          result = { code: 0, message: "已通过取关移除" };
-        }
-        // 两种方式都失败了，返回 act=5 的原始错误
-      }
+      // 移除粉丝 (act=7)。act=5 是拉黑，会把粉丝加入黑名单，绝不能用于清理粉丝
+      const result = await modifyRelation(fid, 7);
 
       if (result.code !== 0) {
-        console.log(`[remove-fan] fid=${fid} all methods failed: code=${result.code} msg=${result.message}`);
+        console.log(`[remove-fan] fid=${fid} remove failed: code=${result.code} msg=${result.message}`);
       }
 
       results.push({
