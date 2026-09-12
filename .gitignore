@@ -61,7 +61,10 @@ minisign.pub
 
 # notes
 TO DO.txt
+TRAE dialog/
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
