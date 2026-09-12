@@ -19,7 +19,7 @@ const BILIBILI_WEB_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 const BILIBILI_MOBILE_UA =
-  "Mozilla/5.0 (Linux; Android 13; SM-G9910 Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36 os/android model/SM-G9910 build/8870400 osVer/13 sdkInt/33 network/2 BiliApp/8870400 mobi_app/android";
+  "Mozilla/5.0 (Linux; Android 14; 25102RKBEC Build/UQ1A.240205.08180011; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.119 Mobile Safari/537.36 os/android model/25102RKBEC build/9080300 osVer/14 sdkInt/34 network/2 BiliApp/9080300 mobi_app/android channel/bili innerVer/9080310 c_locale/zh-Hans_CN s_locale/zh_CN disable_rcmd/0 themeId/1 sh/24 timezone/Asia/Shanghai utcOffset/+08:00 isDaylightTime/0 alwaysTranslate/0";
 
 const BILIBILI_WEB_HEADERS: Record<string, string> = {
   "User-Agent": BILIBILI_WEB_UA,
@@ -53,12 +53,13 @@ export const webPlatform: Platform = {
   os: "web",
 
   async fetchBilibiliJson<T>(options: FetchJsonOptions): Promise<T> {
-    const { url, cookie, method = "GET", body, json = false, mobile = false, live = false } = options;
+    const { url, cookie, method = "GET", body, json = false, mobile = false, live = false, extraHeaders } = options;
     const headers = new Headers(
       mobile ? BILIBILI_MOBILE_HEADERS : live ? BILIBILI_LIVE_HEADERS : BILIBILI_WEB_HEADERS
     );
     if (cookie) headers.set("Cookie", cookie);
     if (body) headers.set("Content-Type", json ? "application/json; charset=utf-8" : "application/x-www-form-urlencoded");
+    if (extraHeaders) for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
 
     const response = await fetch(url, { method, headers, body, cache: "no-store" });
     if (!response.ok) {

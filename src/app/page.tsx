@@ -3072,7 +3072,7 @@ export default function HomePage() {
                 )}
                 {[
                   { icon: "👍", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
-                  { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "自动扫描热门直播间天选福袋，定时进入直播间参与抽奖", needsLogin: true },
+                  { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "指定直播间，自动抢天选福袋和红包", needsLogin: true },
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },

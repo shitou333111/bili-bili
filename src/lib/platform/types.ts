@@ -16,6 +16,8 @@ export type FetchJsonOptions = {
   json?: boolean;
   mobile?: boolean;
   live?: boolean;
+  /** 额外的自定义请求头（合并到默认头之后，可覆盖默认值） */
+  extraHeaders?: Record<string, string>;
 };
 
 export type RawResponse = {
