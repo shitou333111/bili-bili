@@ -3625,8 +3625,7 @@ export default function HomePage() {
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
-                  <span className="text-sm font-semibold">助力主播 自动点赞</span>
-                  {likeList.length > 0 && <span className="text-xs text-black/40">共 {likeList.length} 位常看主播</span>}
+                  <span className="text-sm font-semibold">自动点赞</span>
                   <div className="ml-auto flex items-center gap-2">
                     <button onClick={loadLikeAnchors} disabled={likeLoading} className="shrink-0 rounded-full border border-black/15 px-3 py-1 text-xs text-black/60 hover:bg-gray-50 transition disabled:opacity-50">
                       <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${likeLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
