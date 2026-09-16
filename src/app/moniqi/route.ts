@@ -251,7 +251,7 @@ export async function GET(req: Request) {
   } catch {
     return new NextResponse(
       `<!doctype html><html><head><meta charset='utf-8'></head><body><h2>镜像未生成</h2><p>活动「${act.title}」尚未抓取镜像，请先执行 <code>node scripts/moniqi-mirror.mjs</code>。</p></body></html>`,
-      { headers: { "Content-Type": "text/html; charset=utf-8" } }
+      { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
 
@@ -264,7 +264,7 @@ export async function GET(req: Request) {
     local_image_base: `/moniqi/mirror/${id}`,
   };
 
-  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=15`;
+  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=16`;
   // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置，
   // 并以内联 background-image 引用 B站 CDN(https://i0.hdslb.com/bfs/live/048ae887…png)。
   // 但 B站 CDN 是黑名单式防盗链：背景图请求一旦携带 Referer(如 external Chrome 发送

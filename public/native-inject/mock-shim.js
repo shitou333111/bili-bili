@@ -1861,13 +1861,16 @@
     return { code: 0, message: "OK", ttl: 1, data: { list: [] } };
   }
 
-  // ===== 原生活动窗口底部工具条（仅原生模式 + 星座回响）=====
+  // ===== 原生活动窗口底部工具条（仅原生模式 + 星座回响/翻牌夺宝）=====
   // 与 moniqi 壳页底部按钮一致（去掉"更多功能"/"指定主播"）：
   // "在哪一步停手最赚？" / "破防了😭我要开挂" / 总价值badge(含盈亏) / "仅模拟 无消费"。
   // 按钮与 mock 逻辑通过 window.postMessage 互通（与 moniqi 壳页同机制）。
   function resBuildToolbar() {
     if (MIRROR) return; // moniqi 镜像由壳页 route.ts 提供按钮，避免重复
-    try { if (algType() !== "number_between_same") return; } catch (e) { return; }
+    var at = "";
+    try { at = algType(); } catch (e) { return; }
+    if (at !== "number_between_same" && at !== "card-flip") return;
+    var isCard = at === "card-flip";
     if (document.getElementById("res-toolbar")) return;
     // 统一按钮高度34px，badge 同高
     var h = "height:34px;";
@@ -1888,8 +1891,10 @@
         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15l8-8 8 8"/></svg>' +
       '</button>';
     document.body.appendChild(bar);
-    // 停手分析弹窗（数据与 moniqi 壳页一致，来自权威精确计算）
-    var rows = [[1, 50, 51, 1], [2, 100, 104, 4], [3, 200, 206, 6], [4, 500, 503, 3], [5, 1200, 1207, 7], [6, 3000, 3005, 5], [7, 8800, 8808, 8]];
+    // 停手分析弹窗（数据与 moniqi 壳页一致：星座回响/翻牌夺宝各用对应权威计算）
+    var rows = isCard
+      ? [[1, 50, 55, 5], [2, 200, 203, 3], [3, 500, 502, 2], [4, 1200, 1201, 1], [5, 3000, 3002, 2], [6, 8000, 8003, 3]]
+      : [[1, 50, 51, 1], [2, 100, 104, 4], [3, 200, 206, 6], [4, 500, 503, 3], [5, 1200, 1207, 7], [6, 3000, 3005, 5], [7, 8800, 8808, 8]];
     var trs = "";
     for (var ri = 0; ri < rows.length; ri++) {
       trs += "<tr><td style='padding:9px 10px;text-align:center;border-bottom:1px solid #eee;color:#222'>" + rows[ri][0] + "</td>" +
@@ -1905,9 +1910,9 @@
       "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:12px'><h3 style='margin:0;font:600 17px/1.4 -apple-system,\"PingFang SC\",sans-serif'>在哪一步停手最赚？</h3><span id='resCostClose' style='cursor:pointer;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:15px'>✕</span></div>" +
       "<p style='margin:0 0 8px;font:12px/1.6 -apple-system,\"PingFang SC\",sans-serif;color:#111;font-weight:700'>结论：每一步都是继续下去会更划算，但也只有几个电池的差别，算是不亏不赚，所以这是B站设计好的。继续还是停手完全看你自己的心情（单位：电池）</p>" +
       "<table style='width:100%;border-collapse:collapse;font:13px/1.5 -apple-system,\"PingFang SC\",sans-serif'><thead><tr>" +
-      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>第几个</th>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>" + (isCard ? "已翻出" : "第几个") + "</th>" +
       "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>现在收手</th>" +
-      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>继续的平均收益</th>" +
+      "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>" + (isCard ? "继续翻的平均收益" : "继续的平均收益") + "</th>" +
       "<th style='background:#f5f5fa;color:#666;font-weight:600;padding:8px 10px;text-align:center;position:sticky;top:0'>继续比收手多出</th>" +
       "</tr></thead><tbody>" + trs + "</tbody></table></div>";
     document.body.appendChild(mask);
