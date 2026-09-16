@@ -10,6 +10,7 @@ import type { Platform } from "./platform/types";
 import {
   ensureGiftDataLoaded,
   getGiftImg as storeGetGiftImg,
+  getGiftImgByName as storeGetGiftImgByName,
   getGiftName as storeGetGiftName,
   getGiftPrice as storeGetGiftPrice,
   getGiftList as storeGetGiftList,
@@ -28,6 +29,11 @@ export async function ensureGiftCatalogLoaded(platform: Platform): Promise<void>
 /** 根据 gift_id 获取礼物图片，没找到返回空字符串 */
 export function getGiftImg(giftId: number): string {
   return storeGetGiftImg(giftId);
+}
+
+/** 按名称获取礼物图片（gift_id 失效时回退用），没找到返回空字符串 */
+export function getGiftImgByName(name: string): string {
+  return storeGetGiftImgByName(name);
 }
 
 /** 根据 gift_id 获取礼物名称，没找到返回空字符串 */

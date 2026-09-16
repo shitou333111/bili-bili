@@ -27,6 +27,7 @@ const EFFECTS_FILE = "gift-effects.json";
 const ROOM_LIST_FILE = "roomGiftList.json";
 const EXTRA_IDS_FILE = "gift-extra-ids.json";
 const META_FILE = "gift-data-meta.json";
+const GUARD_FILE = "gift-guard.json";
 
 const GIFT_CONFIG_API =
   "https://api.live.bilibili.com/xlive/web-room/v1/giftPanel/giftConfig?platform=pc&room_id=1844040969";
@@ -71,6 +72,8 @@ let memList: GiftConfigItem[] | null = null;
 let memImgMap: Map<number, string> | null = null;
 let memEffects: Record<number, GiftEffectBinding> | null = null;
 let memRoomGiftList: RoomGiftListData | null = null;
+// 守护礼物（舰长/提督/总督）名 -> 图标，不在普通 list 中，来自 guard_resources
+let memGuardMap: Record<string, string> | null = null;
 
 function filePath(dir: string, file: string): string {
   return `${dir}/${file}`;
@@ -92,18 +95,20 @@ function setMemList(list: GiftConfigItem[]): void {
   }
 }
 
-/** 尝试从本地文件加载到内存；三个文件都成功加载返回 true */
+/** 尝试从本地文件加载到内存；礼物列表与特效绑定表成功加载返回 true */
 async function loadFromDisk(platform: Platform): Promise<boolean> {
   const dir = await platform.getDataDir();
-  const [list, effects, roomList] = await Promise.all([
+  const [list, effects, roomList, guard] = await Promise.all([
     readJson<GiftConfigItem[]>(platform, filePath(dir, LIST_FILE)),
     readJson<Record<number, GiftEffectBinding>>(platform, filePath(dir, EFFECTS_FILE)),
     readJson<RoomGiftListData>(platform, filePath(dir, ROOM_LIST_FILE)),
+    readJson<Record<string, string>>(platform, filePath(dir, GUARD_FILE)),
   ]);
   if (list && effects && roomList) {
     setMemList(list);
     memEffects = effects;
     memRoomGiftList = roomList;
+    memGuardMap = guard ?? {};
     return true;
   }
   return false;
@@ -117,17 +122,26 @@ async function isMetaFresh(platform: Platform): Promise<boolean> {
   return !!meta && typeof meta.updatedAt === "number" && Date.now() - meta.updatedAt < TTL_MS;
 }
 
-async function fetchList(platform: Platform): Promise<GiftConfigItem[] | null> {
+async function fetchList(
+  platform: Platform,
+): Promise<{ list: GiftConfigItem[] | null; guard: Record<string, string> | null }> {
   try {
     const resp = await platform.fetchBilibiliJson<{
       code: number;
-      data?: { list?: GiftConfigItem[] } | null;
+      data?: {
+        list?: GiftConfigItem[] | null;
+        guard_resources?: Array<{ level: number; name: string; img: string }> | null;
+      } | null;
     }>({ url: GIFT_CONFIG_API, cookie: "" }); // 无需登录
-    if (resp.code !== 0 || !resp.data?.list) return null;
-    return resp.data.list;
+    if (resp.code !== 0 || !resp.data?.list) return { list: null, guard: null };
+    const guard: Record<string, string> = {};
+    for (const g of resp.data.guard_resources ?? []) {
+      if (g.name && g.img) guard[g.name] = g.img;
+    }
+    return { list: resp.data.list, guard };
   } catch (err) {
     console.error("[GiftLocalStore] 从B站获取礼物列表失败:", err);
-    return null;
+    return { list: null, guard: null };
   }
 }
 
@@ -177,6 +191,7 @@ async function persist(
   list: GiftConfigItem[],
   effects: Record<number, GiftEffectBinding>,
   roomList: RoomGiftListData,
+  guard: Record<string, string>,
 ): Promise<void> {
   try {
     const dir = await platform.getDataDir();
@@ -184,6 +199,7 @@ async function persist(
       platform.writeFile(filePath(dir, LIST_FILE), JSON.stringify(list)),
       platform.writeFile(filePath(dir, EFFECTS_FILE), JSON.stringify(effects)),
       platform.writeFile(filePath(dir, ROOM_LIST_FILE), JSON.stringify(roomList)),
+      platform.writeFile(filePath(dir, GUARD_FILE), JSON.stringify(guard)),
       platform.writeFile(filePath(dir, META_FILE), JSON.stringify({ updatedAt: Date.now() })),
     ]);
   } catch (err) {
@@ -203,16 +219,15 @@ export async function ensureGiftDataLoaded(platform: Platform, forceRefresh = fa
   if (!forceRefresh) {
     if ((await loadFromDisk(platform)) && (await isMetaFresh(platform))) return;
   }
-  const [list, effects, roomList] = await Promise.all([
-    fetchList(platform),
-    fetchEffects(platform),
-    fetchRoomList(platform),
-  ]);
+  const { list, guard } = await fetchList(platform);
+  const effects = await fetchEffects(platform);
+  const roomList = await fetchRoomList(platform);
   if (list && effects && roomList) {
     setMemList(list);
     memEffects = effects;
     memRoomGiftList = roomList;
-    await persist(platform, list, effects, roomList);
+    memGuardMap = guard ?? {};
+    await persist(platform, list, effects, roomList, guard ?? {});
   } else {
     // 下载失败：回退本地旧文件（有则用）
     await loadFromDisk(platform);
@@ -233,6 +248,19 @@ export function getGiftList(): GiftConfigItem[] {
 /** 根据 gift_id 获取礼物图标，没找到返回空字符串 */
 export function getGiftImg(giftId: number): string {
   return memImgMap?.get(giftId) ?? "";
+}
+
+/**
+ * 按名称获取礼物图标，没找到返回空字符串。
+ * 名称回退用于 gift_id 已失效的场景：B站历史记录中的 gift_id 可能是旧 id
+ * （如"白羊娃娃"旧 id 34933，现目录 id 34928），按 id 查不到时按名称精确匹配。
+ * 守护礼物（舰长/提督/总督）不在普通 list 中，需另查 memGuardMap。
+ */
+export function getGiftImgByName(name: string): string {
+  if (!name) return "";
+  const item = memList?.find((g) => g.name === name);
+  if (item) return item.img_basic || item.webp || item.gif || "";
+  return memGuardMap?.[name] ?? "";
 }
 
 /** 根据 gift_id 获取礼物名称，没找到返回空字符串 */

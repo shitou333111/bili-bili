@@ -11,7 +11,8 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import { BLIND_BOX_CONFIG } from "./config";
-import { ensureGiftCatalogLoaded, getGiftImg } from "./gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftImg, getGiftImgByName } from "./gift-catalog-client";
+import { buildGiftSummary } from "./gift-summary";
 import {
   resolveSession,
   buildCookie,
@@ -1283,9 +1284,12 @@ export async function fetchAnchorGifts(
     // 兼容旧版
     const blindBoxProfit = blindBoxProfits.length > 0 ? blindBoxProfits[0] : null;
 
-    const giftSummary = Array.from(giftMap.entries())
-      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: getGiftImg(gift_id) }))
-      .sort((a, b) => b.hamster - a.hamster);
+    // 按名称合并同一种礼物（B站礼物 ID 随版本变更，旧 ID 与新 ID 同名礼物合并为一条，
+    // 代表 ID 优先取当前目录有效的 ID，图标缺失时按名称回退）
+    const giftSummary = buildGiftSummary(
+      Array.from(giftMap.entries()).map(([gift_id, v]) => ({ gift_id, ...v })),
+      (gift_id, name) => getGiftImg(gift_id) || getGiftImgByName(name),
+    );
 
     const fanDistribution = Array.from(fanMap.entries())
       .map(([uid, v]) => ({ uid, uname: v.uname, hamster: v.hamster, giftCount: v.giftCount }))
@@ -1330,7 +1334,7 @@ export async function fetchAnchorGifts(
       totalRmb: totalHamster / 100,
       totalCount: filteredRecords.length,
       totalPage: Math.ceil(allRecords.length / PAGE_SIZE),
-      giftTypes: giftMap.size,
+      giftTypes: giftSummary.length,
       fanCount: fanMap.size,
       monthlyData,
       fanDistribution,

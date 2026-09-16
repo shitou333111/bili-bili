@@ -35,10 +35,13 @@ type GiftConfigItem = {
  * 礼物目录数据：
  * - `gifts`：gift_id -> { name, img }（仅图标，历史消费者使用）
  * - `list`：完整礼物列表（含价格、角标、分类等全部字段），供模拟器等需要完整数据的场景使用
+ * - `guardResources`：守护礼物（舰长/提督/总督）接口返回的资源，name -> { img }。
+ *   守护礼物不在普通礼物 list 中，图标需从 guard_resources 获取。
  */
 export type GiftCatalogData = {
   gifts: Record<number, { name: string; img: string }>;
   list: GiftConfigItem[];
+  guardResources: Record<string, { img: string }>;
 };
 
 // 进程内内存缓存
@@ -48,7 +51,10 @@ function isCacheValid(): boolean {
   return memCache !== null && Date.now() - memCache.timestamp < CACHE_TTL_MS;
 }
 
-function buildCatalog(list: GiftConfigItem[]): GiftCatalogData {
+function buildCatalog(
+  list: GiftConfigItem[],
+  guardResources?: Array<{ level: number; name: string; img: string }>,
+): GiftCatalogData {
   const gifts: Record<number, { name: string; img: string }> = {};
   for (const item of list) {
     if (!item.id) continue;
@@ -57,7 +63,11 @@ function buildCatalog(list: GiftConfigItem[]): GiftCatalogData {
       gifts[item.id] = { name: item.name, img: item.img_basic };
     }
   }
-  return { gifts, list };
+  const guard: Record<string, { img: string }> = {};
+  for (const g of guardResources ?? []) {
+    if (g.name && g.img) guard[g.name] = { img: g.img };
+  }
+  return { gifts, list, guardResources: guard };
 }
 
 async function fetchFromBili(): Promise<GiftCatalogData | null> {
@@ -78,7 +88,7 @@ async function fetchFromBili(): Promise<GiftCatalogData | null> {
       console.error(`[GiftCatalog] API错误 code=${data.code}`);
       return null;
     }
-    const catalog = buildCatalog(data.data.list);
+    const catalog = buildCatalog(data.data.list, data.data?.guard_resources);
     memCache = { data: catalog, timestamp: Date.now() };
     // 持久化兜底（失败不影响内存缓存）
     try {
@@ -114,6 +124,32 @@ export async function ensureGiftCatalogLoaded(): Promise<void> {
 /** 根据 gift_id 获取礼物图片，没找到返回空字符串 */
 export function getGiftImg(giftId: number): string {
   return memCache?.data.gifts?.[giftId]?.img ?? "";
+}
+
+/**
+ * 按名称获取礼物图片，没找到返回空字符串。
+ * 名称回退用于 gift_id 已失效的场景：B站历史记录中的 gift_id 可能是旧 id
+ * （如"白羊娃娃"旧 id 34933，现目录 id 34928），按 id 查不到时按名称精确匹配。
+ * 守护礼物（舰长/提督/总督）不在普通 list 中，需另查 guardResources。
+ */
+export function getGiftImgByName(name: string): string {
+  if (!name) return "";
+  return (
+    getGiftList().find((g) => g.name === name)?.img_basic ??
+    (guardMap()[name]?.img ?? "")
+  );
+}
+
+/** 守护礼物名 -> 图标 映射（内存优先，兜底落盘文件） */
+function guardMap(): Record<string, { img: string }> {
+  if (memCache?.data.guardResources) return memCache.data.guardResources;
+  try {
+    if (existsSync(CACHE_FILE)) {
+      const parsed = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
+      if (parsed?.guardResources) return parsed.guardResources;
+    }
+  } catch {}
+  return {};
 }
 
 /** 根据 gift_id 获取礼物名称，没找到返回空字符串 */

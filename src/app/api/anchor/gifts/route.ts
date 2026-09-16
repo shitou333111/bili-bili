@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential, buildCookieHeader } from "@/lib/bilibili/cookie-refresh";
-import { ensureGiftCatalogLoaded, getGiftImg } from "@/lib/gift-catalog";
+import { ensureGiftCatalogLoaded, getGiftImg, getGiftImgByName } from "@/lib/gift-catalog";
+import { buildGiftSummary } from "@/lib/gift-summary";
 import { isOffline } from "@/lib/offline";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
@@ -1284,9 +1285,12 @@ export async function GET(request: Request) {
       img: "",
     };
 
-    const giftSummary = Array.from(giftMap.entries())
-      .map(([gift_id, v]) => ({ gift_id, name: v.name, num: v.num, hamster: v.hamster, img: getGiftImg(gift_id) }))
-      .sort((a, b) => b.hamster - a.hamster);
+    // 按名称合并同一种礼物（B站礼物 ID 随版本变更，旧 ID 与新 ID 同名礼物合并为一条，
+    // 代表 ID 优先取当前目录有效的 ID，图标缺失时按名称回退）
+    const giftSummary = buildGiftSummary(
+      Array.from(giftMap.entries()).map(([gift_id, v]) => ({ gift_id, ...v })),
+      (gift_id, name) => getGiftImg(gift_id) || getGiftImgByName(name),
+    );
 
     const fanDistribution = Array.from(fanMap.entries())
       .map(([uid, v]) => ({ uid, uname: v.uname, hamster: v.hamster, giftCount: v.giftCount }))
@@ -1335,7 +1339,7 @@ export async function GET(request: Request) {
       totalRmb: totalHamster / 100,
       totalCount: filteredRecords.length,
       totalPage: (meta?.total_page ?? 0) + fetchedNewPages,
-      giftTypes: giftMap.size,
+      giftTypes: giftSummary.length,
       fanCount: fanMap.size,
       monthlyData,
       fanDistribution,

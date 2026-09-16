@@ -9,7 +9,8 @@ import { serverApiUrl } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
-import { ensureGiftCatalogLoaded } from "@/lib/gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftImgByName } from "@/lib/gift-catalog-client";
+import { buildGiftSummary } from "@/lib/gift-summary";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
@@ -609,17 +610,10 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const giftSummaryFiltered = (() => {
     if (!stats) return [];
     const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
-    const map = new Map<number, { gift_id: number; name: string; num: number; hamster: number; img: string }>();
-    // stats.giftSummary 中的 img 已从本地 gift-list.json 获取（getGiftImg()），直接作为主数据源
+    // stats.giftSummary 中的 img 已从本地 gift-list.json 获取（getGiftImg()），直接作为主数据源；
+    // 旧 ID 记录在汇总中查不到图标时按名称回退本地目录
     const imgMap = new Map(stats.giftSummary.map(g => [g.gift_id, g.img]));
-    for (const r of rawRecords) {
-      const img = imgMap.get(r.gift_id) || "";
-      const existing = map.get(r.gift_id) ?? { gift_id: r.gift_id, name: r.name, num: 0, hamster: 0, img };
-      existing.num += r.num;
-      existing.hamster += r.hamster;
-      map.set(r.gift_id, existing);
-    }
-    return Array.from(map.values()).sort((a, b) => b.hamster - a.hamster);
+    return buildGiftSummary(rawRecords, (giftId, name) => imgMap.get(giftId) || getGiftImgByName(name));
   })();
 
   const allFans = stats?.fanDistribution ?? [];
@@ -1127,7 +1121,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                           </thead>
                           <tbody>
                             {giftSummaryFiltered.map((gift) => (
-                              <tr key={gift.gift_id} className="border-t border-black/10 bg-white">
+                              <tr key={`${gift.gift_id}_${gift.name}`} className="border-t border-black/10 bg-white">
                                 <td className="px-3 py-1.5">
                                   <div className="flex items-center gap-1.5">
                                     {gift.img ? <img src={gift.img} alt="" className="w-5 h-5 rounded flex-shrink-0" /> : null}
