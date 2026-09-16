@@ -22,6 +22,19 @@ const SIM_ROWS: Array<[number, number, number, number]> = [
   [7, 8800, 8808, 8],
 ];
 
+// 翻牌夺宝（唤灵契约）"在哪一步停手最赚？"数据：已翻出 k 张兽魂涌动时，
+// "现在收手"获得的奖励 vs "继续翻 1 张"的最优期望总收益(EV)。
+// 期望按牌堆计算：剩余 9-k 张中 7-k 张好牌 + 2 张坏牌；翻到坏牌整局只剩安慰奖(初遇灵石 50 电池)，
+// 翻到好牌进入 k+1 状态后可再决策；翻满 7 张自动结束获 30000 电池。数据为权威精确计算。
+const CARD_ROWS: Array<[number, number, number, number]> = [
+  [1, 50, 55, 5],
+  [2, 200, 203, 3],
+  [3, 500, 502, 2],
+  [4, 1200, 1201, 1],
+  [5, 3000, 3002, 2],
+  [6, 8000, 8003, 3],
+];
+
 /**
  * /moniqi —— 活动模拟镜像页（公开、无密码、无入口路由）。
  *
@@ -59,10 +72,15 @@ export async function GET(req: Request) {
   const tplHash = hashMatch ? `#${hashMatch[1].trim()}` : "";
 
   // 玩法区隔离选择器：不同算法类型对应不同 DOM 容器（成名之路=.road-to-fame-play，
-  // 星座回响/同数间隔合成=.heart-embed）。隔离时把该容器提升为全屏、隐藏外壳其余元素。
-  const isolateSelector =
-    act.algorithmType === "number_between_same" || /resonance/i.test(String(act.id))
-      ? ".heart-embed"
+  // 星座回响/同数间隔合成=.heart-embed，翻牌夺宝/唤灵契约=.cute-monster-cards）。
+  // 隔离时把该容器提升为全屏、隐藏外壳其余元素。
+  const isRes =
+    act.algorithmType === "number_between_same" || /resonance/i.test(String(act.id));
+  const isCard = act.algorithmType === "card-flip";
+  const isolateSelector = isRes
+    ? ".heart-embed"
+    : isCard
+      ? ".cute-monster-cards"
       : ".road-to-fame-play";
 
   // 兼容直接带参访问：query 可覆盖模板值；不带参访问时用模板值。
@@ -85,9 +103,14 @@ export async function GET(req: Request) {
   // 在哪一步停手最赚？" / "更多功能"按钮与卡片固定在壳页面底部（iframe 外），不遮挡游戏区。
   if (!sp.get("app_name")) {
     const frameSrc = `/moniqi${fullSearch}${fullHash}`;
-    const costRows = SIM_ROWS.map(
-      (r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="pos">+${r[3]}</td></tr>`
-    ).join("");
+    const rows = isCard ? CARD_ROWS : SIM_ROWS;
+    const costRows = rows
+      .map(
+        (r) =>
+          `<tr><td>${isCard ? "已翻出" + r[0] + "张" : r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="pos">+${r[3]}</td></tr>`
+      )
+      .join("");
+    const costThSecond = isCard ? "继续翻的平均收益" : "继续的平均收益";
     return new NextResponse(
       `<!doctype html><html><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -98,9 +121,13 @@ export async function GET(req: Request) {
         `body{display:flex;flex-direction:column}` +
         `.frame-wrap{flex:1;min-height:0;display:flex;justify-content:center}` +
         `iframe{width:540px;max-width:100vw;height:100%;border:0;background:#342a85}` +
-        `.bar{flex:none;min-height:52px;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px;padding:8px 12px;` +
+        `.bar{flex:none;min-height:52px;position:relative;display:flex;align-items:center;gap:8px;padding:8px 56px 8px 12px;` +
         `background:rgba(16,12,36,.92);border-top:1px solid rgba(255,255,255,.08);` +
         `-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}` +
+        `.bar-group{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px}` +
+        `.fold-btn{position:absolute;right:12px;top:50%;width:34px;height:34px;transform:translateY(-50%);border-radius:50%;border:0;cursor:pointer;` +
+        `background:rgba(255,255,255,.12);color:#fff;display:inline-flex;align-items:center;` +
+        `justify-content:center;transition:transform .25s ease;padding:0}` +
         `.badge{font:12px/1 -apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.9);` +
         `padding:8px 14px;border:1px solid rgba(255,255,255,.22);border-radius:99px;` +
         `white-space:nowrap;display:inline-flex;align-items:center;gap:4px;` +
@@ -136,6 +163,7 @@ export async function GET(req: Request) {
         `</style></head><body>` +
         `<div class="frame-wrap"><iframe src="${frameSrc}" title="活动模拟"></iframe></div>` +
         `<div class="bar">` +
+        `<div class="bar-group" id="barGroup">` +
         `<a class="btn btn-home" href="/"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>更多功能</a>` +
         `<button class="btn btn-anchor" id="anchorBtn" type="button">指定主播</button>` +
         `<button class="btn btn-main" id="costBtn" type="button">在哪一步停手最赚？</button>` +
@@ -143,11 +171,13 @@ export async function GET(req: Request) {
         `<span class="badge" id="totalValueBadge" style="display:none">总价值 0 电池</span>` +
         `<span class="badge">仅模拟 无消费</span>` +
         `</div>` +
+        `<button class="fold-btn" id="foldBtn" type="button" aria-label="折叠工具栏"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15l8-8 8 8"/></svg></button>` +
+        `</div>` +
         `<div class="mask" id="costMask">` +
         `<div class="card">` +
         `<h3>在哪一步停手最赚？<span class="close" id="costClose" role="button">✕</span></h3>` +
         `<p class="tip" style="color:black;font-weight:1000;margin:0 0 8px">结论：每一步都是继续下去会更划算，但也只有几个电池的差别，算是不亏不赚，所以这是B站设计好的。继续还是停手完全看你自己的心情（单位：电池）</p>` +
-        `<table><thead><tr><th>第几个</th><th>现在收手</th><th>继续的平均收益</th><th>继续比收手多出</th></tr></thead>` +
+        `<table><thead><tr><th>${isCard ? "已翻出" : "第几个"}</th><th>现在收手</th><th>${costThSecond}</th><th>继续比收手多出</th></tr></thead>` +
         `<tbody>${costRows}</tbody></table>` +
         `</div></div>` +
         `<div class="mask" id="anchorMask">` +
@@ -165,6 +195,14 @@ export async function GET(req: Request) {
         `var btn=document.getElementById('costBtn'),mask=document.getElementById('costMask'),cl=document.getElementById('costClose');` +
         `var unlimitedBtn=document.getElementById('unlimitedBtn'),frame=document.querySelector('iframe');` +
         `var unlimited=false;` +
+        // 工具栏折叠/展开（默认展开；箭头旋转与 APP 内模拟器一致）
+        `var foldBtn=document.getElementById('foldBtn'),barGroup=document.getElementById('barGroup'),folded=false;` +
+        `foldBtn.addEventListener('click',function(){` +
+        `folded=!folded;` +
+        `barGroup.style.display=folded?'none':'flex';` +
+        `foldBtn.style.transform=folded?'translateY(-50%) rotate(180deg)':'translateY(-50%)';` +
+        `foldBtn.setAttribute('aria-label',folded?'展开工具栏':'折叠工具栏');` +
+        `});` +
         `function show(){mask.classList.add('show')}function hide(){mask.classList.remove('show')}` +
         `btn.addEventListener('click',show);cl.addEventListener('click',hide);` +
         `mask.addEventListener('click',function(e){if(e.target===mask)hide()});` +
@@ -226,7 +264,7 @@ export async function GET(req: Request) {
     local_image_base: `/moniqi/mirror/${id}`,
   };
 
-  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=10`;
+  const shimUrl = `/moniqi/mirror/${id}/mock-shim.js?v=15`;
   // 成名之路玩法区的整页背景(activity_bg)由页面内联 background-size:100%（仅限宽高）设置，
   // 并以内联 background-image 引用 B站 CDN(https://i0.hdslb.com/bfs/live/048ae887…png)。
   // 但 B站 CDN 是黑名单式防盗链：背景图请求一旦携带 Referer(如 external Chrome 发送

@@ -1367,7 +1367,7 @@ export default function AdminPage() {
             {/* Synthesis activities */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">合成活动配置</h3>
+                <h3 className="text-xs font-semibold">合成活动盈亏配置</h3>
                 <button onClick={addActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
               </div>
               <p className="text-[10px] text-black/40">勾选 = 在页面上展示该活动</p>

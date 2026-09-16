@@ -44,7 +44,9 @@ async function downloadMockImages(id) {
   const shim = await fs.readFile(MOCK_SHIM_SRC, "utf8");
   let cfg = "{}";
   try { cfg = JSON.stringify(JSON.parse(await fs.readFile(ADMIN_CFG, "utf8"))); } catch {}
-  const re = /https?:\/\/[a-z0-9.\-]+\.hdslb\.com[^\s"'()<>]+?\.(?:png|jpe?g|gif|webp)\b/gi;
+  // 静态资源（受防盗链保护的 mock 返回数据里的资源）：图片 + 动画/配置（mp4/svga/json）
+  // 都会在镜像模式下被 mock-shim resLocalUrl 改写为本地路径，必须一并下载，否则破图/动画失效。
+  const re = /https?:\/\/[a-z0-9.\-]+\.hdslb\.com[^\s"'()<>]+?\.(?:png|jpe?g|gif|webp|mp4|svga|json)\b/gi;
   const urls = new Set();
   for (const m of (shim + "\n" + cfg).matchAll(re)) {
     urls.add(m[0].replace(/[?#].*$/, "")); // 去掉 query/缓存参数，与 mock-shim res() 的匹配一致

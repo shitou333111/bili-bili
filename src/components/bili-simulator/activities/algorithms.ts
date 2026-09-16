@@ -324,6 +324,77 @@ function buildResonanceConfig(params: Record<string, unknown>): Record<string, u
   };
 }
 
+/**
+ * 翻牌夺宝（唤灵契约）默认配置。
+ *
+ * 玩法：9 张倒扣卡牌，其中 7 张【兽魂涌动】+ 2 张【灵兽逃脱】。
+ *   - 每消耗一定电池翻 1 张，翻牌价格随已翻出的兽魂涌动数量递增（card_price_schedule）；
+ *   - 翻出灵兽逃脱 → 本局立即结束，仅获安慰奖（初遇灵石 50 电池）；
+ *   - 翻出兽魂涌动 → 可继续付费翻牌，或主动退出按当前数量结算（card_rewards）；
+ *   - 翻出 7 张兽魂涌动 → 自动结束，获最高奖励（虚天鼎曜）。
+ *
+ * 单位：price/value 均为分（电池×100），与真实 /cardplay/ 接口返回一致。
+ * 字段与 mock-shim.js 的 card_* 分派一一对应，可被算法参数覆盖。
+ */
+const CARD_FLIP_START = 1789531200; // 2026-09-16 12:00 (+08:00)
+const CARD_FLIP_END = 1790006399; // 2026-09-21 23:59:59 (+08:00)
+
+// 已翻出 n 张兽魂涌动（n=0..6）后，再翻 1 张的花费（分）。翻出 7 张后游戏结束无价格。
+const CARD_FLIP_PRICES = [5000, 11000, 17000, 31500, 62000, 102500, 203000];
+
+// 已翻出 n 张兽魂涌动（0..7）对应奖励（value 为分）。
+// 各档奖励图为真实礼物图标（本地礼物库 gift-list.json 提取后写死，与游戏内下发一致）。
+const CARD_FLIP_REWARDS = [
+  { n: 0, name: "", value: 0, img: "" },
+  { n: 1, name: "初遇灵石", value: 5000, img: "https://s1.hdslb.com/bfs/live/2a3d4a80ae71038d507264f079ee6bdf8de6c16a.png" },
+  { n: 2, name: "炎纹玄锁", value: 20000, img: "https://s1.hdslb.com/bfs/live/c7b81430728f4ae1bb9a699ceff736cd045745b7.png" },
+  { n: 3, name: "五彩丹元", value: 50000, img: "https://s1.hdslb.com/bfs/live/011b07ada989dab4aca49c9d8e4a34c87a446069.png" },
+  { n: 4, name: "金潮灵浪", value: 120000, img: "https://s1.hdslb.com/bfs/live/6ddf8b4ea593ce0de5fe1b2de05298bc7236df01.png" },
+  { n: 5, name: "冥钟引籁", value: 300000, img: "https://s1.hdslb.com/bfs/live/b5fdff0ee966ba02e521db2029e7e24ca4c0e11f.png" },
+  { n: 6, name: "冰澜寒境", value: 800000, img: "https://s1.hdslb.com/bfs/live/e8ce28960de30e0717f2380788935a9a856b774d.png" },
+  { n: 7, name: "虚天鼎曜", value: 3000000, img: "https://s1.hdslb.com/bfs/live/ff7fdbfa5cf3840dda24cc5064cc6c071e99908b.png" },
+];
+
+// 翻牌滚动榜（carousels）用户池：取自真实接口抓包
+const CARD_FLIP_CAROUSELS = [
+  { user_name: "桃夭归满_尘满予夭", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "一念布尘烟", card_num: 6, reward_name: "冰澜寒境" },
+  { user_name: "玖渡铭", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "UUの小跟班", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "郑宇宙QaQ", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "坤坤ヽ", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "負け犬-w-", card_num: 6, reward_name: "冰澜寒境" },
+  { user_name: "梦想家吱吱歪", card_num: 6, reward_name: "冰澜寒境" },
+  { user_name: "Ophthalmology_Ht", card_num: 6, reward_name: "冰澜寒境" },
+  { user_name: "䉹罅鐬", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "季风O3O", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "GachyLz", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "谷风糕糕wa", card_num: 7, reward_name: "虚天鼎曜" },
+  { user_name: "菲特醬O口O", card_num: 6, reward_name: "冰澜寒境" },
+  { user_name: "白天上班努力睡觉", card_num: 7, reward_name: "虚天鼎曜" },
+];
+
+/** 组装翻牌夺宝算法的默认 CONFIG（可在参数中覆盖 card_rewards/时间等） */
+function buildCardFlipConfig(params: Record<string, unknown>): Record<string, unknown> {
+  return {
+    start_time: typeof params.start_time === "number" ? params.start_time : CARD_FLIP_START,
+    end_time: typeof params.end_time === "number" ? params.end_time : CARD_FLIP_END,
+    card_config_id: 10,
+    card_act_id: 110687,
+    card_act_name: "唤灵契约",
+    card_right_num: 7,
+    card_wrong_num: 2,
+    card_max_draw_right: 7,
+    card_price_schedule: Array.isArray(params.card_price_schedule)
+      ? params.card_price_schedule
+      : CARD_FLIP_PRICES,
+    card_rewards: Array.isArray(params.card_rewards) ? params.card_rewards : CARD_FLIP_REWARDS,
+    card_carousel_pool: Array.isArray(params.card_carousel_pool)
+      ? params.card_carousel_pool
+      : CARD_FLIP_CAROUSELS,
+  };
+}
+
 /** 算法注册表：键 = algorithmType，与 mock-shim.js 的分派一致 */
 export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
   /** 晶石工坊（山海工坊）：6 槽位抽取/替换/合成 */
@@ -364,6 +435,15 @@ export const ALGORITHM_REGISTRY: Record<string, AlgorithmDefinition> = {
     label: "同数间隔合成",
     description: "星座回响玩法：8槽位抽星座填槽，相同星座间隔决定N值，按N结算奖励",
     buildMockConfig: buildResonanceConfig,
+  },
+  /**
+   * 翻牌夺宝（唤灵契约）：9 张倒扣卡牌，7 张兽魂涌动 + 2 张灵兽逃脱；
+   * 翻出凶牌立即结束仅获安慰奖，可主动退出按已翻出数量结算，翻出 7 张自动结束获最高奖励。
+   */
+  "card-flip": {
+    label: "翻牌夺宝",
+    description: "唤灵契约玩法：9牌7好2坏，翻出凶牌即止仅获安慰奖，翻出7张好牌获最高奖励，可随时主动退出结算",
+    buildMockConfig: buildCardFlipConfig,
   },
 };
 

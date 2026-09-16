@@ -1,29 +1,25 @@
 "use client";
 
 /**
- * 活动注册表
+ * 活动配置归一化
  *
  * - 活动配置唯一数据源为服务器 /api/simulator-activities（管理员在 admin 页维护，
  *   含 URL 模板 + 算法类型），不再使用打包静态 public/activities.json；
+ * - 所有活动均以 iframe 模式打开真实 H5（原生客户端注入 mock-shim 本地返回模拟数据），
+ *   不再维护浏览器本地复刻页；
  * - 本文件把远程配置归一化为 ActivityConfig。
  *
  * 新增一个活动：
  *  1. 若玩法属于已有算法类型：只需在 admin 页新增配置并选择对应算法类型即可，无需改代码；
- *  2. 若玩法全新：在 activities/ 下新建活动目录实现算法（mock-shim.js 分派 + algorithms.ts 注册），
+ *  2. 若玩法全新：在 mock-shim.js 增加分派 + algorithms.ts 注册算法，
  *     客户端通过前端热更新推送，无需原生包更新。
  */
 
-import { useEffect, useState, type ComponentType } from "react";
-import type { ActivityConfig, ActivityPageProps, ActivityRenderMode } from "./types";
+import { useEffect, useState } from "react";
+import type { ActivityConfig } from "./types";
 import { resolveActivityMode } from "./environment";
 import { extractRoomUidFromUrl } from "./types";
-import StoneGongfangPage from "./stone-gongfang/StoneGongfangPage";
 import { serverFetch } from "@/lib/server-api";
-
-/** 页面类型 → 组件注册表 */
-export const ACTIVITY_COMPONENTS: Record<string, ComponentType<ActivityPageProps>> = {
-  "stone-gongfang": StoneGongfangPage,
-};
 
 /**
  * 把远程活动配置归一化为 ActivityConfig。
@@ -41,7 +37,7 @@ function toActivityConfig(raw: unknown): ActivityConfig | null {
     title: String(a.title || "活动"),
     entryImage: String(a.entryImage || ""),
     pageType: (a.pageType as ActivityConfig["pageType"]) || "iframe",
-    mode: resolveActivityMode((a.mode as ActivityRenderMode | undefined) || "iframe"),
+    mode: resolveActivityMode(),
     params: {
       roomId: Number(a.roomId ?? a.params?.roomId ?? 0) || fromUrl.roomId || 0,
       uid: Number(a.uid ?? a.params?.uid ?? 0) || fromUrl.uid || 0,
@@ -89,11 +85,4 @@ export function useActivities() {
   }, []);
 
   return { activities, loading };
-}
-
-/** 根据页面类型获取组件（未注册返回 null） */
-export function getActivityComponent(
-  pageType: string
-): ComponentType<ActivityPageProps> | null {
-  return ACTIVITY_COMPONENTS[pageType] ?? null;
 }

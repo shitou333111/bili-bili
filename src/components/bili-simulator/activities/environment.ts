@@ -6,10 +6,8 @@ import type { ActivityRenderMode } from "./types";
  * 环境检测：区分「原生客户端 WebView」与「浏览器」
  *
  * 原生客户端（Android WebView / iOS WKWebView / 桌面端壳）运行同一套 React 代码，
- * 但活动页的渲染方式不同：
- *  - 原生客户端：嵌入真实 B站 H5（iframe），由原生层 shouldInterceptRequest /
- *    WKURLSchemeHandler 拦截 StarStoneDraw/Replace/Compose 三个接口并返回本地 mock JSON
- *  - 浏览器：浏览器无法拦截跨域 iframe 请求，故默认用本地复刻页（replica）演示
+ * 但活动页统一以 iframe 模式打开真实 B站 H5（原生层注入 mock-shim 本地返回模拟数据），
+ * 浏览器不再提供本地复刻页。
  */
 
 export function isNativeWebView(): boolean {
@@ -32,14 +30,8 @@ export function isNativeWebView(): boolean {
 }
 
 /**
- * 解析活动渲染模式：
- *  - 原生客户端：一律 iframe（嵌入真实 B站 H5，原生层拦截 mock）
- *  - 浏览器：默认使用配置值（replica）；可用 ?activity_mode=iframe 临时切换以调试真实页面
+ * 活动渲染模式：所有活动统一为 iframe（打开真实 B站 H5，原生层注入 mock-shim 拦截）。
  */
-export function resolveActivityMode(preferred: ActivityRenderMode): ActivityRenderMode {
-  if (typeof window !== "undefined") {
-    const param = new URLSearchParams(window.location.search).get("activity_mode");
-    if (param === "iframe" || param === "replica") return param;
-  }
-  return isNativeWebView() ? "iframe" : preferred;
+export function resolveActivityMode(): ActivityRenderMode {
+  return "iframe";
 }

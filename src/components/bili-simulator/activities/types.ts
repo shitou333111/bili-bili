@@ -7,13 +7,13 @@
  * 每套活动可自定义：标题、入口图片、URL 模板、必要参数(room_id/uid)、背后玩法算法类型。
  *
  * - algorithmType 决定用哪套 mock 算法（algorithms.ts 注册表 → mock-shim.js 分派）
- * - mode 决定渲染方式：replica=本地复刻页(浏览器 demo，走本地 mock)；
- *                        iframe=嵌入真实 H5(原生客户端 WebView，由原生层拦截 mock)
+ * - 所有活动统一以 iframe 模式打开真实 H5（原生客户端注入 mock-shim 本地返回模拟数据），
+ *   不再维护浏览器本地复刻页。
  */
 
-export type ActivityPageType = "stone-gongfang" | "iframe";
+export type ActivityPageType = "iframe";
 
-export type ActivityRenderMode = "replica" | "iframe";
+export type ActivityRenderMode = "iframe";
 
 /** 活动必要参数：真实 H5 页面需要的目标直播间 room_id 与主播 uid */
 export interface ActivityParams {
@@ -34,9 +34,9 @@ export interface ActivityConfig {
   title: string;
   /** 入口卡片图片（public 下的静态资源路径，或外部 URL） */
   entryImage: string;
-  /** 页面类型：决定渲染哪个组件 */
+  /** 页面类型：统一为 iframe（打开真实 H5 + 注入 mock） */
   pageType: ActivityPageType;
-  /** 渲染模式：replica=本地复刻；iframe=嵌入真实 H5（原生客户端拦截 mock） */
+  /** 渲染模式：统一为 iframe */
   mode: ActivityRenderMode;
   /** 必要参数（room_id / uid 等） */
   params: ActivityParams;
