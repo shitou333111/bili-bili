@@ -1,7 +1,34 @@
 import { NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
 import { readAdminConfig } from "@/lib/admin-config";
 
 export const dynamic = "force-dynamic";
+
+// 镜像 HTML 读取：生产部署（standalone/Docker）下 public 目录位置不固定，
+// 逐个候选根目录尝试；绝不能用公网域名 self-fetch（生产在 NAT/代理后自请求会失败导致 500）。
+async function readMirrorHtml(id: string): Promise<{ html?: string; tried: string[] }> {
+  const roots = [
+    process.cwd(),
+    path.join(process.cwd(), ".next", "standalone"), // next standalone：public 复制到 .next/standalone/public
+    path.join(process.cwd(), ".."),
+    path.join(process.cwd(), "..", ".."),
+  ];
+  const tried: string[] = [];
+  for (const root of roots) {
+    const p = path.join(root, "public", "moniqi", "mirror", id, "index.html");
+    tried.push(p);
+    try {
+      const s = await fs.stat(p);
+      if (s.isFile()) {
+        return { html: await fs.readFile(p, "utf8"), tried };
+      }
+    } catch {
+      // 该候选不存在，尝试下一个
+    }
+  }
+  return { tried };
+}
 
 /* * "在哪一步停手最赚？"卡片数据：最优停止策略分析
  * 当前不同星座k个时，"现在收手"获得的奖励 vs "继续召唤"的最优期望收益(EV)。
@@ -240,17 +267,14 @@ export async function GET(req: Request) {
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
-  // 镜像 HTML 通过 Next 自身的静态文件服务获取（public/ 是标准静态目录，开发/生产/standalone
-  // 部署都由 Next 托管，路径一致）；不能用 fs 读 process.cwd()/public——生产部署（standalone/
-  // Docker）下 public 不在 cwd 下，会导致"镜像未生成"。
-  const htmlRes = await fetch(new URL(`/moniqi/mirror/${id}/index.html`, req.url));
-  if (!htmlRes.ok) {
+  // 镜像 HTML 通过本地文件系统读取（见 readMirrorHtml 的候选路径说明）
+  const { html, tried } = await readMirrorHtml(id);
+  if (!html) {
     return new NextResponse(
-      `<!doctype html><html><head><meta charset='utf-8'></head><body><h2>镜像未生成</h2><p>活动「${act.title}」尚未抓取镜像，请先执行 <code>node scripts/moniqi-mirror.mjs</code>。</p></body></html>`,
+      `<!doctype html><html><head><meta charset='utf-8'></head><body><h2>镜像未生成</h2><p>活动「${act.title}」尚未抓取镜像，请先执行 <code>node scripts/moniqi-mirror.mjs</code>。</p><p style="color:#666;font-size:12px">已尝试路径：<br>${tried.join("<br>")}</p></body></html>`,
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
-  const html = await htmlRes.text();
 
   // mock 配置：算法类型 + 活动参数（与 native 注入同构，shim 会合并到默认 CONFIG 之上）。
   // local_image_base：镜像模式下把 style_config_map / prize_config 里的 B站 CDN 图片 URL
