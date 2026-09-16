@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { readAdminConfig } from "@/lib/admin-config";
 
 export const dynamic = "force-dynamic";
-
-const MIRROR_ROOT = path.join(process.cwd(), "public", "moniqi", "mirror");
 
 /* * "在哪一步停手最赚？"卡片数据：最优停止策略分析
  * 当前不同星座k个时，"现在收手"获得的奖励 vs "继续召唤"的最优期望收益(EV)。
@@ -244,16 +240,17 @@ export async function GET(req: Request) {
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
-  const htmlPath = path.join(MIRROR_ROOT, id, "index.html");
-  let html: string;
-  try {
-    html = await fs.readFile(htmlPath, "utf8");
-  } catch {
+  // 镜像 HTML 通过 Next 自身的静态文件服务获取（public/ 是标准静态目录，开发/生产/standalone
+  // 部署都由 Next 托管，路径一致）；不能用 fs 读 process.cwd()/public——生产部署（standalone/
+  // Docker）下 public 不在 cwd 下，会导致"镜像未生成"。
+  const htmlRes = await fetch(new URL(`/moniqi/mirror/${id}/index.html`, req.url));
+  if (!htmlRes.ok) {
     return new NextResponse(
       `<!doctype html><html><head><meta charset='utf-8'></head><body><h2>镜像未生成</h2><p>活动「${act.title}」尚未抓取镜像，请先执行 <code>node scripts/moniqi-mirror.mjs</code>。</p></body></html>`,
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
+  const html = await htmlRes.text();
 
   // mock 配置：算法类型 + 活动参数（与 native 注入同构，shim 会合并到默认 CONFIG 之上）。
   // local_image_base：镜像模式下把 style_config_map / prize_config 里的 B站 CDN 图片 URL
