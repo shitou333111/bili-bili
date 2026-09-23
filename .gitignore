@@ -58,6 +58,7 @@ minisign.pub
 
 # 测试/调试脚本目录（测试脚本统一放 scripts/tests/，不进 git；构建脚本 scripts/*.mjs 仍需跟踪）
 /scripts/tests/
+/scripts/output/
 
 # notes
 TO DO.txt

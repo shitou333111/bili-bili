@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, memo, type MutableRefObject } from "react";
+import { useState, useEffect, useRef, memo, Fragment, type MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
@@ -68,6 +68,7 @@ type AnchorStats = {
     blindPrice: number;
     anchors: Array<{ ruid: number; rname: string; count: number }>;
     dateRange: { start: string; end: string } | null;
+    castleFans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
   }>;
   otherStats?: {
     dayStats: { totalDays: number; maxConsecutiveDays: number };
@@ -222,6 +223,119 @@ function GiftSaveModal({
   );
 }
 
+const WEEKDAY_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/** 解析 "2026-07-23 16:30:24" 并格式化展示日期（周几 + 时间） */
+function formatCastleTime(time: string): { date: string; weekday: string; time: string } {
+  const [datePart, timePart] = time.split(" ");
+  const d = new Date(datePart.replace(/-/g, "/"));
+  const weekday = WEEKDAY_CN[d.getDay()];
+  return { date: datePart, weekday, time: timePart ?? "00:00:00" };
+}
+
+/** 粉丝城堡清单模态框：统计每个粉丝开出的城堡数量，可展开查看每次开城堡的详细记录 */
+function CastleStatModal({
+  fans,
+  fanFaces,
+  onClose,
+}: {
+  boxName: string;
+  fans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
+  fanFaces: Record<number, string>;
+  onClose: () => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [closing, setClosing] = useState(false);
+  const toggle = (uid: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  };
+  const close = () => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(onClose, 180);
+  };
+
+  return (
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm castle-modal-backdrop ${closing ? "closing" : ""}`}
+      onClick={close}
+    >
+      <div
+        className={`w-[92%] max-w-md h-auto max-h-[85vh] mb-6 flex flex-col rounded-2xl bg-white shadow-xl overflow-hidden castle-modal-panel ${closing ? "closing" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+          <div className="font-bold text-base">粉丝城堡清单</div>
+          <button onClick={close} className="w-7 h-7 rounded-full bg-black/5 hover:bg-black/10 text-black/60 text-lg leading-none flex items-center justify-center">✕</button>
+        </div>
+        <div className="overflow-y-auto">
+          {fans.length === 0 ? (
+            <div className="p-6 text-center text-sm text-black/40">该时间段内暂无城堡记录</div>
+          ) : (
+            fans.map((fan) => {
+              const isOpen = expanded.has(fan.uid);
+              return (
+                <div key={fan.uid} className="border-b border-black/5">
+                  <button
+                    onClick={() => toggle(fan.uid)}
+                    className="w-full px-4 py-2.5 flex items-center gap-2 hover:bg-black/[0.03] transition"
+                  >
+                    <span className={`text-[10px] text-black/50 transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
+                    {(() => {
+                      // 头像优先用 fan.face；其次用已缓存的 fanFaces。没有真实头像时留空白（不显示首字母），
+                      // 等异步取到头像后由 <img> 渐进加载出来。
+                      const face = fan.face || fanFaces[fan.uid];
+                      return face ? (
+                        <img src={fixImageUrl(face)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-black/10 flex-shrink-0" />
+                      );
+                    })()}
+                    <span className="flex-1 text-left text-sm font-medium truncate">{fan.uname}</span>
+                    <span className="text-xs font-medium text-black/75">{fan.count}个</span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-6 pb-3">
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="text-black/45 text-left">
+                            <th className="py-1 pr-2 w-[12%]">序号</th>
+                            <th className="py-1 pr-2 w-[34%]">日期</th>
+                            <th className="py-1 pr-2 w-[22%]">周几</th>
+                            <th className="py-1 w-[32%]">时间</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fan.records.map((t, i) => {
+                            const f = formatCastleTime(t);
+                            return (
+                              <tr key={i} className="border-t border-black/5">
+                                <td className="py-1.5 pr-2 text-black/50">{i + 1}</td>
+                                <td className="py-1.5 pr-2">{f.date}</td>
+                                <td className="py-1.5 pr-2 text-black/65">{f.weekday}</td>
+                                <td className="py-1.5">{f.time}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const AnchorDataModule = memo(function AnchorDataModule({
   anchorName = "",
   anchorFace = "",
@@ -288,6 +402,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
   // 盲盒盈亏独立数据（与收入统计解耦，互不影响）
   const [blindBoxProfits, setBlindBoxProfits] = useState<AnchorStats["blindBoxProfits"]>(undefined);
   const [yesterdayAvailable, setYesterdayAvailable] = useState(true); // 默认 true，避免初始闪烁
+  // 浪漫城堡统计模态框：选中"所有粉丝"时点击心动盲盒内城堡行打开
+  const [castleModal, setCastleModal] = useState<{ name: string; fans: NonNullable<AnchorStats["blindBoxProfits"]>[number]["castleFans"] } | null>(null);
+  // "全部盲盒"卡片：下拉选"全部盲盒合计"或指定盲盒（值为盲盒 gift_id）
+  const [allBoxFilter, setAllBoxFilter] = useState<string>("");
+  // 选"全部盲盒"时，记录已展开的盲盒分组（默认全部折叠；选单个盲盒时不启用折叠）
+  const [openBoxGroups, setOpenBoxGroups] = useState<Set<number>>(new Set());
   const [fanBubbleData, setFanBubbleData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [fanFaces, setFanFaces] = useState<Record<number, string>>({});
   // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框（与粉丝/消费页一致）
@@ -505,6 +625,39 @@ const AnchorDataModule = memo(function AnchorDataModule({
 
     setFanBubbleData({ items, title: "送礼粉丝分布", loading: false });
   }
+
+  // 打开粉丝城堡清单：先立即打开，再对缺头像的粉丝按 uid 批量补头像（复用 /api/tools/user-info 机制），
+  // 成功后原地更新模态框数据并缓存到 fanFaces 供其它模块复用；失败静默忽略，保留首字圆标兜底。
+  const openCastleModal = (boxName: string, fansArg: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>) => {
+    const normalized = fansArg.map((f) => ({ ...f, uid: Number(f.uid) }));
+    setCastleModal({ name: boxName, fans: normalized });
+    const missing = normalized.filter((f) => !f.face && !fanFaces[f.uid]).map((f) => f.uid);
+    if (missing.length === 0) return;
+    const batchSize = 50;
+    const batches: number[][] = [];
+    for (let i = 0; i < missing.length; i += batchSize) batches.push(missing.slice(i, i + batchSize));
+    batches.forEach((batch) => {
+      (async () => {
+        try {
+          const res = await dataFetch(`/api/tools/user-info?uids=${batch.join(",")}&mid=${mid}&uname=${encodeURIComponent(uname)}`, { cache: "no-store" });
+          const data = await res.json();
+          const map: Record<number, string> = {};
+          if (data.code === 0 && data.data) {
+            for (const [uidStr, info] of Object.entries(data.data)) {
+              const face = (info as any).face || "";
+              if (face) map[Number(uidStr)] = face;
+            }
+          }
+          if (Object.keys(map).length > 0) {
+            setCastleModal((prev) => prev && { name: prev.name, fans: prev.fans.map((f) => map[f.uid] ? { ...f, face: map[f.uid] } : f) });
+            setFanFaces((prev) => ({ ...prev, ...map }));
+          }
+        } catch {
+          // 头像获取失败静默忽略，展示首字圆标
+        }
+      })();
+    });
+  };
 
   const filteredRecords = stats ? (selectedFan
     ? stats.records.filter((r) => r.uid === Number(selectedFan))
@@ -1254,19 +1407,30 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                     {bb.gifts
                                       .filter(g => g.num > 0)
                                       .sort((a, b) => b.hamster - a.hamster)
-                                      .map((gift) => (
-                                        <tr key={`${gift.gift_id}_${gift.name}`} className="border-t border-black/10 bg-white">
+                                      .map((gift) => {
+                                        // "浪漫城堡"仅在选中"所有粉丝"时支持打开粉丝城堡清单
+                                        const castleClickable = gift.name === "浪漫城堡" && blindBoxFanFilter === "";
+                                        return (
+                                        <tr
+                                          key={`${gift.gift_id}_${gift.name}`}
+                                          className={`border-t border-black/10 bg-white ${castleClickable ? "cursor-pointer hover:bg-[#f5f1ea]" : ""}`}
+                                          onClick={castleClickable ? () => openCastleModal(bb.name, bb.castleFans ?? []) : undefined}
+                                        >
                                           <td className="pl-3 pr-2 py-2">
                                             <div className="flex items-center gap-2">
                                               {gift.img && <img src={fixImageUrl(gift.img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
                                               <span className="font-medium text-xs">{gift.name}</span>
+                                              {castleClickable && (
+                                                <span className="text-[10px] text-blue-600/80 border border-blue-600/30 rounded px-1 py-px">粉丝清单</span>
+                                              )}
                                             </div>
                                           </td>
                                           <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 100}</td>
                                           <td className="px-2 py-2 text-right text-xs">{gift.num}</td>
                                           <td className="px-2 py-2 text-right text-xs">{gift.hamster / 100}</td>
                                         </tr>
-                                      ))}
+                                        );
+                                      })}
                                   </tbody>
                                 </table>
                               </div>
@@ -1274,6 +1438,215 @@ const AnchorDataModule = memo(function AnchorDataModule({
                           </div>
                         );
                       })}
+
+                    {/* 全部盲盒卡片（末尾）：下拉选"全部盲盒合计"或指定盲盒，复用同一份盈亏数据 */}
+                    {blindBoxProfits && blindBoxProfits.length > 0 && (() => {
+                      const isAllBoxes = allBoxFilter === "";
+                      const selId = allBoxFilter === "" ? null : Number(allBoxFilter);
+                      const boxes = selId === null
+                        ? blindBoxProfits
+                        : blindBoxProfits.filter((b2) => b2.gift_id === selId);
+                      const agg = boxes.reduce(
+                        (acc, b2) => {
+                          acc.drawCount += b2.drawCount;
+                          acc.cost += b2.cost;
+                          acc.totalHamster += b2.totalHamster;
+                          acc.profit += b2.profit;
+                          return acc;
+                        },
+                        { drawCount: 0, cost: 0, totalHamster: 0, profit: 0 },
+                      );
+                      const aggSpent = agg.cost / 100;
+                      const aggEarned = agg.totalHamster / 100;
+                      const aggProfit = agg.profit / 100;
+                      // 礼物明细：选"全部盲盒"时按盲盒分组显示（每个盲盒的礼物聚在一起），
+                      // 选单个盲盒时只显示该盲盒礼物；礼物统一按爆出价值降序
+                      const mergedGifts = boxes
+                        .map((b2) => ({
+                          gift_id: b2.gift_id,
+                          boxName: b2.name || `盲盒_${b2.gift_id}`,
+                          boxImg: b2.img,
+                          gifts: b2.gifts
+                            .filter((g) => g.num > 0)
+                            .sort((a, b) => b.hamster - a.hamster),
+                        }))
+                        .filter((grp) => grp.gifts.length > 0);
+                      // 粉丝筛选下拉选项：选单个盲盒用该盒主播列表；选"全部盲盒"按 uid 跨盒聚合
+                      const fanOptions = (() => {
+                        if (!isAllBoxes) return boxes[0].anchors ?? [];
+                        const byUid = new Map<number, { ruid: number; rname: string; count: number }>();
+                        for (const a of boxes.flatMap((b2) => b2.anchors ?? [])) {
+                          const e = byUid.get(a.ruid);
+                          if (e) { e.count += a.count; }
+                          else byUid.set(a.ruid, { ruid: a.ruid, rname: a.rname, count: a.count });
+                        }
+                        return [...byUid.values()];
+                      })();
+                      const toggleGroup = (gid: number) => {
+                        setOpenBoxGroups((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(gid)) next.delete(gid);
+                          else next.add(gid);
+                          return next;
+                        });
+                      };
+                      return (
+                        <div className="rounded-lg border border-black/10 p-2 bg-[#fff7e6]">
+                          {/* 盲盒名称位置：下拉框（全部盲盒 + 每个查询盲盒） */}
+                          <div className="flex items-center gap-2 mb-2">
+                            <Dropdown
+                              value={allBoxFilter}
+                              onChange={setAllBoxFilter}
+                              className="rounded-lg border border-black/10 bg-white px-2 py-1 text-sm font-semibold outline-none"
+                              options={[
+                                { value: "", label: "全部盲盒" },
+                                ...blindBoxProfits.map((b2) => ({
+                                  value: String(b2.gift_id),
+                                  label: (
+                                    <span className="inline-flex items-center gap-1.5">
+                                      {b2.img && <img src={fixImageUrl(b2.img)} alt="" className="w-4 h-4 rounded flex-shrink-0" />}
+                                      {b2.name || `盲盒_${b2.gift_id}`}
+                                    </span>
+                                  ),
+                                })),
+                              ]}
+                            />
+                            <span className="ml-auto text-xs text-black/65 inline-flex items-center gap-1">
+                              {(() => {
+                                const dd = boxes
+                                  .flatMap((b2) => (b2.dateRange ? [b2.dateRange.start, b2.dateRange.end] : []))
+                                  .sort();
+                                return dd.length > 0 ? `${dd[0].replace(/-/g, ".")} - ${dd[dd.length - 1].replace(/-/g, ".")}` : "无数据";
+                              })()}
+                              <InfoHint align="right" text="最长只有最近3年记录" />
+                            </span>
+                          </div>
+                          {/* 时间筛选 + 粉丝分析：与上方单个盲盒卡片一致的控件 */}
+                          <div className="grid grid-cols-2 gap-2 mb-2">
+                            <div className="flex border border-black/10 rounded-lg overflow-hidden">
+                              {(["all", "thisMonth", "thisWeek", "yesterday"] as const).map((key) => {
+                                const isYesterday = key === "yesterday";
+                                const disabled = isYesterday && !yesterdayAvailable;
+                                return (
+                                  <button
+                                    key={key}
+                                    disabled={disabled}
+                                    title={disabled ? "昨日数据官方尚未更新，预计12点前更新" : undefined}
+                                    onClick={() => {
+                                      setBlindBoxDateFilter(key);
+                                      const fanParam = blindBoxFanFilter ? `&fan=${blindBoxFanFilter}` : "";
+                                      const url = `/api/anchor/gifts${key !== "all" ? `?dateRange=${key}${fanParam}` : (fanParam ? `?${fanParam.slice(1)}` : "")}`;
+                                      dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
+                                        if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                      });
+                                    }}
+                                    className={`flex-1 px-1 py-1 text-[10px] whitespace-nowrap transition ${
+                                      blindBoxDateFilter === key
+                                        ? "bg-[#1f1c17] text-white"
+                                        : disabled
+                                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                          : "bg-white text-black/65 hover:bg-black/5"
+                                    }`}
+                                  >
+                                    {key === "all" ? "全部" : key === "thisMonth" ? "本月" : key === "thisWeek" ? "本周" : "昨日"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <Dropdown
+                              value={blindBoxFanFilter}
+                              onChange={(fanUid) => {
+                                setBlindBoxFanFilter(fanUid);
+                                const dateParam = blindBoxDateFilter !== "all" ? `dateRange=${blindBoxDateFilter}` : "";
+                                const fanParam = fanUid ? `fan=${fanUid}` : "";
+                                const params = [dateParam, fanParam].filter(Boolean).join("&");
+                                const url = `/api/anchor/gifts${params ? `?${params}` : ""}`;
+                                dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
+                                  if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                });
+                              }}
+                              className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
+                              options={[
+                                { value: "", label: "全部主播" },
+                                ...fanOptions.map((a) => ({
+                                  value: String(a.ruid),
+                                  label: `${a.rname} (${a.count})`,
+                                })),
+                              ]}
+                            />
+                          </div>
+                          {/* 统计 */}
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-black/5 px-3 py-2 text-xs">
+                            <span className="text-black/50">共 <b className="text-black/80">{agg.drawCount}</b> 次</span>
+                            <span className="text-black/50">花费 <b className="text-black/80">{Math.round(aggSpent)}</b></span>
+                            <span className="text-black/50">爆出 <b className="text-black/80">{Math.round(aggEarned)}</b></span>
+                            <span className={`font-bold text-sm ${aggProfit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                              {aggProfit >= 0 ? "+" : ""}{Math.round(aggProfit)}
+                            </span>
+                          </div>
+                          {/* 礼物明细 */}
+                          {mergedGifts.length > 0 && (
+                            <div className="mt-2 overflow-hidden rounded-lg border border-black/10">
+                              <table className="w-full border-collapse text-left text-sm">
+                                <thead className="bg-black/5 text-black/60">
+                                  <tr>
+                                    <th className="pl-3 pr-2 py-2 font-medium w-[45%]">爆出礼物</th>
+                                    <th className="px-2 py-2 font-medium text-right w-[15%]">单价</th>
+                                    <th className="px-2 py-2 font-medium text-right w-[15%]">数量</th>
+                                    <th className="px-2 py-2 font-medium text-right w-[25%]">小计</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {mergedGifts.map((grp, gi) => {
+                                    const groupOpen = isAllBoxes ? openBoxGroups.has(grp.gift_id) : true;
+                                    return (
+                                    <Fragment key={grp.gift_id}>
+                                      {/* 盲盒分组头：选"全部盲盒"时可点击展开/折叠（默认折叠），选单个盲盒不折叠 */}
+                                      <tr
+                                        className={gi === 0 ? "bg-black/[0.07]" : "border-t border-black/15 bg-black/[0.07]"}
+                                        onClick={isAllBoxes ? () => toggleGroup(grp.gift_id) : undefined}
+                                        style={isAllBoxes ? { cursor: "pointer" } : undefined}
+                                      >
+                                        <td colSpan={4} className="px-3 py-1.5">
+                                          <div className="flex items-center gap-1.5">
+                                            {isAllBoxes && (
+                                              <span className={`text-[10px] text-black/45 transition-transform ${groupOpen ? "rotate-90" : ""}`}>▶</span>
+                                            )}
+                                            {grp.boxImg && <img src={fixImageUrl(grp.boxImg)} alt="" className="w-4 h-4 rounded flex-shrink-0" />}
+                                            <span className="font-medium text-xs">{grp.boxName}</span>
+                                            {isAllBoxes && (
+                                              <span className="ml-auto text-[10px] text-black/45">{groupOpen ? "收起" : "展开"}</span>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                      {groupOpen && (
+                                        <Fragment key={`${grp.gift_id}_rows`}>
+                                          {grp.gifts.map((gift) => (
+                                            <tr key={`${grp.gift_id}_${gift.name}`} className="border-t border-black/10 bg-white">
+                                              <td className="pl-3 pr-2 py-2">
+                                                <div className="flex items-center gap-2">
+                                                  {gift.img && <img src={fixImageUrl(gift.img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
+                                                  <span className="font-medium text-xs">{gift.name}</span>
+                                                </div>
+                                              </td>
+                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 100}</td>
+                                              <td className="px-2 py-2 text-right text-xs">{gift.num}</td>
+                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / 100}</td>
+                                            </tr>
+                                          ))}
+                                        </Fragment>
+                                      )}
+                                    </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     </div>
                   ) : (
                     <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4">
@@ -1395,6 +1768,16 @@ const AnchorDataModule = memo(function AnchorDataModule({
           loading={fanBubbleData.loading}
           loadingText={fanBubbleData.loadingText}
           onClose={() => setFanBubbleData(null)}
+        />
+      )}
+
+      {/* 浪漫城堡粉丝清单 */}
+      {castleModal && (
+        <CastleStatModal
+          boxName={castleModal.name}
+          fans={castleModal.fans}
+          fanFaces={fanFaces}
+          onClose={() => setCastleModal(null)}
         />
       )}
     </div>

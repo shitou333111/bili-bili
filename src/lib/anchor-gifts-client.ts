@@ -129,6 +129,9 @@ const MAX_CONSECUTIVE_EMPTY_RUNS = 8;
 
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
 
+/** 浪漫城堡礼物 ID（心动盲盒内的特殊大奖） */
+const CASTLE_GIFT_ID = 32132;
+
 /**
  * 动态并发池：同时最多跑 concurrency 个任务，任一任务完成即启动下一个任务，
  * 让并发槽位始终饱和（替代"批式并行"——批内完成后才开下一批，存在空闲等待）。
@@ -447,6 +450,7 @@ type BlindBoxProfit = {
   blindPrice: number;
   anchors: Array<{ ruid: number; rname: string; count: number }>;
   dateRange: { start: string; end: string } | null;
+  castleFans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
 };
 
 /**
@@ -1060,10 +1064,14 @@ export async function fetchAnchorGifts(
     const blindBoxGiftCountMap = new Map<number, Map<number, { name: string; num: number; hamster: number }>>();
     const blindBoxFanMap = new Map<number, Map<number, { uname: string; count: number }>>();
     const blindBoxDateSet = new Map<number, Set<string>>();
+    // 浪漫城堡按粉丝统计
+    const blindBoxCastleMap = new Map<number, Map<number, { uname: string; records: string[] }>>();
 
     // 盲盒配置与反向映射
     const blindBoxConfig: EffectiveBlindBoxConfig = await getEffectiveBlindBoxConfig(platform);
-    const blindBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
+    const activityBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
+    const extraProfitIds = (blindBoxConfig.profitIds ?? []).filter((id) => !activityBoxIds.includes(id));
+    const blindBoxIds = [...activityBoxIds, ...extraProfitIds];
     const allBlindBoxInfo = await getAllBlindBoxInfo(platform);
 
     // 本地没有或信息异常（名称兜底为"盲盒_<id>"、单价<=0、礼物列表为空）的盲盒信息时，从 B站 API 获取。
@@ -1195,6 +1203,21 @@ export async function fetchAnchorGifts(
           blindBoxDateSet.set(bbId, datesForBB);
         }
         datesForBB.add(getDatePart(r.time));
+
+        // 浪漫城堡按粉丝统计（records 存完整时间戳）
+        if (r.gift_id === CASTLE_GIFT_ID) {
+          let castleFanMapForBB = blindBoxCastleMap.get(bbId);
+          if (!castleFanMapForBB) {
+            castleFanMapForBB = new Map();
+            blindBoxCastleMap.set(bbId, castleFanMapForBB);
+          }
+          let castleFan = castleFanMapForBB.get(r.uid);
+          if (castleFan) {
+            castleFan.records.push(r.time);
+          } else {
+            castleFanMapForBB.set(r.uid, { uname: r.uname, records: [r.time] });
+          }
+        }
       }
     }
 
@@ -1266,6 +1289,20 @@ export async function fetchAnchorGifts(
         ? { start: sortedDates[0], end: sortedDates[sortedDates.length - 1] }
         : null;
 
+      // 浪漫城堡按粉丝统计（与 route.ts 一致）
+      const castleFanMapForBB = blindBoxCastleMap.get(blindBoxId);
+      const castleFans = castleFanMapForBB
+        ? Array.from(castleFanMapForBB.entries())
+            .map(([uid, v]) => ({
+              uid: Number(uid),
+              uname: v.uname,
+              face: "",
+              count: v.records.length,
+              records: v.records.slice().sort((a, b) => b.localeCompare(a)),
+            }))
+            .sort((a, b) => b.records[0].localeCompare(a.records[0]))
+        : [];
+
       blindBoxProfits.push({
         gift_id: blindBoxId,
         name: boxName,
@@ -1278,6 +1315,7 @@ export async function fetchAnchorGifts(
         blindPrice: (info?.blind_price ?? 0) / 2,
         anchors,
         dateRange: dateRangeBB,
+        castleFans,
       });
     }
 

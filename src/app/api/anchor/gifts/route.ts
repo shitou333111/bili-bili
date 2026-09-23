@@ -6,7 +6,7 @@ import { buildGiftSummary } from "@/lib/gift-summary";
 import { isOffline } from "@/lib/offline";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
-import { checkBlindBox } from "@/lib/bilibili/gift-api";
+import { checkBlindBox, getUserInfoByUid } from "@/lib/bilibili/gift-api";
 import { getBuvidCookie } from "@/lib/bilibili/client";
 import { promises as fs } from "fs";
 import path from "path";
@@ -64,6 +64,9 @@ type RecordsMetaData = {
 const DATA_DIR = path.join(process.cwd(), ".data");
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
 const ROOM_INFO_API = "https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld";
+
+/** 浪漫城堡礼物 ID（心动盲盒内的特殊大奖） */
+const CASTLE_GIFT_ID = 32132;
 
 /** 判断该 mid 是否有直播间（是否为主播）。getRoomInfoOld 为公开接口，无需登录凭证。 */
 async function checkAnchorHasRoom(mid: number): Promise<boolean> {
@@ -1030,10 +1033,16 @@ export async function GET(request: Request) {
     const blindBoxFanMap = new Map<number, Map<number, { uname: string; count: number }>>();
     // 盲盒日期集合
     const blindBoxDateSet = new Map<number, Set<string>>();
+    // 盲盒内"浪漫城堡"礼物按粉丝统计（用于"粉丝城堡清单"模态框）
+    // key=盲盒id，value=Map<粉丝uid, { uname, records: 每次开城堡的时间戳 }>
+    const blindBoxCastleMap = new Map<number, Map<number, { uname: string; records: string[] }>>();
 
     // 获取盲盒配置和反向映射（必须在循环之前）
     const blindBoxConfig = await getEffectiveBlindBoxConfig();
-    const blindBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
+    // 可查询盲盒 = admin 勾选的卡片盲盒 ∪ 盈亏勾选的盲盒（保证"全部盲盒"卡片能查到任一指定盲盒），完全按 admin 配置控制
+    const activityBoxIds = blindBoxConfig.current_activity_blind_box_ids ?? [];
+    const extraProfitIds = (blindBoxConfig.profitIds ?? []).filter((id) => !activityBoxIds.includes(id));
+    const blindBoxIds = [...activityBoxIds, ...extraProfitIds];
     const allBlindBoxInfo = await getAllBlindBoxInfo(0, "");
 
     // 如果本地没有盲盒信息，尝试从B站API获取（离线时跳过）
@@ -1163,6 +1172,21 @@ export async function GET(request: Request) {
           blindBoxDateSet.set(bbId, datesForBB);
         }
         datesForBB.add(getDatePart(r.time));
+
+        // 浪漫城堡按粉丝统计（records 存完整时间戳，用于展示 日期/周几/时间）
+        if (r.gift_id === CASTLE_GIFT_ID) {
+          let castleFanMapForBB = blindBoxCastleMap.get(bbId);
+          if (!castleFanMapForBB) {
+            castleFanMapForBB = new Map();
+            blindBoxCastleMap.set(bbId, castleFanMapForBB);
+          }
+          let castleFan = castleFanMapForBB.get(r.uid);
+          if (castleFan) {
+            castleFan.records.push(r.time);
+          } else {
+            castleFanMapForBB.set(r.uid, { uname: r.uname, records: [r.time] });
+          }
+        }
       }
     }
 
@@ -1210,7 +1234,25 @@ export async function GET(request: Request) {
       blindPrice: number;
       anchors: Array<{ ruid: number; rname: string; count: number }>;
       dateRange: { start: string; end: string } | null;
+      castleFans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
     }> = [];
+
+    // 预取"粉丝城堡清单"各粉丝头像（仅有城堡粉丝时发起，数量少；失败不影响列表）
+    const castleFaceMap = new Map<number, string>();
+    {
+      const castleUids = new Set<number>();
+      for (const fanMapBB of blindBoxCastleMap.values()) {
+        for (const uid of fanMapBB.keys()) castleUids.add(Number(uid));
+      }
+      if (castleUids.size > 0) {
+        await Promise.all(Array.from(castleUids).map(async (uid) => {
+          try {
+            const info = await getUserInfoByUid(uid, false, validSession.mid, validSession.uname || "");
+            if (info.face) castleFaceMap.set(uid, info.face);
+          } catch { /* 头像获取失败不阻断列表展示 */ }
+        }));
+      }
+    }
 
     for (const blindBoxId of blindBoxIds) {
       const count = blindBoxCountMap.get(blindBoxId);
@@ -1258,6 +1300,21 @@ export async function GET(request: Request) {
         ? { start: sortedDates[0], end: sortedDates[sortedDates.length - 1] }
         : null;
 
+      // 浪漫城堡按粉丝统计：粉丝按"最新一次开城堡"时间降序排（最新在上），
+      // 每条记录按时间降序（filteredRecords 已按时间倒序）
+      const castleFanMapForBB = blindBoxCastleMap.get(blindBoxId);
+      const castleFans = castleFanMapForBB
+        ? Array.from(castleFanMapForBB.entries())
+            .map(([uid, v]) => ({
+              uid: Number(uid),
+              uname: v.uname,
+              face: castleFaceMap.get(Number(uid)) ?? "",
+              count: v.records.length,
+              records: v.records.slice().sort((a, b) => b.localeCompare(a)),
+            }))
+            .sort((a, b) => b.records[0].localeCompare(a.records[0]))
+        : [];
+
       blindBoxProfits.push({
         gift_id: blindBoxId,
         name: boxName,
@@ -1270,6 +1327,7 @@ export async function GET(request: Request) {
         blindPrice: (info?.blind_price ?? 0) / 2,  // 电池单位，/2 与收益对齐
         anchors,
         dateRange,
+        castleFans,
       });
     }
 

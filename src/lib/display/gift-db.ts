@@ -29,7 +29,7 @@ import {
   type BlindBoxInfo,
   type EffectiveBlindBoxConfig,
 } from "@/lib/stats-client";
-import { BLIND_BOX_CONFIG } from "@/lib/config";
+
 import { getGiftImg } from "@/lib/gift-catalog-client";
 import type { DisplayGiftItem } from "./types";
 
@@ -265,16 +265,6 @@ function boxName(info: Record<number, BlindBoxInfo>, boxId: number): string {
   return info[boxId]?.blind_box_name || `盲盒_${boxId}`;
 }
 
-/**
- * 当前活动盲盒 id 列表（除固定"心动/幸运"以外的盲盒，可能多个或为空）。
- * 用于查询弹幕中"当前活动盲盒名称"关键词匹配。
- */
-function activityBoxIds(config: EffectiveBlindBoxConfig): number[] {
-  return (config.current_activity_blind_box_ids ?? []).filter(
-    (id) => id !== BLIND_BOX_CONFIG.xindong && id !== BLIND_BOX_CONFIG.lucky,
-  );
-}
-
 /** 按收入记录计算：给定时间段 + 用户 + 盲盒的盈亏（电池）。range=null 表示历史全量。
  *  与 anchor-gifts-client 的 blindBoxProfits 同源（hamster 为金仓鼠），但折算成电池：
  *    cost(电池)   = drawCount × blind_price × 50 × 2/100 = drawCount × blind_price
@@ -367,8 +357,9 @@ const PERIOD_TEXT: Record<BlindBoxPeriod, string> = {
 /**
  * 查询弹幕采用【完全匹配】：弹幕内容必须与某个"查询短语"一字不差。
  * - 时间段前缀：空 / 今日 / 昨日 / 本周 / 本月 / 历史
- * - 盲盒名：幸运盲盒 / 当前活动盲盒名 / 心动盲盒（支持"心动盲盒"名称与"盲盒"快捷语）
- * 例如："今日盲盒""今日心动盲盒""历史幸运盲盒""羁绊宝盒"均有效；
+ * - 盲盒名：admin"盲盒盈亏配置"指定的每个盲盒真实名称（心动盲盒 / 幸运盲盒 / 活动盲盒等）
+ * - 快捷语："盲盒"＝不带名称，查询全部可查询盲盒的总和统计
+ * 例如："今日盲盒""今日心动盲盒""今日幸运盲盒""历史中秋盲盒"均有效；
  * 而"今日盲盒快来""盲盒多少钱"这类带额外文本的普通弹幕一律不触发。
  * 完全匹配同时天然避免了自动回复弹幕（内容带"[吃瓜]××盈亏"）被再次识别为查询 → 消除回复自己死循环。
  */
@@ -381,32 +372,29 @@ const PERIOD_PREFIXES: Array<{ label: string; period: BlindBoxPeriod }> = [
   { label: "历史", period: "history" },
 ];
 
-/** 精确匹配一条弹幕是否为合法查询短语；命中返回盲盒 id + 时间段，否则 null。 */
+/** 精确匹配一条弹幕是否为合法查询短语；命中返回盲盒 id 列表 + 时间段，否则 null。
+ *  boxIds 为空数组表示"全部盲盒"（查询所有可查询盲盒的总和统计）。 */
 function matchQueryPhrase(
   ctx: BoxCtx,
   text: string,
-): { boxId: number; period: BlindBoxPeriod } | null {
-  // 盲盒名称关键词 → 盲盒 id（顺序无关，最终按短语逐条精确比对）
-  const boxWords: Array<[string, number]> = [];
-  // 幸运盲盒
-  boxWords.push(["幸运盲盒", BLIND_BOX_CONFIG.lucky]);
-  // 当前活动盲盒（可能多个，名称来自 admin 配置）
-  for (const id of activityBoxIds(ctx.config)) {
+): { boxIds: number[]; period: BlindBoxPeriod } | null {
+  // 可查询盲盒范围 = admin 配置的指定盲盒（profitIds），每个盲盒可用其名称精确查询
+  const profitIds = ctx.config.profitIds ?? [];
+  // 盲盒名称关键词 → 该盲盒 id（顺序无关，最终按短语逐条精确比对）
+  const boxWords: Array<[string, number[]]> = [];
+  for (const id of profitIds) {
     const n = boxName(ctx.info, id);
-    if (n) boxWords.push([n, id]);
+    if (n) boxWords.push([n, [id]]);
   }
-  // 心动盲盒（默认，去除"盲盒"名即匹配）
-  boxWords.push(["盲盒", BLIND_BOX_CONFIG.xindong]);
-  // 心动盲盒的真实名称（与"盲盒"快捷语并存）：与其他盲盒一致，输入"心动盲盒"也能查询
-  const xn = boxName(ctx.info, BLIND_BOX_CONFIG.xindong);
-  if (xn) boxWords.push([xn, BLIND_BOX_CONFIG.xindong]);
+  // 快捷语"盲盒" → 全部可查询盲盒的总和统计（不再默认映射到心动盲盒）
+  boxWords.push(["盲盒", []]);
 
-  for (const [word, boxId] of boxWords) {
+  for (const [word, boxIds] of boxWords) {
     for (const { label, period } of PERIOD_PREFIXES) {
       if (label === "") {
-        if (text === word) return { boxId, period: "today" };
+        if (text === word) return { boxIds, period: "today" };
       } else if (text === label + word) {
-        return { boxId, period };
+        return { boxIds, period };
       }
     }
   }
@@ -466,6 +454,37 @@ function mergeProfit(base: BlindBoxProfitResult, ...parts: BlindBoxProfitResult[
   };
 }
 
+/** 跨多个盲盒聚合盈亏（抽数/爆出/花费累加，盈亏重算）。blindBoxName 暂置空，由调用方覆盖。
+ *  用于"全部盲盒"总和统计查询——统计口径与单个盲盒（computeFromIncome/computeFromDanmu）一致，只是累加多个盲盒。 */
+async function aggregateBoxes(
+  mid: number,
+  uid: number,
+  boxIds: number[],
+  range: { start: Date; end: Date } | null,
+  source: "income" | "danmu",
+): Promise<BlindBoxProfitResult> {
+  let drawCount = 0;
+  let totalEarned = 0;
+  let totalSpent = 0;
+  for (const boxId of boxIds) {
+    const p =
+      source === "income"
+        ? await computeFromIncome(mid, uid, boxId, range)
+        : await computeFromDanmu(mid, uid, boxId, range);
+    drawCount += p.drawCount;
+    totalEarned += p.totalEarned;
+    totalSpent += p.totalSpent;
+  }
+  return {
+    blindBoxId: boxIds.length === 1 ? boxIds[0] : 0,
+    blindBoxName: "",
+    drawCount,
+    totalEarned,
+    totalSpent,
+    profit: totalEarned - totalSpent,
+  };
+}
+
 /**
  * 判断一条弹幕是否为盲盒盈亏查询弹幕，若是则计算并发送回复弹幕。
  * 返回发送的弹幕文本；非查询弹幕返回 null。
@@ -485,30 +504,35 @@ export async function tryHandleBlindBoxQuery(
   const ctx = await loadBoxCtx(platform);
   const matched = matchQueryPhrase(ctx, text);
   if (!matched) return null;
-  const { boxId, period } = matched;
+  const { boxIds, period } = matched;
+  // 指定盲盒：若命中的是"全部盲盒"（boxIds 为空）则聚合所有可查询盲盒（profitIds）
+  const queryBoxIds = boxIds.length > 0 ? boxIds : ctx.config.profitIds;
+  const resultName = boxIds.length > 0 ? boxName(ctx.info, boxIds[0]) : "全部盲盒";
 
-  // 2) 选数据源
+  // 2) 选数据源（与单个盲盒查询一致，只是可跨多个盲盒聚合）
   let result: BlindBoxProfitResult;
   if (period === "today") {
-    result = await computeFromDanmu(mid, uid, boxId, periodRange(period));
+    const a = await aggregateBoxes(mid, uid, queryBoxIds, periodRange(period), "danmu");
+    result = { ...a, blindBoxName: resultName };
   } else if (period === "yesterday") {
     const yesterday = periodRange(period)!;
     const yesterdayDate = localDayStr(new Date(yesterday.start));
     const incomeReady = await hasIncomeRecordOn(mid, yesterdayDate);
-    result = incomeReady
-      ? await computeFromIncome(mid, uid, boxId, yesterday)
-      : await computeFromDanmu(mid, uid, boxId, yesterday);
+    const a = incomeReady
+      ? await aggregateBoxes(mid, uid, queryBoxIds, yesterday, "income")
+      : await aggregateBoxes(mid, uid, queryBoxIds, yesterday, "danmu");
+    result = { ...a, blindBoxName: resultName };
   } else {
     // 本周/本月/历史：收入记录 + 弹幕礼物记录，两者相加。
     // 收入记录通常已覆盖至昨天（唯一的系统性缺口是"今天"），故默认只补"今日"弹幕数据；
     // 若收入记录尚未含昨日（缺口延伸到昨天），则再补"昨日"弹幕数据，避免遗漏。
-    const income = await computeFromIncome(mid, uid, boxId, periodRange(period));
-    const todayDanmu = await computeFromDanmu(mid, uid, boxId, periodRange("today"));
+    const income = await aggregateBoxes(mid, uid, queryBoxIds, periodRange(period), "income");
+    const todayDanmu = await aggregateBoxes(mid, uid, queryBoxIds, periodRange("today"), "danmu");
     if (await hasIncomeRecordOn(mid, yesterdayDayStr())) {
-      result = mergeProfit(income, todayDanmu);
+      result = mergeProfit({ ...income, blindBoxName: resultName }, todayDanmu);
     } else {
-      const yesterdayDanmu = await computeFromDanmu(mid, uid, boxId, periodRange("yesterday"));
-      result = mergeProfit(income, todayDanmu, yesterdayDanmu);
+      const yesterdayDanmu = await aggregateBoxes(mid, uid, queryBoxIds, periodRange("yesterday"), "danmu");
+      result = mergeProfit({ ...income, blindBoxName: resultName }, todayDanmu, yesterdayDanmu);
     }
   }
 

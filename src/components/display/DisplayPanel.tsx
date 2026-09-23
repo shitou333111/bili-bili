@@ -34,11 +34,7 @@ import {
 } from "@/lib/display/danmaku";
 import { sendDanmakuWithRetry } from "@/lib/barrage";
 import { dataFetch } from "@/lib/client-fetch";
-import {
-  getEffectiveBlindBoxConfig,
-  getAllBlindBoxInfo,
-} from "@/lib/stats-client";
-import { BLIND_BOX_CONFIG } from "@/lib/config";
+import { getEffectiveBlindBoxConfig, getAllBlindBoxInfo } from "@/lib/stats-client";
 import DisplayEditModal from "./DisplayEditModal";
 
 interface GuardItem {
@@ -324,27 +320,20 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   const [liveStatus, setLiveStatus] = useState(0);
   // 弹幕调试日志卡片默认折叠
   const [debugOpen, setDebugOpen] = useState(false);
-  // 当前活动盲盒名称（从 admin 配置解析，供使用说明展示）
-  const [activityBoxName, setActivityBoxName] = useState("");
+  // 盲盒盈亏 · 弹幕查询：可查询盲盒名称列表（admin"盲盒盈亏配置"指定，供使用说明展示）
+  const [profitBoxNames, setProfitBoxNames] = useState<string[]>([]);
 
-  // 加载当前活动盲盒名称：admin 配置里的活动盲盒（排除固定的心动/幸运盲盒）
+  // 加载可查询盲盒名称列表：admin 配置的盲盒盈亏查询范围（profitIds）
   useEffect(() => {
     (async () => {
       try {
         const platform = await getPlatform();
         const cfg = await getEffectiveBlindBoxConfig(platform);
-        const ids = cfg.current_activity_blind_box_ids ?? [];
-        const actId = ids.find(
-          (id) => id !== BLIND_BOX_CONFIG.xindong && id !== BLIND_BOX_CONFIG.lucky,
-        );
-        if (!actId) {
-          setActivityBoxName("");
-          return;
-        }
         const info = await getAllBlindBoxInfo(platform);
-        setActivityBoxName(info[actId]?.blind_box_name || `盲盒_${actId}`);
+        const ids = cfg.profitIds ?? [];
+        setProfitBoxNames(ids.map((id) => info[id]?.blind_box_name || `盲盒_${id}`));
       } catch {
-        setActivityBoxName("");
+        setProfitBoxNames([]);
       }
     })();
   }, []);
@@ -1354,18 +1343,28 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         <Card bg="bg-rose-200" border="border-rose-400">
           <p className="text-xs text-black/50 leading-relaxed">
             观众在直播间发送特定查询弹幕，即可按 <b className="text-black/70">时间段 + 盲盒名称</b>{" "}
-            查询该用户的盲盒盈亏，由当前主播账号回复弹幕。适用盲盒：心动盲盒、幸运盲盒、当前活动盲盒。
+            查询该用户的盲盒盈亏，由当前主播账号回复弹幕。适用盲盒：{" "}
+            {profitBoxNames.length > 0 ? (
+              <span className="text-black/70">{profitBoxNames.join("、")}</span>
+            ) : (
+              <span className="text-black/35">（暂无盲盒盈亏配置）</span>
+            )}
           </p>
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1 rounded-xl bg-white/50 p-3 text-[11px] leading-relaxed text-black/60">
-            <div className="font-medium text-black/75">以幸运盲盒为查询例子</div>
+            <div className="font-medium text-black/75">查询全部盲盒的盈亏（不加盲盒名称）</div>
             <div>
-              <span className="font-mono text-black/70">幸运盲盒/今日幸运盲盒，昨日幸运盲盒，本周幸运盲盒，本月幸运盲盒，历史幸运盲盒</span>
+              <span className="font-mono text-black/70">盲盒/今日盲盒，昨日盲盒，本周盲盒，本月盲盒，历史盲盒</span>
             </div>
-            <div className="font-medium text-black/75">心动盲盒最常用，所以不加名称也会被默认为心动盲盒</div>
+            <div className="font-medium text-black/75">指定盲盒按名称查询（以心动盲盒为例子）</div>
             <div>
-              <span className="font-mono text-black/70">今日盲盒，昨日盲盒，本周盲盒，本月盲盒，历史盲盒</span>
+              <span className="font-mono text-black/70">心动盲盒/今日心动盲盒，昨日心动盲盒，本周心动盲盒，本月心动盲盒，历史心动盲盒</span>
             </div>
-            <div className="font-medium text-black/75">当前活动盲盒也可以查询：{activityBoxName || <span className="text-black/35">（暂无活动盲盒）</span>}</div>
+            <div className="font-medium text-black/75">其他盲盒同理（按其真实名称）</div>
+            <div className="font-mono text-black/70">
+              {profitBoxNames.length > 0
+                ? profitBoxNames.join("、")
+                : "（暂无盲盒盈亏配置）"}
+            </div>
           </div>
           <p className="mt-2 text-[11px] text-black/40 leading-relaxed">
             今日盲盒使用监听弹幕实现，开播时需打开软件一直监听，否则数据不准。

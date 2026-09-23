@@ -1,5 +1,6 @@
 {
   "current_activity_blind_box_ids": [35786],
+  "blind_box_profit_ids": [32251, 35206, 35786],
   "blind_boxes": [
     {
       "id": 32251,
@@ -27,6 +28,7 @@
     }
   ],
   "real_activity_url": "",
+  "announcement": "",
   "simulator_activities": [
     {
       "id": "stone-gongfang",

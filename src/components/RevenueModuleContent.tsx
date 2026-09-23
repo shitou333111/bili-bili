@@ -1268,7 +1268,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                             {stat.dateRange
                               ? `${stat.dateRange.start.split(" ")[0].replace(/-/g, ".")} - ${stat.dateRange.end.split(" ")[0].replace(/-/g, ".")}`
                               : "无数据"}
-                            <InfoHint text="只显示最近2个月数据" align="right" />
+                            <InfoHint text="只显示最近2个月数据，主播安装后可以查询3年。选择主播后可以发送统计弹幕" align="right" />
                           </span>
                         </div>
 

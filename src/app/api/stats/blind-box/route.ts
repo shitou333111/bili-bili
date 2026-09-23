@@ -485,6 +485,10 @@ export async function GET(request: Request) {
         if (!profit.blindBoxImg) {
           profit.blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
         }
+        // 活动盲盒可能不在礼物目录中，此时名称显示"盲盒_编号"；补充 admin-config 中的名称作为 fallback
+        if (profit.blindBoxName === `盲盒_${blindBoxId}` || !profit.blindBoxName) {
+          profit.blindBoxName = effectiveBlindBoxConfig.names[blindBoxId] ?? profit.blindBoxName;
+        }
 
         // 填充元数据
         profit.dateRange = dateRange;

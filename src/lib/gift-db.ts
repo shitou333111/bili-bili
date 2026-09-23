@@ -397,6 +397,7 @@ export function calcPayRecordActivityProfit(
         synthetic_time: ts,
         coin_type: record.coin_type,
         gift_id: record.gift_id,
+        gift_num: record.gift_num,
       });
     }
   }

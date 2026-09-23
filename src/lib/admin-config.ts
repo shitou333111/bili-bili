@@ -62,6 +62,8 @@ export type SimulatorActivityConfig = {
 export type AdminConfig = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
+  /** 盲盒盈亏查询配置：可被查询盈亏的盲盒 id 列表（主播页"全部盲盒"卡片 + 弹幕查询） */
+  blind_box_profit_ids?: number[];
   synthesis_activities: SynthesisActivityConfig[];
   /** 推荐主播列表（管理员配置） */
   recommended_anchors?: RecommendedAnchor[];
@@ -69,6 +71,8 @@ export type AdminConfig = {
   real_activity_url?: string;
   /** 模拟器页面活动入口配置（可热更新的玩法算法） */
   simulator_activities?: SimulatorActivityConfig[];
+  /** 帮助页顶部公告内容（管理员在 admin 页编辑，为空则不显示公告卡片） */
+  announcement?: string;
 };
 
 async function ensureConfigFile() {

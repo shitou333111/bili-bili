@@ -592,6 +592,9 @@ type EffectiveBlindBoxConfig = {
   current_activity_blind_box_ids: number[];
   current_activity_blind_box_id: number | null;
   icons: Record<number, string>;
+  names: Record<number, string>;
+  /** 盲盒盈亏查询配置：admin 指定的可查询盈亏的盲盒 id（有序） */
+  profitIds: number[];
 };
 
 export type { EffectiveBlindBoxConfig };
@@ -610,21 +613,28 @@ async function getEffectiveSynthesisConfig(platform: Platform) {
 
 export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<EffectiveBlindBoxConfig> {
   const adminConfig = (await platform.fetchRemoteConfig()) as JsonObject & {
-    blind_boxes?: Array<{ id: number; icon: string }>;
+    blind_boxes?: Array<{ id: number; icon: string; name: string }>;
     current_activity_blind_box_ids?: number[];
+    blind_box_profit_ids?: number[];
   } | null;
 
+  const names: Record<number, string> = {};
+  for (const box of adminConfig?.blind_boxes ?? []) {
+    if (box.id > 0 && box.name) names[box.id] = box.name;
+  }
   if (!adminConfig || !Array.isArray(adminConfig.blind_boxes)) {
+    // 活动盲盒在最前，随后心动、幸运
     const ids: number[] = [];
     if (BLIND_BOX_CONFIG.current_activity_blind_box_id) ids.push(BLIND_BOX_CONFIG.current_activity_blind_box_id);
-    if (!ids.includes(BLIND_BOX_CONFIG.xindong)) ids.unshift(BLIND_BOX_CONFIG.xindong);
-    const xi = ids.indexOf(BLIND_BOX_CONFIG.xindong);
-    if (!ids.includes(BLIND_BOX_CONFIG.lucky)) ids.splice(xi + 1, 0, BLIND_BOX_CONFIG.lucky);
+    if (!ids.includes(BLIND_BOX_CONFIG.xindong)) ids.push(BLIND_BOX_CONFIG.xindong);
+    if (!ids.includes(BLIND_BOX_CONFIG.lucky)) ids.push(BLIND_BOX_CONFIG.lucky);
     return {
       xindong: BLIND_BOX_CONFIG.xindong,
       current_activity_blind_box_ids: ids,
       current_activity_blind_box_id: ids.length > 0 ? ids[0] : null,
       icons: BLIND_BOX_CONFIG.icons,
+      names,
+      profitIds: ids,
     };
   }
 
@@ -639,24 +649,22 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
     }
   }
   const checkedIds = new Set((adminConfig.current_activity_blind_box_ids ?? []).filter((id) => validBoxIds.has(id)));
+  // 卡片盲盒完全按 admin 勾选控制（无心动/幸运特殊路径），按 blind_boxes 顺序输出
   const filteredIds: number[] = [];
   for (const box of adminConfig.blind_boxes) {
     if (box.id > 0 && checkedIds.has(box.id)) filteredIds.push(box.id);
   }
-  if (!filteredIds.includes(BLIND_BOX_CONFIG.xindong)) filteredIds.unshift(BLIND_BOX_CONFIG.xindong);
-  const xindongIdx = filteredIds.indexOf(BLIND_BOX_CONFIG.xindong);
-  const luckyIdx = filteredIds.indexOf(BLIND_BOX_CONFIG.lucky);
-  if (luckyIdx < 0) {
-    filteredIds.splice(xindongIdx + 1, 0, BLIND_BOX_CONFIG.lucky);
-  } else if (luckyIdx !== xindongIdx + 1) {
-    filteredIds.splice(luckyIdx, 1);
-    filteredIds.splice(xindongIdx + 1, 0, BLIND_BOX_CONFIG.lucky);
-  }
+  // 盈亏查询范围完全按 admin 勾选控制（过滤幽灵引用并去重），为空即不涵盖任何盲盒
+  const profitIds = (adminConfig.blind_box_profit_ids ?? [])
+    .filter((id) => validBoxIds.has(id))
+    .filter((id, i, arr) => arr.indexOf(id) === i);
   return {
     xindong: BLIND_BOX_CONFIG.xindong,
     current_activity_blind_box_ids: filteredIds,
     current_activity_blind_box_id: filteredIds.length > 0 ? filteredIds[0] : null,
     icons,
+    names,
+    profitIds,
   };
 }
 
@@ -1185,6 +1193,7 @@ function calcPayRecordActivityProfit(
         synthetic_time: ts,
         coin_type: record.coin_type,
         gift_id: record.gift_id,
+        gift_num: record.gift_num,
       });
       continue; // 一条记录只归入一个角色，避免同时被当作产物
     }
@@ -1237,6 +1246,7 @@ function calcPayRecordActivityProfit(
         synthetic_time: ts,
         coin_type: record.coin_type,
         gift_id: record.gift_id,
+        gift_num: record.gift_num,
       });
     }
   }

@@ -1278,6 +1278,20 @@ export default function HomePage() {
   }
   // 版本号卡片连续点击 → admin 入口（点击10次），已使用过 admin 后再其他工具页显示入口卡片
   const [versionClickCount, setVersionClickCount] = useState(0);
+  // 帮助页顶部公告（管理员在 admin 页编辑；为空则不显示公告卡片）
+  const [helpAnnouncement, setHelpAnnouncement] = useState("");
+  // 拉取管理者发布的帮助页公告
+  useEffect(() => {
+    let cancelled = false;
+    getPlatform().then((platform) =>
+      platform.fetchRemoteConfig().then((cfg) => {
+        if (cancelled) return;
+        const v = (cfg as Record<string, unknown> | null)?.announcement;
+        setHelpAnnouncement(typeof v === "string" ? v : "");
+      }).catch(() => {}),
+    );
+    return () => { cancelled = true; };
+  }, []);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
   const [adminPwd, setAdminPwd] = useState("");
   const [adminPwdError, setAdminPwdError] = useState<string>("");
@@ -2938,6 +2952,16 @@ export default function HomePage() {
           {toolsPage === "home" && (
               <>
               <div className="grid grid-cols-1 gap-3">
+                {/* 公告卡片：管理员在 admin 页编辑，置顶显示 */}
+                {helpAnnouncement.trim() && (
+                  <div className="rounded-xl border border-[#f39c12]/25 bg-[#fdf6ec] p-3 shadow-[0_20px_80px_rgba(31,28,23,0.06)]">
+                    <div className="flex items-center gap-1.5 mb-1.5 text-xs font-semibold text-[#d68910]">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                      公告
+                    </div>
+                    <p className="text-xs leading-relaxed text-black/70 whitespace-pre-wrap">{helpAnnouncement}</p>
+                  </div>
+                )}
                 {/* 更新状态卡片：冷启动自动检查+自动下载，无需手动点击检查。
                     按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败。
                     连续点击卡片 10 次触发显示"管理后台"入口（原版本号卡片连击功能迁移至此） */}
@@ -3071,7 +3095,7 @@ export default function HomePage() {
                   </div>
                 )}
                 {[
-                  { icon: "👍", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
+                  { icon: "/like.png", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
                   { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "指定直播间，自动抢天选福袋和红包", needsLogin: true },
                   { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
                   { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },

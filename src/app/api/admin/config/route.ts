@@ -23,10 +23,12 @@ export async function GET(request: Request) {
       data: {
         current_activity_blind_box_ids: [],
         blind_boxes: [],
+        blind_box_profit_ids: [],
         synthesis_activities: [],
         recommended_anchors: [],
         real_activity_url: "",
         simulator_activities: [],
+        announcement: "",
       },
     });
   }
@@ -36,10 +38,12 @@ export async function GET(request: Request) {
     data: {
       current_activity_blind_box_ids: adminConfig.current_activity_blind_box_ids ?? [],
       blind_boxes: adminConfig.blind_boxes ?? [],
+      blind_box_profit_ids: adminConfig.blind_box_profit_ids ?? [],
       synthesis_activities: adminConfig.synthesis_activities ?? [],
       recommended_anchors: adminConfig.recommended_anchors ?? [],
       real_activity_url: adminConfig.real_activity_url ?? "",
       simulator_activities: adminConfig.simulator_activities ?? [],
+      announcement: adminConfig.announcement ?? "",
     },
   });
 }
@@ -68,6 +72,9 @@ export async function POST(request: Request) {
     current_activity_blind_box_ids: Array.isArray(body.current_activity_blind_box_ids)
       ? body.current_activity_blind_box_ids.map(Number).filter((n: number) => n > 0)
       : [],
+    blind_box_profit_ids: Array.isArray(body.blind_box_profit_ids)
+      ? body.blind_box_profit_ids.map(Number).filter((n: number) => n > 0)
+      : undefined,
     blind_boxes: body.blind_boxes.map((b: { id: number; name: string; icon: string }) => ({
       id: Number(b.id),
       name: String(b.name || ""),
@@ -96,6 +103,7 @@ export async function POST(request: Request) {
         }))
       : [],
     real_activity_url: typeof body.real_activity_url === "string" ? body.real_activity_url : "",
+    announcement: typeof body.announcement === "string" ? body.announcement : "",
     // 模拟器活动入口配置（含算法类型），按原样持久化
     simulator_activities: Array.isArray(body.simulator_activities)
       ? body.simulator_activities.map((a: any) => ({

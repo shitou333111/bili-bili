@@ -159,6 +159,8 @@ export default function AutoLotteryPage({ onBack }: Props) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsCollapsed, setLogsCollapsed] = useState(true);
   const [expandedUids, setExpandedUids] = useState<Set<number>>(new Set());
+  /** 只选择指定直播间：勾选后只监测指定直播间，热门/人气直播间不抢且置灰显示 */
+  const [onlyCustomRooms, setOnlyCustomRooms] = useState(false);
 
   const logRef = useRef<HTMLDivElement>(null);
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -187,6 +189,8 @@ export default function AutoLotteryPage({ onBack }: Props) {
   const hotRankRoomsRef = useRef<HotRoomRaw[]>([]);
   /** 房间元信息（roomid -> 所属热门分区/原始数据），探测到抽奖时据此登记保留 */
   const hotRoomMetaRef = useRef<Map<number, { partitionId: number; raw: HotRoomRaw }>>(new Map());
+  /** 只选择指定直播间的实时引用（扫描时据此过滤房间列表） */
+  const onlyCustomRoomsRef = useRef(false);
   /** 保留房间表的实时引用（仅供回调内读写，渲染用 retainedRooms state） */
   const retainedRoomsRef = useRef<RetainedRooms>(new Map());
 
@@ -260,6 +264,19 @@ export default function AutoLotteryPage({ onBack }: Props) {
     if (!minValueLoaded) return;
     try { localStorage.setItem(MIN_VALUE_KEY, String(minValue)); } catch { /* ignore */ }
   }, [minValue, minValueLoaded]);
+
+  // 只选择指定直播间：启动时读取本地保存的值，修改后写回，下次启动自动应用
+  const ONLY_CUSTOM_KEY = "auto_lottery_only_custom";
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ONLY_CUSTOM_KEY);
+      if (raw != null) setOnlyCustomRooms(raw === "1");
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(ONLY_CUSTOM_KEY, onlyCustomRooms ? "1" : "0"); } catch { /* ignore */ }
+  }, [onlyCustomRooms]);
+  useEffect(() => { onlyCustomRoomsRef.current = onlyCustomRooms; }, [onlyCustomRooms]);
 
   // ===== 热门列表获取（仅客户端支持） =====
   const fetchHotRooms = useCallback(async (): Promise<PartitionResult[] | null> => {
@@ -492,7 +509,8 @@ export default function AutoLotteryPage({ onBack }: Props) {
     if (!isSession(session)) return;
     scanningRef.current = true;
     setScanning(true);
-    const roomList = roomsRef.current;
+    // 只选择指定直播间时，仅扫描指定直播间；否则扫描合并后的全部房间
+    const roomList = onlyCustomRoomsRef.current ? customRoomsRef.current : roomsRef.current;
     try {
       if (roomList.length === 0) { addLog("暂无房间", "warn"); return; }
       addLog(`扫描 ${roomList.length} 个直播间...`, "info");
@@ -590,7 +608,9 @@ export default function AutoLotteryPage({ onBack }: Props) {
       hotRoomMetaRef.current = meta;
     }
     // 同步重建房间列表（state 更新是异步的），确保首次探测能拿到房间
-    const roomList = mergeRoomLists(partitions ?? [], retainedRoomsRef.current.values(), customRoomsRef.current, hotRankRoomsRef.current);
+    const roomList = onlyCustomRoomsRef.current
+      ? [...customRoomsRef.current]
+      : mergeRoomLists(partitions ?? [], retainedRoomsRef.current.values(), customRoomsRef.current, hotRankRoomsRef.current);
     roomsRef.current = roomList;
     addLog(`当前房间数: ${roomList.length}`, "info");
     if (roomList.length === 0) addLog("暂无直播间", "warn");
@@ -619,14 +639,6 @@ export default function AutoLotteryPage({ onBack }: Props) {
     addLog("已停止", "info");
   }, [clearAllTimers, addLog]);
 
-  // ===== 手动刷新探测：立即触发一次扫描（结束后重新开始 10 分钟倒计时，不更新直播间列表） =====
-  const refreshScanNow = useCallback(async () => {
-    if (!runningRef.current || scanningRef.current) return;
-    if (scanTimerRef.current) { clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
-    setNextScanAt(null);
-    await scanAndProcess(sessionRef.current);
-  }, [scanAndProcess]);
-
   // ===== 手动刷新列表：重新抓取各分区直播间列表，并按北京时间 01 分/31 分重排下次刷新（不触发探测） =====
   // 注意：这里只更新 hotPartitions/房间列表，不调用 closeRoomPresence、不清空定时器，
   // 已建立的弹幕在场连接（presenceMap，模块级、按 roomId 管理）保持不断开。
@@ -636,6 +648,17 @@ export default function AutoLotteryPage({ onBack }: Props) {
     await fetchHotRooms();
     if (runningRef.current) scheduleListRefresh();
   }, [fetchHotRooms, scheduleListRefresh]);
+
+  // ===== 手动探测：先刷新直播列表，再立即触发一次扫描（结束后重新开始 10 分钟倒计时） =====
+  const refreshScanNow = useCallback(async () => {
+    if (!runningRef.current || scanningRef.current) return;
+    if (scanTimerRef.current) { clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+    setNextScanAt(null);
+    // 先刷新列表（复用刷新列表逻辑），再探测
+    await refreshListNow();
+    if (!runningRef.current) return;
+    await scanAndProcess(sessionRef.current);
+  }, [refreshListNow, scanAndProcess]);
 
   const getCountdown = (endTs: number) => formatCountdown(Math.max(0, (endTs * 1000 - now) / 1000));
 
@@ -768,12 +791,21 @@ export default function AutoLotteryPage({ onBack }: Props) {
         自动扫描各分区热门直播间，检测天选福袋和红包，开奖前自动进入直播间参与。支持按奖品价值阈值过滤。
       </div>
 
-      {/* 阈值设置 */}
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-black/50">最低价值（电池）:</span>
-        <input type="number" min={0} value={minValue} onChange={(e) => setMinValue(Math.max(0, Number(e.target.value)))}
-          className="w-20 rounded-lg border border-black/15 bg-white px-2 py-1 text-sm outline-none focus:border-[#00a1d6]/50 transition" />
-        <span className="text-black/35">总价值低于此值的天选/红包不显示</span>
+      {/* 阈值设置 + 只选择指定直播间 */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+        <span className="flex items-center gap-2">
+          <span className="text-black/50">最低价值（电池）:</span>
+          <input type="number" min={0} value={minValue} onChange={(e) => setMinValue(Math.max(0, Number(e.target.value)))}
+            className="w-20 rounded-lg border border-black/15 bg-white px-2 py-1 text-sm outline-none focus:border-[#00a1d6]/50 transition" />
+        </span>
+        <label className="flex items-center gap-1.5 text-black/70 cursor-pointer select-none">
+          <input type="checkbox" checked={onlyCustomRooms} onChange={(e) => setOnlyCustomRooms(e.target.checked)}
+            className="accent-[#00a1d6] w-3.5 h-3.5" />
+          只选择指定直播间
+        </label>
+      </div>
+      <div className="text-xs text-black/35">
+        总价值低于最低价值的天选/红包不显示。勾选"只选择指定直播间"后仅抢指定直播间的天选和红包，下方热门/人气直播间不参与并置灰显示。
       </div>
 
       {/* 按钮行 */}
@@ -781,20 +813,16 @@ export default function AutoLotteryPage({ onBack }: Props) {
         {!running ? (
           <button onClick={start} disabled={loadingHotRooms}
             className="flex-1 rounded-xl bg-[#00a1d6] py-2.5 text-sm font-medium text-white hover:opacity-90 transition disabled:opacity-50">
-            {loadingHotRooms ? "获取列表中..." : "自动抢天选/红包"}
+            {loadingHotRooms ? "获取列表中..." : "点击开始抢天选/红包"}
           </button>
         ) : (
           <>
             <button onClick={stop} className="flex-1 h-10 flex items-center justify-center whitespace-nowrap rounded-xl bg-red-500 text-xs font-medium text-white hover:opacity-90 transition">
               停止
             </button>
-            <button onClick={refreshListNow} disabled={loadingHotRooms}
-              className="flex-1 h-10 flex items-center justify-center whitespace-nowrap rounded-xl border border-black/15 bg-black/[0.03] text-xs font-medium text-black/70 hover:bg-black/[0.06] transition disabled:opacity-50">
-              {loadingHotRooms ? "刷新中..." : `刷新列表${nextListRefreshAt ? `（${formatCountdown(Math.max(0, (nextListRefreshAt - now) / 1000))}）` : ""}`}
-            </button>
-            <button onClick={refreshScanNow} disabled={scanning}
+            <button onClick={refreshScanNow} disabled={scanning || loadingHotRooms}
               className="flex-1 h-10 flex items-center justify-center whitespace-nowrap rounded-xl border border-[#00a1d6]/30 bg-[#00a1d6]/10 text-xs font-medium text-[#00a1d6] hover:bg-[#00a1d6]/20 transition disabled:opacity-50">
-              {scanning ? "探测中..." : `刷新探测${nextScanAt ? `（${formatCountdown(Math.max(0, (nextScanAt - now) / 1000))}）` : ""}`}
+              {scanning || loadingHotRooms ? "探测中..." : "探测"}
             </button>
           </>
         )}
@@ -832,7 +860,7 @@ export default function AutoLotteryPage({ onBack }: Props) {
         </div>
 
         {/* 人气直播间抽屉（指定直播间下方）：来自 getHotRankList，仅显示有天选/红包的直播间 */}
-        <div>
+        <div className={onlyCustomRooms ? "opacity-40 pointer-events-none select-none" : ""}>
           <button onClick={() => setHotRankDrawerOpen(!hotRankDrawerOpen)}
             className="flex items-center justify-between w-full px-3 py-2 text-xs hover:bg-black/[0.02] transition">
             <span className="flex items-center gap-2">
@@ -865,7 +893,7 @@ export default function AutoLotteryPage({ onBack }: Props) {
           const visibleRooms = prRooms.filter((r) => roomHasLottery(r.uid));
           const isOpen = expandedPartitions.has(pr.partition.id);
           return (
-            <div key={pr.partition.id}>
+            <div key={pr.partition.id} className={onlyCustomRooms ? "opacity-40 pointer-events-none select-none" : ""}>
               <button onClick={() => setExpandedPartitions((prev) => { const next = new Set(prev); if (next.has(pr.partition.id)) next.delete(pr.partition.id); else next.add(pr.partition.id); return next; })}
                 className="flex items-center justify-between w-full px-3 py-2 text-xs hover:bg-black/[0.02] transition">
                 <span className="flex items-center gap-2">

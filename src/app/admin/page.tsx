@@ -88,10 +88,13 @@ type SimulatorActivityItem = {
 type AdminConfigData = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
+  /** 盲盒盈亏查询配置：可被查询盈亏的盲盒 id 列表 */
+  blind_box_profit_ids: number[];
   synthesis_activities: ActivityItem[];
   recommended_anchors: RecommendedAnchorItem[];
   real_activity_url: string;
   simulator_activities: SimulatorActivityItem[];
+  announcement: string;
 };
 
 /** 读取本地保存的管理员会话 sid */
@@ -141,6 +144,10 @@ export default function AdminPage() {
   const [blindBoxSearchIndex, setBlindBoxSearchIndex] = useState<number | null>(null);
   // 合成产物名称搜索建议（当前展开的产品行）
   const [productSearch, setProductSearch] = useState<{ act: number; product: number } | null>(null);
+  // 配置模块折叠状态：盲盒配置 / 模拟器活动配置 / 合成活动盈亏配置 默认折叠
+  const [blindBoxCollapsed, setBlindBoxCollapsed] = useState(true);
+  const [simulatorCollapsed, setSimulatorCollapsed] = useState(true);
+  const [synthesisCollapsed, setSynthesisCollapsed] = useState(true);
   // 算法参数全屏编辑器：记录正在编辑的活动序号 / 临时文本 / 校验错误
   const [paramsEditIndex, setParamsEditIndex] = useState<number | null>(null);
   const [paramsEditText, setParamsEditText] = useState("");
@@ -311,6 +318,9 @@ export default function AdminPage() {
             ? data.current_activity_blind_box_ids
             : [],
           blind_boxes: Array.isArray(data.blind_boxes) ? data.blind_boxes : [],
+          blind_box_profit_ids: Array.isArray(data.blind_box_profit_ids)
+            ? data.blind_box_profit_ids
+            : [],
           synthesis_activities: Array.isArray(data.synthesis_activities)
             ? data.synthesis_activities
             : [],
@@ -318,6 +328,7 @@ export default function AdminPage() {
             ? data.recommended_anchors
             : [],
           real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
+          announcement: typeof data.announcement === "string" ? data.announcement : "",
           simulator_activities: simActs.map((a: any) => ({
                 id: String(a.id ?? ""),
                 title: String(a.title ?? ""),
@@ -684,18 +695,13 @@ export default function AdminPage() {
     });
   };
 
-  // 上移下移盲盒条目（固定盲盒 32251/35206 不参与排序，仅调整其余条目顺序）
-  const moveBlindBox = (filteredIndex: number, dir: -1 | 1) => {
+  // 上移下移盲盒条目（所有盲盒统一参与排序，无固定项）
+  const moveBlindBox = (index: number, dir: -1 | 1) => {
     if (!config) return;
-    const fixedIds = [32251, 35206];
     const boxes = [...config.blind_boxes];
-    const nonFixed: number[] = [];
-    boxes.forEach((b, i) => { if (!fixedIds.includes(b.id)) nonFixed.push(i); });
-    const target = filteredIndex + dir;
-    if (target < 0 || target >= nonFixed.length) return;
-    const a = nonFixed[filteredIndex];
-    const b = nonFixed[target];
-    [boxes[a], boxes[b]] = [boxes[b], boxes[a]];
+    const target = index + dir;
+    if (target < 0 || target >= boxes.length) return;
+    [boxes[index], boxes[target]] = [boxes[target], boxes[index]];
     setConfig({ ...config, blind_boxes: boxes });
   };
 
@@ -950,6 +956,16 @@ export default function AdminPage() {
     });
   };
 
+  // 盲盒盈亏查询配置：增删可查询盈亏的盲盒 id（有序保留）
+  const toggleProfitBoxId = (id: number) => {
+    if (!config) return;
+    const ids = config.blind_box_profit_ids;
+    setConfig({
+      ...config,
+      blind_box_profit_ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
+    });
+  };
+
   const toggleActivityActive = (index: number) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
@@ -1099,67 +1115,78 @@ export default function AdminPage() {
               </div>
             </div>
 
+            {/* 帮助页公告 */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold">帮助页公告</h3>
+              <p className="text-[10px] text-black/40">显示在“帮助”页面最上方的公告内容，留空则不显示公告卡片。支持换行。</p>
+              <textarea
+                value={config.announcement ?? ""}
+                onChange={(e) => setConfig({ ...config, announcement: e.target.value })}
+                placeholder="在此输入公告内容..."
+                rows={3}
+                className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+              />
+            </div>
+
+            <hr className="border-t-2 border-black/30" />
+
             {/* Blind boxes */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">盲盒配置</h3>
-                <button onClick={addBlindBox} className="text-xs text-[#00a1d6] hover:underline">+ 添加盲盒</button>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setBlindBoxCollapsed((v) => !v)}
+                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-3 h-3 transition-transform ${blindBoxCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                  盲盒配置
+                </span>
+                <span className="text-[10px] font-normal text-black/35">{blindBoxCollapsed ? "展开" : "折叠"}</span>
+              </button>
+              {!blindBoxCollapsed && (<>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-[10px] text-black/40">☑卡片 = 单独作为一个盲盒卡片显示；☑盈亏 = 纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒</p>
+                <button onClick={addBlindBox} className="text-xs text-[#00a1d6] hover:underline shrink-0">+ 添加盲盒</button>
               </div>
-              <p className="text-[10px] text-black/40">勾选 = 在页面上展示为当前活动盲盒</p>
               <div className="space-y-2">
-                {/* 心动盲盒 - 固定项，始终勾选，不可更改 */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    type="checkbox"
-                    checked={true}
-                    disabled
-                    className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0 opacity-50"
-                  />
-                  <span className="w-16 text-xs text-black/50">32251</span>
-                  <span className="w-auto text-xs text-black/50">心动盲盒</span>
-                  <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
-                </div>
-                {/* 幸运盲盒 - 固定项，始终勾选，不可更改 */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    type="checkbox"
-                    checked={true}
-                    disabled
-                    className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0 opacity-50"
-                  />
-                  <span className="w-16 text-xs text-black/50">35206</span>
-                  <span className="w-auto text-xs text-black/50">幸运盲盒</span>
-                  <span className="text-[10px] text-black/30 shrink-0">默认显示，不可更改</span>
-                </div>
-                {/* 其他盲盒（可配置，支持上移下移排序） */}
-                {config.blind_boxes
-                  .filter((box) => box.id !== 32251 && box.id !== 35206)
-                  .map((box, filteredIndex) => {
-                    const realIndex = config.blind_boxes.findIndex((b) => b === box);
-                    return (
-                  <div key={realIndex} className={`rounded-lg border border-black/10 p-2 space-y-2 ${!config.current_activity_blind_box_ids.includes(box.id) ? "opacity-50" : ""}`}>
+                {/* 所有盲盒统一逻辑：心动/幸运盲盒同样可勾选、可排序，无默认固定状态 */}
+                {config.blind_boxes.map((box, realIndex) => (
+                  <div key={realIndex} className={`rounded-lg border border-black/10 p-2 space-y-2 ${!config.current_activity_blind_box_ids.includes(box.id) && !config.blind_box_profit_ids.includes(box.id) ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="flex flex-col shrink-0">
                         <button
-                          onClick={() => moveBlindBox(filteredIndex, -1)}
-                          disabled={filteredIndex === 0}
+                          onClick={() => moveBlindBox(realIndex, -1)}
+                          disabled={realIndex === 0}
                           className="admin-move-btn"
                           title="上移"
                         >▲</button>
                         <button
-                          onClick={() => moveBlindBox(filteredIndex, 1)}
-                          disabled={filteredIndex === config.blind_boxes.filter((b) => b.id !== 32251 && b.id !== 35206).length - 1}
+                          onClick={() => moveBlindBox(realIndex, 1)}
+                          disabled={realIndex === config.blind_boxes.length - 1}
                           className="admin-move-btn"
                           title="下移"
                         >▼</button>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={config.current_activity_blind_box_ids.includes(box.id)}
-                        onChange={() => toggleCurrentBoxId(box.id)}
-                        className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
-                        title="勾选为当前活动盲盒"
-                      />
+                      <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
+                        <input
+                          type="checkbox"
+                          checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
+                          onChange={() => toggleCurrentBoxId(box.id)}
+                          disabled={box.id <= 0}
+                          className="w-3.5 h-3.5 accent-[#00a1d6]"
+                        />
+                        <span className="text-[10px] text-black/50">卡片</span>
+                      </label>
+                      <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
+                        <input
+                          type="checkbox"
+                          checked={box.id > 0 && config.blind_box_profit_ids.includes(box.id)}
+                          onChange={() => toggleProfitBoxId(box.id)}
+                          disabled={box.id <= 0}
+                          className="w-3.5 h-3.5 accent-[#00a1d6]"
+                        />
+                        <span className="text-[10px] text-black/50">盈亏</span>
+                      </label>
                       {box.id > 0 && box.icon && (
                         <img src={box.icon} alt="" className="w-7 h-7 rounded shrink-0" />
                       )}
@@ -1206,12 +1233,12 @@ export default function AdminPage() {
                       <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
                     </div>
                   </div>
-                  );
-                })}
+                ))}
               </div>
+              </>)}
             </div>
 
-            <hr className="border-black/5" />
+            <hr className="border-t-2 border-black/30" />
 
             {/* 黑抽（真实合成活动）URL 配置 */}
             <div className="space-y-2">
@@ -1219,12 +1246,12 @@ export default function AdminPage() {
               <p className="text-[10px] text-black/40">
                 填写 B站 真实合成活动页面 URL 模板，使用 {'{roomId}'} 和 {'{uid}'} 作为占位符（{'{roomId}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{roomId}'}&uid={'{uid}'}#/play?config_id=...
               </p>
-              <input
-                type="text"
+              <textarea
                 value={config.real_activity_url}
                 onChange={(e) => setConfig({ ...config, real_activity_url: e.target.value })}
                 placeholder="粘贴活动 URL 模板"
-                className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                rows={Math.max(1, Math.ceil((config.real_activity_url?.length ?? 0) / 80))}
+                className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
               />
               {config.real_activity_url && (
                 <p className="text-[10px] text-[#2ecc71]">✓ 已配置，黑抽入口可用</p>
@@ -1234,12 +1261,22 @@ export default function AdminPage() {
               )}
             </div>
 
-            <hr className="border-black/5" />
+            <hr className="border-t-2 border-black/30" />
 
             {/* 模拟器活动配置（玩法可热更新） */}
             <div className="space-y-2">
+              <button
+                onClick={() => setSimulatorCollapsed((v) => !v)}
+                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-3 h-3 transition-transform ${simulatorCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                  模拟器活动配置（玩法可热更新）
+                </span>
+                <span className="text-[10px] font-normal text-black/35">{simulatorCollapsed ? "展开" : "折叠"}</span>
+              </button>
+              {!simulatorCollapsed && (<>
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">模拟器活动配置（玩法可热更新）</h3>
                 <button onClick={addSimulatorActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
               </div>
               <p className="text-[10px] text-black/40">
@@ -1360,14 +1397,25 @@ export default function AdminPage() {
                   <p className="text-[10px] text-black/30">暂无活动配置，点击"+ 添加活动"新增</p>
                 )}
               </div>
+              </>)}
             </div>
 
-            <hr className="border-black/5" />
+            <hr className="border-t-2 border-black/30" />
 
             {/* Synthesis activities */}
             <div className="space-y-2">
+              <button
+                onClick={() => setSynthesisCollapsed((v) => !v)}
+                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-3 h-3 transition-transform ${synthesisCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                  合成活动盈亏配置
+                </span>
+                <span className="text-[10px] font-normal text-black/35">{synthesisCollapsed ? "展开" : "折叠"}</span>
+              </button>
+              {!synthesisCollapsed && (<>
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">合成活动盈亏配置</h3>
                 <button onClick={addActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
               </div>
               <p className="text-[10px] text-black/40">勾选 = 在页面上展示该活动</p>
@@ -1504,9 +1552,10 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+              </>)}
             </div>
 
-            <hr className="border-black/5" />
+            <hr className="border-t-2 border-black/30" />
 
             {/* 推荐主播管理 */}
             <div className="space-y-2">
