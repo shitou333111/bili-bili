@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import DownloadSection from "./DownloadSection";
 import SloganRotator from "./SloganRotator";
+import WindowTitleBar from "@/components/WindowTitleBar";
+import BackBar from "./BackBar";
 
 export const metadata: Metadata = {
   title: "B瓜 · Bilibili 直播消费数据分析工具",
@@ -58,8 +60,18 @@ export default function LandingPage() {
   return (
     <main
       className="min-h-screen text-[#1f1c17]"
-      style={{ background: "#f5f5f5", WebkitUserSelect: "auto", userSelect: "auto" }}
+      style={{
+        background: "#f5f5f5",
+        WebkitUserSelect: "auto",
+        userSelect: "auto",
+        // Tauri 桌面（decorations:false）：内容避开自绘标题栏（--safe-top 由根布局 SafeAreaStyler 注入）
+        paddingTop: "var(--safe-top, 0px)",
+      }}
     >
+      {/* Tauri 桌面子页面必须自行渲染标题栏，否则窗口无法拖动/最小化/关闭（统一样式，不带返回按钮）；
+          页面内统一返回条参考"帮助"各子页实现，SPA 后退不刷新，自动回到来路页 */}
+      <WindowTitleBar />
+      <BackBar />
       <div className="content-wrapper px-5 pb-16 pt-6 sm:px-8 sm:pt-10">
         {/* ============ Hero ============ */}
         <section className="flex flex-col items-center pt-4 text-center sm:pt-6">
@@ -79,6 +91,25 @@ export default function LandingPage() {
             B站直播数据分析工具
           </p>
           <SloganRotator />
+        </section>
+
+        {/* ============ 第一种使用方式：网页端（在安装包下载模块上方） ============ */}
+        <section id="web" className="mx-auto mt-12 max-w-4xl scroll-mt-8 sm:mt-16">
+          <h2 className="text-center text-2xl font-semibold sm:text-3xl">第一种使用方式：网页端</h2>
+          <div className="mt-6 flex flex-col items-center gap-4 rounded-3xl border border-[#ececec] bg-white p-6 shadow-sm sm:p-8">
+            <a
+              href="https://app.bili-bili.icu/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-full bg-[#1f1c17] px-6 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+            >
+              app.bili-bili.icu
+            </a>
+            <div className="space-y-1.5 text-center text-[13px] leading-6 text-[#6b6b6b]">
+              <p>推荐第二种方式，下面下载安装使用，体验更好。</p>
+              <p>主播功能必须下载安装客户端使用，推荐电脑版。</p>
+            </div>
+          </div>
         </section>
 
         {/* ============ 下载安装包（在使用指南上方） ============ */}

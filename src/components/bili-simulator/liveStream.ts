@@ -74,8 +74,10 @@ async function fetchJSON(url: string): Promise<any> {
       throw e;
     }
   }
-  // 浏览器环境：直接 fetch
-  const resp = await fetch(url);
+  // 浏览器环境：直连 B站 会被 403/CORS 拒绝（如 get_status_info_by_uids），
+  // 统一走服务器 /api/bili-proxy 同源转发（白名单仅放行 B站 域名）
+  const resp = await fetch(`/api/bili-proxy?url=${encodeURIComponent(url)}`);
+  if (!resp.ok) throw new Error(`代理请求失败: HTTP ${resp.status}`);
   return resp.json();
 }
 

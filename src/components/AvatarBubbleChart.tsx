@@ -117,20 +117,31 @@ function computeInitialSize() {
     const n = parseFloat(v);
     if (!isNaN(n)) topPad = n;
   } catch { /* ignore */ }
-  // 底部安全区：用探针元素读取 env(safe-area-inset-bottom) 的实际像素
-  let bottomPad = 0;
+  // 底部安全区：优先解析 --safe-bottom（SafeAreaStyler 注入，含托盘栏/Home Indicator 适配），
+  // 再用探针元素读取 env(safe-area-inset-bottom) 的实际像素；二者都取不到时保底 20px。
+  // 此前只靠 env 探针，桌面/部分安卓 WEB 下读到 0，导致模态框贴底、按钮被底部托盘栏遮挡。
+  let bottomPad = 20;
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--safe-bottom").trim();
+    const n = parseFloat(v);
+    if (!isNaN(n) && n > 0) bottomPad = Math.max(bottomPad, n);
+  } catch { /* ignore */ }
   try {
     const probe = document.createElement("div");
     probe.style.cssText = "position:fixed;left:0;bottom:0;width:100%;height:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none";
     document.body.appendChild(probe);
-    bottomPad = probe.offsetHeight || 0;
+    const n = probe.offsetHeight || 0;
     document.body.removeChild(probe);
+    if (n > 0) bottomPad = Math.max(bottomPad, n);
   } catch { /* ignore */ }
   const sideMargin = 32; // 左右留边（内容两侧各 16px）
   // 标题 + 说明文字 + 底部两个按钮 + 外边距 + 模态框 padding 的固定垂直开销
   const overhead = 200;
+  // 模态框与屏幕底部的最小间隔：保证按钮行不贴边、不被底部托盘栏遮挡
+  // （与外层容器 paddingBottom 保持一致，否则画布会算大撑破可视区）
+  const bottomGap = 14;
   const maxW = Math.max(200, viewW - sideMargin);
-  const maxH = Math.max(200, viewH - topPad - bottomPad - overhead);
+  const maxH = Math.max(200, viewH - topPad - bottomPad - bottomGap - overhead);
   let w = Math.min(maxW, 800);
   let h = Math.round(w * DOWNLOAD_H / DOWNLOAD_W);
   if (h > maxH) { h = Math.round(maxH); w = Math.round(h * DOWNLOAD_W / DOWNLOAD_H); }
@@ -696,7 +707,14 @@ export default function AvatarFoamTreeChart({ items, title, loading: externalLoa
     : `单元格面积代表消费额，共显示 ${displayCount} 个粉丝`;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4 touch-none overscroll-contain" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4 touch-none overscroll-contain"
+      // 底部预留安全区+固定间隔：整体内容下移贴近可视区底部，充分利用空间，
+      // 同时保留最小间隔保证底部两个按钮不被托盘栏遮挡
+      // （与 computeInitialSize 中 bottomPad + bottomGap 对应）
+      style={{ paddingBottom: "calc(var(--safe-bottom, 20px) + 14px)" }}
+      onClick={onClose}
+    >
       <div
         className="relative flex flex-col items-center"
         style={{ width: canvasDims.w + 32 }}

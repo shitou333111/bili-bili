@@ -15,6 +15,7 @@ import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
 import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice, getGiftList as getCatalogGiftList } from "./gift-catalog-client";
+import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta } from "./blind-box-calc";
 import {
   BLIND_BOX_CONFIG,
   BLIND_BOX_API,
@@ -1962,43 +1963,13 @@ type BlindBoxProfitResult = {
   }>;
   castleStats: CastleStat[];
   castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
+  /** 该盲盒的全部原始记录（精简），供浏览器端本地筛选重算使用 */
+  records?: BlindBoxCalcRecord[];
+  /** ruid → 主播昵称 */
+  anchorNames?: Record<number, string>;
+  /** gift_id → 礼物名称/图标/单价 */
+  giftMeta?: Record<number, BlindBoxGiftMeta>;
 };
-
-function calculateCastleStats(
-  drawRecords: BlindBoxDrawRecord[],
-): { castleStats: CastleStat[]; castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null } {
-  const castleRecords = drawRecords.filter((r) => r.gift_id === CASTLE_ID);
-  if (castleRecords.length === 0) {
-    return { castleStats: [], castleGift: null };
-  }
-
-  const anchorMap = new Map<number, { rname: string; totalCount: number; dates: Map<string, number> }>();
-  for (const record of castleRecords) {
-    const date = record.timestamp.split(" ")[0];
-    let anchor = anchorMap.get(record.ruid);
-    if (!anchor) {
-      anchor = { rname: record.rname, totalCount: 0, dates: new Map() };
-      anchorMap.set(record.ruid, anchor);
-    }
-    anchor.totalCount += record.gift_num;
-    anchor.dates.set(date, (anchor.dates.get(date) ?? 0) + record.gift_num);
-  }
-
-  const castleStats: CastleStat[] = Array.from(anchorMap.entries()).map(([ruid, anchor]) => ({
-    ruid,
-    rname: anchor.rname,
-    totalCount: anchor.totalCount,
-    dates: Array.from(anchor.dates.entries())
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => b.date.localeCompare(a.date)),
-  }));
-  castleStats.sort((a, b) => b.totalCount - a.totalCount);
-
-  return {
-    castleStats,
-    castleGift: { gift_id: CASTLE_ID, gift_name: getCatalogGiftName(CASTLE_ID), gift_img: getCatalogGiftImg(CASTLE_ID), price: getCatalogGiftPrice(CASTLE_ID) },
-  };
-}
 
 function getLatestTimestamp(records: BlindBoxDrawRecord[]): string | undefined {
   if (records.length === 0) return undefined;
@@ -2007,133 +1978,45 @@ function getLatestTimestamp(records: BlindBoxDrawRecord[]): string | undefined {
   return latest;
 }
 
-function getDateRangeFilter(type: string): { start: Date; end: Date } | null {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  switch (type) {
-    case "today": {
-      const end = new Date(today);
-      end.setDate(end.getDate() + 1);
-      return { start: today, end };
-    }
-    case "yesterday": {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayEnd = new Date(today);
-      return { start: yesterday, end: yesterdayEnd };
-    }
-    case "thisWeek": {
-      const dayOfWeek = today.getDay();
-      const monday = new Date(today);
-      monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const nextMonday = new Date(monday);
-      nextMonday.setDate(nextMonday.getDate() + 7);
-      return { start: monday, end: nextMonday };
-    }
-    case "thisMonth": {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      return { start, end };
-    }
-    default:
-      return null;
-  }
+/** 原始记录 → 供浏览器本地筛选用的精简记录（不带昵称/礼物名，减少体积） */
+function toCalcRecords(records: BlindBoxDrawRecord[]): BlindBoxCalcRecord[] {
+  return records.map((r) => ({
+    gift_id: r.gift_id,
+    gift_num: r.gift_num,
+    ruid: r.ruid,
+    timestamp: r.timestamp,
+  }));
 }
 
-function filterRecords(
+/** ruid → 主播昵称（首次出现者优先，与聚合时的取名口径一致） */
+function buildAnchorNames(records: BlindBoxDrawRecord[]): Record<number, string> {
+  const names: Record<number, string> = {};
+  for (const r of records) {
+    if (names[r.ruid] === undefined) names[r.ruid] = r.rname;
+  }
+  return names;
+}
+
+/** 从礼物目录构建 gift_id → {name,img,price} 元数据（供浏览器本地重算使用） */
+function buildGiftMeta(
   records: BlindBoxDrawRecord[],
-  ruid: number | null,
-  dateRange: string,
-): BlindBoxDrawRecord[] {
-  let filtered = records;
-  if (ruid !== null) filtered = filtered.filter((r) => r.ruid === ruid);
-  const range = getDateRangeFilter(dateRange);
-  if (range) {
-    filtered = filtered.filter((r) => {
-      const t = new Date(r.timestamp).getTime();
-      return t >= range.start.getTime() && t < range.end.getTime();
-    });
-  }
-  return filtered;
-}
-
-function buildAnchorList(records: BlindBoxDrawRecord[]): Array<{ ruid: number; rname: string; count: number }> {
-  const map = new Map<number, { rname: string; count: number }>();
-  for (const r of records) {
-    const existing = map.get(r.ruid) ?? { rname: r.rname, count: 0 };
-    existing.count += r.gift_num;
-    map.set(r.ruid, existing);
-  }
-  return Array.from(map.entries())
-    .map(([ruid, v]) => ({ ruid, rname: v.rname, count: v.count }))
-    .sort((a, b) => b.count - a.count);
-}
-
-function getDateRange(records: BlindBoxDrawRecord[]): { start: string; end: string } | null {
-  if (records.length === 0) return null;
-  let earliest = records[0].timestamp;
-  let latest = records[0].timestamp;
-  for (const r of records) {
-    if (r.timestamp < earliest) earliest = r.timestamp;
-    if (r.timestamp > latest) latest = r.timestamp;
-  }
-  return { start: earliest, end: latest };
-}
-
-async function calculateProfit(
-  _platform: Platform,
   blindBoxId: number,
-  drawRecords: BlindBoxDrawRecord[],
-): Promise<BlindBoxProfitResult> {
-  const blindPrice = getCatalogGiftPrice(blindBoxId);
-  const blindBoxName = getCatalogGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
-  const blindBoxImg = getCatalogGiftImg(blindBoxId) || "";
-
-  const giftStats = new Map<number, { gift_name: string; count: number; totalValue: number }>();
-  for (const record of drawRecords) {
-    const existing = giftStats.get(record.gift_id) ?? { gift_name: record.gift_name, count: 0, totalValue: 0 };
-    existing.count += record.gift_num;
-    const giftPrice = getCatalogGiftPrice(record.gift_id);
-    existing.totalValue += giftPrice * record.gift_num;
-    giftStats.set(record.gift_id, existing);
-  }
-
-  let totalEarned = 0;
-  for (const record of drawRecords) {
-    totalEarned += getCatalogGiftPrice(record.gift_id) * record.gift_num;
-  }
-
-  const drawCount = drawRecords.reduce((sum, r) => sum + r.gift_num, 0);
-  const totalSpent = drawCount * blindPrice;
-
-  const gifts = Array.from(giftStats.entries()).map(([gift_id, stats]) => {
-    return {
-      gift_id,
-      gift_name: stats.gift_name,
-      gift_img: getCatalogGiftImg(gift_id),
-      unitPrice: getCatalogGiftPrice(gift_id),
-      count: stats.count,
-      totalValue: stats.totalValue,
+  extraIds: number[] = [],
+): Record<number, BlindBoxGiftMeta> {
+  const meta: Record<number, BlindBoxGiftMeta> = {};
+  for (const r of records) {
+    if (meta[r.gift_id]) continue;
+    meta[r.gift_id] = {
+      name: r.gift_name || getCatalogGiftName(r.gift_id),
+      img: getCatalogGiftImg(r.gift_id) || r.gift_img,
+      price: getCatalogGiftPrice(r.gift_id),
     };
-  });
-
-  return {
-    blindBoxId,
-    blindBoxName,
-    blindBoxImg,
-    blindPrice,
-    totalSpent,
-    totalEarned,
-    profit: totalEarned - totalSpent,
-    drawCount,
-    recordCount: drawRecords.length,
-    dateRange: { start: "", end: "" },
-    anchors: [],
-    filter: { ruid: null, dateRange: "all" },
-    gifts,
-    castleStats: [],
-    castleGift: null,
-  };
+  }
+  for (const id of [blindBoxId, ...extraIds]) {
+    if (meta[id]) continue;
+    meta[id] = { name: getCatalogGiftName(id), img: getCatalogGiftImg(id), price: getCatalogGiftPrice(id) };
+  }
+  return meta;
 }
 
 export type BlindBoxFilter = {
@@ -2195,29 +2078,35 @@ export async function fetchBlindBoxStats(
           );
         }
 
-        // 主播下拉列表只按日期筛选（不受主播筛选影响）：
-        // 仅显示所选时间段内有数据的主播，count 为该时段内的送出个数
-        const dateRange = getDateRange(mergedRecords);
-        const dateOnlyFiltered = filterRecords(mergedRecords, null, filterDateRange);
-        const anchors = buildAnchorList(dateOnlyFiltered);
-        const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
+        // 盲盒本身名称/图标（礼物目录 + admin-config fallback）
+        const blindBoxPrice = getCatalogGiftPrice(blindBoxId);
+        const blindBoxName = getCatalogGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
+        let blindBoxImg = getCatalogGiftImg(blindBoxId) || "";
+        if (!blindBoxImg) blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
 
-        // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）
-        const profit = await calculateProfit(platform, blindBoxId, filteredRecords);
-        // 补充 admin-config 中的 icon 作为图标 fallback
-        if (!profit.blindBoxImg) {
-          profit.blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
-        }
+        // 浏览器端本地筛选所需的一次性载荷（精简记录 + 元数据）
+        const calcRecords = toCalcRecords(mergedRecords);
+        const anchorNames = buildAnchorNames(mergedRecords);
+        const giftMeta = buildGiftMeta(mergedRecords, blindBoxId, blindBoxId === 32251 ? [CASTLE_ID] : []);
+        // 盲盒本身用已解析好的名称/图标（含 admin-config fallback）
+        giftMeta[blindBoxId] = { name: blindBoxName, img: blindBoxImg, price: blindBoxPrice };
 
-        profit.dateRange = dateRange;
-        profit.anchors = anchors;
-        profit.filter = { ruid, dateRange: filterDateRange };
-
-        if (blindBoxId === 32251) {
-          const { castleStats, castleGift } = calculateCastleStats(mergedRecords);
-          profit.castleStats = castleStats;
-          profit.castleGift = castleGift;
-        }
+        // 用全量记录本地重算（零依赖纯函数，与 route.ts / 浏览器端共享同一份语义）
+        const profit: BlindBoxProfitResult = {
+          ...computeBlindBoxFromRecords({
+            blindBoxId,
+            records: calcRecords,
+            anchorNames,
+            giftMeta,
+            blindPrice: blindBoxPrice,
+            blindBoxName,
+            blindBoxImg,
+            filter: { ruid, dateRange: filterDateRange },
+          }),
+          records: calcRecords,
+          anchorNames,
+          giftMeta,
+        };
 
         results.push(profit);
       } catch (err) {

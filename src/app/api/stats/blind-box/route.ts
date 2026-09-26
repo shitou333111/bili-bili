@@ -5,6 +5,7 @@ import { fetchBlindBoxDrawStream } from "@/lib/bilibili/gift-api";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftPrice } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
+import type { BlindBoxCalcRecord, BlindBoxGiftMeta } from "@/lib/blind-box-calc";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -61,6 +62,16 @@ type BlindBoxProfitResult = {
   castleStats: CastleStat[];
   /** 城堡礼物信息 */
   castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
+  /**
+   * 浏览器端本地筛选所需的一次性载荷（精简记录 + 元数据）。
+   * WEB 端只在冷启动/刷新时请求本接口拿全量数据，之后切换主播/时间段全部本地重算，0 请求。
+   * 计算语义与 `src/lib/blind-box-calc.ts` 为镜像实现，两边修改需同步。
+   */
+  records?: BlindBoxCalcRecord[];
+  /** ruid → 主播昵称 */
+  anchorNames?: Record<number, string>;
+  /** gift_id → 礼物名称/图标/单价 */
+  giftMeta?: Record<number, BlindBoxGiftMeta>;
 };
 
 // 数据存储目录
@@ -501,6 +512,35 @@ export async function GET(request: Request) {
           profit.castleStats = castleStats;
           profit.castleGift = castleGift;
         }
+
+        // 浏览器端本地筛选所需的一次性载荷（精简记录，不含昵称/礼物名以减小体积）
+        profit.records = mergedRecords.map((r) => ({
+          gift_id: r.gift_id,
+          gift_num: r.gift_num,
+          ruid: r.ruid,
+          timestamp: r.timestamp,
+        }));
+        const anchorNames: Record<number, string> = {};
+        for (const r of mergedRecords) {
+          if (anchorNames[r.ruid] === undefined) anchorNames[r.ruid] = r.rname;
+        }
+        profit.anchorNames = anchorNames;
+        const giftMeta: Record<number, BlindBoxGiftMeta> = {};
+        for (const r of mergedRecords) {
+          if (giftMeta[r.gift_id]) continue;
+          giftMeta[r.gift_id] = {
+            name: r.gift_name || getGiftName(r.gift_id),
+            img: getGiftImg(r.gift_id) || r.gift_img,
+            price: getGiftPrice(r.gift_id),
+          };
+        }
+        // 盲盒本身用已解析好的名称/图标（含 admin-config fallback）
+        giftMeta[blindBoxId] = { name: profit.blindBoxName, img: profit.blindBoxImg, price: getGiftPrice(blindBoxId) };
+        // 浪漫城堡（心动盲盒的本地重算需要它的名称/图标/单价）
+        if (blindBoxId === 32251 && !giftMeta[CASTLE_ID]) {
+          giftMeta[CASTLE_ID] = { name: getGiftName(CASTLE_ID), img: getGiftImg(CASTLE_ID), price: getGiftPrice(CASTLE_ID) };
+        }
+        profit.giftMeta = giftMeta;
 
         results.push(profit);
       } catch (err) {

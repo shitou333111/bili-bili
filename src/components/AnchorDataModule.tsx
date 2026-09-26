@@ -266,7 +266,7 @@ function CastleStatModal({
       onClick={close}
     >
       <div
-        className={`w-[92%] max-w-md h-auto max-h-[85vh] mb-6 flex flex-col rounded-2xl bg-white shadow-xl overflow-hidden castle-modal-panel ${closing ? "closing" : ""}`}
+        className={`w-[88%] max-w-sm h-auto max-h-[78vh] my-8 flex flex-col rounded-2xl bg-white shadow-xl overflow-hidden castle-modal-panel ${closing ? "closing" : ""}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-4 py-3 border-b border-black/10 flex items-center justify-between">
@@ -381,20 +381,22 @@ const AnchorDataModule = memo(function AnchorDataModule({
   /** toast 提示 */
   showToast?: (msg: string) => void;
   /** 收益拉取进度上报（透传给父级全屏遮罩） */
-  onFetchProgress?: (p: { text: string; ratio?: number } | null) => void;
+  onFetchProgress?: (p: { text: string; ratio?: number; anchorGift?: boolean } | null) => void;
   /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
   onNoRevenue?: () => void;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
   // 收益记录按月获取进度（首次拉取时展示进度条）
-  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
+  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number; anchorGift?: boolean } | null>(null);
   const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "display" | "gift_screenshot" | "other">("revenue");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedFan, setSelectedFan] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  // 撞到 B站 412 限流时的提示：说明已抓多少、还剩多少个月份待补
+  const [quotaHint, setQuotaHint] = useState<string | null>(null);
   const [blindBoxDateFilter, setBlindBoxDateFilter] = useState<string>("all");
   const [blindBoxFanFilter, setBlindBoxFanFilter] = useState<string>("");
   // 保存完整粉丝列表（不受筛选影响），用于下拉框始终显示全部粉丝
@@ -491,12 +493,24 @@ const AnchorDataModule = memo(function AnchorDataModule({
     setFetchProgress(null);
     // 统一起始提示：模块内部遮罩与父级全屏遮罩都立即显示"正在获取主播收益..."
     // （dataFetch 只在实际拉取月份时有进度回调，前置一个起始提示避免只显示"加载中"）
-    const startHint = { text: "正在获取主播收益...", ratio: undefined } as const;
+    const startHint = { text: "正在获取主播收益...", ratio: undefined, anchorGift: true } as const;
     setFetchProgress(startHint);
     onFetchProgress?.(startHint);
     // 重置盲盒筛选条件
     setBlindBoxDateFilter("all");
     setBlindBoxFanFilter("");
+    // 登录触发的全量探测标记：扫码登录跳转主页时由 /login 页写入，仅消费一次。
+    // 置位时向收益接口传 probe=true，仅在该账号 roomStatus=1 时做一次有容错的全量探测；
+    // 冷启动/绿色刷新（无此标记）不做全量探测，避免对无收益账号反复试探。
+    // （读取放在 try 外，保证 catch 分支也能访问 restoreProbeFlag）
+    const probe = typeof window !== "undefined" && localStorage.getItem("bili_live_anchor_probe") === "1";
+    if (probe) localStorage.removeItem("bili_live_anchor_probe");
+    // probe 标记在请求前已消费：若本次请求失败（网络中断、非 code=0），
+    // 必须写回标记，否则下次刷新走 refresh=true 非 probe 分支会因无数据基线 skipFetch 返回 0，
+    // 表现为"重建/首次初始化后界面仍显示 0"。成功或 needs-relogin 时不写回。
+    const restoreProbeFlag = () => {
+      if (probe) localStorage.setItem("bili_live_anchor_probe", "1");
+    };
     try {
       // 先确保本地礼物目录已加载（给 GiftScreenshotPanel、giftSummary 图标读取用）
       try {
@@ -510,18 +524,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
       if (!stats) {
         await loadCachedStats();
       }
-      // 登录触发的全量探测标记：扫码登录跳转主页时由 /login 页写入，仅消费一次。
-      // 置位时向收益接口传 probe=true，仅在该账号 roomStatus=1 时做一次有容错的全量探测；
-      // 冷启动/绿色刷新（无此标记）不做全量探测，避免对无收益账号反复试探。
-      const probe = typeof window !== "undefined" && localStorage.getItem("bili_live_anchor_probe") === "1";
-      if (probe) localStorage.removeItem("bili_live_anchor_probe");
       // 本函数仅由页面统一刷新触发（冷启动初始化 / 绿色刷新按钮，见 page.tsx finishRefresh）。
       // 必须带 refresh=true：否则会被客户端/服务器当作"打开页面"的本地直出（不拉 B站），
       // 导致冷启动/手动刷新永远拿不到新数据。筛选切换等页面内交互走独立请求，不带此参数。
       const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts?refresh=true", { cache: "no-store" }, (p) => {
         // 模块内进度条 + 透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
-        setFetchProgress({ text: p.text, ratio: p.ratio });
-        onFetchProgress?.({ text: p.text, ratio: p.ratio });
+        setFetchProgress({ text: p.text, ratio: p.ratio, anchorGift: p.anchorGift });
+        onFetchProgress?.({ text: p.text, ratio: p.ratio, anchorGift: p.anchorGift });
       });
       const data = await res.json();
       if (data.message === "needs-relogin") {
@@ -532,6 +541,14 @@ const AnchorDataModule = memo(function AnchorDataModule({
       if (data.code === 0 && data.data) {
         setStats(data.data);
         setYesterdayAvailable(data.data.yesterdayAvailable ?? true);
+        // 撞到 B站 412 限流：退避重试已在本次运行内就地完成（客户端会按梯度重试同一批请求），
+        // 只有"退避用完仍被拦截"才会走到这里，此时不再起跨轮定时器，只提示用户稍后手动刷新续拉。
+        if (data.data.quotaExhausted) {
+          const tail = data.data.pendingMonths ? `，还剩 ${data.data.pendingMonths} 个月份待补` : "";
+          setQuotaHint(`B站 持续限制本机请求频率：已抓 ${data.data.records?.length ?? 0} 条${tail}，退避重试后仍被拦截。稍后点刷新继续补齐，或在「帮助」页的「重建数据」卡片里把抓取速度调低。`);
+        } else {
+          setQuotaHint(null);
+        }
         // 无收益判定（仅扫码登录探测会置位）：立即通知父级隐藏"主播"选项卡，
         // 不必等下次账号刷新/重载
         if (data.data.noRevenue) onNoRevenue?.();
@@ -549,9 +566,14 @@ const AnchorDataModule = memo(function AnchorDataModule({
         // 另一个并发请求正在进行，静默跳过（锁等待模式下基本不会走到此分支）
         console.log("[AnchorGifts] another fetch in progress, skipping this call");
       } else {
+        restoreProbeFlag();
+        // 本轮未成功（网络等失败）：清掉"将于 HH:MM 自动继续"提示，避免定时器已被取消却仍显示等待
+        setQuotaHint(null);
         setAuthError(data.message || "获取数据失败");
       }
     } catch (error) {
+      restoreProbeFlag();
+      setQuotaHint(null);
       console.error("Failed to fetch anchor data:", error);
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
@@ -796,6 +818,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
       {authError && (
         <div className="content-wrapper px-2 py-2 bg-amber-50 rounded-lg">
           <p className="text-sm text-amber-800">{authError}</p>
+        </div>
+      )}
+
+      {/* B站 412 限流提示（退避重试后仍被拦截、提前收尾时展示，说明剩余待补月份） */}
+      {quotaHint && (
+        <div className="content-wrapper px-2 py-2 bg-amber-50 rounded-lg">
+          <p className="text-sm text-amber-800">{quotaHint}</p>
         </div>
       )}
 

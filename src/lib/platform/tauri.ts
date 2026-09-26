@@ -281,6 +281,21 @@ export const tauriPlatform: Platform = {
     try { prev = JSON.parse(await readTextFile(statePath)); } catch { /* 首次无记录 */ }
     const userPrev = prev[String(mid)] ?? {};
 
+    // 上传限流：距离上次成功上传不足 1 周直接跳过。
+    // 大数据文件（如 pay-records.json 数十 MB）每次刷新都全量哈希+加密+上传非常耗时，
+    // 影响使用体验；备份数据一周同步一次已足够。
+    const lastTimePath = await join(await appDataDir(), "data", "upload-last-time.json");
+    let lastTimes: Record<string, number> = {};
+    try { lastTimes = JSON.parse(await readTextFile(lastTimePath)); } catch { /* 首次无记录 */ }
+    const lastUploadAt = lastTimes[String(mid)] ?? 0;
+    const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    if (lastUploadAt > 0 && Date.now() - lastUploadAt < ONE_WEEK_MS) {
+      console.log(
+        `[Upload] 距上次上传不足 1 周（${((Date.now() - lastUploadAt) / 86400000).toFixed(1)} 天前），跳过`,
+      );
+      return;
+    }
+
     // 诊断日志（仅 console，不影响 UI）：确认上传阶段是不是慢/卡顿的瓶颈
     const totalBytes = Object.values(files).reduce((s, c) => s + new TextEncoder().encode(c).length, 0);
     console.log(
@@ -390,6 +405,9 @@ export const tauriPlatform: Platform = {
     for (const [name, content] of Object.entries(toSend)) next[name] = stableContentHash(content);
     prev[String(mid)] = next;
     try { await writeTextFile(statePath, JSON.stringify(prev)); } catch { /* ignore */ }
+    // 上传成功后记录时间戳，作为下次"距上次上传满 1 周才上传"的判断依据
+    lastTimes[String(mid)] = Date.now();
+    try { await writeTextFile(lastTimePath, JSON.stringify(lastTimes)); } catch { /* ignore */ }
   },
 
   async fetchRemoteUserData(mid: number, uname: string): Promise<Record<string, string>> {

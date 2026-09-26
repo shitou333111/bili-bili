@@ -58,6 +58,8 @@ export type FetchProgress = {
   ratio?: number;
   current?: number;
   total?: number;
+  /** 来自"主播收益"拉取的显式标记（见 anchor-gifts-client 的 FetchProgressHandler） */
+  anchorGift?: boolean;
 };
 
 async function dispatchNative(
@@ -217,8 +219,17 @@ export async function dataFetch(
 ): Promise<Response> {
   const platform = await getPlatform();
   if (!platform.isNative) {
+    const [pathname, queryString] = path.split("?");
+    const query = new URLSearchParams(queryString ?? "");
+    // 打 B站 的全量/增量拉取是分钟级长任务：Next.js 路由要等整个拉取完成后才返回响应头，
+    // 通用 6 秒超时会把客户端请求掐断（服务端仍会继续跑完并落盘，但首次响应已丢失），
+    // 表现为"重建/首次初始化获取完数据后界面仍显示 0，需再点一次绿色刷新按钮才正常"。
+    // 对此类长任务放宽到 15 分钟，其余请求保持 6 秒快速失败。
+    const isLongPull =
+      (pathname === "/api/revenue/pay-record" && query.get("fast") !== "1") ||
+      (pathname === "/api/anchor/gifts" && (query.get("probe") === "true" || query.get("refresh") === "true"));
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const timer = setTimeout(() => ctrl.abort(), isLongPull ? 15 * 60 * 1000 : 6000);
     try {
       return await fetch(serverApiUrl(path), { cache: "no-store", signal: ctrl.signal, ...init });
     } catch {

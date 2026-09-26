@@ -32,6 +32,9 @@ import { hasLiveRoom } from "./medical-client";
 
 // B站 礼物流水接口每页返回条数（客户端不传 page_size，使用 B站 默认 50）
 const PAGE_SIZE = 50;
+// B站 礼物流水接口实际每页返回条数：实测 page0 返回 20 条（total_count/total_page≈20）。
+// 用于"月份内断点续拉"按已有记录数推算该从第几页接着翻。
+const API_PAGE_SIZE = 20;
 
 // ==================== 类型定义（与 API route 保持一致） ====================
 
@@ -68,6 +71,11 @@ type RecordsMetaData = {
   empty_counts?: Record<string, number>;
   /** 首次登录全量探测收益为空 → 判定为无收益/非持续开播主播，置位后跳过后续全量探测 */
   noRevenue?: boolean;
+  /**
+   * 已"完整覆盖"的最早扫描起点（YYYYMMDD）。仅在本轮无未知月份、未保守中断时写入。
+   * 缺失 = 旧版本遗留数据，可能带着"end_date 很新但更早历史从未抓取"的缺失（见历史缺失自愈）。
+   */
+  scan_from?: string;
 };
 
 export type AnchorGiftsResult = {
@@ -101,22 +109,107 @@ export type AnchorGiftsResult = {
   noRevenue: boolean;
   fetchedNewPages: number;
   yesterdayAvailable: boolean;
+  /** 本次 412 退避重试后仍被拦截而收尾：同窗口内重试无效，须稍后手动刷新续拉 */
+  quotaExhausted?: boolean;
+  /** 本轮未抓完（page0 失败 / 翻页中断）的月份数，供界面提示补拉进度 */
+  pendingMonths?: number;
 };
 
 // ==================== 常量 ====================
 
-// 正常翻页之间的请求间隔；B 站反爬阈值实测 ~ 1 次/秒，400ms 留有余量。
-// 注意：设为 0 会让并发月份高速翻页、极易触发 412 软限流/假空，导致部分月份数据缺失，
-// 故至少保留 400ms（与注释表述一致）以降低触发风控概率。
-const REQUEST_INTERVAL_MS = 400;
-// 遇到 412 限流冷却后恢复阶段的请求间隔（更保守）
-const SLOW_REQUEST_INTERVAL_MS = 1500;
+// ==================== 抓取速率（唯一的速率参数） ====================
+// 用户只能调一个东西：每秒发多少次请求（req/s）。内部由此派生出
+// ①全局发包间隔 = 1000/速率，②月份并发度（只为喂满节拍，不再对用户暴露）。
+// 所有 B站 拉取路径（绿色环形刷新 / 冷启动自动刷新 / 增量更新 / 重建数据库）都经过
+// fetchGiftStreamPage 的全局节拍器，因此统一受本参数约束。
+//
+// 取值依据（2026-09 阶梯加载实测，同一出口 IP，登录 Cookie）：
+//  - B站 的 412 是 WAF 网关层拦截（返回 HTML 拦截页，早于业务校验）；凭证（buvid3/buvid4/
+//    指纹头）与请求通道（Web Cookie / APP appkey 签名）对阈值均无显著影响（四档对照实测
+//    376/400/505/388 次，差异落在噪声内）→ 瓶颈是出口 IP，不是身份。
+//  - 限流由"速率"决定，不是"累计次数"：2 req/s 连发 3 分钟（361 次）零 412；
+//    3 req/s 连发 30 分钟（5401 次）零 412、延迟平稳（76ms，无软降速）；
+//    4 req/s 第 63 秒（252 次）被拦；5 req/s 第 39 秒（196 次）被拦；10~12.6 req/s 几十秒被拦。
+//    → 触发点在"60 秒窗口内约 200 次请求"附近：3 req/s = 180 次/分，只剩约 10% 余量。
+//      因此 3 req/s 是"贴着线"的默认值（速度优先），2 req/s（120 次/分）才是宽裕档位。
+//  - 超额后惩罚阶梯递增（0s → 61s → 851s → 15min 以上），恢复需静置 15~25 分钟。
+export const DEFAULT_FETCH_RATE = 3; // req/s（速度优先）
+export const MIN_FETCH_RATE = 1;
+export const MAX_FETCH_RATE = 12;
+/** 速率档位持久化键（localStorage），保证冷启动自动刷新也能读到用户选择。 */
+const FETCH_RATE_STORAGE_KEY = "bili_live_anchor_fetch_rate";
+
+/** 速率 → 月份并发度：并发只保证"能喂满节拍"，不再是用户可见的旋钮（并行度=1 时等价串行）。 */
+function concurrencyForRate(rate: number): number {
+  return Math.min(6, Math.max(1, Math.round(rate)));
+}
+
+function clampRate(v: number): number {
+  return Math.min(MAX_FETCH_RATE, Math.max(MIN_FETCH_RATE, v));
+}
+
+function loadSavedRate(): number {
+  try {
+    if (typeof localStorage === "undefined") return DEFAULT_FETCH_RATE;
+    const v = Number(localStorage.getItem(FETCH_RATE_STORAGE_KEY));
+    return Number.isFinite(v) && v >= MIN_FETCH_RATE && v <= MAX_FETCH_RATE ? v : DEFAULT_FETCH_RATE;
+  } catch {
+    return DEFAULT_FETCH_RATE;
+  }
+}
+
+/** 当前抓取速率（req/s）。模块级单值：运行中途改档对后续请求即刻生效。 */
+let _fetchRate = loadSavedRate();
+
+/** 设置抓取速率（req/s），越界自动收敛到 [MIN_FETCH_RATE, MAX_FETCH_RATE] 并持久化。 */
+export function setFetchRate(rate: number): void {
+  const v = Number(rate);
+  if (!Number.isFinite(v)) return;
+  _fetchRate = clampRate(v);
+  try {
+    localStorage.setItem(FETCH_RATE_STORAGE_KEY, String(_fetchRate));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getFetchRate(): number {
+  return _fetchRate;
+}
+
 const PAGE_RETRY_COUNT = 3;
 const PAGE0_RETRY_COUNT = 5;
-const RATE_LIMIT_COOLDOWN_MS = 30_000;
-// 月度并行度：1=串行，>1 时批内多个月份并行拉取（注意：多个月同时翻页会增加 412 限流风险）
-const MONTH_CONCURRENCY = 12;
+/**
+ * 撞到 HTTP 412 后就地退避的梯度：先短等、再长等，仍被拦则本轮收尾
+ * （进度已落盘，界面提示稍后刷新续拉）。刻意不设更长的等待——严格期靠调低抓取速度解决。
+ */
+const QUOTA_BACKOFF_MS = [60 * 1000, 300 * 1000];
+/**
+ * 本轮是否已放弃（412 退避重试后仍被拦）：置位后本轮所有重试/翻页立即放弃（不再空转等待），
+ * 由 fetchAnchorGifts 带回 quotaExhausted，由界面提示用户稍后手动刷新。
+ */
+let _quotaHitThisRun = false;
+/** 412 退避期间的进度上报钩子（由 fetchAnchorGifts 注入，把"等待限流恢复 mm:ss"透传给界面） */
+let _quotaWaitReporter: ((info: { attempt: number; remainMs: number }) => void) | null = null;
 const CONSECUTIVE_MATCH_THRESHOLD = 5;
+
+// 注：原"连续 N 个月无数据即判定历史尽头并提前停止"的机制已删除。
+// 抓取改为从旧到新，且首次全量扫描有首探阶段逐月探明数据分布（见 probeMonthOnce），
+// 数据起止月份是"实测确定"而非"靠连续空月份推断"，因此早停判据既无必要、还会误判
+// （账号停播又复播的中段断档会被当成历史尽头）。空月份的取舍改由 empty_counts 承担。
+
+// 单轮"未知月份"（page0 完全失败 / 翻页中断）上限：达到即视为整体限流，
+// 保守中断本轮并保持 end_date = 本次扫描起点（绝不推进）。低于上限时不再中断整轮，
+// 而是把未知月份计入 empty_counts 钉住 end_date 供下轮补拉，同时继续扫描其余月份。
+const MAX_UNKNOWN_MONTHS_PER_RUN = 3;
+
+// 历史缺失自愈：旧版本"月份获取失败即中断整轮并保存 end_date=失败月份"会留下
+// "end_date 已经推到最近、本地却只有最近一两个月记录"的损坏数据——更早历史因 end_date
+// 越不过去而永久不可达。判据：缺少 scan_from 标记，且 end_date 距昨天 ≤ SELF_HEAL_END_DATE_DAYS
+// 天、本地最早记录距当前月份 ≤ SELF_HEAL_RECORD_SPAN_MONTHS 个月（典型的"只有最近一两个月"）。
+// 命中则强制从 B站 保留边界全量重扫一次并把 scan_from 写入，之后不再重复。
+const SELF_HEAL_END_DATE_DAYS = 62;
+const SELF_HEAL_RECORD_SPAN_MONTHS = 5;
 
 // 伪空重试间隔：page0 返回 total_page=0 时，按这些递增间隔再查，
 // 区分"软限流/冷缓存的假空"与"真无数据"
@@ -343,11 +436,11 @@ async function readRecordsWithMeta(
   const parsed = await readJson<unknown>(platform, filePath);
   if (!parsed) return { records: [], meta: null };
   if (Array.isArray(parsed)) return { records: parsed as BiliGiftRecord[], meta: null };
-  const obj = parsed as { records?: BiliGiftRecord[]; end_date?: string; last_fetch?: string; total_page?: number; empty_counts?: Record<string, number>; noRevenue?: boolean };
+  const obj = parsed as { records?: BiliGiftRecord[]; end_date?: string; last_fetch?: string; total_page?: number; empty_counts?: Record<string, number>; noRevenue?: boolean; scan_from?: string };
   return {
     records: obj.records ?? [],
     meta: obj.end_date !== undefined || obj.noRevenue !== undefined
-      ? { end_date: obj.end_date, last_fetch: obj.last_fetch, total_page: obj.total_page, empty_counts: obj.empty_counts ?? {}, noRevenue: obj.noRevenue ?? false }
+      ? { end_date: obj.end_date, last_fetch: obj.last_fetch, total_page: obj.total_page, empty_counts: obj.empty_counts ?? {}, noRevenue: obj.noRevenue ?? false, scan_from: obj.scan_from }
       : null,
   };
 }
@@ -374,6 +467,7 @@ async function saveRecordsWithMeta(
         total_count: records.length,
         empty_counts: meta.empty_counts ?? {},
         noRevenue: meta.noRevenue ?? false,
+        scan_from: meta.scan_from,
         records,
       },
       null,
@@ -406,34 +500,93 @@ async function fetchGiftStreamPage(
 
   const fullCookie = buvidCookie ? `${cookie};${buvidCookie}` : cookie;
 
-  if (page === 0) {
-    console.log(`[AnchorGifts-Tauri][API] 请求 page=0 begin=${beginDate} end=${endDate}`);
-  }
+  // 412 就地退避重试：撞到限流不再立刻抛给上层收尾，而是按梯度等一会儿重试同一个请求，
+  // 让"一次点击"在本次运行内尽量跑完。退避用完仍被拦才收尾（进度已落盘，稍后刷新续拉）。
+  for (let attempt = 0; ; attempt++) {
+    await paceRequest();
 
-  const t0 = performance.now();
-  try {
-    const result = await platform.fetchBilibiliJson<BiliGiftStreamResponse>({
-      url: GIFT_STREAM_API,
-      method: "POST",
-      body,
-      cookie: fullCookie,
-      live: true,
-    });
-    const elapsed = Math.round(performance.now() - t0);
-    console.log(`[AnchorGifts-Tauri][API] page=${page} 耗时=${elapsed}ms`);
     if (page === 0) {
-      console.log(
-        `[AnchorGifts-Tauri][API] 响应 page=0: code=${result.code} total_page=${result.data?.total_page ?? -1} total_count=${result.data?.total_count ?? -1} list_len=${result.data?.list?.length ?? 0}`,
+      console.log(`[AnchorGifts-Tauri][API] 请求 page=0 begin=${beginDate} end=${endDate}`);
+    }
+
+    const t0 = performance.now();
+    try {
+      const result = await platform.fetchBilibiliJson<BiliGiftStreamResponse>({
+        url: GIFT_STREAM_API,
+        method: "POST",
+        body,
+        cookie: fullCookie,
+        live: true,
+      });
+      const elapsed = Math.round(performance.now() - t0);
+      console.log(`[AnchorGifts-Tauri][API] page=${page} 耗时=${elapsed}ms`);
+      if (page === 0) {
+        console.log(
+          `[AnchorGifts-Tauri][API] 响应 page=0: code=${result.code} total_page=${result.data?.total_page ?? -1} total_count=${result.data?.total_count ?? -1} list_len=${result.data?.list?.length ?? 0}`,
+        );
+      }
+      return result;
+    } catch (err: any) {
+      if (!err?.message?.includes("412")) throw err;
+      // 412 = 撞到出口 IP 的 WAF 配额（与凭证、通道无关）。退避梯度用完即收尾本轮。
+      if (attempt >= QUOTA_BACKOFF_MS.length) {
+        _quotaHitThisRun = true;
+        throw new Error(`412 限流：已退避重试 ${attempt} 次仍被拦截`);
+      }
+      const wait = QUOTA_BACKOFF_MS[attempt];
+      console.warn(
+        `[AnchorGifts-Tauri] 撞到 B站 412 限流，退避 ${Math.round(wait / 1000)}s 后重试`
+        + `（第 ${attempt + 1}/${QUOTA_BACKOFF_MS.length} 次）：page=${page} begin=${beginDate}`,
       );
+      await sleepBackoff(wait, attempt);
     }
-    return result;
-  } catch (err: any) {
-    // 412 限流：包装错误信息，供上层识别
-    if (err?.message?.includes("412")) {
-      throw new Error("412 限流");
-    }
-    throw err;
   }
+}
+
+/**
+ * 单次 page0 探测（仅网络层重试，不做伪空重试）：用于首探阶段逐月探明数据分布，
+ * 只需快速判断该月有没有数据，不翻页。
+ * failed=true 表示未得到可信结论（网络/限流持续失败），调用方必须保守处理（不得据此判空，
+ * 也不得据此判有数据）——它会以 "unknown" 记入月份计划，并在翻页阶段被重新请求。
+ * 成功时一并带回 page0 原始响应，供后续正式翻页直接复用，避免对同一批月份重复请求。
+ */
+async function probeMonthOnce(
+  platform: Platform,
+  cookie: string,
+  csrf: string,
+  buvidCookie: string,
+  chunk: { start: string; end: string },
+): Promise<{ hasData: boolean; failed: boolean; credentialExpired: boolean; firstPage?: BiliGiftStreamResponse; failInfo?: string }> {
+  let failInfo = "未知（未收到响应）";
+  for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
+    // 本轮已撞到配额窗口（412）：继续探测只会拿到同样的 412，立即放弃交上层收尾
+    if (_quotaHitThisRun) {
+      return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
+    }
+    try {
+      const result = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
+      if (result.code === 0) {
+        return { hasData: (result.data?.total_page ?? 0) > 0, failed: false, credentialExpired: false, firstPage: result };
+      }
+      // B站凭证失效：交由上层立即跳登录
+      if (result.code === -101 || result.code === 3 || (result.message && result.message.includes("未登录"))) {
+        return { hasData: false, failed: false, credentialExpired: true };
+      }
+      // 1301000：数据已过期（超出 B站 3 年保留期）→ 视为无数据
+      if (result.code === 1301000) {
+        return { hasData: false, failed: false, credentialExpired: false, firstPage: result };
+      }
+      failInfo = `code=${result.code} ${result.message ?? ""}`.trim();
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+    } catch (err) {
+      failInfo = err instanceof Error ? err.message : String(err);
+      if (_quotaHitThisRun) {
+        return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
+      }
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+    }
+  }
+  return { hasData: false, failed: true, credentialExpired: false, failInfo };
 }
 
 // ==================== 盲盒统计（对应服务器 route 的盲盒盈亏） ====================
@@ -465,6 +618,9 @@ export type FetchProgressHandler = (p: {
   ratio?: number;
   current?: number;
   total?: number;
+  /** 显式标记：本进度来自"主播收益"拉取。界面据此决定是否追加收益相关的 4 行提示，
+   *  不再依赖对 text 做正则匹配（文案一变就失效，已踩过坑）。 */
+  anchorGift?: boolean;
 }) => void;
 
 // 模块级防重入锁：不依赖组件 ref，HMR 重挂载也不会失效
@@ -503,6 +659,37 @@ async function acquireLock(): Promise<boolean> {
   return true;
 }
 
+/**
+ * 全局发包节拍器（整机唯一）：所有月份 worker 共用同一个节拍，因此整机速率恒等于
+ * fetchRate req/s，与派生的月份并发度无关（并发度只保证有足够的 worker 喂满节拍）。
+ * 间隔 = 1000 / 速率，逐包推进、不做突发——实测短窗口对"瞬时速率"敏感，
+ * 攒够一波再放会被 412 拦掉；退避期间节拍落后于当前时间，用 Math.max 不补偿积压，
+ * 避免 412 退避结束瞬间把欠下的请求一次性补发出去。
+ */
+let _pacerNextAt = 0;
+/** 本轮已发出的 B站 请求数（含重试/伪空重试/探测），用于结合 plannedRequests 估算剩余耗时。 */
+let _requestsIssued = 0;
+function paceRequest(): Promise<void> {
+  const now = Date.now();
+  const at = Math.max(_pacerNextAt, now);
+  _pacerNextAt = at + 1000 / _fetchRate;
+  _requestsIssued++;
+  const wait = at - now;
+  return wait > 0 ? new Promise((r) => setTimeout(r, wait)) : Promise.resolve();
+}
+
+/**
+ * 412 退避等待：期间每秒刷新一次锁心跳（避免超过 5 分钟锁超时被抢锁），并把剩余时间透传给界面。
+ */
+async function sleepBackoff(ms: number, attempt: number): Promise<void> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (_fetchingGlobal) _fetchingGlobalAt = Date.now();
+    _quotaWaitReporter?.({ attempt, remainMs: end - Date.now() });
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 export async function fetchAnchorGifts(
   platform: Platform,
   opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler; probe?: boolean; fast?: boolean } = {},
@@ -518,10 +705,17 @@ export async function fetchAnchorGifts(
       return { code: -1, message: "already fetching", data: null };
     }
     acquired = true;
+    // 每轮开始清空"限流"标记，只反映本轮是否撞到 412
+    _quotaHitThisRun = false;
+    // 节拍器复位：上一轮结束后残留的 _pacerNextAt 不应把本轮的起步时间提前
+    _pacerNextAt = 0;
+    _requestsIssued = 0;
   }
 
   try {
   const { refresh = false, dateRange = "all", fan = "", onProgress, probe = false } = opts;
+  // 本轮月份并发度（由速率派生，只保证喂满节拍；速率为 1 时并发 1 = 完全串行）
+  const monthConcurrency = concurrencyForRate(_fetchRate);
 
   const session = await resolveSession(platform);
   if (!session) {
@@ -552,6 +746,10 @@ export async function fetchAnchorGifts(
     let fetchedNewPages = 0;
     // 本次拉取是否判定该账号无收益（供响应带回前端立即隐藏主播页）
     let markedNoRevenue = false;
+    // 本轮是否撞到 B站 配额窗口（412）而提前收尾、以及未抓完的月份数：带回前端用于
+    // "已抓 X 条，还剩 N 个月份待补，将于 HH:MM 自动继续"的提示与自动续跑
+    let quotaExhausted = false;
+    let pendingMonths = 0;
 
     const yesterdayStr = getYesterdayStr();
 
@@ -599,6 +797,31 @@ export async function fetchAnchorGifts(
     })();
     const clampStart = (d: string) => (d < retentionBoundary ? retentionBoundary : d);
 
+    /**
+     * 历史缺失自愈判据（probe / 非 probe 共用）：
+     * 旧版"月份获取失败即中断整轮并保存 end_date=失败月份"会留下 end_date 已推到最近、
+     * 本地却只有最近一两个月的损坏数据——更早历史因 end_date 越不过去而永久不可达。
+     * 这类数据没有 scan_from 标记，且记录跨度极短（见 SELF_HEAL_* 常量）。
+     * 命中则放弃 end_date，从保留边界全量重扫一次；scan_from 写入后不再重复触发。
+     */
+    const needsSelfHealFullScan = (): boolean => {
+      if (meta?.scan_from || !meta?.end_date || existingRecords.length === 0) return false;
+      try {
+        const endDiffDays = Math.round(
+          (parseDateStr(yesterdayStr).getTime() - parseDateStr(meta.end_date).getTime()) / 86400000,
+        );
+        let earliest = existingRecords[0].time;
+        for (const r of existingRecords) if (r.time < earliest) earliest = r.time;
+        const earliestYM = earliest.slice(0, 7).replace("-", "");
+        const curYM = yesterdayStr.slice(0, 6);
+        const spanMonths = (Number(curYM.slice(0, 4)) * 12 + Number(curYM.slice(4, 6)))
+          - (Number(earliestYM.slice(0, 4)) * 12 + Number(earliestYM.slice(4, 6)));
+        return endDiffDays >= 0 && endDiffDays <= SELF_HEAL_END_DATE_DAYS && spanMonths <= SELF_HEAL_RECORD_SPAN_MONTHS;
+      } catch {
+        return false;
+      }
+    };
+
     // 起始日期：
     // - probe=true（扫码登录触发）：允许有容错的全量探测——无基线时从3年前开始，
     //   end_date 被错误推进时保底回退全量；登录探测被中断时也从 end_date 续拉。
@@ -606,11 +829,18 @@ export async function fetchAnchorGifts(
     //   无基线（从未探测成功 / 登录探测被中断）的账号直接跳过拉取，避免反复试探。
     const startDate = (() => {
       if (skipPull) return yesterdayStr; // 无房/无收益不拉取，startDate 无意义，占位即可
+      // 历史缺失自愈：无论 probe 与否都强制全量重扫一次（否则下一次 end_date 推进会让
+      // 更早历史永久不可达）。仅命中旧版损坏特征时触发，scan_from 写入后不再重复。
+      if (needsSelfHealFullScan()) {
+        console.warn(`[AnchorGifts-Tauri] 历史缺失自愈：end_date=${meta?.end_date} 但本地记录仅跨极少月份，改为从保留边界 ${retentionBoundary} 全量重扫`);
+        return clampStart(retentionBoundary);
+      }
       if (probe) {
         // 与服务器 route 保持一致：只用 end_date 决定起始日期。
         // - end_date 非空 → 从 end_date 开始增量获取（含被中断探测的续拉）
         // - end_date 为空但已有本地记录（旧缓存）→ 从已有记录最新时间开始增量获取
         // - 两者皆无 → 首次全量探测，从3年前下个月开始
+        let forceFullScan = false; // true = 放弃 end_date，从 B站 保留边界全量重扫
         if (meta?.end_date) {
           // ===== 保底：end_date 已推进至近期但 records 为空 → 视为被错误推进，回退全量 =====
           // 典型场景：首次探测时网络/412 导致 page 0 失败被旧代码当成"无数据"跳过，
@@ -625,20 +855,13 @@ export async function fetchAnchorGifts(
               const diffDays = Math.round((yesD.getTime() - endD.getTime()) / 86400000);
               if (diffDays >= 0 && diffDays <= 30) {
                 console.warn(`[AnchorGifts-Tauri] 保底回退：end_date=${meta.end_date}(距昨天${diffDays}天)但现有0条记录，视为被错误推进，改为从3年前全量拉取`);
-                const now = new Date();
-                const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-                const beijing = new Date(utc + 8 * 3600000);
-                const startYear = beijing.getFullYear() - 3;
-                const startMonth = beijing.getMonth() + 1;
-                const beginYear = startMonth === 12 ? startYear + 1 : startYear;
-                const beginMonth = startMonth === 12 ? 1 : startMonth + 1;
-                return `${beginYear}${String(beginMonth).padStart(2, "0")}01`;
+                forceFullScan = true;
               }
             } catch { /* parseDateStr 异常则不回退，走原逻辑 */ }
           }
-          return clampStart(meta.end_date);
+          if (!forceFullScan) return clampStart(meta.end_date);
         }
-        if (existingRecords.length > 0) {
+        if (!forceFullScan && existingRecords.length > 0) {
           let maxTime = existingRecords[0].time;
           for (const r of existingRecords) {
             if (r.time > maxTime) maxTime = r.time;
@@ -676,54 +899,185 @@ export async function fetchAnchorGifts(
       return yesterdayStr;
     })();
 
+    // ==================== 进度统计状态（月级分母 + 月内页级 + ETA） ====================
+    const chunks = generateMonthChunks(startDate, yesterdayStr); // 升序
+    /** 单个月的探明结论：data=有数据(pages=总页数)；empty=已确认无数据；unknown=未得到可信结论。 */
+    type MonthStatus = "data" | "empty" | "unknown";
+    const monthPlan = new Map<string, { status: MonthStatus; pages: number }>();
+
+    /**
+     * 进度分母 = "有数据的月份数"（精确值，来自逐月探测），不是"最早到最晚的跨度"。
+     * 跨度口径在中间存在空月份时，分母把空月份也算进去、分子却永远不会加上它们，
+     * 导致进度条永远到不了 100%；改用计数口径后，每个计入分母的月份都会被真正翻完。
+     */
+    let totalValidMonths = -1; // -1 表示尚未探明（增量路径没有首探阶段）
+    let validDone = 0; // 已完成全部翻页的有数据月份数
+
+    const dataMonthCount = () => {
+      let n = 0;
+      for (const v of monthPlan.values()) if (v.status === "data") n++;
+      return n;
+    };
+    /** 最早有数据月份在 chunks 中的下标（-1 = 未知）。用于剪枝"开播之前"的空月份。 */
+    const firstDataIndexOf = () => {
+      for (let i = 0; i < chunks.length; i++) {
+        if (monthPlan.get(chunks[i].start)?.status === "data") return i;
+      }
+      return -1;
+    };
+    const plannedRequests = () => {
+      let n = 0;
+      // 有数据月 = 该月总页数；其余（空月/未知月）至少 1 次 page0。
+      for (const v of monthPlan.values()) n += v.status === "data" ? Math.max(v.pages, 1) : 1;
+      return n;
+    };
+    /** 剩余耗时文案（尚未探明任何月份时返回空串，不做假估算）。 */
+    const fmtRemain = () => {
+      const planned = plannedRequests();
+      if (planned <= 0 || _requestsIssued <= 0) return "";
+      const left = planned - _requestsIssued;
+      if (left <= 0) return "即将完成";
+      const sec = Math.round(left / _fetchRate);
+      if (sec < 60) return "约剩不到 1 分钟";
+      if (sec < 3600) return `约剩 ${Math.round(sec / 60)} 分钟`;
+      return `约剩 ${Math.floor(sec / 3600)} 小时 ${Math.round((sec % 3600) / 60)} 分钟`;
+    };
+    /** 月级进度（月内页级进度由 processChunk 上报）。 */
+    const emitMonthProgress = (ym: string) => {
+      const remain = fmtRemain();
+      onProgress?.({
+        text: `正在获取收益记录 ${ym}（${validDone}/${totalValidMonths}）${remain ? " · " + remain : ""}`,
+        ratio: Math.min(1, validDone / totalValidMonths),
+        current: validDone,
+        total: totalValidMonths,
+        anchorGift: true,
+      });
+    };
+    /**
+     * 记录某月份的探明结论。调用方必须区分三态：
+     *  - 探测失败（未知）绝不能当成"无数据"：那会让该月被排除出分母、且永久不被翻页；
+     *  - 分母只上修不下修：未知月份在翻页阶段重试成功后可以补进分母（如软限流假空恢复）。
+     */
+    const recordMonth = (start: string, status: MonthStatus, pages = 0) => {
+      const prev = monthPlan.get(start);
+      // 不拿"未得到结论"去覆盖已有结论（例如翻页阶段重试失败不应抹掉首探的结果）
+      if (prev && prev.status !== "unknown" && status === "unknown") return;
+      monthPlan.set(start, { status, pages });
+      // 只有本批月份"全部"有了结论时，分母才算探明。增量路径下月份是边翻边进的，
+      // 若每进一个月就重算分母，分母会跟着分子一起涨（如 1/1→2/2→3/3 恒等于 100%）。
+      if (monthPlan.size < chunks.length) return;
+      const n = dataMonthCount();
+      // n=0（本批无任何有数据月份）时不设分母，保持 -1 → 进度条走不定态，
+      // 避免出现"（1/0）"这种分母为 0 的文案。
+      if (n > 0 && n > totalValidMonths) totalValidMonths = n;
+    };
+
+    // ==================== 首探：一次性探完全部月份（仅扫码登录全量探测，且本地无任何记录） ====================
+    // 不逐月探明的话，既无法提前确定进度分母，也无法区分"某月真没数据"与"某月没抓到"。
+    // 这里把扫描窗口内所有月份的 page0 一次探完（每月 1 次请求，3 req/s 下约 12 秒），换来：
+    //  ① 分母（有数据的月份总数）在翻页开始前就固定 → 进度条第一秒起就是确定百分比，不再中途变大；
+    //  ② 每个月的 total_page 都已知 → 剩余请求数精确 → ETA 精确。
+    // 这些 page0 会被正式翻页阶段从 probedFirstPage 复用，所以不额外增加请求。
+    // 全部月份均无数据 → 该账号无收益：置 noRevenue 并保存后立即终止，不再扫描历史月份。
+    // 注意：仅"零记录"账号适用（有记录的账号即使近期无数据也不得判无收益）。
+    let buvidCookie = "";
+    // 首探已拿到的 page0 原始响应（按月份 start 缓存），供正式翻页阶段复用。
+    const probedFirstPage = new Map<string, BiliGiftStreamResponse>();
+    if (probe && !skipPull && existingRecords.length === 0) {
+      buvidCookie = await platform.getBuvidCookie().catch(() => "");
+      console.log(`[AnchorGifts-Tauri] 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}），用于固定进度分母与 ETA`);
+      onProgress?.({ text: "正在探测收益记录（首次全量扫描）...", current: 0, total: 0, anchorGift: true });
+      const probeResults = await runWithConcurrency(
+        chunks,
+        monthConcurrency,
+        (c) => probeMonthOnce(platform, cookie, csrf, buvidCookie, c),
+      );
+      probeResults.forEach((r, i) => {
+        if (r.firstPage) probedFirstPage.set(chunks[i].start, r.firstPage);
+        // 三态区分：探测失败 = 未知（既不算有数据，也绝不算空），该月会被翻页阶段重试；
+        // 只有"拿到可信响应且 total_page=0"才是空月份。
+        if (r.failed) recordMonth(chunks[i].start, "unknown");
+        else if (r.hasData) recordMonth(chunks[i].start, "data", r.firstPage?.data?.total_page ?? 0);
+        else recordMonth(chunks[i].start, "empty");
+      });
+      if (probeResults.some((r) => r.credentialExpired)) {
+        return { code: 0, message: "needs-relogin", data: null };
+      }
+      // 有月份探测未得到可信结论（网络/限流持续失败）时不判空，继续走正常全量抓取。
+      // 补日志：探测失败此前是完全静默的，导致"page0 全失败"看起来像是正式翻页阶段的问题。
+      const probeFailedList = probeResults
+        .map((r, i) => ({ r, start: chunks[i].start }))
+        .filter((x) => x.r.failed);
+      if (probeFailedList.length > 0) {
+        console.warn(
+          `[AnchorGifts-Tauri] 首探有 ${probeFailedList.length}/${chunks.length} 个月未得到可信结论，不判无收益，继续全量抓取；失败明细：`
+          + probeFailedList.map((x) => `${x.start}(${x.r.failInfo ?? "未知"})`).join("，"),
+        );
+      }
+      const probeFailed = probeFailedList.length > 0;
+      const probeAllEmpty = probeResults.every((r) => !r.hasData);
+      if (!probeFailed && probeAllEmpty) {
+        markedNoRevenue = true;
+        skipPull = true;
+        await saveRecordsWithMeta(platform, session.mid, [], {
+          end_date: yesterdayStr,
+          total_page: meta?.total_page ?? 0,
+          last_fetch: getBeijingTime(),
+          empty_counts: {},
+          noRevenue: true,
+        });
+        console.log(`[AnchorGifts-Tauri] ${session.mid} 首探短路：全部 ${chunks.length} 个月均无数据，标记 noRevenue 并终止扫描`);
+      }
+    }
+
     // 纯服务器收集账号（source=server）无 B站 Cookie，无法从 B站 拉取增量，
-    // 直接基于已从自建服务器拉取到本地的 anchor-gifts-records.json 计算统计。
+    // 直接基于已从自服务器拉取到本地的 anchor-gifts-records.json 计算统计。
     if (!skipPull && startDate <= yesterdayStr) {
-      const buvidCookie = await platform.getBuvidCookie().catch(() => "");
-      const chunks = generateMonthChunks(startDate, yesterdayStr);
-      console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月, 并发度=${MONTH_CONCURRENCY}`);
+      // 412 退避发生在 API 层（fetchGiftStreamPage），此处注入钩子把等待进度透传给界面：
+      // 让用户看到"已抓 X 条 · 第 N 次退避 · 等待限流恢复 mm:ss"，而不是页面长时间静止。
+      _quotaWaitReporter = ({ attempt, remainMs }) => {
+        const sec = Math.max(0, Math.ceil(remainMs / 1000));
+        onProgress?.({
+          text: `正在获取收益记录：已抓 ${allRecords.length} 条 · 第 ${attempt + 1}/${QUOTA_BACKOFF_MS.length} 次退避 · 等待限流恢复 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`,
+          anchorGift: true,
+        });
+      };
+      if (!buvidCookie) buvidCookie = await platform.getBuvidCookie().catch(() => "");
+      // buvid 缺失时 B站 live 接口极易直接以 412/风控 拒绝，且 getBuvidCookie 内部 catch 会静默返回空串，
+      // 这里显式告警，避免把"缺 buvid 导致的全批失败"误判成账号/数据问题。
+      if (!buvidCookie) console.warn("[AnchorGifts-Tauri] buvid Cookie 获取失败（为空），B站可能以 412/风控 拒绝所有请求");
+      // 执行顺序：从旧到新。数据起止范围已由首探实测确定，不再需要"从新到旧 + 连续空月份
+      // 提前终止"的启发式；顺序推进更符合"按时间补齐历史"的直觉，日志与进度也更好读。
+      console.log(`[AnchorGifts-Tauri] 获取数据: ${startDate} ~ ${yesterdayStr}, ${chunks.length}个月, 速率=${_fetchRate}req/s 并发度=${monthConcurrency}（从旧到新）`);
+
+      // 伪空重试（total_page=0 时按递增间隔复查，识别软限流假空）的适用范围：
+      // 首探已给出完整的月份分布时，只对"有数据月份之间的空档"复查——中段断档才可疑；
+      // 开播之前 / 停播之后的长空白段是账号真的没有收益，若也逐月复查（5s+15s+30s），
+      // 一次全量扫描会白等几十分钟。没有首探结论（增量路径）时保持原有行为，一律复查。
+      //
+      // 例外：最早有数据月份的"前一个月"也必须复查。它紧邻已知最早的数据月，是最可能的
+      // 假空位置——首探时该月的 page0 恰好被软限流/冷缓存命中返回 total_page=0 的话，
+      // 它会被当成"开播之前"而永久跳过，导致账号真实的最早一个月收益缺失。
+      // （代价只有一次 5s+15s+30s 的复查；相较之下漏掉首月历史是不可逆的。）
+      const dataStarts = chunks.map((c) => c.start).filter((s) => monthPlan.get(s)?.status === "data");
+      const knownRange = monthPlan.size >= chunks.length && dataStarts.length > 0;
+      const firstDataStart = knownRange ? dataStarts[0] : null;
+      const lastDataStart = knownRange ? dataStarts[dataStarts.length - 1] : null;
+      const firstDataIdxInChunks = firstDataIndexOf();
+      const monthBeforeFirstData = firstDataIdxInChunks > 0 ? chunks[firstDataIdxInChunks - 1].start : null;
+      const shouldRetryEmptyMonth = (start: string) =>
+        !knownRange
+        || (start > firstDataStart! && start < lastDataStart!)
+        || start === monthBeforeFirstData;
 
       const existingKeyCounter = existingRecords.length > 0 ? buildRecordKeyCounter(existingRecords) : undefined;
-
-      // 进度分母 = 首个有数据月份 → 当前时间 的月数（固定）。
-      // 注意：增量拉取（冷启动/绿色刷新）时本批 chunks 只含近几个月，若仅用本批探测结果，
-      // 分母会错误地等于本批月数（常为 1）。因此先从已有记录推算最早有数据月份作为基准，
-      // 再与本批探测结果取较大者，保证分母反映全量收益月份的跨度。
-      let earliestDataBase: string | null = null; // 已有记录的最早月份（YYYYMM）
-      for (const r of existingRecords) {
-        const m = r.time.slice(0, 7).replace("-", "");
-        if (earliestDataBase === null || m < earliestDataBase) earliestDataBase = m;
-      }
-      const curYM = yesterdayStr.slice(0, 6);
-      const baseTotalMonths = earliestDataBase
-        ? (Number(curYM.slice(0, 4)) * 12 + Number(curYM.slice(4, 6)))
-          - (Number(earliestDataBase.slice(0, 4)) * 12 + Number(earliestDataBase.slice(4, 6)))
-          + 1
-        : 0;
-
-      let probedCount = 0;
-      let firstDataIndex = -1; // 按时间顺序本批第一个有数据的月份下标
-      let totalValidMonths = -1; // 固定分母；-1 表示探测未完成
-      let validDone = 0; // 已完成全部翻页的有效月份数
-      // 分母 = 首个有数据月份 → 当前时间 的月数；与已有记录推算的基准取较大者。
-      const recomputeTotalMonths = () => {
-        if (firstDataIndex === -1) return 0;
-        return Math.max(chunks.length - firstDataIndex, baseTotalMonths);
-      };
-      const probeMonthHasData = (index: number, hasData: boolean) => {
-        probedCount++;
-        if (hasData && (firstDataIndex === -1 || index < firstDataIndex)) firstDataIndex = index;
-        if (probedCount >= chunks.length) {
-          // 只上修不下修：避免与 onTaskDone 的最终结果互相覆盖导致分母回跳
-          const recomputed = recomputeTotalMonths();
-          if (recomputed > totalValidMonths) totalValidMonths = recomputed;
-        }
-      };
 
       // 单个月份 chunk 处理：拉取该月所有页，返回结果（不修改全局状态，并行安全）
       async function processChunk(
         chunk: { start: string; end: string },
-        index: number,
+        // 该批中排在最前的月份负责上报月内页级进度：多个月份并行时若都上报，
+        // 文案会在不同月份之间来回跳。月级进度仍由每个月份完成时上报。
+        reportPages = false,
       ): Promise<{
         records: BiliGiftRecord[];
         totalPages: number;
@@ -731,17 +1085,25 @@ export async function fetchAnchorGifts(
         yesterdayReady?: boolean;
         interrupted: boolean;
         page0Failed: boolean;
+        /** page0 失败或翻页中断时的原始失败原因（B站 code/message 或网络异常文本），供上层日志定位 */
+        failInfo?: string;
         /** 本次判定为"可疑空月份"（伪空重试后仍 total_page=0） */
         empty?: boolean;
         /** B站凭证失效（code=-101/3/"未登录"）：与 page0Failed 不同，需要立即终止整个 fetchAnchorGifts 并让上层跳 /login */
         credentialExpired?: boolean;
       }> {
         const records: BiliGiftRecord[] = [];
-        let rateLimited = false;
 
-        // 第0页
-        let firstPage: BiliGiftStreamResponse | null = null;
-        for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
+        // 首探已确认无数据的月份：直接跳过，不再翻页——省掉一次无用请求。
+        // 注意只信任"empty"（拿到可信响应且 total_page=0），"unknown"（探测失败）必须照常重试。
+        if (monthPlan.get(chunk.start)?.status === "empty") {
+          return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: false, empty: true };
+        }
+
+        // 第0页：优先复用首探阶段已拿到的响应，避免对同一月份重复请求
+        let firstPage: BiliGiftStreamResponse | null = probedFirstPage.get(chunk.start) ?? null;
+        let lastFailInfo = "未知（未收到响应）"; // 失败原因，供上层日志定位（412/风控/网络/其它 code）
+        for (let attempt = 0; firstPage === null && !_quotaHitThisRun && attempt <= PAGE0_RETRY_COUNT; attempt++) {
           try {
             const result = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
             if (result.code === 0) {
@@ -760,14 +1122,13 @@ export async function fetchAnchorGifts(
               firstPage = result;
               break;
             }
+            lastFailInfo = `code=${result.code} ${result.message ?? ""}`.trim();
             await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
           } catch (err: any) {
-            if (err?.message?.includes("412")) {
-              rateLimited = true;
-              await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
-            } else {
-              await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
-            }
+            // 412 → 配额窗口已满：同窗口内重试无效，立即跳出（不再空转等待），由上层收尾
+            lastFailInfo = _quotaHitThisRun ? "412 限流退避耗尽" : (err?.message ?? String(err));
+            if (_quotaHitThisRun) break;
+            await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
           }
         }
 
@@ -775,12 +1136,16 @@ export async function fetchAnchorGifts(
         // 必须标记 page0Failed，否则上层会当作"正常无数据"推进 end_date，
         // 导致该月及更早的历史数据被永久跳过。
         if (!firstPage) {
-          console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page 0 获取完全失败，标记为 page0Failed`);
-          return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: true };
+          console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page 0 获取完全失败，标记为 page0Failed（最后失败原因：${lastFailInfo}）`);
+          return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: true, failInfo: lastFailInfo };
         }
-        // 探测：page0 确定该月是否有数据（1301000 数据过期也属无数据）。
-        // 所有月份探测完成后，用首个有数据月份固定进度分母。
-        probeMonthHasData(index, firstPage.code === 0 && (firstPage.data?.total_page ?? 0) > 0);
+        // 记录该月结论（page0 已确定，1301000 数据过期也属无数据）。
+        // 未知月份在这里重试成功后会把结论升级为 data/empty，并相应修正进度分母。
+        recordMonth(
+          chunk.start,
+          firstPage.code === 0 && (firstPage.data?.total_page ?? 0) > 0 ? "data" : "empty",
+          firstPage.data?.total_page ?? 0,
+        );
         // code=1301000 表示该月数据已过期，属于 B站正常响应，不是失败
         if (firstPage.code === 1301000) {
           return { records, totalPages: 0, hasData: false, interrupted: false, page0Failed: false };
@@ -794,7 +1159,8 @@ export async function fetchAnchorGifts(
         let totalPages = firstPage.data?.total_page ?? 0;
         // total_page=0 不一定代表该月无数据：B站 在软限流/冷缓存时静默返回假空（非错误、不重试）。
         // 按递增间隔再探测：恢复出数据 → 视为假空继续翻页；仍为 0 → 判定"可疑空月份"，交给上层用 empty_counts 决定是否补拉。
-        if (totalPages === 0) {
+        // 只在"值得怀疑的月份"上做（见 shouldRetryEmptyMonth）：开播前/停播后的大段空白不值得逐月白等。
+        if (totalPages === 0 && shouldRetryEmptyMonth(chunk.start)) {
           for (const delay of EMPTY_RETRY_INTERVAL_MS) {
             await new Promise((r) => setTimeout(r, delay));
             try {
@@ -811,6 +1177,9 @@ export async function fetchAnchorGifts(
             console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 可疑空月份：重试后仍 total_page=0（标记 empty）`);
             return { records, totalPages: 0, hasData: false, yesterdayReady, interrupted: false, page0Failed: false, empty: true };
           }
+          // 伪空重试恢复出数据：修正该月的请求数计划与"有数据"判定（分母只上修）
+          console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 伪空误判修正：该月实有数据（total_page=${totalPages}）`);
+          recordMonth(chunk.start, "data", totalPages);
         }
 
         if (firstPage.data?.list?.length) {
@@ -819,8 +1188,46 @@ export async function fetchAnchorGifts(
 
         // 翻页
         let interrupted = false;
-        for (let p = 1; p < totalPages; p++) {
-          if (existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
+        let lastPageFailInfo = "未知（未收到响应）"; // 翻页中断时的原始失败原因
+        // "提前停翻"开关：命中本地已有记录时提前结束翻页，用于跳过已经完整抓过的月份。
+        // 但对于上一轮被限流打断、尚未抓完的月份（记在 empty_counts 里）必须关掉，
+        // 否则重拉时会在"已有记录的边界"处再次提前停翻，该月份尾部数据永远补不回来。
+        const allowEarlyStop = (meta?.empty_counts?.[chunk.start] ?? 0) < 1;
+        // 月份内断点续拉：该月上一轮被 412 打断（记在 empty_counts 里）时，本地已存有前 K 页记录。
+        // 必须从缺失页接着翻，而不是从 page 1 重翻——否则每次运行都只会重复抓取同样的前 K 页，
+        // 配额一耗尽就再次中断，尾部数据永远拿不到（多轮运行也无法收敛）。
+        // 留 2 页余量防边界漂移，重复记录由合并阶段的 existingKeyCounter 去重。
+        let startPage = 1;
+        if (!allowEarlyStop) {
+          const ym = `${chunk.start.slice(0, 4)}-${chunk.start.slice(4, 6)}`;
+          let haveThisMonth = 0;
+          for (const r of existingRecords) if (r.time.startsWith(ym)) haveThisMonth++;
+          if (haveThisMonth > 0) {
+            startPage = Math.max(1, Math.floor(haveThisMonth / API_PAGE_SIZE) - 2);
+            console.log(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 断点续拉：本地已有 ${haveThisMonth} 条（约 ${Math.ceil(haveThisMonth / API_PAGE_SIZE)} 页），从第 ${startPage} 页继续（共 ${totalPages} 页）`);
+          }
+        }
+        // 月内页级进度：进入该月翻页时先报一次，之后每翻完一页报一次
+        const emitPageProgress = (page: number) => {
+          if (!reportPages) return;
+          const remain = fmtRemain();
+          onProgress?.({
+            text: `正在获取收益记录 ${chunk.start.slice(0, 6)} 第 ${page}/${totalPages} 页${remain ? " · " + remain : ""}`,
+            ratio: totalValidMonths > 0 ? Math.min(1, validDone / totalValidMonths) : undefined,
+            current: validDone,
+            total: totalValidMonths,
+            anchorGift: true,
+          });
+        };
+        emitPageProgress(startPage);
+        for (let p = startPage; p < totalPages; p++) {
+          // 已撞到配额窗口（412）：停止剩余翻页（不再发请求空转），记为"部分完成"待下轮断点续拉
+          if (_quotaHitThisRun) {
+            interrupted = true;
+            lastPageFailInfo = "412 限流退避耗尽";
+            break;
+          }
+          if (allowEarlyStop && existingKeyCounter && records.length >= CONSECUTIVE_MATCH_THRESHOLD) {
             const lastN = records.slice(-CONSECUTIVE_MATCH_THRESHOLD);
             const allMatch = lastN.every((r) => {
               const key = recordKey(r);
@@ -828,9 +1235,6 @@ export async function fetchAnchorGifts(
             });
             if (allMatch) break;
           }
-
-          const interval = rateLimited ? SLOW_REQUEST_INTERVAL_MS : REQUEST_INTERVAL_MS;
-          await new Promise((r) => setTimeout(r, interval));
 
           let success = false;
           for (let attempt = 0; attempt <= PAGE_RETRY_COUNT; attempt++) {
@@ -841,68 +1245,55 @@ export async function fetchAnchorGifts(
                 success = true;
                 break;
               }
+              lastPageFailInfo = `page=${p} code=${result.code} ${result.message ?? ""}`.trim();
             } catch (err: any) {
-              if (err?.message?.includes("412")) {
-                rateLimited = true;
-                await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS + attempt * 5000));
-              } else {
-                await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
-              }
+              lastPageFailInfo = `page=${p} ${err?.message ?? String(err)}`;
+              if (_quotaHitThisRun) break; // 412：不再重试，交由上层收尾
+              await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
             }
           }
           if (!success) {
             interrupted = true;
             break;
           }
+          emitPageProgress(p + 1);
         }
 
-        return { records, totalPages, hasData: true, yesterdayReady, interrupted, page0Failed: false };
+        return { records, totalPages, hasData: true, yesterdayReady, interrupted, page0Failed: false, failInfo: interrupted ? lastPageFailInfo : undefined };
       }
 
-      // 动态并发池：任一任务完成即启动下一个任务，让并发槽位始终饱和
-      // （原批式并行需等整批 10 个全部完成才开下一批，存在空闲等待）。
-      // onTaskDone：每个月份 chunk 完成时立即上报进度（拉取过程中动态更新进度条），
-      // 而不是等全部完成后再一次性上报。
-      const chunkResults = await runWithConcurrency(
-        chunks.map((chunk, index) => ({ chunk, index })),
-        MONTH_CONCURRENCY,
-        ({ chunk, index }) => processChunk(chunk, index),
-        (i, item, result) => {
-          if (!result.hasData) {
-            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
-            return;
-          }
-          validDone++;
-          // 修正分母：早期探测按 page0 首次响应判断有无数据，软限流假空时会把真实有数据的
-          // 月份误判为空（首个有数据月份下标偏后）→ 分母偏小（如实际3个有数据月份只显示2）。
-          // 该 chunk 实际翻页完成后若发现比当前首个有数据月份更早的月份有数据，
-          // 就把分母上修到真实跨度，保证"已获取月份/总的有数据的月份"显示正确总数。
-          if (firstDataIndex === -1 || i < firstDataIndex) {
-            firstDataIndex = i;
-            const recomputed = recomputeTotalMonths();
-            if (recomputed > totalValidMonths) totalValidMonths = recomputed;
-          }
-          // 探测尚未完成（极端情况，通常 page0 探测先于翻页完成）时维持"探测中"，
-          // 避免分母漂移；探测完成后分母固定为 totalValidMonths。
-          if (totalValidMonths < 0) {
-            onProgress?.({ text: "正在探测收益记录起始月份...", current: 0, total: 0 });
-            return;
-          }
-          onProgress?.({
-            text: `正在获取收益记录 ${item.chunk.start.slice(0, 6)}（${validDone}/${totalValidMonths}）`,
-            ratio: Math.min(1, validDone / totalValidMonths),
-            current: validDone,
-            total: totalValidMonths,
-          });
-        },
-      );
+      // 从旧到新分批抓取：每批最多 monthConcurrency 个月份并行（并发度由速率派生）。
+      // 批内结果仍按月份顺序串行处理（见下方 for 循环），与并发度无关。
+      const chunkResults: Array<Awaited<ReturnType<typeof processChunk>> | undefined> = new Array(chunks.length);
+      const unknownStarts: string[] = []; // page0 完全失败的月份：完全未知，计入保守中断阈值
+      const partialStarts: string[] = []; // page0 成功但翻页被 412 打断的月份：已知有数据但不完整
+      let aborted = false; // 未知月份过多 → 保守中断本轮（end_date 保持本次起始日期，绝不推进）
+      for (let b = 0; b < chunks.length && !aborted; b += monthConcurrency) {
+        const batch = Array.from({ length: Math.min(monthConcurrency, chunks.length - b) }, (_, k) => b + k);
+        // onTaskDone：每个月份 chunk 完成时立即上报进度（拉取过程中动态更新进度条），
+        // 而不是等全部完成后再一次性上报。
+        const batchResults = await runWithConcurrency(
+          batch,
+          monthConcurrency,
+          // batch[0] 是本批最靠前的月份：只由它上报月内页级进度，避免多月并行时文案跳来跳去
+          (idx) => processChunk(chunks[idx], idx === batch[0]),
+          (_batchIndex, idx, result) => {
+            // 空月份不计入分母，也不上报进度——它没有"第几个月"可显示，
+            // 若在此处改文案，会把"正在获取收益记录 X（n/m）"降级回"正在探测…"（已修复的闪现问题）。
+            // 未知月份同理由翻页阶段的结果决定，这里不动进度。
+            if (!result.hasData) return;
+            validDone++;
+            if (totalValidMonths < 0) return; // 分母未探明（增量路径）：交给页级进度显示
+            emitMonthProgress(chunks[idx].start.slice(0, 6));
+          },
+        );
+        batch.forEach((idx, k) => { chunkResults[idx] = batchResults[k]; });
 
-      // 结果按月份顺序串行处理（去重/中断逻辑依赖有序结果，且避免竞态）。
-      // 进度已在 onTaskDone 实时上报，此处不再重复上报。
-      let interrupted = false;
-      for (let ci = 0; ci < chunkResults.length && !interrupted; ci++) {
-        const chunk = chunks[ci];
-        const result = chunkResults[ci];
+        // 本批结果按月份顺序串行处理（去重/中断逻辑依赖有序结果，且避免竞态）。
+        // 进度已在 onTaskDone 实时上报，此处不再重复上报。
+        for (const idx of batch) {
+          const chunk = chunks[idx];
+          const result = chunkResults[idx]!;
 
           if (result.yesterdayReady !== undefined) {
             yesterdayApiReady = result.yesterdayReady;
@@ -915,27 +1306,7 @@ export async function fetchAnchorGifts(
             return { code: 0, message: "needs-relogin", data: null };
           }
 
-          // page 0 完全失败：不应推进 end_date 到昨天，否则该月及更早的历史数据
-          // 将被永久跳过。保存当前已获取的记录，end_date 设为失败月份的起始日期，
-          // 下次从该月重新拉取。
-          if (result.page0Failed) {
-            console.warn(`[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page0Failed，保存 end_date=${chunk.start} 并中断`);
-            const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
-            await saveRecordsWithMeta(platform, session.mid, allSorted, {
-              end_date: chunk.start,
-              total_page: (meta?.total_page ?? 0) + fetchedNewPages,
-              last_fetch: getBeijingTime(),
-              empty_counts: meta?.empty_counts ?? {},
-            });
-            interrupted = true;
-            break;
-          }
-
-          if (!result.hasData) {
-            continue;
-          }
-
-          // 去重并合并（串行，避免竞态）
+          // 已取到的记录照常合并（翻页中断的月份也可能已取到前若干页，不能因为失败就丢弃）
           for (const r of result.records) {
             if (existingKeyCounter) {
               const key = recordKey(r);
@@ -947,40 +1318,91 @@ export async function fetchAnchorGifts(
             }
             allRecords.push(r);
           }
-          fetchedNewPages += Math.min(result.records.length > 0 ? 1 : 0, result.totalPages);
+          if (result.records.length > 0) fetchedNewPages += 1;
 
-          if (result.interrupted) {
-            const allSorted = allRecords.sort((a, b) => b.time.localeCompare(a.time));
-            await saveRecordsWithMeta(platform, session.mid, allSorted, {
-              end_date: chunk.start,
-              total_page: (meta?.total_page ?? 0) + fetchedNewPages,
-              last_fetch: getBeijingTime(),
-              empty_counts: meta?.empty_counts ?? {},
-            });
-            interrupted = true;
-            break;
+          // 拉取失败（page0 完全失败 / 翻页中断）的月份 = 未知月份：
+          // 绝不在此中断整轮，也绝不当作"无数据"——那会让该月被排除出分母并永久跳过。
+          // 处理：页0失败记为"未知月份"、翻页被限流打断记为"待补拉月份"，
+          // 两者都计入 empty_counts 钉住 end_date 供下轮补拉，本轮继续推进后面的月份。
+          if (result.page0Failed) {
+            console.warn(
+              `[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} page0 获取失败，记为未知月份（失败原因：${result.failInfo ?? "未知"}），本轮跳过该月待下轮补拉`,
+            );
+            unknownStarts.push(chunk.start);
+            continue;
           }
+
+          // 翻页被 412 打断 = "部分完成"：该月份确实有数据（前几十页已取到），只是没翻完。
+          // 与"未知月份"区分开：不计入保守中断阈值（一轮里几十个月份先后被限流是常态，
+          // 若计入会让每次扫描都在中途放弃），但仍计入 empty_counts 钉住 end_date 供下轮补拉。
+          if (result.interrupted) {
+            console.warn(
+              `[AnchorGifts-Tauri] ${chunk.start}~${chunk.end} 翻页中断（已取 ${result.records.length} 条，失败原因：${result.failInfo ?? "未知"}），记为待补拉月份`,
+            );
+            partialStarts.push(chunk.start);
+          }
+        }
+
+        // 412 退避用完仍被拦截：判定出口 IP 被持续限流，本轮收尾。
+        // end_date 保持本轮起点，未知/待补拉月份已计入 empty_counts，用户下次刷新可续拉。
+        if (_quotaHitThisRun) {
+          console.warn(
+            `[AnchorGifts-Tauri] 已退避重试 ${QUOTA_BACKOFF_MS.length} 次仍被 412 限流，本轮收尾：已抓 ${allRecords.length} 条，待补拉 ${partialStarts.length + unknownStarts.length} 个月份，请稍后手动刷新续拉（或在「重建数据」卡片里把抓取速度调低）`,
+          );
+          aborted = true;
+          break;
+        }
+
+        // 单轮未知月份过多（连首页都拿不到）→ 保守中断本轮：
+        // end_date 保持本次扫描起点（绝不推进），已取到的记录照常保存，下一轮从同一范围重来。
+        if (unknownStarts.length >= MAX_UNKNOWN_MONTHS_PER_RUN) {
+          console.warn(
+            `[AnchorGifts-Tauri] 本轮已有 ${unknownStarts.length} 个月份获取失败（≥${MAX_UNKNOWN_MONTHS_PER_RUN}），保守中断并保持 end_date=${startDate}`,
+          );
+          aborted = true;
+          break;
+        }
       }
 
-      // 仅当未发生中断/失败时才推进 end_date 到昨天。
-      // 若 interrupted=true，上面已在中断点保存了 end_date=chunk.start，此处不可覆盖。
-      if (!interrupted) {
+      // 保守中断（未知月份过多）：end_date 保持本次扫描起点，绝不推进，下一轮从同一范围重来。
+      if (aborted) {
+        // 必须把本轮的未知月份/待补拉月份一并写入 empty_counts，否则下一轮找不到它们，
+        // 既不会补拉，也不会关闭"提前停翻"开关（尾部数据会被永久跳过）。
+        const abortedEmptyCounts: Record<string, number> = { ...(meta?.empty_counts ?? {}) };
+        for (const s of [...partialStarts, ...unknownStarts]) {
+          abortedEmptyCounts[s] = (abortedEmptyCounts[s] ?? 0) + 1;
+        }
+        allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
+        await saveRecordsWithMeta(platform, session.mid, allRecords, {
+          end_date: startDate,
+          total_page: (meta?.total_page ?? 0) + fetchedNewPages,
+          last_fetch: getBeijingTime(),
+          empty_counts: abortedEmptyCounts,
+          noRevenue: meta?.noRevenue ?? false,
+          scan_from: meta?.scan_from,
+        });
+        console.log(`[AnchorGifts-Tauri] 保守中断：end_date 保持 ${startDate}（不推进），总计 ${allRecords.length} 条`);
+      } else {
         // empty_counts：有数据的月份清零，可疑空月份累加；只有仍低于上限的空月份才挡住 end_date（供下轮补拉），
         // 达到上限视为真无数据放行，避免 end_date 永不推进导致死循环。
         const nextEmptyCounts: Record<string, number> = { ...(meta?.empty_counts ?? {}) };
+        // 首个有数据月份之前的历史月份 = 账号尚未开播，真·无数据且响应与假空无法区分（都是 code=0/total_page=0）。
+        // 若也计入 empty_counts 会把 end_date 钉到最早月份、每次全量重拉并反复重试这些月份，代价过大；
+        // 故对于开播之前的无历史月份一律不计数、不补拉。
+        // （边角：若账号真正的首播月本次恰好被限流假空，该月会被当作无历史跳过——
+        //  少见且可通过手动"重建数据库"重新获得机会，权衡下值得。）
+        const firstDataIndex = firstDataIndexOf();
         for (let ci = 0; ci < chunkResults.length; ci++) {
           const result = chunkResults[ci];
           const start = chunks[ci]?.start;
           if (!result || !start) continue;
-          // 首个有数据月份之前的历史月份 = 账号尚未开播，真·无数据且响应与假空无法区分（都是 code=0/total_page=0）。
-          // 若也计入 empty_counts 会把 end_date 钉到最早月份、每次全量重拉并反复重试这些月份，代价过大；
-          // 故对于开播之前的无历史月份一律不计数、不补拉。
-          // （边角：若账号真正的首播月本次恰好被限流假空，该月会被当作无历史跳过——
-          //  少见且可通过手动"重建数据库"重新获得满 5 次机会，权衡下值得。）*/
           if (firstDataIndex !== -1 && ci < firstDataIndex) continue;
           if (result.empty) {
             nextEmptyCounts[start] = (nextEmptyCounts[start] ?? 0) + 1;
-          } else if (result.records.length > 0) {
+          } else if (result.hasData && !result.interrupted) {
+            // "完整翻完"的月份才清除补拉标记（该月页数已全部取到，即使本次没有新增记录——
+            // 断点续拉从缺失页接着翻完时，前面的页都是已有记录，records 可能为 0）；
+            // 被 412 打断的部分完成月份必须保留标记，否则下轮会跳过它、尾部数据永久缺失。
             delete nextEmptyCounts[start];
           }
         }
@@ -996,6 +1418,17 @@ export async function fetchAnchorGifts(
             prunedEmptyCounts[s] = c;
           }
         }
+        // 本轮"未知月份"（拉取失败）必须计入：它们不是"无数据"，只是没抓到，
+        // 需要挡住 end_date 供下一轮补拉（超过 MAX_CONSECUTIVE_EMPTY_RUNS 才放弃，防死循环）。
+        // 不套用 minDataStart 过滤——失败的月份可能比已知最早的收益月份还早，
+        // 若被过滤掉，end_date 推进会把这些月份永久跳过。
+        // 被 412 打断的部分完成月份同理：必须挡住 end_date 供下一轮把它补完。
+        for (const s of partialStarts) {
+          prunedEmptyCounts[s] = (prunedEmptyCounts[s] ?? 0) + 1;
+        }
+        for (const s of unknownStarts) {
+          prunedEmptyCounts[s] = (prunedEmptyCounts[s] ?? 0) + 1;
+        }
         const suspiciousEmptyStarts = chunks
           .map((c) => c.start)
           .filter((s) => {
@@ -1008,32 +1441,32 @@ export async function fetchAnchorGifts(
           ? suspiciousEmptyStarts.sort()[0]
           : yesterdayStr;
 
-        // 登录触发的全量探测（probe=true，扫到昨天）完成后本地一条记录都没有 → 判定该账号无收益/非持续开播。
-        // 置位 noRevenue 后（持久化到元数据），冷启动与绿色刷新均直接跳过后续全量探测，避免反复试探。
-        // 仅在"无失败、无中断"的干净完整扫描下才会到达：期间任一月 page0 彻底失败会被打断
-        // （page0Failed→interrupted），限流导致的假空在 EMPTY_RETRY 内已重试，故可据此判定真无收益。
-        // 注意：仅 probe=true（扫码登录触发）时置位；冷启动/绿色刷新（probe=false）的增量拉取
-        // 即便无记录也不标记，避免仅凭近几日增量误判。
-        const markNoRevenue = probe && allRecords.length === 0;
-
+        // noRevenue 仅由首探短路判定置位（见上文），此处沿用已持久化的标记，不再重复判定。
+        // end_date 的推进：没有"待补拉/可疑空"的月份时直接推进到昨天（本轮范围已抓完），
+        // 否则钉在最早的那个月份上供下轮续拉。
+        // scan_from 语义 = "从该日期起的历史已确认完整"：仅当本轮从 B站 保留边界起步
+        // （真正覆盖全部可得历史）且无未知月份时才写入首次值；增量轮次不写入，避免把
+        // scan_from 标成近期日期而使"历史缺失自愈"判据失效。
+        const coveredFullHistory = startDate <= retentionBoundary && unknownStarts.length === 0 && partialStarts.length === 0;
         allRecords = allRecords.sort((a, b) => b.time.localeCompare(a.time));
         await saveRecordsWithMeta(platform, session.mid, allRecords, {
           end_date: nextEndDate,
           total_page: (meta?.total_page ?? 0) + fetchedNewPages,
           last_fetch: getBeijingTime(),
           empty_counts: prunedEmptyCounts,
-          noRevenue: markNoRevenue || (meta?.noRevenue ?? false),
+          noRevenue: meta?.noRevenue ?? false,
+          scan_from: meta?.scan_from ?? (coveredFullHistory ? startDate : undefined),
         });
-        if (markNoRevenue) {
-          markedNoRevenue = true;
-          console.log(`[AnchorGifts-Tauri] ${session.mid} 首次全量探测无收益，标记 noRevenue，后续跳过收益拉取`);
-        }
         if (suspiciousEmptyStarts.length > 0) {
           console.log(`[AnchorGifts-Tauri] 获取完成: end_date 保留在最早可疑空月份 ${nextEndDate}（共${suspiciousEmptyStarts.length}个待补拉），总计 ${allRecords.length} 条`);
         } else {
           console.log(`[AnchorGifts-Tauri] 获取完成: 推进到昨天，总计 ${allRecords.length} 条`);
         }
       }
+
+      // 带回本轮收尾状态：412 退避耗尽时前端提示用户稍后刷新续拉（配合断点续拉逐轮补齐）
+      quotaExhausted = _quotaHitThisRun;
+      pendingMonths = partialStarts.length + unknownStarts.length;
     }
 
     // ==================== 统计 ====================
@@ -1391,6 +1824,8 @@ export async function fetchAnchorGifts(
       noRevenue: markedNoRevenue || (meta?.noRevenue ?? false),
       fetchedNewPages,
       yesterdayAvailable,
+      quotaExhausted,
+      pendingMonths,
     };
 
     return { code: 0, message: "ok", data };
@@ -1399,6 +1834,7 @@ export async function fetchAnchorGifts(
     return { code: 500, message: `获取礼物流水失败: ${err?.message || String(err)}`, data: null };
   }
   } finally {
+    _quotaWaitReporter = null;
     if (acquired) _fetchingGlobal = false;
   }
 }

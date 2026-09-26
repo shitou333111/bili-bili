@@ -9,6 +9,8 @@ import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl, serverPost, pageUrl, isTauri } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
+import { cacheGet, cacheSet, cacheClearMid, cacheKeys } from "@/lib/idb-cache";
+import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta } from "@/lib/blind-box-calc";
 import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
@@ -22,6 +24,7 @@ import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 import PieTooltip from "@/components/PieTooltip";
 import { showToast } from "@/lib/toast";
 import { accountApi } from "@/lib/api";
+import { getFetchRate, setFetchRate, DEFAULT_FETCH_RATE, MIN_FETCH_RATE, MAX_FETCH_RATE } from "@/lib/anchor-gifts-client";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import { downloadJsonFile } from "@/lib/download-json";
 import Dropdown from "@/components/Dropdown";
@@ -88,6 +91,17 @@ function formatTimestamp(ts: number) {
   const mins = String(date.getMinutes()).padStart(2, "0");
   const secs = String(date.getSeconds()).padStart(2, "0");
   return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+}
+
+/** 相对时间文案（用于"浏览器缓存 · X前更新"提示） */
+function fmtAgo(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} 小时前`;
+  return `${Math.floor(hr / 24)} 天前`;
 }
 
 type Account = {
@@ -159,6 +173,12 @@ type BlindBoxProfitResult = {
   }>;
   castleStats: CastleStat[];
   castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
+  /** 浏览器端本地筛选所需的一次性载荷（冷启动/刷新时随无筛选响应一起返回） */
+  records?: BlindBoxCalcRecord[];
+  /** ruid → 主播昵称 */
+  anchorNames?: Record<number, string>;
+  /** gift_id → 礼物名称/图标/单价 */
+  giftMeta?: Record<number, BlindBoxGiftMeta>;
 };
 
 type BlindBoxStats = BlindBoxProfitResult[];
@@ -821,6 +841,15 @@ function CastleStatModal({
   );
 }
 
+// B站 抓取速率档位（req/s）：只影响从 B站 拉取数据的节奏。
+// 实测阈值落在 (3, 4] req/s —— 2/3 各连发 3 分钟零 412，4 req/s 第 63 秒被拦。
+const FETCH_RATE_PRESETS: Array<{ label: string; rate: number; hint: string }> = [
+  { label: "稳但慢", rate: 2, hint: "最不容易被限流" },
+  { label: "平衡", rate: 3, hint: "默认，贴着安全线" },
+  { label: "快不稳", rate: 4, hint: "可能被 B站 拦截" },
+];
+const FETCH_RATE_OPTIONS = FETCH_RATE_PRESETS.map((p) => p.rate);
+
 export default function HomePage() {
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -844,7 +873,7 @@ export default function HomePage() {
   const [overviewAnchor, setOverviewAnchor] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
   // 首次获取消费/收益记录时的进度提示（text: 说明文字, ratio: 0~1 可选）
-  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number } | null>(null);
+  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number; anchorGift?: boolean } | null>(null);
   const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1086,6 +1115,9 @@ export default function HomePage() {
       if (res.code === 0) {
         showToast(res.message || "数据库已重建，即将重新加载...");
         setShowRebuildDbConfirm(false);
+        // 清掉该账号的浏览器缓存，避免重建后重新加载仍秒显旧数据
+        const mid = currentAccount?.mid ?? currentMidRef.current;
+        if (mid) await cacheClearMid(mid);
         // 重建后必须重新全量拉取主播收益记录：置位登录探测标记（与扫码登录后一致），
         // 让 reload 后的首次收益拉取走 probe=true，从3年前重新全量获取。
         // 否则删光记录后（无 records、无 end_date 基线）冷启动路径会 skipPull，
@@ -1299,6 +1331,25 @@ export default function HomePage() {
   // 重建数据库确认弹窗
   const [showRebuildDbConfirm, setShowRebuildDbConfirm] = useState(false);
   const [rebuildDbLoading, setRebuildDbLoading] = useState(false);
+  // B站 抓取速率（req/s）：初值用常量避免 SSR/首帧与持久化值不一致（挂载后再同步真实值）
+  const [fetchRate, setFetchRateState] = useState(DEFAULT_FETCH_RATE);
+  // 自定义档位输入框的文本（仅"自定义"被选中时显示）
+  const [customRateText, setCustomRateText] = useState("");
+  const [rateCustom, setRateCustom] = useState(false);
+  // 同步持久化的 B站 抓取速率（冷启动自动刷新也按该值走，见 anchor-gifts-client 的模块级速率）
+  useEffect(() => {
+    const saved = getFetchRate();
+    setFetchRateState(saved);
+    if (!FETCH_RATE_OPTIONS.includes(saved)) {
+      setRateCustom(true);
+      setCustomRateText(String(saved));
+    }
+  }, []);
+  // 应用抓取速率：写入节拍器（后续所有 B站 请求即刻生效）并持久化
+  function applyFetchRate(rate: number) {
+    setFetchRate(rate);
+    setFetchRateState(getFetchRate());
+  }
   // 版本显示（V1.0.0 (2026-08-18) 格式）+ 应用更新相关
   const [versionDisplay, setVersionDisplay] = useState<VersionDisplay | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -1515,10 +1566,46 @@ export default function HomePage() {
   // 后台同步中（刷新按钮显示三点动画）；首次使用无本地会话（直接扫码登录）
   const [syncing, setSyncing] = useState(false);
   const [isFirstTime, setIsFirstTime] = useState(false);
+  // WEB 端浏览器缓存时间戳（>0 = 当前展示的是 IndexedDB 缓存、尚未与服务器同步）
+  const [offlineCacheAt, setOfflineCacheAt] = useState(0);
+  // 当前账号 mid 的同步引用：供异步回调写穿缓存（state 闭包可能滞后）
+  const currentMidRef = useRef<number | null>(null);
+  // 本次启动是否成功用浏览器缓存展示过数据（用于服务器不可达且无任何缓存时给出提示）
+  const browserCacheHitRef = useRef(false);
+  // 最近一次“无筛选”的盲盒响应（含原始记录与元数据）。
+  // 切换主播/时间段筛选时直接用它本地重算，不再请求服务器（0 请求、无卡顿、无 B站 风控风险）。
+  const blindBoxRawRef = useRef<BlindBoxStats | null>(null);
   // 在线状态（离线时使用本地缓存数据，并禁用需要联网的功能）
   const isOnline = useOnlineStatus();
-  // 当前账号是否有直播间（是否为主播）：false 时隐藏"主播"选项卡及托盘按钮
+  // 当前账号是否有直播间（是否为主播）：false 时"主播"页面显示客户端下载引导提示
   const [hasLiveRoom, setHasLiveRoom] = useState(false);
+  // 直播间检测是否已完成（检测完成前不显示引导提示，避免真实主播闪一下提示）
+  const [liveRoomChecked, setLiveRoomChecked] = useState(false);
+  // 是否 WEB 端（null=挂载后未确认，false=已确认客户端，true=WEB）。WEB 端"主播"页恒显示下载引导提示。
+  // 首帧为 null：收益模块以 `isWeb === false` 为挂载条件，保证 WEB 端从首帧起就不挂载、
+  // 不发任何收益请求（若初值 false 会先挂载一帧并触发 fast 缓存读取再卸载）
+  const [isWeb, setIsWeb] = useState<boolean | null>(null);
+  useEffect(() => {
+    setIsWeb(!("__TAURI_INTERNALS__" in window));
+  }, []);
+
+  // WEB 端"主播"页面 / 客户端非主播账号显示的引导提示（结构化功能亮点）
+  const ANCHOR_PROMO_FEATURES: Array<{ title: string; desc: string }> = [
+    { title: "主播收益统计", desc: "每天、每月收到哪位粉丝的哪些礼物，多维度详细统计" },
+    { title: "粉丝盲盒盈亏", desc: "查询粉丝最近 3 年的盲盒盈亏记录，粉丝可在直播间发弹幕互动查询" },
+    { title: "大礼物录屏截图", desc: "大礼物模拟录屏、大礼物自动截图，精彩时刻不错过" },
+    { title: "进场特效动画", desc: "粉丝进场特效、进场动画，直播间更有氛围" },
+  ];
+  // "主播"页面是否显示下载引导提示：WEB 端恒显示；客户端等直播间检测完成后、无直播间时显示
+  const showAnchorPromo = isWeb || (liveRoomChecked && !hasLiveRoom);
+  // WEB 端不开放、仅 APP 可用的帮助页工具卡片（点击置灰卡片轻提示"只能在APP中使用"）
+  const WEB_APP_ONLY_TOOLS = new Set([
+    "助力主播 自动点赞",
+    "自动抢天选和红包",
+    "粉丝清理",
+    "粉丝牌清理",
+    "多人接力PK医药费",
+  ]);
 
   // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
   useEffect(() => {
@@ -1534,6 +1621,52 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** 从浏览器缓存(IndexedDB)读取并展示某账号的全部业务数据（WEB 端离线/秒显用）。返回是否命中。 */
+  async function loadMidCache(mid: number): Promise<boolean> {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) return false;
+    const [snap, blindBox, synthesis, other, cert] = await Promise.all([
+      cacheGet<Snapshot>(cacheKeys.snapshot(mid)),
+      cacheGet<BlindBoxStats>(cacheKeys.blindBox(mid)),
+      cacheGet<SynthesisStats>(cacheKeys.synthesis(mid)),
+      cacheGet<OtherStats>(cacheKeys.other(mid)),
+      cacheGet<Certification[]>(cacheKeys.certification(mid)),
+    ]);
+    let hit = false;
+    if (snap?.data) {
+      setSnapshot(snap.data);
+      setOfflineCacheAt(snap.savedAt);
+      hit = true;
+    }
+    if (blindBox?.data) {
+      setBlindBoxStats(blindBox.data);
+      // 缓存里带原始记录，离线/秒显时也能本地切筛选
+      blindBoxRawRef.current = blindBox.data;
+    }
+    if (synthesis?.data) setSynthesisStats(synthesis.data);
+    if (other?.data) setOtherStats(other.data);
+    if (cert?.data) setCertifications(cert.data);
+    return hit;
+  }
+
+  /** WEB 端启动时先用浏览器缓存秒显（服务器不可达时也能看到上次的数据）。
+   *  客户端数据在本地文件里，本身即权威，无需此步。 */
+  async function showBrowserCache() {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) return;
+    try {
+      const last = await cacheGet<{ account: Account; isLocalAccount: boolean }>(cacheKeys.lastAccount);
+      const acct = last?.data?.account;
+      if (!acct?.mid) return;
+      const accountsCached = await cacheGet<Account[]>(cacheKeys.accounts);
+      if (accountsCached?.data) setAccounts(accountsCached.data);
+      setCurrentAccount(acct);
+      setIsLocalAccount(!!last?.data?.isLocalAccount);
+      currentMidRef.current = acct.mid;
+      browserCacheHitRef.current = await loadMidCache(acct.mid);
+    } catch {
+      // 静默：缓存读取失败不影响正常流程
+    }
+  }
+
   async function initLocalFirst() {
     const hasSession = typeof window !== "undefined" && !!localStorage.getItem("bili_live_sid");
     if (!hasSession) {
@@ -1548,6 +1681,8 @@ export default function HomePage() {
     setSyncing(true);
     setLoading(false);
     try {
+      // WEB 端：先用浏览器缓存秒显，避免服务器不可达时白屏（客户端本地文件即数据源，无需此步）
+      await showBrowserCache();
       const hasActiveSession = await loadCachedQuick();
       // 本地有 sid 残留但实际会话已不存在（如用户删除/清空了数据文件夹后重启）：
       // 视为首次使用，清除残留 sid 并跳转扫码登录页，避免一直卡在"加载中"
@@ -1575,16 +1710,26 @@ export default function HomePage() {
       const accountsData = await accountsRes.json();
       const snapshotData = await snapshotRes.json();
       const statusData = await statusRes.json();
-      setAccounts(accountsData.data?.accounts || []);
-      if (snapshotData.data) {
-        setSnapshot(snapshotData.data);
-        // 无本地缓存：显示首次初始化提示
-        setIsFirstTime(snapshotData.message === "empty cached");
+
+      // 服务器不可达（dataFetch 在网络失败/超时统一返回 code=-1）：
+      // 保留浏览器缓存的展示，不覆盖任何 state、也不清 sid 跳登录，由离线提示告知用户。
+      if (accountsData?.code === -1 || snapshotData?.code === -1 || statusData?.code === -1) {
+        // 连一份浏览器缓存都没有：给出可操作提示，避免空白页
+        if (!browserCacheHitRef.current) setAuthError("无法连接服务器，请检查网络后稍后重试");
+        return true;
       }
+
+      setAuthError(null);
+      // 已成功与服务器通信：不再是"浏览器缓存未同步"状态（即使服务器返回空数据）
+      setOfflineCacheAt(0);
+
+      const accountList: Account[] = accountsData.data?.accounts || [];
+      setAccounts(accountList);
+      let acct: Account | null = null;
       if (statusData.data?.loggedIn && statusData.data?.sid) {
         localStorage.setItem("bili_live_sid", statusData.data.sid);
-        const matched = accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data.sid) || null;
-        setCurrentAccount({
+        const matched = accountList.find((a) => a.sid === statusData.data.sid) || null;
+        acct = {
           sid: statusData.data.sid,
           uname: statusData.data.uname,
           mid: statusData.data.mid,
@@ -1592,12 +1737,23 @@ export default function HomePage() {
           source: matched?.source || "qr",
           updatedAt: matched?.updatedAt || "",
           noRevenue: matched?.noRevenue,
-        });
+        };
+        setCurrentAccount(acct);
         // 是否本机登录：accounts 仅返回本机登录账号（/api/auth/accounts 已按设备令牌过滤）
         setIsLocalAccount(!!matched);
         setApiLoggedIn(true);
+        currentMidRef.current = acct.mid;
+        // 写穿浏览器缓存：账号列表 + 当前账号，供下次离线秒显（WEB 端生效，客户端内部跳过）
+        cacheSet(cacheKeys.accounts, accountList);
+        cacheSet(cacheKeys.lastAccount, { account: acct, isLocalAccount: !!matched });
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
+      }
+      if (snapshotData.data) {
+        setSnapshot(snapshotData.data);
+        // 无本地缓存：显示首次初始化提示
+        setIsFirstTime(snapshotData.message === "empty cached");
+        if (acct?.mid) cacheSet(cacheKeys.snapshot(acct.mid), snapshotData.data);
       }
       // 是否存在活动会话（会话被删除/数据文件夹被清除时返回 false）
       return Boolean(statusData.data?.loggedIn && statusData.data?.sid);
@@ -1658,17 +1814,28 @@ export default function HomePage() {
   // 切换标签栏（display:none / display:flex）不触发任何请求，仅展示已加载到 React state 中的数据
   const anchorRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
-  /** 检查当前账号是否有直播间（是否为主播）。仅确知无房时才返回 false 并隐藏"主播"选项卡；
-   *  查询出错（网络/接口异常）时视为有房，避免误隐藏真实主播。
-   *  若该账号曾在首次登录全量探测中被判定为无收益（noRevenue），同样按无房处理（不再显示）。 */
+  /** 检查当前账号是否有直播间（是否为主播）。仅客户端需要（WEB 端"主播"页恒显示引导提示，
+   *  不依赖检测结果，也不发起任何探测请求）；查询出错（网络/接口异常）时视为有房，避免误判真实主播。
+   *  若该账号曾在首次登录全量探测中被判定为无收益（noRevenue），同样按无房处理。 */
   const checkHasLiveRoom = useCallback(async () => {
-    if (!currentAccount?.mid) {
+    // WEB 端不探测直播间：直接按无房处理（showAnchorPromo 已由 isWeb 恒真显示下载引导提示），
+    // 避免发起任何与主播身份相关的探测请求。
+    // 用运行时同步检测而非 isWeb state：本函数可能在 state 尚未提交时被首跑（stale closure），
+    // 直接检测 window 可靠且无水合问题（本函数只在客户端 effect/回调中执行）
+    if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
       setHasLiveRoom(false);
+      setLiveRoomChecked(true);
       return false;
     }
-    // 无收益标记（持久化）：视为无直播间，直接隐藏，无需再实时查房间
+    if (!currentAccount?.mid) {
+      setHasLiveRoom(false);
+      setLiveRoomChecked(true);
+      return false;
+    }
+    // 无收益标记（持久化）：视为无直播间，直接显示引导提示，无需再实时查房间
     if (currentAccount.noRevenue) {
       setHasLiveRoom(false);
+      setLiveRoomChecked(true);
       return false;
     }
     try {
@@ -1678,6 +1845,8 @@ export default function HomePage() {
     } catch {
       setHasLiveRoom(true);
       return true;
+    } finally {
+      setLiveRoomChecked(true);
     }
   }, [currentAccount?.mid, currentAccount?.noRevenue]);
 
@@ -1686,19 +1855,16 @@ export default function HomePage() {
     checkHasLiveRoom();
   }, [checkHasLiveRoom]);
 
-  // 账号无直播间时，若当前正停留在"主播"页面则退回粉丝页（隐藏该选项卡）
-  useEffect(() => {
-    if (!hasLiveRoom && activeModule === "anchor") {
-      pushView("revenue", "home");
-    }
-  }, [hasLiveRoom, activeModule, pushView]);
-
   /** 刷新收尾：先让收益模块重新拉取，再统一上传本账号所有变化的数据（哈希判断，未变则跳过）。
    *  无直播间（非主播）的跳过由收益拉取内部（客户端 skipPull / 服务器 checkAnchorHasRoom）决定，
-   *  此处必须无条件调用，避免因 hasLiveRoom state 尚未就绪（stale closure）而永远跳过导致"加载中"。 */
+   *  此处必须无条件调用，避免因 hasLiveRoom state 尚未就绪（stale closure）而永远跳过导致"加载中"。
+   *  WEB 端例外：完全不探测主播收益（即使该账号有收益也不获取）——"主播"页只显示下载引导提示。
+   *  不发起探测就不会在客户端/服务器写入 noRevenue 标记，账号在客户端的后续收益探测不受影响。
+   *  平台用运行时同步检测（非 isWeb state）：finishRefresh 可能被 useCallback([]) 闭包首版捕获（stale）。 */
   const finishRefresh = async () => {
     try {
-      if (anchorRefreshRef.current) await anchorRefreshRef.current();
+      const isWebRuntime = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
+      if (!isWebRuntime && anchorRefreshRef.current) await anchorRefreshRef.current();
     } catch {
       // 收益拉取失败不阻塞其余流程
     }
@@ -1724,7 +1890,12 @@ export default function HomePage() {
       const accountsData = await accountsRes.json();
       const snapshotData = await snapshotRes.json();
 
+      // 服务器不可达：保留当前（可能来自浏览器缓存的）展示，不做任何覆盖，也不清 sid 跳登录
+      if (accountsData?.code === -1 || snapshotData?.code === -1) return;
+
       setAccounts(accountsData.data?.accounts || []);
+      // 已成功与服务器通信：清除"浏览器缓存未同步"标记
+      setOfflineCacheAt(0);
 
       const statusRes = await dataFetch("/api/auth/status", { cache: "no-store" });
       const statusData = await statusRes.json();
@@ -1734,7 +1905,7 @@ export default function HomePage() {
         localStorage.setItem("bili_live_sid", statusData.data.sid);
         // 当前账号优先用 status 返回的完整信息（即使该账号是服务器上的其他用户，也能正确显示昵称/头像）
         const matched = accountsData.data?.accounts?.find((a: Account) => a.sid === statusData.data?.sid) || null;
-        setCurrentAccount({
+        const acct: Account = {
           sid: statusData.data.sid,
           uname: statusData.data.uname,
           mid: statusData.data.mid,
@@ -1742,7 +1913,12 @@ export default function HomePage() {
           source: matched?.source || "qr",
           updatedAt: matched?.updatedAt || "",
           noRevenue: matched?.noRevenue,
-        });
+        };
+        setCurrentAccount(acct);
+        currentMidRef.current = acct.mid;
+        // 写穿浏览器缓存：账号列表 + 当前账号（WEB 端生效，客户端内部跳过）
+        cacheSet(cacheKeys.accounts, accountsData.data?.accounts || []);
+        cacheSet(cacheKeys.lastAccount, { account: acct, isLocalAccount: !!matched });
       } else if (statusData.data?.expired) {
         setApiLoggedIn(false);
         // B站凭证失效且刷新失败 → 需要重新登录
@@ -1762,6 +1938,9 @@ export default function HomePage() {
       if (snapshotData.data) {
         setSnapshot(snapshotData.data);
         setAuthError(null);
+        // 写穿浏览器缓存（按当前账号 mid 隔离，切换账号不串号）
+        const mid = statusData.data?.mid ?? currentMidRef.current;
+        if (mid) cacheSet(cacheKeys.snapshot(mid), snapshotData.data);
         // 注意：这里不再提前 setIsFirstTime(false)。
         // 首次/重建初始化时，全屏遮罩需要延续到主播收益拉取完成，
         // 因此统一在 fetchData 的 finally 中关闭（见下方 finally）。
@@ -1790,6 +1969,31 @@ export default function HomePage() {
     }
   }
 
+  /** 用最近一次“无筛选”响应里的原始记录在本地重算盲盒统计（切换筛选 0 请求、无卡顿）。
+   *  缺少原始记录（老缓存/结果为空对象）时返回 null，由调用方回退到服务器。 */
+  function computeBlindBoxesLocally(
+    base: BlindBoxStats,
+    filters: Record<number, { ruid: string; dateRange: string }>,
+  ): BlindBoxStats | null {
+    if (!Array.isArray(base)) return null;
+    const next: BlindBoxStats = [];
+    for (const item of base) {
+      if (!item.records || !item.giftMeta) return null;
+      const f = filters[item.blindBoxId];
+      next.push(computeBlindBoxFromRecords({
+        blindBoxId: item.blindBoxId,
+        records: item.records,
+        anchorNames: item.anchorNames,
+        giftMeta: item.giftMeta,
+        blindPrice: item.blindPrice,
+        blindBoxName: item.blindBoxName,
+        blindBoxImg: item.blindBoxImg,
+        filter: { ruid: f?.ruid ? Number(f.ruid) : null, dateRange: f?.dateRange ?? "all" },
+      }));
+    }
+    return next;
+  }
+
   async function fetchStats(filters?: Record<number, { ruid: string; dateRange: string }>) {
     try {
       // 构建盲盒统计请求URL（按盲盒ID分别传递筛选参数：ruid_32251=xxx, dateRange_32251=thisMonth）
@@ -1804,9 +2008,15 @@ export default function HomePage() {
         if (qs) blindBoxUrl += `?${qs}`;
       }
 
-      // 筛选（主播/日期）变化时只重新拉取盲盒统计，不触发合成/其他统计的重新拉取，
-      // 避免不必要的自动更新与网络请求。
+      // 筛选（主播/时间段）变化：仅本地重算，不请求服务器、不触发 B站 拉取
       if (filters) {
+        const base = blindBoxRawRef.current;
+        const local = base ? computeBlindBoxesLocally(base, filters) : null;
+        if (local) {
+          setBlindBoxStats(local);
+          return;
+        }
+        // 兜底：本地尚无原始记录（数据未就绪）时才回退到服务器
         const blindBoxRes = await dataFetch(blindBoxUrl, { cache: "no-store" });
         const blindBoxData = await blindBoxRes.json();
         if (blindBoxData.message === "needs-relogin") {
@@ -1830,8 +2040,16 @@ export default function HomePage() {
         await handleAuthExpired();
         return;
       }
-      if (blindBoxData.code === 0) setBlindBoxStats(blindBoxData.data);
-      if (synthesisData.code === 0) setSynthesisStats(synthesisData.data);
+      if (blindBoxData.code === 0) {
+        setBlindBoxStats(blindBoxData.data);
+        // 保存未筛选的原始响应：之后切筛选全部本地重算
+        blindBoxRawRef.current = Array.isArray(blindBoxData.data) ? blindBoxData.data : null;
+        if (currentMidRef.current) cacheSet(cacheKeys.blindBox(currentMidRef.current), blindBoxData.data);
+      }
+      if (synthesisData.code === 0) {
+        setSynthesisStats(synthesisData.data);
+        if (currentMidRef.current) cacheSet(cacheKeys.synthesis(currentMidRef.current), synthesisData.data);
+      }
     } catch {
       // stats may not be available yet
     }
@@ -1865,6 +2083,7 @@ export default function HomePage() {
       }
       if (data.code === 0 && data.data) {
         setCertifications(data.data.certifications);
+        if (currentMidRef.current) cacheSet(cacheKeys.certification(currentMidRef.current), data.data.certifications);
       }
     } catch {
       // certifications may not be available
@@ -1881,6 +2100,7 @@ export default function HomePage() {
       }
       if (data.code === 0 && data.data) {
         setOtherStats(data.data);
+        if (currentMidRef.current) cacheSet(cacheKeys.other(currentMidRef.current), data.data);
       }
     } catch {
       // other stats may not be available
@@ -2309,7 +2529,21 @@ export default function HomePage() {
       if (data.code === 0) {
         // 同步 localStorage，确保 admin 页依据最新 sid 标记当前激活用户
         localStorage.setItem("bili_live_sid", sid);
-        // 本地优先：切换到本机其他账号时先展示其本地缓存，再后台静默同步（不弹阻塞遮罩）
+        // 切换账号：先清空上一账号的内存数据，避免目标账号数据到达前界面串号
+        setSnapshot(null);
+        setBlindBoxStats(null);
+        blindBoxRawRef.current = null;
+        setSynthesisStats(null);
+        setOtherStats(null);
+        setCertifications([]);
+        setOfflineCacheAt(0);
+        // 本地优先：先展示目标账号的浏览器缓存（WEB 端），再后台静默同步
+        const target = accounts.find((a) => a.sid === sid) || null;
+        if (target?.mid) {
+          currentMidRef.current = target.mid;
+          setCurrentAccount(target);
+          await loadMidCache(target.mid);
+        }
         setSyncing(true);
         try {
           await loadCachedQuick();
@@ -2335,6 +2569,7 @@ export default function HomePage() {
     setApiLoggedIn(false);
     setSnapshot(null);
     setBlindBoxStats(null);
+    blindBoxRawRef.current = null;
     setSynthesisStats(null);
     window.location.href = "/login";
   }
@@ -2349,6 +2584,7 @@ export default function HomePage() {
     setApiLoggedIn(false);
     setSnapshot(null);
     setBlindBoxStats(null);
+    blindBoxRawRef.current = null;
     setSynthesisStats(null);
     setAuthError("B站登录已失效，请重新登录");
     window.location.href = "/login";
@@ -2645,8 +2881,6 @@ export default function HomePage() {
   function handleDockChange(tab: DockTabKey) {
     if (tab === "fans") { pushView("revenue", "home"); }
     else if (tab === "anchor") {
-      // 无直播间时禁用"主播"选项卡
-      if (!hasLiveRoom) return;
       pushView("anchor", "home");
     }
     else if (tab === "help") { pushView("screenshot", "home"); }
@@ -2802,6 +3036,19 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* 浏览器缓存提示（WEB 端）：当前展示的是上次缓存的浏览器数据，尚未与服务器同步 */}
+      {isOnline && offlineCacheAt > 0 && (
+        <div className="content-wrapper px-2 pt-2">
+          <div className="flex items-center gap-2 rounded-lg bg-sky-50 border border-sky-200 px-3 py-2">
+            <span className="text-base">💾</span>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-sky-900">浏览器缓存数据</p>
+              <p className="text-xs text-sky-900/60">数据更新于 {fmtAgo(offlineCacheAt)}，正在后台获取最新数据…</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Auth error banner */}
       {authError && (
         <div className="content-wrapper px-2 py-2 bg-amber-50 rounded-lg">
@@ -2817,10 +3064,8 @@ export default function HomePage() {
             <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
             <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
             <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会很快。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">播的久数据多的主播，要先检查数据是否完整。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">看数据日期范围，看收入是否符合自己的估计。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">如果数据不全，先尝试点击绿色圆圈按钮刷新。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">如果仍然不全，就点击帮助里的重建数据按钮。</p>
+            <p className="text-sm leading-6 text-black/55 mt-1">建议安装APP，不用频繁登录，体验更好。</p>
+
             {fetchProgress && (
               <div className="mt-5">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
@@ -2830,6 +3075,16 @@ export default function HomePage() {
                   ></div>
                 </div>
                 <p className="mt-2 text-xs text-black/55">{fetchProgress.text}</p>
+                {/* 获取主播收益阶段：用显式标记判断（不再对文案做正则匹配——文案一改就失效）。
+                    全程显示，从"正在获取主播收益"起始提示到月级/页级进度、412 退避提示都覆盖。 */}
+                {fetchProgress.anchorGift && (
+                  <div className="mt-2 text-center">
+                    <p className="text-sm leading-6 text-black/55">播的久数据多的主播，要先检查数据是否完整。</p>
+                    <p className="text-sm leading-6 text-black/55">看数据日期范围，看收入是否符合自己的估计。</p>
+                    <p className="text-sm leading-6 text-black/55">如果数据不全，先尝试点击绿色圆圈按钮刷新。</p>
+                    <p className="text-sm leading-6 text-black/55">如果仍然不全，就点击帮助里的重建数据按钮。</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2914,7 +3169,55 @@ export default function HomePage() {
       </div>
 
       {/* 主播数据 - 保持挂载避免切换闪烁 */}
+      {/* WEB 端 或 客户端检测到无直播间：显示客户端下载引导提示，主播数据模块保持挂载仅隐藏 */}
       <div style={{ display: activeModule === "anchor" ? "block" : "none" }}>
+        {showAnchorPromo && (
+          <div className="content-wrapper px-2 min-w-0 py-3">
+            <div className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-black/10 bg-white/85 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+              {/* 头部：图标 + 标题 + 引导语 */}
+              <div className="bg-gradient-to-b from-[#f5f5f5] to-white px-6 pb-6 pt-8 text-center sm:px-8">
+                <img
+                  src="/orig_icon.png"
+                  alt="B瓜"
+                  width={64}
+                  height={64}
+                  className="mx-auto h-16 w-16 rounded-[18px]"
+                />
+                <h2 className="mt-4 text-xl font-semibold text-[#1f1c17]">主播功能</h2>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-black/60">
+                  这些功能需要在客户端中使用，下载安装软件后即可解锁：
+                </p>
+              </div>
+              {/* 功能亮点：卡片网格 */}
+              <div className="grid grid-cols-1 gap-3 px-4 pb-2 pt-1 sm:grid-cols-2 sm:px-6">
+                {ANCHOR_PROMO_FEATURES.map((f) => (
+                  <div key={f.title} className="rounded-xl border border-[#ececec] bg-white p-4 shadow-sm">
+                    <h4 className="text-sm font-semibold text-[#1f1c17]">{f.title}</h4>
+                    <p className="mt-1.5 text-xs leading-5 text-[#6b6b6b]">{f.desc}</p>
+                  </div>
+                ))}
+              </div>
+              {/* 行动按钮：下载客户端 + 网站首页 */}
+              <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-6">
+                <a
+                  href="/landing#download"
+                  className="inline-flex w-full max-w-xs items-center justify-center rounded-full bg-[#1f1c17] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  下载客户端
+                </a>
+                <a href="/landing" className="text-xs text-black/45 underline-offset-2 transition hover:text-black/75 hover:underline">
+                  访问网站首页
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* WEB 端完全不挂载收益模块：不注册刷新引用、不发 fast 缓存读取、不探测收益——
+            "主播"页只显示上方下载引导提示；也因此不会写入/覆盖任何 noRevenue 标记，
+            该账号在客户端上的收益探测与标记完全不受影响。
+            客户端（isWeb === false）：保持挂载（display:none 隐藏）避免切换闪烁。 */}
+        {isWeb === false && (
+        <div style={{ display: showAnchorPromo ? "none" : "block" }}>
         <AnchorDataModule
           key={currentAccount?.sid ?? "no-account"}
           anchorName={currentAccount?.uname ?? ""}
@@ -2934,16 +3237,15 @@ export default function HomePage() {
           showToast={showToast}
           onFetchProgress={(p) => setFetchProgress(p)}
           onNoRevenue={() => {
-            // 登录探测判定该账号无收益：置位标记并立即隐藏"主播"选项卡。
-            // 仅在首次探测判定时轻提示，冷启动/刷新（已标记）不再重复打扰。
-            const wasMarked = !!currentAccount?.noRevenue;
+            // 登录探测判定该账号无收益：置位标记，"主播"页面改为显示客户端下载引导提示。
+            // 不再额外轻提示：切换到下载引导页本身已经足够明显，再弹提示纯属打扰。
             setCurrentAccount((prev) => (prev ? { ...prev, noRevenue: true } : prev));
             setHasLiveRoom(false);
-            if (!wasMarked) {
-              showToast("该账号暂无直播收益记录，已隐藏主播相关功能");
-            }
+            setLiveRoomChecked(true);
           }}
         />
+        </div>
+        )}
       </div>
 
       {/* B站小工具 - 保持挂载，仅切换 display */}
@@ -2964,7 +3266,9 @@ export default function HomePage() {
                 )}
                 {/* 更新状态卡片：冷启动自动检查+自动下载，无需手动点击检查。
                     按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败。
-                    连续点击卡片 10 次触发显示"管理后台"入口（原版本号卡片连击功能迁移至此） */}
+                    连续点击卡片 10 次触发显示"管理后台"入口（原版本号卡片连击功能迁移至此）。
+                    WEB 端自动更新、无需手动更新版本，直接不显示该卡片 */}
+                {!isWeb && (
                 <div
                   onClick={() => {
                     const next = versionClickCount + 1;
@@ -3059,10 +3363,12 @@ export default function HomePage() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* 重建数据库卡片：只在有登录账号时显示；服务器账号无登录凭证不可用 */}
                 {isLoggedIn && (
-                  <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur flex items-center gap-4 ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
+                  <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
+                    <div className="flex items-center gap-4">
                     <button
                       onClick={() => {
                         if (serverAccount) {
@@ -3092,6 +3398,76 @@ export default function HomePage() {
                     {serverAccount && (
                       <svg className="w-4 h-4 text-black/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
                     )}
+                    </div>
+                    {/* 抓取速度：控制从 B站 拉取数据的请求速率（所有更新路径统一生效） */}
+                    {!serverAccount && (
+                      <div className="mt-3 border-t border-indigo-200/70 pt-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="shrink-0 text-xs font-semibold text-indigo-900">抓取速度</span>
+                          <div className="flex items-center gap-1 rounded-lg bg-white/80 p-1">
+                            {FETCH_RATE_PRESETS.map((p) => {
+                              const active = !rateCustom && fetchRate === p.rate;
+                              return (
+                                <button
+                                  key={p.rate}
+                                  title={`${p.rate} 条/秒 · ${p.hint}`}
+                                  onClick={() => {
+                                    setRateCustom(false);
+                                    setCustomRateText("");
+                                    applyFetchRate(p.rate);
+                                  }}
+                                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${active ? "bg-[#6366f1] text-white shadow-sm" : "text-indigo-900/70 hover:bg-indigo-100"}`}
+                                >
+                                  {p.label}
+                                </button>
+                              );
+                            })}
+                            <button
+                              title={`自定义 ${MIN_FETCH_RATE}~${MAX_FETCH_RATE} 条/秒`}
+                              onClick={() => {
+                                setRateCustom(true);
+                                setCustomRateText(String(fetchRate));
+                              }}
+                              className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${rateCustom ? "bg-[#6366f1] text-white shadow-sm" : "text-indigo-900/70 hover:bg-indigo-100"}`}
+                            >
+                              自定义
+                            </button>
+                            {rateCustom && (
+                              <>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={customRateText}
+                                  onChange={(e) => {
+                                    const t = e.target.value.replace(/[^0-9]/g, "");
+                                    setCustomRateText(t);
+                                    const v = Number(t);
+                                    if (Number.isFinite(v) && t !== "" && v >= MIN_FETCH_RATE && v <= MAX_FETCH_RATE) applyFetchRate(v);
+                                  }}
+                                  onBlur={() => {
+                                    const v = Number(customRateText);
+                                    const clamped = customRateText !== "" && Number.isFinite(v)
+                                      ? Math.min(MAX_FETCH_RATE, Math.max(MIN_FETCH_RATE, Math.round(v)))
+                                      : fetchRate;
+                                    setCustomRateText(String(clamped));
+                                    applyFetchRate(clamped);
+                                  }}
+                                  className="w-12 rounded-md border border-indigo-200 bg-white px-2 py-1 text-center text-xs text-indigo-900 outline-none focus:border-[#6366f1]"
+                                />
+                                <span className="pr-1 text-[11px] text-indigo-800/70">条/秒</span>
+                              </>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-indigo-800/70">
+                            当前 {fetchRate} 条/秒
+                            {fetchRate <= 2 ? "（最稳）" : fetchRate === 3 ? "（默认）" : fetchRate === 4 ? "（偏快，可能被拦截）" : "（很快，容易被拦截）"}
+                          </span>
+                        </div>
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-indigo-800/60">
+                          只影响从 B站 拉取数据的节奏，所有更新都会按这个速度走（首次全量获取、重建数据时差别最明显）。B站 对单机请求速率有限制，调太快会被拦截并需要等待恢复。
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
                 {[
@@ -3102,12 +3478,18 @@ export default function HomePage() {
                   { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
                   { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false },
                 ].map((tool) => {
+                  // WEB 端仅 APP 可用的工具：置灰（点赞/天选/粉丝清理/粉丝牌清理/PK医药费）
+                  const isWebOnlyApp = isWeb && WEB_APP_ONLY_TOOLS.has(tool.title);
                   // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
-                  const disabled = tool.needsLogin && (serverAccount || !isOnline);
+                  const disabled = isWebOnlyApp || (tool.needsLogin && (serverAccount || !isOnline));
                   return (
                   <button
                     key={tool.title}
                     onClick={() => {
+                      if (isWebOnlyApp) {
+                        showOfflineToast("只能在APP中使用");
+                        return;
+                      }
                       if (disabled) {
                         if (serverAccount) showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
                         else showOfflineToast("当前处于离线模式，无法使用此项功能");
@@ -3748,7 +4130,6 @@ export default function HomePage() {
             {/* UID 输入 */}
             <div className="mb-4">
               <input
-                type="number"
                 value={simUidInput}
                 onChange={(e) => setSimUidInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -3830,8 +4211,8 @@ export default function HomePage() {
       <BottomDock
         tabs={[
           { key: "fans", label: "粉丝" },
-          // 无直播间（非主播）时不显示"主播"选项卡及托盘按钮
-          ...(hasLiveRoom ? [{ key: "anchor" as const, label: "主播" }] : []),
+          // 无论是否主播账号都显示"主播"选项卡：WEB 端/无直播间账号点进去看下载引导提示
+          { key: "anchor" as const, label: "主播" },
           { key: "pending", label: "模拟" },
           { key: "help", label: "帮助" },
         ]}
