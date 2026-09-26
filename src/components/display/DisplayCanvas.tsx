@@ -1,19 +1,19 @@
 "use client";
 
 /**
- * 展示画布（横屏 1920x1080 / 竖屏 1080x1920）—— 浏览器源客户端 + 三个信息模块渲染。
+ * 展示画布（横屏 1920x1080 / 竖屏 1080x1920）—— 浏览器源客户端 + 四个信息模块渲染。
  *
  * 由直播姬「浏览器源」或 APP 内「编辑」模态框 iframe 加载（同源 http://127.0.0.1:<port>/display）。
  * 所有数据走 WebSocket：onopen 发 {type:"ready",mode}，onmessage 分发：
  *  - init(orientation/layouts/gifts/animeSample) → 常驻数据
- *  - event(payload) → entry / anime / gift 投放事件
+ *  - event(payload) → entry / anime / gift / giftEffect 投放事件
  *  - layout / orientation → 布局与朝向的受控同步
  *
  * 编辑模式（?mode=edit / 模态框外层包了一层）：
- *  - 三个元素常驻并循环播放（礼物空则占位、入场提示 TestEntryLoop、入场动画 animeSample 或占位）
+ *  - 四个元素常驻并循环播放（礼物空则占位、入场提示 TestEntryLoop、入场动画 animeSample 或占位、礼物特效占位）
  *  - MovableBox 受控可拖动/缩放，onCommit → WS {type:"saveLayout"} → 主进程持久化 + 广播
  *
- * 层级：进场动画（anime）在最底层，礼物展示与进场提示在同一层（在其上）。
+ * 层级：进场动画（anime）在最底层(1)，礼物特效在其上(2)，礼物展示与进场提示在最上(3)。
  *
  * 背景完全透明：直播姬「浏览器源」可一键抠背景叠加到直播画面（本容器无任何背景色）。
  */
@@ -31,10 +31,12 @@ import {
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import GiftFlower from "./GiftFlower";
+import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
 import MovableBox from "./MovableBox";
 
 type AnimeEvent = Extract<DisplayEvent, { type: "anime" }>;
+type GiftEffectEvent = Extract<DisplayEvent, { type: "giftEffect" }>;
 
 /** 编辑模式的入场用户（循环播放示例） */
 const TEST_ENTRY_USER: DisplayEntryPayload = {
@@ -133,6 +135,7 @@ export default function DisplayCanvas() {
     entry: true,
     gift: true,
     anime: true,
+    giftEffect: true,
   });
   // flags 的最新 ref（供 applyEvent 读取，避免闭包过期）
   const flagsRef = useRef(flags);
@@ -263,6 +266,32 @@ export default function DisplayCanvas() {
     }
   }, []);
 
+  // 礼物特效队列（1 播放 + 最多 3 等待，同类礼物去重）
+  const [giftEffect, setGiftEffect] = useState<GiftEffectEvent | null>(null);
+  const giftEffectRef = useRef<GiftEffectEvent | null>(null);
+  useEffect(() => {
+    giftEffectRef.current = giftEffect;
+  }, [giftEffect]);
+  const giftEffectQueueRef = useRef<GiftEffectEvent[]>([]);
+  // 等待队列长度（仅用于触发重渲染，把"后面是否有排队"实时传给 GiftEffect 决定是否限时播放）
+  const [giftEffectWaiting, setGiftEffectWaiting] = useState(0);
+  // 特效输出尺寸（natural 像素）：优先取配套 JSON 的输出尺寸；无 JSON 时由 GiftEffect 实测上报
+  const [giftEffectMeasured, setGiftEffectMeasured] = useState<{ w: number; h: number } | null>(null);
+  const onGiftEffectMeasure = useCallback((w: number, h: number) => {
+    setGiftEffectMeasured((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+  }, []);
+  const onGiftEffectEnd = useCallback(() => {
+    const q = giftEffectQueueRef.current;
+    if (q.length) {
+      const [next, ...rest] = q;
+      giftEffectQueueRef.current = rest;
+      setGiftEffectWaiting(rest.length);
+      setGiftEffect(next);
+    } else {
+      setGiftEffect(null);
+    }
+  }, []);
+
   const onEntryDone = useCallback(() => {
     showingRef.current = false;
     setCurrentEntry(null);
@@ -308,6 +337,19 @@ export default function DisplayCanvas() {
       // 礼物展示模块关闭：忽略事件
       if (!flagsRef.current.gift) return;
       setGifts(p.gifts);
+    } else if (p.type === "giftEffect") {
+      // 礼物特效模块关闭：忽略事件
+      if (!flagsRef.current.giftEffect) return;
+      if (!giftEffectRef.current) {
+        setGiftEffect(p);
+      } else {
+        // 正在播放中：同类礼物去重；队列最多排 3 个
+        if (giftEffectRef.current.giftId === p.giftId) return;
+        const q = giftEffectQueueRef.current;
+        if (q.length >= 3 || q.some((x) => x.giftId === p.giftId)) return;
+        giftEffectQueueRef.current = [...q, p];
+        setGiftEffectWaiting(giftEffectQueueRef.current.length);
+      }
     }
   }, []);
 
@@ -331,6 +373,12 @@ export default function DisplayCanvas() {
     }
     if (!flags.gift) {
       setGifts([]);
+    }
+    if (!flags.giftEffect) {
+      giftEffectQueueRef.current = [];
+      setGiftEffectWaiting(0);
+      setGiftEffect(null);
+      setGiftEffectMeasured(null);
     }
   }, [flags]);
 
@@ -430,6 +478,61 @@ export default function DisplayCanvas() {
     return entryBase;
   }, [entryBase, entryDefault, entryMeasuredW, orientation]);
 
+  // —— 礼物特效默认摆放 ——
+  // 目标宽度：横屏占画布宽 1/2，竖屏占满宽；默认底边与画布底边对齐、水平居中。
+  // 高度按特效自身宽高比等比换算（不同礼物特效尺寸不同，故默认位置动态计算）。
+  const giftEffectTargetW = orientation === "portrait" ? canvas.w : Math.round(canvas.w / 2);
+  // 特效输出尺寸：优先取配套 JSON 的输出尺寸，否则用 GiftEffect 实测上报，都没有则用正方形占位
+  const giftEffectNatural = useMemo(() => {
+    const info = giftEffect?.config?.info;
+    if (info) {
+      const s = info.scale || 1;
+      return { w: Math.max(1, Math.round(info.w * s)), h: Math.max(1, Math.round(info.h * s)) };
+    }
+    return giftEffectMeasured;
+  }, [giftEffect, giftEffectMeasured]);
+  const giftEffectDisp = (() => {
+    // 编辑模式：固定正方形占位（不随实时特效尺寸变化），便于稳定摆放
+    if (isEdit) return { w: giftEffectTargetW, h: giftEffectTargetW };
+    if (!giftEffectNatural || giftEffectNatural.w <= 0) {
+      return { w: giftEffectTargetW, h: giftEffectTargetW }; // 未测量：正方形兜底
+    }
+    const s = giftEffectTargetW / giftEffectNatural.w;
+    return { w: giftEffectTargetW, h: Math.max(1, Math.round(giftEffectNatural.h * s)) };
+  })();
+  // 自定义坐标采用"底部锚定"：保存的 y = 元素底边距画布底边的高度（默认哨兵 {0,0,1}=自动）。
+  // 因为特效实际宽高比与编辑占位（正方形）不同，若按顶边锚定，同一份 rect 在实际播放时元素
+  // 高度变化会让底边漂移，出现"实际播放位置与面板预览不一致"。底部锚定后，无论特效多高，
+  // 底边始终停在设定处（默认即底边与画布底边对齐）。
+  const giftEffectRect: MovableRect = (() => {
+    const base = layouts.giftEffect[orientation];
+    if (base.x === 0 && base.y === 0 && base.scale === 1) {
+      return {
+        x: Math.round((canvas.w - giftEffectDisp.w) / 2),
+        y: Math.round(canvas.h - giftEffectDisp.h),
+        scale: 1,
+      };
+    }
+    return {
+      x: base.x,
+      y: Math.round(canvas.h - base.y - giftEffectDisp.h * base.scale),
+      scale: base.scale,
+    };
+  })();
+  // 拖动/缩放提交：顶边坐标 → 底边间距（与上面的底部锚定互逆）
+  const commitGiftEffectLayout = useCallback(
+    (rect: MovableRect) => {
+      const gap = Math.round(canvas.h - (rect.y + giftEffectDisp.h * rect.scale));
+      send({
+        type: "saveLayout",
+        id: "giftEffect",
+        orientation,
+        rect: { x: rect.x, y: gap, scale: rect.scale },
+      });
+    },
+    [send, orientation, canvas.h, giftEffectDisp.h],
+  );
+
   // 服务端不可达（APP/本地服务已退出）：浏览器源清空不渲染任何内容，
   // 避免关闭 APP 后直播姬仍残留上一帧画面；服务恢复重连成功后自动恢复显示。
   if (serverDown) {
@@ -485,6 +588,39 @@ export default function DisplayCanvas() {
                     </span>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        </MovableBox>
+      )}
+
+      {/* 礼物特效：收到带特效的礼物时在画布播放（alpha/RGB 合成）；编辑模式常驻占位可拖动/缩放。
+          层级 2：在入场动画(1)之上、礼物展示/入场提示(3)之下。 */}
+      {flags.giftEffect && (isEdit || giftEffect) && (
+        <MovableBox
+          id="giftEffect"
+          rect={giftEffectRect}
+          onCommit={commitGiftEffectLayout}
+          editable={isEdit}
+          zIndex={2}
+        >
+          <div className="relative" style={{ width: giftEffectDisp.w, height: giftEffectDisp.h }}>
+            {!isEdit && giftEffect && (
+              <GiftEffect
+                src={giftEffect.videoSrc}
+                config={giftEffect.config}
+                onEnd={onGiftEffectEnd}
+                onMeasure={onGiftEffectMeasure}
+                queued={giftEffectWaiting > 0}
+              />
+            )}
+            {isEdit && (
+              <div className="w-full h-full flex items-center justify-center px-6 text-center">
+                <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-[40px] font-semibold leading-relaxed shadow-sm">
+                  礼物特效将在此播放
+                  <br />
+                  收到带特效的礼物时显示
+                </span>
               </div>
             )}
           </div>

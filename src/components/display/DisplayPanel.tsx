@@ -3,9 +3,11 @@
 /**
  * 展示模块 —— 主播页"展示"tab 配置面板。
  *
- * 总开关：创建展示窗口 + 启动弹幕监听；关闭则销毁窗口 + 停止监听。
- * 三个信息模块各有开关：①入场提示（粒子 pill）②礼物展示（今日礼物轮换）③入场动画（高级用户自定义动画）。
- * 附加"弹幕互动"模块：向直播间按间隔循环发送自定义弹幕。
+ * 无独立总开关：是否运行（本地浏览器源服务 + 弹幕监听）由子模块派生——任一画布显示模块
+ * （收到的礼物展示 / 礼物特效 / 入场提示 / 入场动画）或盲盒盈亏·弹幕查询开启即运行；
+ * 全部关闭即停止监听。画布是否渲染内容（派生 master）只看 4 个画布显示模块。
+ * 各信息模块各有开关：①入场提示（粒子 pill）②收到的礼物展示（今日礼物轮换）③入场动画（高级用户自定义动画）。
+ * 附加"弹幕互动"模块：向直播间按间隔循环发送自定义弹幕（不参与派生，自己独立工作）。
  * 所有配置持久化到 <dataDir>/uid_<mid>/display-config.json（按账号分开）。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -17,6 +19,8 @@ import {
   type ScreenOrientation,
 } from "@/lib/display/types";
 import {
+  displayMaster,
+  displayNeedsService,
   loadDisplayConfig,
   saveDisplayConfig,
   resolveAnimeVideo,
@@ -389,18 +393,18 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     };
   }, []);
 
-  // 打开软件时自动检测并显示连接状态：若打开软件时总开关已处于开启状态（auto-start 已在启动时
-  // 自动打开展示窗口并恢复弹幕监听），就解析直播间信息（主播昵称 + 开播状态）展示到状态提示中，
-  // 无需再次点击开关；顺带兜底恢复监听与推送礼物（start 对同一房间幂等，不会重复连接）。
-  // 仅记录首次加载时的开关状态：之后手动开关由 handleMaster 处理，不会重复自动检测。
-  const initialMasterRef = useRef<boolean | null>(null);
+  // 打开软件时自动检测并显示连接状态：若打开软件时已有模块需要弹幕监听（auto-start 已在启动时
+  // 自动启动浏览器源服务并恢复弹幕监听），就解析直播间信息（主播昵称 + 开播状态）展示到状态提示中，
+  // 无需再次手动开启；顺带兜底恢复监听与推送礼物（start 对同一房间幂等，不会重复连接）。
+  // 仅记录首次加载时的派生状态：之后手动开关由 toggleModule / toggleBlindBoxQuery 处理，不会重复自动检测。
+  const initialNeedRef = useRef<boolean | null>(null);
   const autoDetectedRef = useRef(false);
   useEffect(() => {
     if (!loaded) return;
-    if (initialMasterRef.current === null) {
-      initialMasterRef.current = config.master;
+    if (initialNeedRef.current === null) {
+      initialNeedRef.current = displayNeedsService(config);
     }
-    if (!initialMasterRef.current) return; // 打开软件时开关未开启，无需自动检测
+    if (!initialNeedRef.current) return; // 打开软件时监听未运行，无需自动检测
     if (!isLocalAccount || !isNative || !mid) return;
     if (autoDetectedRef.current) return;
     autoDetectedRef.current = true;
@@ -415,7 +419,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         console.warn("[展示]启动自动检测直播间失败", e?.message || e);
       }
     })();
-  }, [loaded, config.master, isLocalAccount, isNative, mid]);
+  }, [loaded, config, isLocalAccount, isNative, mid]);
 
   // 浏览器源架构下不存在"画布窗口"：画布/编辑 iframe 的朝向、布局、调试日志都经本地
   // HTTP 服务器的 WS 处理（danmaku.ts 内 handleServerMessage / setOrientation），
@@ -430,7 +434,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   }, []);
 
   const update = useCallback(
-    async (patch: Partial<DisplayConfig>) => {
+    async (patch: Partial<DisplayConfig>): Promise<DisplayConfig> => {
       // 以主进程侧最新配置（含浏览器源/编辑 iframe 经 saveLayout 刚保存的布局）为基准合并，
       // 否则用本页缓存的旧 config 整体覆盖磁盘会把 iframe 里刚拖动的元素位置一并冲掉
       // （表现为切换横/竖屏后布局恢复默认值）。
@@ -438,24 +442,83 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       const next = { ...latest, ...patch };
       setConfig(next);
       await saveDisplayConfig(mid, next);
+      return next;
     },
     [mid],
   );
 
-  // 模块开关变化：持久化后广播 flags，让浏览器源即时显隐对应元素（无需重连）；
-  // 重新开启礼物展示时主动重推今日礼物清单，使画布立即恢复显示
+  // 布局编辑模态框开关（声明在监听服务同步之前：停止监听时需一并关闭）
+  const [editOpen, setEditOpen] = useState(false);
+
+  /**
+   * 按派生状态启动/停止弹幕监听服务：只要还有子模块需要监听（4 个画布显示模块任一开启，
+   * 或盲盒盈亏·弹幕查询开启）就确保"本地浏览器源服务 + 直播间弹幕监听"在运行；全部关闭则停止。
+   * 幂等：已在运行时不重复解析房间号 / 启服务。停止时不断开浏览器源服务本身——直播姬里已添加
+   * 的源保持加载，仅画布空白，重新开启立即恢复，无需重新添加源。
+   */
+  const syncService = useCallback(
+    async (next: DisplayConfig) => {
+      if (!displayNeedsService(next)) {
+        displayDanmaku.stop();
+        setEditOpen(false);
+        return;
+      }
+      if (enabling) return;
+      if (displayDanmaku.getServerPort() && displayDanmaku.isActive()) return; // 已在运行
+      if (!isLocalAccount) {
+        toast("该功能需要登录凭证，服务器账号无法使用");
+        return;
+      }
+      if (!isNative || !mid) return;
+      setEnabling(true);
+      try {
+        // 解析直播间信息：房间号 + 主播昵称 + 开播状态（失败直接报错，绝不回退用 uid 当房间号）
+        const info = await withTimeout(resolveRoomInfo(mid), 6000, "解析房间号");
+        setAnchorName(info.uname);
+        setLiveStatus(info.liveStatus);
+        // 启动本地浏览器源 HTTP+WS 服务（Rust 端绑定 127.0.0.1:25100 起端口）。
+        // 直播软件（如直播姬）添加浏览器源 http://127.0.0.1:<port>/display 透明叠加。
+        await withTimeout(displayDanmaku.startServer(), 10000, "启动浏览器源服务");
+        await displayDanmaku.start(info.roomId, mid);
+        // 立即推送一次今日礼物清单：已有礼物记录时无需等下一次送礼即可显示；
+        // 浏览器源就绪后还会因 ready 消息再做一次 broadcastInit 兜底推送。
+        void displayDanmaku.pushGiftUpdate(mid);
+        // 启动期间用户可能已把所有开关关掉 → 补一次判定，避免监听"偷偷"继续运行
+        if (!displayNeedsService(await loadDisplayConfig(mid))) displayDanmaku.stop();
+      } catch (e: any) {
+        console.error("[展示]启动弹幕监听失败", e);
+        toast(`启动弹幕监听失败：${e?.message || e}`);
+      } finally {
+        setEnabling(false);
+      }
+    },
+    [enabling, isLocalAccount, isNative, mid, toast],
+  );
+
+  // 模块开关变化：先按派生状态同步监听服务（开启任一模块即自动启动监听），再持久化后广播 flags，
+  // 让浏览器源即时显隐对应元素（无需重连）；重新开启礼物展示时主动重推今日礼物清单
   const toggleModule = useCallback(
     async (patch: Partial<DisplayConfig>) => {
-      await update(patch);
+      const next = await update(patch);
+      await syncService(next);
       void displayDanmaku.broadcastFlags();
       if (patch.gift && mid) void displayDanmaku.pushGiftUpdate(mid);
     },
-    [update, mid],
+    [update, syncService, mid],
+  );
+
+  // 盲盒盈亏 · 弹幕查询开关：不显示在画布上、不参与派生 master，但它的查询依赖弹幕监听，
+  // 因此单独触发监听服务的启停（打开它即可单独让监听跑起来，关闭它也不影响画布模块）
+  const toggleBlindBoxQuery = useCallback(
+    async (v: boolean) => {
+      const next = await update({ blindBoxQuery: { ...config.blindBoxQuery, enabled: v } });
+      await syncService(next);
+    },
+    [update, syncService, config.blindBoxQuery],
   );
 
   // 横屏 / 竖屏切换：持久化朝向并广播给已连接的浏览器源画布（canvas 收到 orientation
-  // 消息后切换 1080x1920 / 1920x1080）。浏览器源随时可再加，无需先开总开关。
-  const [editOpen, setEditOpen] = useState(false);
+  // 消息后切换 1080x1920 / 1920x1080）。浏览器源随时可再加，无需先开监听服务。
   const serverPort = displayDanmaku.getServerPort();
 
   // 浏览器源地址：优先用实际端口；未启动时给默认 25100（Rust 端 25100 起端口）
@@ -484,64 +547,6 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       }
     },
     [update, toast, mid],
-  );
-
-  // 总开关开启：解析房间号 → 开窗口 → 启动监听
-  const handleMaster = useCallback(
-    async (on: boolean) => {
-      if (on) {
-        if (!isLocalAccount) {
-          toast("该功能需要登录凭证，服务器账号无法使用");
-          return;
-        }
-        if (!isNative) {
-          toast("展示窗口仅支持 Windows 客户端，请在桌面客户端中使用");
-          return;
-        }
-        if (!mid) {
-          toast("缺少主播 UID，无法监听直播间");
-          return;
-        }
-        setEnabling(true);
-        try {
-          // 解析直播间信息：房间号 + 主播昵称 + 开播状态（失败直接报错，绝不回退用 uid 当房间号）
-          const roomInfo = await withTimeout(resolveRoomInfo(mid), 6000, "解析房间号");
-          const roomId = roomInfo.roomId;
-          setAnchorName(roomInfo.uname);
-          setLiveStatus(roomInfo.liveStatus);
-          // 启动本地浏览器源 HTTP+WS 服务（Rust 端绑定 127.0.0.1:25100 起端口）。
-          // 直播软件（如直播姬）添加浏览器源 http://127.0.0.1:<port>/display 透明叠加。
-          await withTimeout(displayDanmaku.startServer(), 10000, "启动浏览器源服务");
-          displayDanmaku.start(roomId, mid);
-          // 立即推送一次今日礼物清单：已有礼物记录时无需等下一次送礼即可显示；
-          // 浏览器源就绪后还会因 ready 消息再做一次 broadcastInit 兜底推送。
-          void displayDanmaku.pushGiftUpdate(mid);
-          // 落盘 master=true 后广播 flags，让已加载的浏览器源立即恢复显示
-          const cfg = await loadDisplayConfig(mid);
-          const next = { ...cfg, master: true };
-          setConfig(next);
-          await saveDisplayConfig(mid, next);
-          await displayDanmaku.broadcastFlags();
-        } catch (e: any) {
-          console.error("[展示]开启展示失败", e);
-          toast(`开启展示失败：${e?.message || e}`);
-        } finally {
-          setEnabling(false);
-        }
-      } else {
-        // 关闭总开关：先落盘并广播 master=false，让浏览器源整体清空（显示空白）；
-        // 再停止弹幕监听。本地浏览器源服务保持运行——直播姬浏览器源保持已加载状态仅显示
-        // 空白，重新开启后立即恢复内容，无需在直播姬中重加源。
-        const cfg = await loadDisplayConfig(mid);
-        const next = { ...cfg, master: false };
-        setConfig(next);
-        await saveDisplayConfig(mid, next);
-        await displayDanmaku.broadcastFlags();
-        displayDanmaku.stop();
-        setEditOpen(false);
-      }
-    },
-    [mid, isNative, toast],
   );
 
   // 加载大航海舰长列表（主播的舰长，官方 guardTab/topList 接口）
@@ -965,26 +970,17 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   return (
     <div className="space-y-8 w-full min-w-0">
-      {/* 总开关 */}
+      {/* 面板说明卡片（无独立总开关：由下方各子模块开关自动决定是否运行） */}
       <section>
         <div className="flex items-center justify-center mb-2.5 select-none">
           <div className="flex items-center gap-2.5">
-            <h3 className="text-sm font-bold text-black/75">直播间投屏面板总开关</h3>
-            <Switch
-              onColor="bg-slate-600"
-              checked={config.master}
-              disabled={enabling}
-              onToggle={(v) => {
-                if (enabling) return;
-                handleMaster(v);
-              }}
-            />
+            <h3 className="text-sm font-bold text-black/75">直播间投屏面板</h3>
           </div>
         </div>
         <Card bg="bg-slate-300" border="border-slate-400">
           <p className="text-xs text-black/45 leading-relaxed">
             {isNative
-              ? "开启后在直播姬添加浏览器源即可（地址与步骤见下）"
+              ? "在直播姬添加浏览器源即可（地址与步骤见下）"
               : "仅 Windows 客户端支持"}
           </p>
           {isNative && (
@@ -1024,11 +1020,11 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               disabled={enabling || !isNative}
               onChange={(v) => void handleOrientation(v === "portrait")}
             />
-            {/* 右：编辑布局。需先开启总开关（serverPort>0）才能用模态框 iframe 加载编辑页 */}
+            {/* 右：编辑布局。需有画布显示模块开启（派生 master）且服务已启动才能用模态框 iframe 加载编辑页 */}
             <button
               onClick={() => setEditOpen(true)}
-              disabled={!config.master || enabling || !serverPort}
-              title="在 APP 内打开布局编辑框：可切换横/竖屏，分别调整三个模块的位置和大小"
+              disabled={!displayMaster(config) || enabling || !serverPort}
+              title="在 APP 内打开布局编辑框：可切换横/竖屏，分别调整各模块的位置和大小"
               className="inline-flex w-[170px] items-center justify-center whitespace-nowrap rounded-lg bg-white text-slate-700 shadow-sm px-4 py-1.5 text-xs font-medium transition active:scale-[0.98] hover:bg-white/80 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               编辑布局
@@ -1047,10 +1043,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         />
       )}
 
-      {/* 模块1：礼物展示 */}
+      {/* 模块1：收到的礼物展示 */}
       <section>
         <ModuleTitle
-          title="礼物展示"
+          title="收到的礼物展示"
           onColor="bg-amber-500"
           checked={config.gift}
           onToggle={(v) => void toggleModule({ gift: v })}
@@ -1084,6 +1080,35 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               ))}
             </div>
           )}
+        </Card>
+      </section>
+
+      {/* 模块：礼物特效（收到带专属动画的礼物时在画布播放） */}
+      <section>
+        <ModuleTitle
+          title="礼物特效"
+          onColor="bg-pink-500"
+          checked={config.giftEffect.enabled}
+          onToggle={(v) =>
+            void toggleModule({ giftEffect: { ...config.giftEffect, enabled: v } })
+          }
+        />
+        <Card bg="bg-pink-200" border="border-pink-400">
+          <p className="text-xs text-black/45 leading-relaxed">
+            收到带专属动画的礼物时，在画布上播放该礼物的特效动画
+          </p>
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs text-black/60">
+            <span className="shrink-0">开启/关闭礼物关键字特效</span>
+            <Switch
+              size="sm"
+              onColor="bg-pink-500"
+              checked={config.giftEffect.keyword}
+              onToggle={(v) => update({ giftEffect: { ...config.giftEffect, keyword: v } })}
+            />
+          </div>
+          <p className="mt-2 text-xs text-black/35 leading-relaxed">
+            开启后，弹幕内容精确匹配某个礼物名称时，也会在礼物特效的相同位置播放该礼物特效
+          </p>
         </Card>
       </section>
 
@@ -1338,7 +1363,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           title="盲盒盈亏 · 弹幕查询"
           onColor="bg-rose-500"
           checked={config.blindBoxQuery.enabled}
-          onToggle={(v) => update({ blindBoxQuery: { ...config.blindBoxQuery, enabled: v } })}
+          onToggle={(v) => void toggleBlindBoxQuery(v)}
         />
         <Card bg="bg-rose-200" border="border-rose-400">
           <p className="text-xs text-black/50 leading-relaxed">

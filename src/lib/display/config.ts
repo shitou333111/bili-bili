@@ -34,7 +34,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "entry" | "anime", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "gift" | "giftEffect" | "entry" | "anime", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -44,6 +44,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
   };
   return {
     gift: norm("gift", r.gift),
+    giftEffect: norm("giftEffect", (r as any).giftEffect),
     entry: norm("entry", r.entry),
     anime: norm("anime", r.anime),
   };
@@ -75,16 +76,39 @@ export function resolveAnimeSegment(
   return { startSec: a.landscapeStartSec, endSec: a.landscapeEndSec };
 }
 
+/**
+ * 派生"总开关"：面板已无独立总开关，任一**画布显示子模块**（收到的礼物展示 / 礼物特效 /
+ * 入场提示 / 入场动画）开启即视为开启（画布正常渲染），全部关闭即视为关闭（画布空白）。
+ * 注意：盲盒盈亏·弹幕查询与弹幕互动不参与触发（它们不显示在画布上）。
+ */
+export function displayMaster(cfg: DisplayConfig): boolean {
+  return !!(cfg.gift || cfg.giftEffect?.enabled || cfg.entry || cfg.anime);
+}
+
+/**
+ * 是否需要运行弹幕监听服务（本地浏览器源服务 + 直播间弹幕监听）：
+ *  - 任一画布显示模块开启 → 需要（礼物/入场提示/入场动画/礼物特效都靠监听触发）
+ *  - 盲盒盈亏·弹幕查询开启 → 也需要（查询本身就是靠监听弹幕实现的），
+ *    因此"总开关"关闭（画布空白）也不会影响盲盒查询
+ *  - 弹幕互动不需要（它自己按间隔向直播间发弹幕，不依赖监听）
+ */
+export function displayNeedsService(cfg: DisplayConfig): boolean {
+  return displayMaster(cfg) || !!cfg.blindBoxQuery?.enabled;
+}
+
 /** 解析一个可能残缺的配置对象，用默认值补齐缺失字段（向前兼容）。 */
 export function normalizeConfig(raw: unknown): DisplayConfig {
   const d = DEFAULT_DISPLAY_CONFIG;
   const r = (raw ?? {}) as Partial<DisplayConfig>;
   return {
-    master: !!r.master,
     screenOrientation: r.screenOrientation === "portrait" ? "portrait" : "landscape",
     entry: r.entry ?? d.entry,
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
+    giftEffect: {
+      enabled: !!r.giftEffect?.enabled,
+      keyword: !!r.giftEffect?.keyword,
+    },
     entryFilter: {
       zongdu: !!r.entryFilter?.zongdu,
       tidu: !!r.entryFilter?.tidu,

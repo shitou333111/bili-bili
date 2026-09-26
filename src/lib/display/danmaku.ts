@@ -12,11 +12,13 @@ import {
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
+  type GiftEffectFrameConfig,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
 } from "./types";
 import {
+  displayMaster,
   loadDisplayConfig,
   saveDisplayConfig,
   resolveAnimeVideo,
@@ -28,6 +30,7 @@ import {
   tryHandleBlindBoxQuery,
 } from "./gift-db";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftList } from "@/lib/gift-catalog-client";
+import { getGiftEffectsMap } from "@/lib/gift-local-store";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
@@ -389,6 +392,68 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+// ==================== 礼物关键字（弹幕精确匹配礼物名称 → 播放特效） ====================
+
+/** 礼物名称 → gift_id 映射（仅包含"有特效"的礼物）。连接房间时重建，随礼物目录刷新。 */
+let giftEffectNameMap: Map<string, number> | null = null;
+/** 上次构建时间（空表时用于限频重建） */
+let giftEffectNameMapAt = 0;
+
+/** 重建礼物名称映射（只保留在特效绑定表中的礼物）。 */
+function rebuildGiftEffectNameMap(): Map<string, number> {
+  const effects = getGiftEffectsMap();
+  const map = new Map<string, number>();
+  for (const g of getGiftList()) {
+    const id = Number(g?.id) || 0;
+    const name = String(g?.name ?? "");
+    if (!id || !name) continue;
+    if (!effects[id]) continue; // 无特效的礼物不参与关键字匹配
+    if (!map.has(name)) map.set(name, id);
+  }
+  giftEffectNameMap = map;
+  giftEffectNameMapAt = Date.now();
+  console.log("[展示]礼物关键字特效名表构建完成，可匹配礼物数=", map.size);
+  return map;
+}
+
+/**
+ * 获取礼物名称映射（懒构建 + 缓存）。
+ * 注意：礼物目录（gift-list.json / gift-effects.json）可能晚于弹幕服务就绪，若建连那刻数据
+ * 尚未加载会得到空表；空表不长期缓存，最多每 30s 重建一次，避免"一次空表永久失效"以及
+ * 高频弹幕下反复重建。
+ */
+function getGiftEffectNameMap(): Map<string, number> {
+  if (giftEffectNameMap && giftEffectNameMap.size > 0) return giftEffectNameMap;
+  if (giftEffectNameMap && Date.now() - giftEffectNameMapAt < 30000) return giftEffectNameMap;
+  return rebuildGiftEffectNameMap();
+}
+
+/**
+ * 廉价预筛：判断弹幕内容是否"像"礼物名，用于在精确匹配前排除绝大多数非礼物弹幕（性能保护）：
+ *  - 仅允许 汉字/英文字母/数字（含表情、标点、其他符号的直接排除）
+ *  - 按"连续英文字母数字算 1 个字、汉字每个算 1 个字"计长度，礼物名称为 2~5 个字
+ */
+function looksLikeGiftName(content: string): boolean {
+  const s = content.trim();
+  if (!s || s.length > 16) return false;
+  if (!/^[\u4e00-\u9fff\uf900-\ufaffA-Za-z0-9]+$/.test(s)) return false; // 含表情/标点/符号
+  let units = 0;
+  let inWord = false;
+  for (const ch of s) {
+    if (/[A-Za-z0-9]/.test(ch)) {
+      if (!inWord) {
+        units++;
+        inWord = true;
+      }
+    } else {
+      units++;
+      inWord = false;
+    }
+    if (units > 5) return false;
+  }
+  return units >= 2;
+}
+
 class DisplayDanmakuService {
   private roomId = 0;
   /** 当前监听的主播 uid（供画布就绪后补推礼物清单） */
@@ -405,12 +470,14 @@ class DisplayDanmakuService {
   private retry = 0;
   private statusListeners = new Set<StatusListener>();
   /** 最近一次状态：供后挂载的面板订阅时立即回放（打开软件自动恢复已连接后，面板再挂载时
-   *  不至于停留在 idle，导致总开关卡片的连接状态行不显示） */
+   *  不至于停留在 idle，导致面板卡片的连接状态行不显示） */
   private currentStatus: DisplayServiceStatus = { state: "idle" };
   // 弹幕 token 缓存：弹幕接口有风控，不能每次重连都重新拉取；
   // 首次进房间拉一次，后续断线重连直接复用，避免高频请求把 IP 打成 -352。
   private cachedToken: string | null = null;
   private cachedRoomId = 0;
+  /** 礼物特效配套 JSON 缓存（web_mp4_json URL → 配置；null=拉取失败，避免反复重试） */
+  private effectJsonCache = new Map<string, GiftEffectFrameConfig | null>();
   /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
   private wsConnectedAt = 0;
   // ---- 调试日志 ----
@@ -650,25 +717,28 @@ class DisplayDanmakuService {
       gifts,
       animeSample,
       flags: {
-        master: cfg.master,
+        master: displayMaster(cfg),
         entry: cfg.entry,
         gift: cfg.gift,
         anime: cfg.anime,
+        giftEffect: !!cfg.giftEffect?.enabled,
       },
     });
   }
 
-  /** 广播当前各模块开关状态（master/entry/gift/anime）到浏览器源，画布据此即时显隐元素。
-   *  在面板切换总开关或各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。 */
+  /** 广播当前各模块开关状态（master/entry/gift/anime/giftEffect）到浏览器源，画布据此即时
+   *  显隐元素。在面板切换各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。
+   *  master 为派生值：任一画布显示子模块开启即为 true。 */
   async broadcastFlags(): Promise<void> {
     const cfg = await loadDisplayConfig(this.mid);
     await this.broadcast({
       type: "flags",
       flags: {
-        master: cfg.master,
+        master: displayMaster(cfg),
         entry: cfg.entry,
         gift: cfg.gift,
         anime: cfg.anime,
+        giftEffect: !!cfg.giftEffect?.enabled,
       },
     });
   }
@@ -695,6 +765,7 @@ class DisplayDanmakuService {
     if (platform.isNative) {
       try {
         await ensureGiftCatalogLoaded(platform);
+        rebuildGiftEffectNameMap(); // 礼物目录就绪后重建"有特效礼物"名称映射（供关键字特效）
       } catch {
         /* 礼物目录加载失败不阻塞监听 */
       }
@@ -918,6 +989,22 @@ class DisplayDanmakuService {
         if (!content) return;
 
         const config = await loadDisplayConfig(mid);
+
+        // 礼物关键字特效：弹幕精确匹配"有特效礼物名称"→ 在收礼特效同位置播放（独立于盲盒查询）
+        if (config.giftEffect?.enabled && config.giftEffect?.keyword) {
+          // 先廉价预筛，只有"像礼物名"的弹幕才落到调试日志与精确匹配，避免刷屏与无谓开销
+          if (looksLikeGiftName(content)) {
+            const map = getGiftEffectNameMap();
+            const hitId = map.get(content.trim()) ?? null;
+            this.pushDebug("danmu", hitId ? "关键字命中" : "关键字候选未匹配", {
+              content: content.trim(),
+              giftId: hitId ?? 0,
+              nameMapSize: map.size,
+            });
+            if (hitId) await this.emitGiftEffect(hitId, content.trim());
+          }
+        }
+
         if (!config.blindBoxQuery?.enabled) return;
         const senderUid = Number(d.user.uid);
         // 当前主播账号查询为特例：不返回其自身盲盒记录，而是返回"全部粉丝"的盲盒数据（uid=0 = 不按用户过滤）
@@ -996,6 +1083,38 @@ class DisplayDanmakuService {
     });
   }
 
+  /** 拉取礼物特效配套 JSON 配置（主窗口用 invoke fetch_json 绕过 CORS），带内存缓存。 */
+  private async loadEffectConfig(url: string): Promise<GiftEffectFrameConfig | null> {
+    if (!url) return null;
+    if (this.effectJsonCache.has(url)) return this.effectJsonCache.get(url) ?? null;
+    let cfg: GiftEffectFrameConfig | null = null;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      cfg = await invoke<GiftEffectFrameConfig>("fetch_json", { url });
+    } catch {
+      cfg = null; // 拉取失败：缓存 null 避免高频弹幕反复请求
+    }
+    this.effectJsonCache.set(url, cfg);
+    return cfg;
+  }
+
+  /**
+   * 查特效绑定表 → 拉配套 JSON → 下发画布播放礼物特效。
+   * 画布运行在外部浏览器（直播姬浏览器源），无 Tauri IPC，故特效查找与 JSON 获取都在
+   * 主窗口完成，仅把 {videoSrc, config} 经 WS 交给画布做 alpha/RGB 合成播放。
+   */
+  private async emitGiftEffect(giftId: number, giftName: string): Promise<void> {
+    if (!this.active || !giftId) return;
+    const bind = getGiftEffectsMap()[giftId];
+    if (!bind?.web_mp4) {
+      this.pushDebug("giftEffect", "无特效", { giftId, giftName });
+      return;
+    }
+    const config = await this.loadEffectConfig(bind.web_mp4_json);
+    this.pushDebug("giftEffect", "emit", { giftId, giftName, hasConfig: !!config });
+    this.emitTo({ type: "giftEffect", giftId, giftName, videoSrc: bind.web_mp4, config });
+  }
+
   /** 处理一条送礼信息：追加到礼物逐条记录 → 组装达标礼物清单 → emit。
    *  礼物记录（uid_<mid>/display-gift-records.json）同时供"礼物展示"与盲盒"今日/昨日"查询使用，
    *  是单一来源，不再各自维护一份今日聚合。
@@ -1038,6 +1157,12 @@ class DisplayDanmakuService {
     if (!this.isNative()) return;
 
     const config = await loadDisplayConfig(mid);
+
+    // 礼物特效模块：该礼物在特效绑定表中有动画则下发画布播放（独立于"收到的礼物展示"开关）
+    if (config.giftEffect?.enabled) {
+      await this.emitGiftEffect(giftId, d.giftName || "");
+    }
+
     if (!config.gift) return;
 
     // 从礼物逐条记录聚合今日达标清单（单价 > 阈值；阈值 0 = 不限制）

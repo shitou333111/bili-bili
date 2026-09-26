@@ -34,11 +34,12 @@ export interface MovableRect {
 }
 
 /** 可编辑布局的元素 ID */
-export type LayoutElementId = "gift" | "entry" | "anime";
+export type LayoutElementId = "gift" | "giftEffect" | "entry" | "anime";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
   gift: Record<ScreenOrientation, MovableRect>;
+  giftEffect: Record<ScreenOrientation, MovableRect>;
   entry: Record<ScreenOrientation, MovableRect>;
   anime: Record<ScreenOrientation, MovableRect>;
 }
@@ -51,6 +52,12 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
     // 恢复迁移前（960 坐标系）的默认位置：左上角（50,50），不水平居中
     landscape: { x: 50, y: 50, scale: 1 },
     portrait: { x: 60, y: 60, scale: 1 },
+  },
+  giftEffect: {
+    // {0,0,1} 表示"尚未自定义"：渲染时按特效实际尺寸动态摆放（横屏宽 1/4、距下边界 10%，
+    // 竖屏占满宽、距下边界 1/5，均水平居中）；一旦拖动/缩放即保存为绝对坐标。
+    landscape: { x: 0, y: 0, scale: 1 },
+    portrait: { x: 0, y: 0, scale: 1 },
   },
   entry: {
     // 水平居中（入场提示实际宽度 ≈ 头像56 + gap24 + 昵称28px×字数 + padding64，4字昵称约262px，
@@ -105,18 +112,26 @@ export interface BlindBoxQueryConfig {
   enabled: boolean;
 }
 
+/** 礼物特效模块配置 */
+export interface GiftEffectConfig {
+  /** 模块总开关：关闭后不播放任何礼物特效 */
+  enabled: boolean;
+  /** 礼物关键字特效开关：开启后弹幕精确匹配礼物名称也播放对应特效 */
+  keyword: boolean;
+}
+
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
-  /** 总开关：开启才创建展示窗口并启动监听 */
-  master: boolean;
   /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
   screenOrientation: ScreenOrientation;
   /** 模块1 · 入场提示 开关 */
   entry: boolean;
-  /** 模块2 · 礼物展示 开关 */
+  /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
   anime: boolean;
+  /** 模块4 · 礼物特效（收到带特效的礼物时在画布播放） */
+  giftEffect: GiftEffectConfig;
   /** 入场筛选 */
   entryFilter: EntryFilter;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
@@ -132,17 +147,30 @@ export interface DisplayConfig {
 }
 
 /** 画布各模块显示开关（主进程随配置变化实时广播，浏览器源据此即时显隐元素）。
- *  master=false 时浏览器源整体不渲染任何内容（关闭总开关 → 显示空白）。 */
-export type DisplayFlags = Pick<DisplayConfig, "master" | "entry" | "gift" | "anime">;
+ *  已无独立"总开关"：master 由各画布显示子模块派生（见 config.ts displayMaster），
+ *  master=false 时浏览器源整体不渲染任何内容（显示空白）。 */
+export type DisplayFlags = {
+  /** 派生总开关：任一画布显示子模块（礼物展示/礼物特效/入场提示/入场动画）开启即为 true */
+  master: boolean;
+  entry: boolean;
+  gift: boolean;
+  anime: boolean;
+  /** 礼物特效模块开关（从 DisplayConfig.giftEffect.enabled 派生） */
+  giftEffect: boolean;
+};
 
 /** 默认展示配置 */
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
-  master: false,
   screenOrientation: "landscape",
-  // 各模块开关默认状态：入场提示 / 礼物展示 / 入场动画 默认关闭，盲盒盈亏弹幕查询默认开启，弹幕互动默认关闭
+  // 各模块开关默认状态：入场提示 / 收到的礼物展示 / 入场动画 / 礼物特效 默认关闭，
+  // 盲盒盈亏弹幕查询默认开启，弹幕互动默认关闭
   entry: false,
   gift: false,
   anime: false,
+  giftEffect: {
+    enabled: false,
+    keyword: false,
+  },
   entryFilter: {
     zongdu: false,
     tidu: false,
@@ -184,6 +212,27 @@ export interface DisplayGiftItem {
   img: string;
 }
 
+/** 礼物特效配套 JSON 配置（B站特效视频内含 rgbFrame 画面区 + aFrame 灰度透明区，
+ *  由画布侧按 AlphaVideoPlayer 的处理方式合成 alpha 通道）。字段与模拟器 EffectConfig 一致。 */
+export interface GiftEffectFrameConfig {
+  info: {
+    /** 透明区矩形 [x, y, w, h]（取 R 通道作为 alpha） */
+    aFrame: [number, number, number, number];
+    /** 画面区矩形 [x, y, w, h] */
+    rgbFrame: [number, number, number, number];
+    f: number;
+    fps: number;
+    videoW: number;
+    videoH: number;
+    w: number;
+    h: number;
+    scale: number;
+    align: number;
+    custom: number;
+    v: number;
+  };
+}
+
 /** 主窗口 → 展示窗口 事件 payload（channel: "display-event"） */
 export type DisplayEvent =
   | { type: "entry"; user: DisplayEntryPayload }
@@ -195,5 +244,14 @@ export type DisplayEvent =
       startSec: number;
       /** 播放结束秒数（0=播到末尾；配合 startSec 实现选段播放） */
       endSec: number;
+    }
+  | {
+      type: "giftEffect";
+      giftId: number;
+      giftName: string;
+      /** 特效视频地址（B站 web_mp4 直链） */
+      videoSrc: string;
+      /** 配套 JSON 配置（缺失时退化为整段绘制） */
+      config: GiftEffectFrameConfig | null;
     }
   | { type: "gift"; gifts: DisplayGiftItem[] };

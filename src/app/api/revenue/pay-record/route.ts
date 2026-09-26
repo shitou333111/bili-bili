@@ -4,6 +4,7 @@ import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
 import { fetchRealPayRecordSnapshot } from "@/lib/bilibili/app";
 import { readPayRecords, savePayRecords, getMaxId, type RawGiftRecord } from "@/lib/user-data";
 import { isOffline } from "@/lib/offline";
+import { reportPayRecordProgress, clearPayRecordProgress } from "@/lib/pay-record-progress";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -98,6 +99,10 @@ export async function GET(request: Request) {
 
   console.log(`[PayRecord] 拉取B站最新数据（用户: ${validSession.mid} ${validSession.uname}）...`);
 
+  // WEB 端进度通道：前端带 _t=<ticket>，本路由把每页进度写入服务器内存，
+  // 前端轮询 /api/revenue/pay-record/progress 读取（Tauri 端不走这里，直接本地回调）。
+  const progressTicket = url.searchParams.get("_t") ?? "";
+
   try {
     // 读取已有记录，获取最大id
     const existingRecords = await readPayRecords(validSession.mid, validSession.uname);
@@ -115,7 +120,12 @@ export async function GET(request: Request) {
     const cutoffTimestamp = updatePointTimestamp > 0 ? updatePointTimestamp - RETROSPECT_SECONDS : 0;
 
     // 从B站获取新数据（增量 + 回溯窗口，按时间窗口停止翻页）
-    const snapshot = await fetchRealPayRecordSnapshot(validSession, undefined, cutoffTimestamp);
+    const snapshot = await fetchRealPayRecordSnapshot(
+      validSession,
+      undefined,
+      cutoffTimestamp,
+      (p) => reportPayRecordProgress(progressTicket, p),
+    );
 
     // 合并：新记录在前，已有记录在后
     const newRecords = snapshot.records as unknown as RawGiftRecord[];
@@ -223,5 +233,8 @@ export async function GET(request: Request) {
       { code: 0, message: "needs-relogin", data: null },
       { status: 200 },
     );
+  } finally {
+    // 无论成功/失败都清理进度条目，避免异常路径下残留
+    clearPayRecordProgress(progressTicket);
   }
 }

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import DownloadSection from "./DownloadSection";
 import SloganRotator from "./SloganRotator";
 import WindowTitleBar from "@/components/WindowTitleBar";
-import BackBar from "./BackBar";
 
 export const metadata: Metadata = {
   title: "B瓜 · Bilibili 直播消费数据分析工具",
@@ -68,10 +67,10 @@ export default function LandingPage() {
         paddingTop: "var(--safe-top, 0px)",
       }}
     >
-      {/* Tauri 桌面子页面必须自行渲染标题栏，否则窗口无法拖动/最小化/关闭（统一样式，不带返回按钮）；
-          页面内统一返回条参考"帮助"各子页实现，SPA 后退不刷新，自动回到来路页 */}
+      {/* Tauri 桌面下必须自行渲染标题栏，否则窗口无法拖动/最小化/关闭（统一样式，不带返回按钮）。
+          本页是官网首页（bili-bili.icu 内部改写到 /landing），App 内已不再内嵌进入，
+          因此不渲染页面内返回条。 */}
       <WindowTitleBar />
-      <BackBar />
       <div className="content-wrapper px-5 pb-16 pt-6 sm:px-8 sm:pt-10">
         {/* ============ Hero ============ */}
         <section className="flex flex-col items-center pt-4 text-center sm:pt-6">

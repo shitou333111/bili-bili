@@ -1082,7 +1082,8 @@ export default function HomePage() {
   }, [currentAccount?.mid]);
 
   // 启动自动恢复展示模块：仅 Windows 桌面客户端（展示投屏不支持 Web/Android/iOS）。
-  // 总开关开启时自动打开展示窗口并恢复弹幕监听（autoStartDisplay 内部只执行一次，且自身再做平台校验）
+  // 仍有需要弹幕监听的子模块开启时自动启动浏览器源服务并恢复弹幕监听
+  // （autoStartDisplay 内部只执行一次，且自身再做平台校验）
   useEffect(() => {
     if (!currentAccount?.mid) return;
     import("@/lib/display/auto-start")
@@ -3197,15 +3198,25 @@ export default function HomePage() {
                   </div>
                 ))}
               </div>
-              {/* 行动按钮：下载客户端 + 网站首页 */}
+              {/* 行动按钮：下载客户端 + 网站首页
+                  必须用主域名绝对地址 + 新窗口：本应用跑在 app.bili-bili.icu 子域名下，
+                  相对路径 /landing 会在应用内（子域名/客户端本地页）打开，而不是真正的官网。
+                  绝对地址在 Tauri 里由 ExternalLinkHandler 交给系统浏览器打开。 */}
               <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-6">
                 <a
-                  href="/landing#download"
+                  href="https://bili-bili.icu/#download"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex w-full max-w-xs items-center justify-center rounded-full bg-[#1f1c17] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
                 >
                   下载客户端
                 </a>
-                <a href="/landing" className="text-xs text-black/45 underline-offset-2 transition hover:text-black/75 hover:underline">
+                <a
+                  href="https://bili-bili.icu/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-black/45 underline-offset-2 transition hover:text-black/75 hover:underline"
+                >
                   访问网站首页
                 </a>
               </div>

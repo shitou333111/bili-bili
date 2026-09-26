@@ -1,9 +1,10 @@
 /**
  * 展示模块 —— 启动时自动恢复。
  *
- * 业务规则：当"展示总开关"开启时，软件启动后应自动启动本地浏览器源 HTTP+WS 服务并恢复对该
- * 账号直播间的弹幕监听（礼物展示 / 入场提示 / 入场动画 / 盲盒盈亏查询等全部监听），无需用户
- * 打开"展示"面板。浏览器源服务本身无窗口，直播姬添加浏览器源后即可透明叠加。
+ * 业务规则：面板已无独立"总开关"，改为由子模块派生——只要还有"需要弹幕监听"的子模块开启
+ * （任一画布显示模块：收到的礼物展示 / 礼物特效 / 入场提示 / 入场动画，或盲盒盈亏·弹幕查询），
+ * 软件启动后应自动启动本地浏览器源 HTTP+WS 服务并恢复对该账号直播间的弹幕监听，无需用户打开
+ * "展示"面板。浏览器源服务本身无窗口，直播姬添加浏览器源后即可透明叠加。
  *
  * 健壮性：
  *  - 刚启动时各进程 / 网络可能繁忙，网络解析房间号可能失败 → 只把"已成功"标记为完成，
@@ -11,7 +12,7 @@
  *  - 幂等：displayDanmaku.start() 对同一房间重复调用会直接忽略，后续打开"展示"面板不会重复监听。
  */
 import { getPlatform } from "@/lib/platform";
-import { loadDisplayConfig } from "./config";
+import { displayNeedsService, loadDisplayConfig } from "./config";
 import { displayDanmaku } from "./danmaku";
 import { resolveRoomInfo } from "@/components/display/DisplayPanel";
 
@@ -24,8 +25,8 @@ const MAX_ATTEMPTS = 6;
 const RETRY_BASE_MS = 4000;
 
 /**
- * 在应用启动、账号就绪后调用：若展示总开关开启且为本机本地账号，则自动启动浏览器源服务
- * 并恢复全部弹幕监听。整体非阻塞；失败会异步重试。
+ * 在应用启动、账号就绪后调用：若仍有需要弹幕监听的子模块开启且为本机本地账号，则自动启动
+ * 浏览器源服务并恢复全部弹幕监听。整体非阻塞；失败会异步重试。
  */
 export function autoStartDisplay(mid: number, isLocalAccount: boolean): Promise<void> {
   return autoStartOnce(mid, isLocalAccount);
@@ -33,11 +34,11 @@ export function autoStartDisplay(mid: number, isLocalAccount: boolean): Promise<
 
 async function autoStartOnce(mid: number, isLocalAccount: boolean): Promise<void> {
   if (done || inFlight || !mid) return;
-  // 前置条件即时判定（本地账号 / 未开总开关）→ 不需要重试
+  // 前置条件即时判定（本地账号 / 所有子模块都已关闭）→ 不需要重试
   const platform = await getPlatform().catch(() => null);
   if (!platform || !platform.isNative || !isLocalAccount) return;
   const cfg = await loadDisplayConfig(mid).catch(() => null);
-  if (!cfg || !cfg.master) return;
+  if (!cfg || !displayNeedsService(cfg)) return;
 
   inFlight = true;
   try {

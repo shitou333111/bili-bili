@@ -230,12 +230,38 @@ export async function dataFetch(
       (pathname === "/api/anchor/gifts" && (query.get("probe") === "true" || query.get("refresh") === "true"));
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), isLongPull ? 15 * 60 * 1000 : 6000);
+    // WEB 端长任务没有原生进度回调：服务端把每页进度写进内存表（pay-record-progress），
+    // 这里生成 ticket 随主请求带上，并每秒轮询进度接口转发给调用方，
+    // 使 WEB 端的进度文案/进度条与 Tauri 端完全一致。
+    const ticket = isLongPull && onProgress
+      ? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+      : "";
+    const requestUrl = ticket
+      ? serverApiUrl(`${path}${path.includes("?") ? "&" : "?"}_t=${ticket}`)
+      : serverApiUrl(path);
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    if (ticket && onProgress) {
+      const report = onProgress;
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(
+            serverApiUrl(`/api/revenue/pay-record/progress?t=${ticket}`),
+            { cache: "no-store" },
+          );
+          const data = await res.json();
+          if (data?.data?.text) report(data.data);
+        } catch {
+          // 轮询失败静默忽略：进度是锦上添花，不能影响主请求
+        }
+      }, 1000);
+    }
     try {
-      return await fetch(serverApiUrl(path), { cache: "no-store", signal: ctrl.signal, ...init });
+      return await fetch(requestUrl, { cache: "no-store", signal: ctrl.signal, ...init });
     } catch {
       return jsonResponse({ code: -1, message: "服务器不可达，请检查网络或服务器状态" });
     } finally {
       clearTimeout(timer);
+      if (pollTimer) clearInterval(pollTimer);
     }
   }
   return dispatchNative(platform, path, init, onProgress);

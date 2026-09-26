@@ -95,6 +95,7 @@ export async function fetchRealPayRecordSnapshot(
   session: AuthSession,
   _nextId?: number,
   cutoffTimestamp?: number,
+  onProgress?: (p: { text: string; current?: number; total?: number }) => void,
 ): Promise<PayRecordSnapshot> {
   if (!session.biliSessdata) {
     throw new Error("SESSDATA 不能为空");
@@ -165,6 +166,13 @@ export async function fetchRealPayRecordSnapshot(
     nextId = response.data.params?.next_id;
 
     console.log(`[PayRecord] 第${pageCount}页获取完成，本页${list.length}条（新增${newCount}条），累计${allRecords.length}条，nextId=${nextId ?? "无"}`);
+
+    // 上报页级进度（WEB 端经 pay-record-progress 内存表 + 轮询抵达前端，文案与 APP 一致）
+    onProgress?.({
+      text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
+      current: allRecords.length,
+      total: 0,
+    });
 
     // 如果没有新记录，说明已经获取完所有数据
     if (newCount === 0) {
