@@ -896,6 +896,9 @@ jobs:
           strip_components: 1
           timeout: 120s
           command_timeout: 120s
+          # 传输慢排查用：打印底层 tar/scp 命令与更多过程细节（含耗时线索）。
+          # 排查完建议改回 false，否则日志会很冗长。
+          debug: true
 
       - name: Retry upload artifacts (wait 15s)
         if: steps.prepare.outputs.HAS_FILES == 'true' && steps.scp-artifacts.outcome == 'failure'
@@ -911,6 +914,7 @@ jobs:
           strip_components: 1
           timeout: 120s
           command_timeout: 120s
+          debug: true
 
       - name: Atomic publish on server
         id: ssh-publish
