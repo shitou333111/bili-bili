@@ -314,9 +314,12 @@ export async function ensureValidCredential(session: AuthSession): Promise<Crede
 async function _doEnsureValidCredential(session: AuthSession): Promise<CredentialCheckResult> {
   const cookie = buildCookieHeader(session);
 
-  // 步骤1：用 nav 接口验证凭证（412/网络错误时重试 3 次，指数退避）
+  // 步骤1：用 nav 接口验证凭证（限流/网络错误时重试 3 次，指数退避）
   // 这是切号后偶发"伪失效"的主因——短时间内并发请求B站导致临时限流
   let navResult: NavResponse | null = null;
+  // 是否拿到"凭证确实失效"的确凿结论。只有 -101/3（账号未登录）或 nav 明确返回未登录才算，
+  // 限流（-412）、网络异常、未知 code 都只是临时异常，不能据此把用户踢下线。
+  let expired = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const res = await fetchBilibiliJson<NavResponse>({
@@ -328,9 +331,12 @@ async function _doEnsureValidCredential(session: AuthSession): Promise<Credentia
         _okCache.set(session.sid, Date.now());
         return { valid: true, session, cookie };
       }
-      // code!==0 或 isLogin=false：不是网络/限流问题，是凭证真失效，跳出重试
-      if (navResult.code === -101 || navResult.code === 3 || !navResult.data?.isLogin) break;
-      // 其他错误（-412 限流）：重试
+      if (isBiliCredentialExpired(navResult.code) || navResult.code === 0) {
+        // -101/3 = 账号未登录；code=0 且没有 isLogin = 明确未登录
+        expired = true;
+        break;
+      }
+      // 其他错误（-412 限流、-799 等）：临时异常，继续重试
     } catch (err) {
       console.error(`[CredentialCheck] nav 接口请求失败 attempt=${attempt + 1}:`, err);
     }
@@ -340,9 +346,22 @@ async function _doEnsureValidCredential(session: AuthSession): Promise<Credentia
       await new Promise(r => setTimeout(r, delay));
     }
   }
-  if (navResult) {
-    console.log("[CredentialCheck] B站凭证疑似失效，尝试刷新...", navResult.code, navResult.message);
+
+  // 没拿到"确凿失效"结论（限流/网络抖动/未知 code）：保守放行，保留当前会话。
+  // 误判成失效的代价是把用户直接踢出登录，且刷新有 12h 节流、期间无法自愈；
+  // 放行的最坏结果只是下游 B站 请求报错，下次校验还能自愈。
+  if (!expired) {
+    console.log(
+      "[CredentialCheck] nav 未取得“凭证失效”结论（疑似限流或网络异常），保留当前会话:",
+      navResult?.code,
+      navResult?.message,
+    );
+    // 记 okCache，避免每个请求都重跑 nav 重试（最多 4.5s）造成请求堆积
+    _okCache.set(session.sid, Date.now());
+    return { valid: true, session, cookie };
   }
+
+  console.log("[CredentialCheck] B站凭证已失效，尝试刷新...", navResult?.code, navResult?.message);
 
   // 刷新节流：距上次刷新间隔过短则跳过（旧 cookie 可能仍可用），避免高频死循环与 token 消耗。
   // 服务端 refresh 失败（如 correspond 404、refresh_token 不匹配）时尤其需要节流，防止每请求都刷。
@@ -386,7 +405,11 @@ async function _doEnsureValidCredential(session: AuthSession): Promise<Credentia
     }
 
     // 步骤4：用新凭证验证一次（加重试）
+    // 刷新本身已成功（B站下发了新 cookie，说明 refresh_token 仍有效），
+    // 所以只有 nav 明确回报未登录才算失败；限流/网络异常一律按刷新成功处理，
+    // 否则一次限流就会把刚刷好的会话又踢掉。
     const newCookie = refreshResult.newCookies.join("; ");
+    let retryExpired = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const retryNav = await fetchBilibiliJson<NavResponse>({
@@ -398,7 +421,10 @@ async function _doEnsureValidCredential(session: AuthSession): Promise<Credentia
           _okCache.set(session.sid, Date.now());
           return { valid: true, session: updatedSession, cookie: newCookie };
         }
-        if (retryNav.code === -101 || retryNav.code === 3 || !retryNav.data?.isLogin) break;
+        if (isBiliCredentialExpired(retryNav.code) || retryNav.code === 0) {
+          retryExpired = true;
+          break;
+        }
       } catch (err) {
         console.error(`[CredentialCheck] 刷新后验证 attempt=${attempt + 1} 失败:`, err);
       }
@@ -408,16 +434,21 @@ async function _doEnsureValidCredential(session: AuthSession): Promise<Credentia
       }
     }
 
-    return {
-      valid: false,
-      needsRelogin: true,
-      reason: "刷新后验证仍失败",
-    };
+    if (retryExpired) {
+      return {
+        valid: false,
+        needsRelogin: true,
+        reason: "刷新后凭证仍失效",
+      };
+    }
+    console.log("[CredentialCheck] 刷新后验证未取得失效结论，按刷新成功处理");
+    _okCache.set(session.sid, Date.now());
+    return { valid: true, session: updatedSession, cookie: newCookie };
   }
 
-  // 刷新被节流跳过：返回需重新登录（旧 cookie 已确认失效，nav 验证失败），
-  // 但先记录 okCache 避免同一秒内再次触发不必要的 nav 重试风暴
-  _okCache.set(session.sid, Date.now());
+  // 刷新被节流跳过，且 nav 已确凿回报未登录（否则上面已按临时异常放行）：
+  // 此时确实需要重新登录。注意不要写 _okCache——那会让后续 5 分钟内的校验
+  // 反向返回"有效"，造成各接口登录态自相矛盾。
   return {
     valid: false,
     needsRelogin: true,

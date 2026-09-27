@@ -29,6 +29,7 @@ export async function GET(request: Request) {
         real_activity_url: "",
         simulator_activities: [],
         announcement: "",
+        faq: [],
       },
     });
   }
@@ -44,6 +45,7 @@ export async function GET(request: Request) {
       real_activity_url: adminConfig.real_activity_url ?? "",
       simulator_activities: adminConfig.simulator_activities ?? [],
       announcement: adminConfig.announcement ?? "",
+      faq: adminConfig.faq ?? [],
     },
   });
 }
@@ -104,6 +106,11 @@ export async function POST(request: Request) {
       : [],
     real_activity_url: typeof body.real_activity_url === "string" ? body.real_activity_url : "",
     announcement: typeof body.announcement === "string" ? body.announcement : "",
+    faq: Array.isArray(body.faq)
+      ? body.faq
+          .map((f: any) => ({ q: String(f?.q || ""), a: String(f?.a || "") }))
+          .filter((f: { q: string }) => f.q.trim())
+      : [],
     // 模拟器活动入口配置（含算法类型），按原样持久化
     simulator_activities: Array.isArray(body.simulator_activities)
       ? body.simulator_activities.map((a: any) => ({

@@ -5,7 +5,8 @@ import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
-import { getGiftImg } from "@/lib/gift-catalog-client";
+import { ensureGiftCatalogLoaded, getGiftImg, giftIdsByName, resolveGiftAliasName } from "@/lib/gift-catalog-client";
+import { getPlatform } from "@/lib/platform";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
 import Dropdown from "@/components/Dropdown";
@@ -81,9 +82,8 @@ const DATE_OPTIONS = [
 ] as const;
 
 const PRICE_OPTIONS = [
-  { value: 30000, label: "≥30000电池" },
   { value: 10000, label: "≥10000电池" },
-  { value: 2000, label: "≥2000电池" },
+  { value: 1000, label: "≥1000电池" },
 ] as const;
 
 const FAN_COLORS = [
@@ -476,7 +476,7 @@ export default function GiftScreenshotPanel({
 }) {
   // 筛选状态
   const [dateFilter, setDateFilter] = useState<string>("thisWeek");
-  const [priceFilter, setPriceFilter] = useState<number>(10000);
+  const [priceFilter, setPriceFilter] = useState<number>(1000);
   const [fanFilter, setFanFilter] = useState<string>("");
   const [showToast, setShowToast] = useState<string>("");
 
@@ -734,26 +734,48 @@ export default function GiftScreenshotPanel({
       return;
     }
 
-    const giftIds = selectedGifts.map(s => s.gift_id);
-    const uniqueIds = [...new Set(giftIds)];
-    const missingIds = uniqueIds.filter(id => {
-      const existing = effectDataMap[id];
-      // 需要重新请求的情况：
-      // 1. 完全没有记录
-      // 2. 有记录但 found=false（特效列表里没找到，可能是本地缓存过期）
-      // 3. 有记录 found=true 但 effect_config 为 null（上次 JSON 拉取失败，需要重试）
-      return !existing || !existing.found || (existing.found && !existing.effect_config);
-    });
+    let disposed = false;
+    (async () => {
+      const platform = await getPlatform();
+      await ensureGiftCatalogLoaded(platform);
+      if (disposed) return;
 
-    if (missingIds.length === 0) return;
+      // 大航海：开通舰长/提督/总督触发的动画不在礼物列表与特效列表中，对应的是
+      // "舰长一号/提督一号/总督一号"，故先做名称别名替换（其他名称原样）；同一名称可能有
+      // 多个 gift_id，全部作为候选逐个尝试，命中后登记到原始 gift_id（页面按原始 id 查找）。
+      const candidatesOf = (giftId: number, name: string): number[] =>
+        [...new Set([giftId, ...giftIdsByName(resolveGiftAliasName(name))])];
 
-    setLoadingEffects(true);
-    fetchGiftEffects(missingIds)
-      .then(data => {
-        setEffectDataMap(prev => ({ ...prev, ...data }));
-      })
-      .catch(err => console.error("获取礼物特效失败:", err))
-      .finally(() => setLoadingEffects(false));
+      const missing = selectedGifts.filter(s => {
+        const existing = effectDataMap[s.gift_id];
+        // 需要重新请求的情况：
+        // 1. 完全没有记录
+        // 2. 有记录但 found=false（特效列表里没找到，可能是本地缓存过期）
+        // 3. 有记录 found=true 但 effect_config 为 null（上次 JSON 拉取失败，需要重试）
+        return !existing || !existing.found || (existing.found && !existing.effect_config);
+      });
+      if (missing.length === 0) return;
+
+      const allIds = [...new Set(missing.flatMap(s => candidatesOf(s.gift_id, s.name)))];
+      setLoadingEffects(true);
+      try {
+        const data = await fetchGiftEffects(allIds);
+        const merged: Record<number, GiftEffectData> = {};
+        for (const s of missing) {
+          const hit = candidatesOf(s.gift_id, s.name).find(id => data[id]?.found && data[id]?.web_mp4);
+          merged[s.gift_id] = hit ? data[hit] : (data[s.gift_id] ?? { found: false });
+        }
+        if (!disposed) setEffectDataMap(prev => ({ ...prev, ...merged }));
+      } catch (err) {
+        console.error("获取礼物特效失败:", err);
+      } finally {
+        if (!disposed) setLoadingEffects(false);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
   }, [selectedGifts.map(s => s.gift_id).join(",")]);
 
   // ==================== 视频帧提取（基于 aFrame 定位 + 椭圆径向渐变遮罩） ====================

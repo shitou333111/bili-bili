@@ -6,7 +6,7 @@
  * 功能：
  * 1. 拉取 7 天内全部直播场次（GetHistoryLiveStreamRecordListNew），多选下拉（默认全选）
  * 2. 按场次拉取礼物（GetLiveRecordInfos 翻页），仅保留 gift_value ≥ 筛选档位 的礼物
- * 3. 电池数下拉（≥2000/≥10000/≥30000）、粉丝下拉筛选，礼物按粉丝着色
+ * 3. 电池数下拉（≥1000/≥10000）、粉丝下拉筛选，礼物按粉丝着色
  * 4. 多选礼物后点击“生成录屏”：切割 2s 短视频，把所有选中片段按日期时间先后拼接成一个视频
  *    （合并 m3u8 + hls 顺序播放）；通过 720×1280 canvas 把礼物特效（rgbFrame/aFrame 裁剪+透明）
  *    叠加在直播画面之上；点击播放/暂停、循环播放；可一键保存视频到相册/下载
@@ -15,7 +15,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import Hls from "hls.js";
 import { dataFetch } from "@/lib/client-fetch";
 import { getPlatform } from "@/lib/platform";
-import { ensureGiftCatalogLoaded, getGiftList } from "@/lib/gift-catalog-client";
+import {
+  ensureGiftCatalogLoaded,
+  giftIdsByName,
+  resolveGiftAliasName,
+} from "@/lib/gift-catalog-client";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
 import { saveVideoFile, saveVideoFileFromPath, isTauriMobile } from "@/lib/save-image";
 import { open, remove, type FileHandle } from "@tauri-apps/plugin-fs";
@@ -32,9 +36,8 @@ const FAN_COLORS = [
 ];
 
 const PRICE_OPTIONS = [
-  { value: 30000, label: "≥30000电池" },
   { value: 10000, label: "≥10000电池" },
-  { value: 2000, label: "≥2000电池" },
+  { value: 1000, label: "≥1000电池" },
 ] as const;
 
 const BEFORE_SECONDS = 2; // 礼物时刻前 2s
@@ -1969,7 +1972,7 @@ export default function GiftReplayPanel({
   // 每个场次的礼物组：live_id -> GiftGroup[]
   const [giftsBySession, setGiftsBySession] = useState<Record<string, GiftGroup[]>>({});
 
-  const [priceFilter, setPriceFilter] = useState(2000);
+  const [priceFilter, setPriceFilter] = useState(1000);
   const [fanFilter, setFanFilter] = useState("");
   const [selectedGiftKeys, setSelectedGiftKeys] = useState<Set<string>>(new Set());
   const [clips, setClips] = useState<ClipData[]>([]);
@@ -2101,7 +2104,7 @@ export default function GiftReplayPanel({
     };
   }, []);
 
-  // 载入所选场次的礼物（并行，逐场拉取 ≥2000）
+  // 载入所选场次的礼物（并行，逐场拉取 ≥1000）
   useEffect(() => {
     const ids = Array.from(selectedSessions);
     if (ids.length === 0) return;
@@ -2115,7 +2118,7 @@ export default function GiftReplayPanel({
         if (!s) continue;
         try {
           const res = await dataFetch(
-            `/api/anchor/gift-replay?action=gifts&live_id=${liveId}&start_time=${s.start_time}&end_time=${s.end_time}&threshold=2000`,
+            `/api/anchor/gift-replay?action=gifts&live_id=${liveId}&start_time=${s.start_time}&end_time=${s.end_time}&threshold=1000`,
           );
           const json = await res.json();
           console.log(`[GiftReplay] gifts live_id=${liveId} 响应:`, json);
@@ -2141,33 +2144,30 @@ export default function GiftReplayPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessions]);
 
-  // 解析礼物目录，构建 name -> gift_id -> 特效
+  // 解析礼物目录，构建 礼物名 -> gift_id 候选 -> 特效
   useEffect(() => {
     let disposed = false;
     (async () => {
       const platform = await getPlatform();
       await ensureGiftCatalogLoaded(platform);
-      const list = getGiftList();
-      const nameToId: Record<string, number> = {};
-      for (const g of list) {
-        if (g.name && g.id) nameToId[g.name] = g.id;
-      }
+      // 大航海：开通/续费舰长/提督/总督触发的动画在礼物列表与特效列表中对应的是
+      // "舰长一号/提督一号/总督一号"，故先做名称别名替换（其他名称原样）；
+      // 同一名称可能对应多个 gift_id，全部作为候选，逐个尝试命中真正带特效的那个。
+      const effectIdCandidates = (giftName: string): number[] =>
+        giftIdsByName(resolveGiftAliasName(giftName));
       if (disposed) return;
       // 为当前展示的全部礼物一次性解析特效
       const allGroups = Object.values(giftsBySession).flat();
       const needed = allGroups.filter((g) => !effectMap[g.key]);
       if (needed.length === 0) return;
-      const ids = needed
-        .map((g) => nameToId[g.giftName])
-        .filter((id): id is number => !!id);
-      const uniqueIds = [...new Set(ids)];
+      const uniqueIds = [...new Set(needed.flatMap((g) => effectIdCandidates(g.giftName)))];
       if (uniqueIds.length === 0) return;
       const fx = await fetchGiftEffects(uniqueIds);
       // id -> url; 关联回 group
       const updated: Record<string, { url: string; config: EffectConfig | null }> = {};
       for (const g of needed) {
-        const id = nameToId[g.giftName];
-        const eff = ids.includes(id) ? fx[id] : undefined;
+        const hit = effectIdCandidates(g.giftName).find((id) => fx[id]?.found && fx[id]?.web_mp4);
+        const eff = hit ? fx[hit] : undefined;
         if (eff?.found && eff.web_mp4) {
           updated[g.key] = {
             url: eff.web_mp4,

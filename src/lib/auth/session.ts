@@ -50,21 +50,35 @@ async function ensureStateFile() {
   }
 }
 
+function parseState(raw: string): SessionState {
+  let text = raw;
+  // 去除 UTF-8 BOM (EF BB BF)
+  if (text.charCodeAt(0) === 0xFEFF) {
+    text = text.slice(1);
+  }
+  const parsed = JSON.parse(text) as Partial<SessionState>;
+  return {
+    currentSid: parsed.currentSid ?? null,
+    sessions: parsed.sessions ?? [],
+  };
+}
+
 export async function readState(): Promise<SessionState> {
   await ensureStateFile();
-  let raw = await fs.readFile(STATE_FILE, "utf8");
-  // 去除 UTF-8 BOM (EF BB BF)
-  if (raw.charCodeAt(0) === 0xFEFF) {
-    raw = raw.slice(1);
-  }
+  const raw = await fs.readFile(STATE_FILE, "utf8");
   try {
-    const parsed = JSON.parse(raw) as Partial<SessionState>;
-    return {
-      currentSid: parsed.currentSid ?? null,
-      sessions: parsed.sessions ?? [],
-    };
+    return parseState(raw);
   } catch {
-    return defaultState;
+    // 写入用的是 fs.writeFile（先截断再写），并发读可能拿到空/半截 JSON。
+    // 绝不能把这种情况当成"没有任何会话"——那等于把用户直接踢下线，
+    // 所以短暂等待后重读一次，仍失败才回退默认值。
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      const retryRaw = await fs.readFile(STATE_FILE, "utf8");
+      return parseState(retryRaw);
+    } catch {
+      return defaultState;
+    }
   }
 }
 

@@ -34,6 +34,8 @@ export async function POST(request: NextRequest) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
+    // 持久化（与 userToken 一致），否则浏览器关闭后丢失登录
+    maxAge: 365 * 24 * 60 * 60,
   });
   response.cookies.set(getUserTokenCookieName(), userToken, {
     httpOnly: false,

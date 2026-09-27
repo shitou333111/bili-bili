@@ -170,7 +170,7 @@ async function fetchGiftList(
   liveId: string,
   startTime: number,
   endTime: number,
-  threshold = 2000,
+  threshold = 1000,
 ): Promise<RawGiftItem[]> {
   const gifts: RawGiftItem[] = [];
   let index = 0;
@@ -372,7 +372,7 @@ export async function fetchGiftReplay(
       const liveId = query.get("live_id") ?? "";
       const startTime = Number(query.get("start_time")) || 0;
       const endTime = Number(query.get("end_time")) || 0;
-      const threshold = Number(query.get("threshold")) || 2000;
+      const threshold = Number(query.get("threshold")) || 1000;
       const gifts = await fetchGiftList(platform, cookie, liveId, startTime, endTime, threshold);
       console.log(`[GiftReplay-Tauri][gifts] live_id=${liveId} ≥${threshold} 礼物数=${gifts.length}`);
       return { code: 0, message: "ok", data: { list: gifts } };

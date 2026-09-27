@@ -29,6 +29,8 @@ export async function POST(request: Request) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
+    // 持久化（与登录/切号一致），否则浏览器关闭后丢失登录
+    maxAge: 365 * 24 * 60 * 60,
   });
   return res;
 }

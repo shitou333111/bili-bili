@@ -29,7 +29,12 @@ import {
   loadTodayQualifyingGifts,
   tryHandleBlindBoxQuery,
 } from "./gift-db";
-import { ensureGiftCatalogLoaded, getGiftImg, getGiftList } from "@/lib/gift-catalog-client";
+import {
+  ensureGiftCatalogLoaded,
+  getGiftImg,
+  getGiftList,
+  resolveGiftAliasName,
+} from "@/lib/gift-catalog-client";
 import { getGiftEffectsMap } from "@/lib/gift-local-store";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
@@ -995,13 +1000,15 @@ class DisplayDanmakuService {
           // 先廉价预筛，只有"像礼物名"的弹幕才落到调试日志与精确匹配，避免刷屏与无谓开销
           if (looksLikeGiftName(content)) {
             const map = getGiftEffectNameMap();
-            const hitId = map.get(content.trim()) ?? null;
+            const key = content.trim();
+            // 大航海：弹幕"舰长/提督/总督"精确匹配时换算成"舰长一号/提督一号/总督一号"再查
+            const hitId = map.get(key) ?? map.get(resolveGiftAliasName(key)) ?? null;
             this.pushDebug("danmu", hitId ? "关键字命中" : "关键字候选未匹配", {
-              content: content.trim(),
+              content: key,
               giftId: hitId ?? 0,
               nameMapSize: map.size,
             });
-            if (hitId) await this.emitGiftEffect(hitId, content.trim());
+            if (hitId) await this.emitGiftEffect(hitId, key);
           }
         }
 
@@ -1104,15 +1111,22 @@ class DisplayDanmakuService {
    * 主窗口完成，仅把 {videoSrc, config} 经 WS 交给画布做 alpha/RGB 合成播放。
    */
   private async emitGiftEffect(giftId: number, giftName: string): Promise<void> {
-    if (!this.active || !giftId) return;
-    const bind = getGiftEffectsMap()[giftId];
-    if (!bind?.web_mp4) {
+    if (!this.active) return;
+    const effects = getGiftEffectsMap();
+    let id = effects[giftId]?.web_mp4 ? giftId : 0;
+    if (!id) {
+      // 大航海：开通/续费舰长/提督/总督触发的动画不在礼物列表与特效列表中，对应的是
+      // "舰长一号/提督一号/总督一号"，故把名称换成别名后再查（名称表只收录带特效的 id）
+      id = getGiftEffectNameMap().get(resolveGiftAliasName(giftName)) ?? 0;
+    }
+    const bind = id ? effects[id] : undefined;
+    if (!id || !bind?.web_mp4) {
       this.pushDebug("giftEffect", "无特效", { giftId, giftName });
       return;
     }
     const config = await this.loadEffectConfig(bind.web_mp4_json);
-    this.pushDebug("giftEffect", "emit", { giftId, giftName, hasConfig: !!config });
-    this.emitTo({ type: "giftEffect", giftId, giftName, videoSrc: bind.web_mp4, config });
+    this.pushDebug("giftEffect", "emit", { giftId: id, giftName, hasConfig: !!config });
+    this.emitTo({ type: "giftEffect", giftId: id, giftName, videoSrc: bind.web_mp4, config });
   }
 
   /** 处理一条送礼信息：追加到礼物逐条记录 → 组装达标礼物清单 → emit。

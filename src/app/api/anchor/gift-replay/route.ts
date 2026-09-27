@@ -172,7 +172,7 @@ async function fetchGiftList(
   liveId: string,
   startTime: number,
   endTime: number,
-  threshold = 2000,
+  threshold = 1000,
 ): Promise<GiftRecord[]> {
   const gifts: GiftRecord[] = [];
   let index = 0;
@@ -371,7 +371,7 @@ export async function GET(request: Request) {
       const liveId = url.searchParams.get("live_id") ?? "";
       const startTime = Number(url.searchParams.get("start_time")) || 0;
       const endTime = Number(url.searchParams.get("end_time")) || 0;
-      const threshold = Number(url.searchParams.get("threshold")) || 2000;
+      const threshold = Number(url.searchParams.get("threshold")) || 1000;
       const gifts = await fetchGiftList(cookie, liveId, startTime, endTime, threshold);
       console.log(`[GiftReplay][gifts] live_id=${liveId} ≥${threshold} 礼物数=${gifts.length}`);
       return NextResponse.json({ code: 0, message: "ok", data: { list: gifts } });

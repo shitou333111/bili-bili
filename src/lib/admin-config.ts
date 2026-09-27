@@ -59,6 +59,14 @@ export type SimulatorActivityConfig = {
   algorithmParams?: SimulatorAlgorithmParams;
 };
 
+/** 帮助页「常见问题」条目（管理员在 admin 页维护） */
+export type FaqItem = {
+  /** 问题 */
+  q: string;
+  /** 回答（支持换行） */
+  a: string;
+};
+
 export type AdminConfig = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
@@ -73,6 +81,8 @@ export type AdminConfig = {
   simulator_activities?: SimulatorActivityConfig[];
   /** 帮助页顶部公告内容（管理员在 admin 页编辑，为空则不显示公告卡片） */
   announcement?: string;
+  /** 帮助页「常见问题」列表（管理员在 admin 页编辑，为空则不显示该卡片） */
+  faq?: FaqItem[];
 };
 
 async function ensureConfigFile() {

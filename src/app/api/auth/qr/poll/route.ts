@@ -210,6 +210,9 @@ export async function GET(request: NextRequest) {
         httpOnly: true,
         sameSite: "lax",
         path: "/",
+        // 必须给 maxAge：不设置就是"会话 Cookie"，浏览器关闭/清理会话数据后即丢失，
+        // 表现为"明明登录过，过一会儿刷新就要求重新扫码"。与 userToken 保持一年一致。
+        maxAge: 365 * 24 * 60 * 60,
       });
       // 设置用户标识 Cookie（非 httpOnly，以便客户端可以读取）
       localResponse.cookies.set(getUserTokenCookieName(), userToken, {

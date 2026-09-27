@@ -55,3 +55,36 @@ export function getGiftList(): GiftConfigItem[] {
 export function getRoomGiftData(): RoomGiftListData {
   return storeGetRoomGiftData();
 }
+
+/**
+ * 大航海「开通/续费」动画的礼物别名：真实操作名 → 礼物列表/特效列表中的名称。
+ *
+ * 在直播间开通舰长/提督/总督时，B站触发的动画并不挂在"舰长/提督/总督"这三个名称上，
+ * 礼物列表与特效列表里对应的是相近的「舰长一号 / 提督一号 / 总督一号」（真实送礼与
+ * 弹幕关键字两种情况都需要替换）。**仅这 3 种特殊名称需要替换**，其他名称一律原样返回，
+ * 不影响既有流程。
+ */
+const GUARD_GIFT_ALIAS: Record<string, string> = {
+  舰长: "舰长一号",
+  提督: "提督一号",
+  总督: "总督一号",
+};
+
+/** 把大航海操作名换成礼物列表/特效列表中的对应名称（舰长→舰长一号…）；其他名称原样返回 */
+export function resolveGiftAliasName(name: string): string {
+  const n = (name ?? "").trim();
+  return (n && GUARD_GIFT_ALIAS[n]) || n;
+}
+
+/**
+ * 某名称在礼物列表中对应的全部 gift_id。同名可能有多个 id（例如"舰长一号"就有 4 个），
+ * 按 id 升序返回，便于调用方逐个尝试、命中真正带特效的那个。
+ */
+export function giftIdsByName(name: string): number[] {
+  const n = (name ?? "").trim();
+  if (!n) return [];
+  return getGiftList()
+    .filter((g) => g.name === n && g.id)
+    .map((g) => g.id)
+    .sort((a, b) => a - b);
+}

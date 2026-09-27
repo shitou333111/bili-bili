@@ -1266,7 +1266,8 @@ function calcPayRecordActivityProfit(
     for (const r of records) {
       if (!roomRuids.has(r.room_id)) roomRuids.set(r.room_id, r.ruid);
     }
-    const anchorNameMatcher = /该礼物仅限([^的]+)的直播间使用/;
+    // 用惰性匹配，允许主播昵称中含“的”（如“不酸甜的柠檬”）
+    const anchorNameMatcher = /该礼物仅限(.+?)的直播间使用/;
 
     for (const g of bagGifts) {
       if (!inProducts(g.gift_name)) continue;

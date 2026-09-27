@@ -1313,16 +1313,30 @@ export default function HomePage() {
   const [versionClickCount, setVersionClickCount] = useState(0);
   // 帮助页顶部公告（管理员在 admin 页编辑；为空则不显示公告卡片）
   const [helpAnnouncement, setHelpAnnouncement] = useState("");
-  // 拉取管理者发布的帮助页公告
+  // 帮助页「常见问题」（管理员在 admin 页编辑；为空则不显示该卡片）
+  const [helpFaq, setHelpFaq] = useState<{ q: string; a: string }[]>([]);
+  // 当前展开的常见问题索引（null=全部折叠）
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
+  // 拉取管理者发布的帮助页公告与常见问题（公开配置接口 /api/config，APP 与 WEB 均可读取）
   useEffect(() => {
     let cancelled = false;
-    getPlatform().then((platform) =>
-      platform.fetchRemoteConfig().then((cfg) => {
+    dataFetch("/api/config", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json) => {
         if (cancelled) return;
-        const v = (cfg as Record<string, unknown> | null)?.announcement;
+        const c = (json?.code === 0 ? json.data : null) as Record<string, unknown> | null;
+        const v = c?.announcement;
         setHelpAnnouncement(typeof v === "string" ? v : "");
-      }).catch(() => {}),
-    );
+        const rawFaq = c?.faq;
+        setHelpFaq(
+          Array.isArray(rawFaq)
+            ? rawFaq
+                .map((f) => ({ q: String((f as Record<string, unknown>)?.q ?? ""), a: String((f as Record<string, unknown>)?.a ?? "") }))
+                .filter((f) => f.q.trim())
+            : [],
+        );
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
   const [showAdminPwd, setShowAdminPwd] = useState(false);
@@ -1606,6 +1620,12 @@ export default function HomePage() {
     "粉丝清理",
     "粉丝牌清理",
     "多人接力PK医药费",
+  ]);
+  // 默认隐藏的帮助页工具卡片：与"管理后台"入口同一触发方式（连击版本卡片 10 次），
+  // 但无需 admin 密码（非机密信息，只是初始隐藏）。WEB 端版本卡片不显示 → 无法触发，恒隐藏。
+  const HIDDEN_BY_DEFAULT_TOOLS = new Set([
+    "助力主播 自动点赞",
+    "自动抢天选和红包",
   ]);
 
   // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
@@ -3491,6 +3511,8 @@ export default function HomePage() {
                 ].map((tool) => {
                   // WEB 端仅 APP 可用的工具：置灰（点赞/天选/粉丝清理/粉丝牌清理/PK医药费）
                   const isWebOnlyApp = isWeb && WEB_APP_ONLY_TOOLS.has(tool.title);
+                  // 默认隐藏的工具（点赞/天选）：连击版本卡片 10 次解锁后（adminUsed）才显示
+                  if (!adminUsed && HIDDEN_BY_DEFAULT_TOOLS.has(tool.title)) return null;
                   // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
                   const disabled = isWebOnlyApp || (tool.needsLogin && (serverAccount || !isOnline));
                   return (
@@ -3612,6 +3634,33 @@ export default function HomePage() {
                 <RecommendedAnchors />
                 {/* 开机自启动卡片（仅 Windows 桌面展示） */}
                 <AutostartCard />
+                {/* 常见问题卡片（管理员在 admin 页编辑；无内容则不显示） */}
+                {helpFaq.length > 0 && (
+                  <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                    <h3 className="text-base font-bold mb-3">常见问题</h3>
+                    <div className="space-y-2">
+                      {helpFaq.map((item, i) => {
+                        const open = openFaq === i;
+                        return (
+                          <div key={i} className="rounded-lg border border-black/10 overflow-hidden">
+                            <button
+                              onClick={() => setOpenFaq(open ? null : i)}
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition hover:bg-black/[0.03]"
+                            >
+                              <span className="min-w-0 flex-1 text-sm font-medium text-black/80">{item.q}</span>
+                              <svg className={`w-4 h-4 shrink-0 text-black/30 transition-transform duration-200 ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                            </button>
+                            <div className={`grid transition-all duration-200 ${open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
+                              <div className="overflow-hidden">
+                                <p className="px-3 pb-3 text-xs leading-relaxed text-black/60 whitespace-pre-wrap">{item.a}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {/* 反馈卡片 */}
                 <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">

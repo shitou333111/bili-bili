@@ -95,7 +95,11 @@ type AdminConfigData = {
   real_activity_url: string;
   simulator_activities: SimulatorActivityItem[];
   announcement: string;
+  faq: FaqItemData[];
 };
+
+/** 帮助页「常见问题」条目 */
+type FaqItemData = { q: string; a: string };
 
 /** 读取本地保存的管理员会话 sid */
 function getStoredAdminSid(): string | null {
@@ -329,6 +333,9 @@ export default function AdminPage() {
             : [],
           real_activity_url: typeof data.real_activity_url === "string" ? data.real_activity_url : "",
           announcement: typeof data.announcement === "string" ? data.announcement : "",
+          faq: Array.isArray(data.faq)
+            ? data.faq.map((f: any) => ({ q: String(f?.q ?? ""), a: String(f?.a ?? "") }))
+            : [],
           simulator_activities: simActs.map((a: any) => ({
                 id: String(a.id ?? ""),
                 title: String(a.title ?? ""),
@@ -1126,6 +1133,61 @@ export default function AdminPage() {
                 rows={3}
                 className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
               />
+            </div>
+
+            {/* 帮助页常见问题 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold">帮助页常见问题</h3>
+                <button
+                  onClick={() => setConfig({ ...config, faq: [...(config.faq ?? []), { q: "", a: "" }] })}
+                  className="text-xs text-[#00a1d6] hover:underline shrink-0"
+                >
+                  + 添加问题
+                </button>
+              </div>
+              <p className="text-[10px] text-black/40">显示在“帮助”页面“开机自启动”下方的“常见问题”卡片，每个问题为可展开折叠项（默认折叠）。全部留空则不显示该卡片。</p>
+              {(config.faq ?? []).length === 0 && (
+                <p className="text-[10px] text-black/30">暂无问题</p>
+              )}
+              <div className="space-y-2">
+                {(config.faq ?? []).map((item, i) => (
+                  <div key={i} className="rounded-lg border border-black/10 p-2 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={item.q}
+                        onChange={(e) => {
+                          const faq = [...(config.faq ?? [])];
+                          faq[i] = { ...faq[i], q: e.target.value };
+                          setConfig({ ...config, faq });
+                        }}
+                        placeholder="问题"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <button
+                        onClick={() => {
+                          const faq = (config.faq ?? []).filter((_, idx) => idx !== i);
+                          setConfig({ ...config, faq });
+                        }}
+                        className="text-xs text-[#e74c3c] hover:underline shrink-0"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <textarea
+                      value={item.a}
+                      onChange={(e) => {
+                        const faq = [...(config.faq ?? [])];
+                        faq[i] = { ...faq[i], a: e.target.value };
+                        setConfig({ ...config, faq });
+                      }}
+                      placeholder="回答（支持换行）"
+                      rows={3}
+                      className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
 
             <hr className="border-t-2 border-black/30" />
