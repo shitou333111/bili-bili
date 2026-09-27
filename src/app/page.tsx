@@ -1432,7 +1432,9 @@ export default function HomePage() {
       if (!isTauri()) return;
       try {
         // 后台静默检查更新：不阻塞首页渲染（结果驱动更新卡片显示）
-        const result = await withTimeout(checkForUpdates(), 10000);
+        // 30s：启动时 showBrowserCache/loadCachedQuick/fetchData 等并发网络请求会争抢带宽，
+        // 10s 太短会导致检查被静默放弃 → 既不显示更新卡片、也不会触发后台自动下载。
+        const result = await withTimeout(checkForUpdates(), 30000);
         setUpdateResult(result);
 
         // 原生更新静默下载：有原生更新则后台下载安装包（Windows=exe、Android=apk、iOS=ipa），
@@ -1465,10 +1467,16 @@ export default function HomePage() {
         // 后台静默下载并激活（asset provider 已切换，当前页面仍是旧资源），
         // 完成后顶部显示提示条，用户点击"立即生效"才刷新 —— 不阻塞首屏、不自动打断操作。
         if (!result.native.available && result.hot.available && !result.hot.shellTooOld) {
-          const r = await withTimeout(applyHotUpdate(), 60000);
-          if (r.status === "applied") {
-            setHotUpdateReady(true);
-          }
+          // 后台静默下载+激活，并把进度写进 updateProgress：
+          // 帮助页更新卡片会实时显示后台下载进度，用户不会误以为"没有自动下载"而去点"点击刷新"。
+          // applyHotUpdate 对同一时刻的下载去重：即便用户点了"点击刷新"，也只是复用这次下载，
+          // 不会再起第二条下载（并发下载会争抢同一个 .tmp-seq-<n> 目录、进度互相覆盖）。
+          applyHotUpdate((p) => setUpdateProgress(p))
+            .then((r) => {
+              if (r.status === "applied") setHotUpdateReady(true);
+            })
+            .catch(() => {})
+            .finally(() => setUpdateProgress(null));
         }
       } catch {
         // 检查失败/超时：首页照常显示，用户可通过"检查更新"卡片手动重试

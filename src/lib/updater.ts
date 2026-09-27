@@ -329,29 +329,94 @@ export interface HotUpdateApplyResult {
 }
 
 /**
+ * 把插件的下载进度事件转成单调递增的进度回调。
+ *
+ * 插件在下载失败重试时会重新从 0 计数字节（download_with_retry → download_once），
+ * 原样转发会让进度条突然从 50% 退回 2%。这里忽略"回退"事件保证只增不减，
+ * 并在下载成功时把进度补齐到 100%（重试导致末值可能不足 100%）。
+ */
+function makeMonotonicProgress(onProgress: ProgressCb) {
+  let total = 0;
+  let last = 0;
+  return {
+    push(p: { downloaded: number; total: number | null }) {
+      if (p.total && p.total > 0) total = p.total;
+      if (p.downloaded < last) return; // 重试回退，忽略
+      last = p.downloaded;
+      onProgress({ downloaded: p.downloaded, total: p.total || total });
+    },
+    flush() {
+      if (total > 0 && last < total) onProgress({ downloaded: total, total });
+    },
+  };
+}
+
+/**
+ * 全局在途的热更新应用（下载 + 激活）。
+ *
+ * 必须去重：hotswap 的 `hotswap://download-progress` 是全局广播事件，任何监听者
+ * 都会收到"所有"下载流的事件。若同一时刻有两个 hotswap_apply 在跑（例如冷启动
+ * 后台已发起一次，用户在下载途中又点了"点击刷新"），进度条会把两条下载流的字节数
+ * 混在一起 → 表现为 50% 突然退回 2%、反复跳变；两个下载还会争抢同一个
+ * `.tmp-seq-<n>` 解压目录互相破坏，各自重试，跳变更加剧烈。
+ * 因此这里只允许一个在途 apply，后续调用复用同一次下载（仅追加进度监听）。
+ */
+let inflightApply: Promise<HotUpdateApplyResult> | null = null;
+
+/**
  * 应用热更新（下载 + 验证 + 激活一步，hotswap applyUpdate）
  * 激活后 asset provider 已切换，window.location.reload() 立即生效（无需重启进程）。
  * 进度回调通过 tauri-plugin-hotswap-api 的 onDownloadProgress 事件
  */
-export async function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdateApplyResult> {
-  if (!isTauri()) return { status: "error", error: "非 Tauri 环境" };
-  try {
-    const { applyUpdate, onDownloadProgress } = await import("tauri-plugin-hotswap-api");
-    let unlisten: (() => void) | null = null;
-    if (onProgress) {
-      unlisten = await onDownloadProgress((p) =>
-        onProgress({ downloaded: p.downloaded, total: p.total || 0 }),
-      );
-    }
-    try {
-      const version = await applyUpdate();
-      return { status: "applied", version };
-    } finally {
-      unlisten?.();
-    }
-  } catch (e: any) {
-    return { status: "error", error: String(e?.message || e) };
+export function applyHotUpdate(onProgress?: ProgressCb): Promise<HotUpdateApplyResult> {
+  if (!isTauri()) return Promise.resolve({ status: "error", error: "非 Tauri 环境" });
+
+  // 已有下载在途：复用同一次下载，只追加进度监听（全局进度事件仍在持续推送）
+  if (inflightApply) {
+    const current = inflightApply;
+    if (!onProgress) return current;
+    return (async () => {
+      const { onDownloadProgress } = await import("tauri-plugin-hotswap-api");
+      const mon = makeMonotonicProgress(onProgress);
+      const unlisten = await onDownloadProgress((p) => mon.push(p));
+      try {
+        const r = await current;
+        if (r.status === "applied") mon.flush();
+        return r;
+      } finally {
+        unlisten();
+      }
+    })();
   }
+
+  const mon = onProgress ? makeMonotonicProgress(onProgress) : null;
+  const run = (async (): Promise<HotUpdateApplyResult> => {
+    try {
+      const { applyUpdate, onDownloadProgress } = await import("tauri-plugin-hotswap-api");
+      let unlisten: (() => void) | null = null;
+      if (mon) {
+        try {
+          unlisten = await onDownloadProgress((p) => mon.push(p));
+        } catch {
+          /* 监听失败不阻塞下载 */
+        }
+      }
+      try {
+        const version = await applyUpdate();
+        mon?.flush();
+        return { status: "applied", version };
+      } finally {
+        unlisten?.();
+      }
+    } catch (e: any) {
+      return { status: "error", error: String(e?.message || e) };
+    }
+  })();
+
+  inflightApply = run;
+  return run.finally(() => {
+    if (inflightApply === run) inflightApply = null;
+  });
 }
 
 /** 原生更新静默下载结果 */
