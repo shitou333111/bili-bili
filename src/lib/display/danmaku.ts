@@ -118,9 +118,14 @@ const RAW_CMDS = [
   "UNIVERSAL_EVENT_GIFT_V2",
   "DANMU_MSG",
   "GUARD_BUY",
+  "USER_TOAST_MSG",
   "WELCOME_GUARD",
   "SUPER_CHAT_MESSAGE",
 ];
+
+/** GUARD_BUY/USER_TOAST_MSG 的 guard_level → 大航海名称兜底（1=总督 2=提督 3=舰长），
+ *  两条命令都带 gift_name/role_name 时优先用其原值。 */
+const GUARD_LEVEL_GIFT_NAME: Record<number, string> = { 1: "总督", 2: "提督", 3: "舰长" };
 
 /** 把原始弹幕包精简为可读的关键字段（避免 JSON 里塞满无用字段） */
 function summarizeRaw(cmd: string, raw: any): any {
@@ -188,6 +193,10 @@ function summarizeRaw(cmd: string, raw: any): any {
     if (cmd === "GUARD_BUY") {
       const d = raw?.data ?? {};
       return { uid: d.uid, uname: d.username, guardLevel: d.guard_level, giftName: d.gift_name, price: d.price, num: d.num };
+    }
+    if (cmd === "USER_TOAST_MSG") {
+      const d = raw?.data ?? {};
+      return { uid: d.uid, uname: d.username, guardLevel: d.guard_level, roleName: d.role_name, price: d.price, num: d.num };
     }
     if (cmd === "WELCOME_GUARD") {
       const d = raw?.data ?? {};
@@ -483,6 +492,8 @@ class DisplayDanmakuService {
   private cachedRoomId = 0;
   /** 礼物特效配套 JSON 缓存（web_mp4_json URL → 配置；null=拉取失败，避免反复重试） */
   private effectJsonCache = new Map<string, GiftEffectFrameConfig | null>();
+  /** 大航海特效去重（uid:guardLevel → 最近触发时刻）：GUARD_BUY 与 USER_TOAST_MSG 可能同时下发 */
+  private guardEffectAt = new Map<string, number>();
   /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
   private wsConnectedAt = 0;
   // ---- 调试日志 ----
@@ -985,6 +996,32 @@ class DisplayDanmakuService {
       );
     }
 
+    // ---- 大航海（真实开通/续费舰长·提督·总督）：GUARD_BUY / USER_TOAST_MSG ----
+    // 真实开通大航海时 B站下发的是这两条命令（并非 SEND_GIFT），bili-live-listener 的 onGift
+    // 不会触发 → 特效漏播。这里单独触发礼物特效，名称统一交给 emitGiftEffect 做别名换算
+    // （舰长→舰长一号…）。只播特效，不写礼物记录、不改收益口径，避免影响既有送礼流程。
+    for (const cmd of ["GUARD_BUY", "USER_TOAST_MSG"]) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, async (raw: any) => {
+          if (!this.active) return;
+          const d = raw?.data ?? {};
+          const uid = Number(d.uid) || 0;
+          const guardLevel = Number(d.guard_level) || 0;
+          const name = String(d.gift_name || d.role_name || "").trim() || GUARD_LEVEL_GIFT_NAME[guardLevel] || "";
+          if (!name) return;
+          const config = await loadDisplayConfig(mid);
+          if (!config.giftEffect?.enabled) return;
+          // 两条命令可能对同一次开通同时下发，短窗口内按"用户 + 等级"去重，避免特效播两遍
+          const key = `${uid}:${guardLevel || name}`;
+          const now = Date.now();
+          if (now - (this.guardEffectAt.get(key) ?? 0) < 3000) return;
+          this.guardEffectAt.set(key, now);
+          this.pushDebug("guard", "开通/续费", { uid, guardLevel, giftName: name, cmd });
+          await this.emitGiftEffect(Number(d.gift_id) || 0, name);
+        }),
+      );
+    }
+
     // ---- 盲盒盈亏 · 弹幕查询 ----
     this.removeHandlers.push(
       this.live.onDanmu(async (message: any) => {
@@ -997,11 +1034,10 @@ class DisplayDanmakuService {
 
         // 礼物关键字特效：弹幕精确匹配"有特效礼物名称"→ 在收礼特效同位置播放（独立于盲盒查询）
         if (config.giftEffect?.enabled && config.giftEffect?.keyword) {
-          // 先廉价预筛，只有"像礼物名"的弹幕才落到调试日志与精确匹配，避免刷屏与无谓开销
           if (looksLikeGiftName(content)) {
             const map = getGiftEffectNameMap();
             const key = content.trim();
-            // 大航海：弹幕"舰长/提督/总督"精确匹配时换算成"舰长一号/提督一号/总督一号"再查
+            // 大航海：弹幕"舰长/提督/总督/上舰"精确匹配时换算成"舰长一号/提督一号/总督一号"再查
             const hitId = map.get(key) ?? map.get(resolveGiftAliasName(key)) ?? null;
             this.pushDebug("danmu", hitId ? "关键字命中" : "关键字候选未匹配", {
               content: key,
@@ -1014,7 +1050,6 @@ class DisplayDanmakuService {
 
         if (!config.blindBoxQuery?.enabled) return;
         const senderUid = Number(d.user.uid);
-        // 当前主播账号查询为特例：不返回其自身盲盒记录，而是返回"全部粉丝"的盲盒数据（uid=0 = 不按用户过滤）
         const queryUid = senderUid === mid ? 0 : senderUid;
         try {
           const reply = await tryHandleBlindBoxQuery(mid, queryUid, content, this.roomId);
