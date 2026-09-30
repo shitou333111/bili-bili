@@ -4,9 +4,6 @@ version = "1.0.0"
 description = "B瓜 - B站直播数据分析工具"
 authors = ["you"]
 edition = "2021"
-# 除主程序外还有人工验收入口 bin/wgc_spike（WGC + MF 采集编码），
-# 不指定 default-run 时 `cargo run`（tauri dev 用的就是它）会报"无法确定要跑哪个二进制"。
-default-run = "bili-live"
 
 [lib]
 name = "app_lib"

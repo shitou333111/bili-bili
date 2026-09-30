@@ -297,19 +297,20 @@ jobs:
             npx tauri build --no-bundle
           fi
 
+      # 精确指定主程序，避免 target 下其它二进制被一并打进 artifact。
       - name: Upload EXE (debug)
         if: env.IS_DEBUG == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-exe-debug
-          path: src-tauri/target/debug/*.exe
+          path: src-tauri/target/debug/bili-live.exe
 
       - name: Upload EXE (release)
         if: env.IS_DEBUG != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bili-live-exe
-          path: src-tauri/target/release/*.exe
+          path: src-tauri/target/release/bili-live.exe
 
   # ==================== Android APK ====================
   build-apk:
@@ -824,11 +825,11 @@ jobs:
             done
             return 1
           }
-          # EXE：先 release，再 debug
+          # EXE：只取主程序 bili-live.exe，避免同目录下其它二进制被误当成安装包主体。
+          # 先 release（artifact 目录名不含 debug），再 debug 兜底。
           EXE_CANDIDATES() {
-            find artifacts-dl -type f -name '*.exe' | grep -E '/release/|release[^/]*\.exe$' || true
-            find artifacts-dl -type f -name '*.exe' | grep -vE '/debug/|debug[^/]*\.exe$' || true
-            find artifacts-dl -type f -name '*.exe' || true
+            find artifacts-dl -type f -name 'bili-live.exe' | grep -v 'debug' || true
+            find artifacts-dl -type f -name 'bili-live.exe' || true
           }
           EXE="$(EXE_CANDIDATES | awk '!seen[$0]++' | pick_first || true)"
           # APK：先 universal+release，再 universal(任意)，再 release，最后任意
