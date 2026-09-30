@@ -2,7 +2,8 @@
  * 展示模块 —— 弹幕监听服务（运行于主窗口）。
  *
  * 用 bili-live-listener 监听"当前登录主播自己直播间"的实时弹幕：
- *  - 入场（INTERACT_WELCOME / 高级入场 ENTRY_EFFECT）→ 按配置过滤 → emit 到展示窗口
+ *  - 入场（INTERACT_WORD / INTERACT_WORD_V2 / ENTRY_EFFECT，均在 raw 层防御式解析）
+ *    → 按配置过滤 → emit 到展示窗口
  *  - 礼物（SEND_GIFT）→ 累加记录到 .data/display-gifts-<mid>.json → 组装达标礼物清单 → emit
  *
  * 仅 Tauri（桌面）环境使用；Web 下不 emit 到独立窗口。
@@ -112,6 +113,7 @@ function filterRecentDays(records: DanmuDebugRecord[]): DanmuDebugRecord[] {
 /** 捕获的关键原始命令 */
 const RAW_CMDS = [
   "INTERACT_WORD",
+  "INTERACT_WORD_V2",
   "ENTRY_EFFECT",
   "SEND_GIFT",
   "SEND_GIFT_V2",
@@ -139,6 +141,15 @@ function summarizeRaw(cmd: string, raw: any): any {
         guardType: d.guard_type,
         medalLevel: d.fans_medal?.medal_level,
         timestamp: d.timestamp,
+      };
+    }
+    if (cmd === "INTERACT_WORD_V2") {
+      const v2 = parseInteractWordV2(raw?.data);
+      return {
+        uid: v2?.uid,
+        uname: v2?.uname,
+        msgType: v2?.msgType,
+        isPb: typeof raw?.data?.pb === "string",
       };
     }
     if (cmd === "ENTRY_EFFECT") {
@@ -333,6 +344,67 @@ function parseGiftV2Pb(data: any): any[] | null {
     });
   }
   return out;
+}
+
+/** 解析 INTERACT_WORD_V2 的 data.pb（protobuf）为入场所需的最小用户信息。
+ *  背景：B站对部分特殊用户（高荣耀等级/大航海等高权重账号）会把进场消息从明文
+ *  INTERACT_WORD 改为 INTERACT_WORD_V2（protobuf，data.pb 为 base64），而
+ *  bili-live-listener 只订阅 INTERACT_WORD/ENTRY_EFFECT，未订阅 V2 → 这类用户的
+ *  进场被整条丢弃（表现为"某个特殊用户永远无法触发入场提示与入场动画"）。
+ *  字段号取自 blivedm（xfgryujk/blivedm，models/pb.py）：uid=1 uname=2 msg_type=5
+ *  timestamp=7 uinfo=22（uinfo.base=2，base.face=2）；msg_type 1=进入 2=关注 3=分享。
+ *  当 data 无 pb（JSON 变体）时回退读取明文字段。 */
+function parseInteractWordV2(
+  data: any,
+): { uid: number; uname: string; face: string; msgType: number; guardType: number; medalLevel: number } | null {
+  const pbB64 = data?.pb;
+  if (typeof pbB64 === "string" && pbB64) {
+    let fields: PbField[];
+    try {
+      const raw = Uint8Array.from(atob(pbB64), (c) => c.charCodeAt(0));
+      fields = pbDecode(raw, 0, raw.length);
+    } catch {
+      return null; // base64 损坏 → 视为解析失败
+    }
+    const uid = pbInt(fields, 1);
+    if (!uid) return null;
+    const uinfo = pbMsg(fields, 22);
+    const base = uinfo ? pbMsg(uinfo, 2) : null;
+    return {
+      uid,
+      uname: pbStr(fields, 2),
+      face: base ? pbStr(base, 2) : "",
+      msgType: pbInt(fields, 5),
+      guardType: 0,
+      medalLevel: 0,
+    };
+  }
+  // 无 pb → JSON 变体，字段与 INTERACT_WORD 同构，复用统一解析
+  return parseEntryJson(data);
+}
+
+/** 防御式解析入场原始包（JSON）为入场所需最小信息。
+ *  库内 dataProcessor 直接访问 data.uinfo.base.name / data.uinfo.guard.level，缺字段
+ *  即抛异常并中断该命令的全部监听器 → 整条入场丢失。这里全部用可选链兜底，任何缺字段
+ *  只退化为 0/空串，不会抛错。 */
+function parseEntryJson(
+  data: any,
+): { uid: number; uname: string; face: string; msgType: number; guardType: number; medalLevel: number } | null {
+  if (!data || typeof data !== "object") return null;
+  const uid = Number(data.uid) || 0;
+  if (!uid) return null;
+  const uinfo = data.uinfo ?? {};
+  const base = uinfo.base ?? {};
+  const medal = uinfo.medal ?? data.fans_medal ?? {};
+  const guard = uinfo.guard ?? {};
+  return {
+    uid,
+    uname: String(base.name ?? data.uname ?? ""),
+    face: String(data.face ?? base.face ?? ""),
+    msgType: Number(data.msg_type) || 0,
+    guardType: Number(guard.level ?? data.guard_level ?? data.guard_type) || 0,
+    medalLevel: Number(medal.level ?? medal.medal_level) || 0,
+  };
 }
 
 /** 判断 JSON 变体是否携带礼物特征字段。
@@ -943,20 +1015,39 @@ class DisplayDanmakuService {
     }
 
     // ---- 入场 ----
-    this.removeHandlers.push(
-      this.live.onInteract(async (message: any) => {
-        // Enter=1；Follow=2；Share=3；Like=4
-        if (!message?.data || message.data.type !== 1) return;
-        await this.handleEntry(mid, message.data.user);
-      }),
-    );
-    this.removeHandlers.push(
-      this.live.onEntryEffect(async (message: any) => {
-        // 高级入场特效（通常是舰长/高等级用户），同样作为入场来源
-        if (!message?.data?.user) return;
-        await this.handleEntry(mid, message.data.user);
-      }),
-    );
+    // 直接在底层 ws 监听入场原始包，不再依赖库的 dataProcessor，原因有二：
+    //  1) 库只订阅 INTERACT_WORD / ENTRY_EFFECT，未订阅 INTERACT_WORD_V2 —— 后者是
+    //     B站当前使用的入场命令（新版 protobuf，data.pb 为 base64）。未订阅该命令时，
+    //     这类用户的下发整条被丢弃，入场提示与入场动画均不触发；
+    //  2) 库的 dataProcessor 对 data.uinfo.base.name / data.uinfo.guard.level 等字段
+    //     是非防御式访问，缺字段即抛异常；该类监听器注册在底层同一命令上，异常会中断
+    //     该命令的全部监听器 → 整条入场丢失（表现为"某位用户永远无法触发入场"）。
+    // 因此在 raw 层统一防御式解析，可同时覆盖以上两种情况；入场提示与入场动画都从
+    // handleEntry 入口触发，一处修复即可同时生效。
+    for (const cmd of ["INTERACT_WORD", "INTERACT_WORD_V2", "ENTRY_EFFECT"]) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, async (raw: any) => {
+          if (!this.active) return;
+          const src = cmd === "INTERACT_WORD_V2" ? parseInteractWordV2(raw?.data) : parseEntryJson(raw?.data);
+          if (!src || !src.uid) return;
+          // INTERACT_WORD 系列仅处理"进入"（msg_type 1=进入 2=关注 3=分享）；ENTRY_EFFECT 无 msg_type
+          if (cmd !== "ENTRY_EFFECT" && src.msgType !== 1) return;
+          await this.handleEntry(
+            mid,
+            {
+              uid: src.uid,
+              uname: src.uname,
+              face: src.face,
+              guardType: src.guardType,
+              fansMedal: src.medalLevel ? { level: src.medalLevel } : undefined,
+            },
+            // INTERACT_WORD_V2 的 pb 变体不含勋章/大航海信息（恒为 0），无法评估筛选 →
+            // 直接放行；否则会被当作 0 级用户按筛选条件误过滤，导致入场提示也不触发。
+            cmd === "INTERACT_WORD_V2" && !src.guardType && !src.medalLevel,
+          );
+        }),
+      );
+    }
 
     // ---- 礼物 ----
     this.removeHandlers.push(
@@ -1076,8 +1167,11 @@ class DisplayDanmakuService {
     );
   }
 
-  /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。 */
-  private async handleEntry(mid: number, user: any) {
+  /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。
+   *  @param skipFilter — 该入场事件不携带大航海/粉丝勋章信息（如 INTERACT_WORD_V2 的
+   *  protobuf），无法评估入场筛选条件。此时跳过筛选直接提示：V2 只会下发给高权重特殊
+   *  用户，正是入场提示模块要展示的对象；若不跳过会因等级按 0 处理而被误过滤。 */
+  private async handleEntry(mid: number, user: any, skipFilter = false) {
     if (!this.active || !user || !user.uid) return;
     const config = await loadDisplayConfig(mid);
     const guardType = Number(user.guardType) || 0;
@@ -1107,14 +1201,15 @@ class DisplayDanmakuService {
       // 不 return：高级用户同样走普通入场提示
     }
 
-    // 入场提示模块：应用筛选
-    if (!config.entry || !this.matchesEntryFilter(config, guardType, medalLevel)) {
+    // 入场提示模块：应用筛选（skipFilter=true 时跳过——事件未携带勋章/大航海信息，无法评估）
+    if (!config.entry || (!skipFilter && !this.matchesEntryFilter(config, guardType, medalLevel))) {
       this.pushDebug("entry", "filtered", {
         uid: Number(user.uid),
         uname: user.uname || "",
         guardType,
         medalLevel,
         entryOn: !!config.entry,
+        skipFilter,
         matched: this.matchesEntryFilter(config, guardType, medalLevel),
       });
       return;

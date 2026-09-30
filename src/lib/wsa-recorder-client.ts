@@ -33,6 +33,8 @@ export type RawRecordOutput = {
 
 /** 「自启动」开关在 store 里的键（全账号共用）。 */
 const AUTOSTART_KEY = "rawRecordAutoStart";
+/** 「阈值档位（电池）」在 store 里的键（全账号共用）。 */
+const THRESHOLD_KEY = "rawRecordThreshold";
 /** 会话/配置所在的 store 文件（与 platform/tauri.ts 的 getSessionState 同一份）。 */
 const STORE_FILE = "bili-live-state.json";
 
@@ -58,11 +60,40 @@ export async function setAutoStartEnabled(on: boolean): Promise<void> {
 /** 尾窗：最后一个达标礼物之后继续录 15 秒。 */
 const TAIL_MS = 15_000;
 
-/** 阈值档位（礼物单价，电池）。`1` 是测试档：任何礼物都会触发。 */
-export const RAW_RECORD_THRESHOLDS = [1, 199, 1000, 10000] as const;
+/** 阈值档位（礼物单价，电池）。 */
+export const RAW_RECORD_THRESHOLDS = [199, 1000, 10000] as const;
 
 /** 默认阈值（电池）。 */
 export const RAW_RECORD_DEFAULT_THRESHOLD = 1000;
+
+/** 存的档位是不是现有档位之一（改过档位定义后，旧值会落到默认档）。 */
+function isKnownThreshold(v: unknown): v is number {
+  return typeof v === "number" && (RAW_RECORD_THRESHOLDS as readonly number[]).includes(v);
+}
+
+/** 读落盘的阈值档位（不认识的值 / 读失败一律回落到默认档）。 */
+export async function loadThreshold(): Promise<number> {
+  try {
+    const { load } = await import("@tauri-apps/plugin-store");
+    const store = await load(STORE_FILE, { autoSave: false });
+    const v = await store.get<number>(THRESHOLD_KEY);
+    return isKnownThreshold(v) ? v : RAW_RECORD_DEFAULT_THRESHOLD;
+  } catch {
+    return RAW_RECORD_DEFAULT_THRESHOLD;
+  }
+}
+
+/** 写阈值档位。落盘失败只影响下次启动，不影响本次会话内的选择。 */
+async function saveThreshold(v: number): Promise<void> {
+  try {
+    const { load } = await import("@tauri-apps/plugin-store");
+    const store = await load(STORE_FILE, { autoSave: false });
+    await store.set(THRESHOLD_KEY, v);
+    await store.save();
+  } catch {
+    /* 忽略 */
+  }
+}
 
 async function invokeCmd<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
@@ -119,9 +150,16 @@ class RawRecorder {
     return this.threshold;
   }
 
-  /** 改阈值：对下一次触发即时生效（已在录的那段不受影响）。 */
+  /** 改阈值：对下一次触发即时生效（已在录的那段不受影响），并落盘供下次启动沿用。 */
   setThreshold(v: number): void {
     this.threshold = v;
+    void saveThreshold(v);
+  }
+
+  /** 载入落盘的阈值档位（启动时调一次；不写回，避免把默认档覆盖掉用户的选择）。 */
+  async restoreThreshold(): Promise<number> {
+    this.threshold = await loadThreshold();
+    return this.threshold;
   }
 
   subscribe(cb: (s: RawRecordState) => void): () => void {
@@ -206,6 +244,9 @@ class RawRecorder {
       return;
     }
     if (!platform.isNative || platform.os !== "windows") return;
+
+    // 自启动可能在面板挂载前就开录，阈值得先取回落盘的那份
+    await this.restoreThreshold();
 
     // 环境没装齐（WSA/adb/APP）就别硬启，免得一开机就抛一串错误状态
     try {

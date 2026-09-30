@@ -154,6 +154,20 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
     };
   }, []);
 
+  // 阈值档位：同样落盘保存，下次启动沿用上次的选择
+  useEffect(() => {
+    let alive = true;
+    rawRecorder
+      .restoreThreshold()
+      .then((v) => {
+        if (alive) setThreshold(v);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 安装进度：下载/解压/安装各阶段的结果回执
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -409,7 +423,6 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
                   key={v}
                   type="button"
                   disabled={!supported}
-                  title={v === 1 ? "测试档：任何礼物都触发" : undefined}
                   onClick={() => {
                     rawRecorder.setThreshold(v);
                     setThreshold(v);
