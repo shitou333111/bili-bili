@@ -72,8 +72,38 @@ export async function GET(req: Request) {
 
   if (!act || !act.id) {
     return new NextResponse(
-      "<!doctype html><html><head><meta charset='utf-8'></head><body><h2>暂无模拟器活动</h2><p>请在 admin 配置中启用一个 simulator 活动后重新生成镜像。</p></body></html>",
-      { headers: { "Content-Type": "text/html; charset=utf-8" } }
+      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
+        `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+        `<link rel="icon" href="/orig_icon.png">` +
+        `<title>活动模拟</title>` +
+        `<style>` +
+        `*{box-sizing:border-box}` +
+        `html,body{height:100%;margin:0}` +
+        `body{display:flex;align-items:center;justify-content:center;padding:24px;background:#1b1533;color:#fff;` +
+        `font:15px/1.85 -apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;` +
+        `-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;` +
+        `background-image:radial-gradient(120% 80% at 50% 0%,#3a2f7a 0%,rgba(27,21,51,0) 60%),` +
+        `radial-gradient(95% 70% at 50% 100%,#2a2456 0%,rgba(27,21,51,0) 55%)}` +
+        `.card{width:min(440px,100%);padding:36px 30px 32px;border-radius:22px;text-align:center;` +
+        `background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);` +
+        `box-shadow:0 24px 60px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);` +
+        `animation:rise .5s cubic-bezier(.22,1,.36,1) both}` +
+        `@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}` +
+        `.mark{width:56px;height:56px;margin:0 auto 20px;border-radius:50%;display:flex;align-items:center;` +
+        `justify-content:center;background:linear-gradient(135deg,#8a5cff,#5b8cff);` +
+        `box-shadow:0 10px 26px rgba(122,92,255,.45)}` +
+        `.mark svg{width:26px;height:26px}` +
+        `p{margin:0;font-size:14px;text-align:justify;text-justify:inter-ideograph}` +
+        `.lead{margin-bottom:16px;padding-bottom:16px;font-size:15.5px;font-weight:600;color:#fff;letter-spacing:.2px;` +
+        `border-bottom:1px solid rgba(255,255,255,.1)}` +
+        `.body{color:rgba(255,255,255,.76)}` +
+        `</style></head><body>` +
+        `<div class="card">` +
+        `<div class="mark"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2l1.9 5.6L19.5 9.5l-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/></svg></div>` +
+        `<p class="lead">本次合成活动，逻辑清晰，简单易懂，没有模拟。</p>` +
+        `<p class="body">其实，经过多次模拟活动发现，每个活动每一步的盈亏基本都是持平的，都是官方设计好的。也就是说在每一步继续还是收手，没有更赚更亏的说法，完全就是拼运气看心情。所以之后可能不会每次都模拟，只会模拟一些有意思的合成活动。</p>` +
+        `</div></body></html>`,
+      { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
   }
 
