@@ -89,7 +89,7 @@ function nextHalfHourTs(from = Date.now()): number {
 }
 
 function openBiliLiveRoom(roomId: number) {
-  if (!roomId) { showToast("房间号无效"); return; }
+  if (!roomId) { showToast("房间号无效", "error"); return; }
   getPlatform().then((platform) => {
     const appScheme = `bilibili://live/${roomId}`;
     const webUrl = `https://live.bilibili.com/${roomId}`;
@@ -327,7 +327,7 @@ export default function AutoLotteryPage({ onBack }: Props) {
     const input = uidInput.trim();
     if (!input) return;
     const uid = Number(input);
-    if (!uid || uid <= 0) { showToast("请输入有效的 UID"); return; }
+    if (!uid || uid <= 0) { showToast("请输入有效的 UID", "error"); return; }
     if (customRooms.some((r) => r.uid === uid)) { showToast("该用户已在列表中"); setUidInput(""); return; }
     setUidInput("");
     addLog(`正在查询 UID ${uid} 的直播间...`, "info");

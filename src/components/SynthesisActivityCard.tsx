@@ -107,14 +107,14 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
     const text = `[吃瓜]${activity.name}活动：合成${totalGiftCount}个 ${filteredStats.totalEarned}-${filteredStats.totalSpent}=${filteredStats.profit}电池`;
     const roomRes = await fetchMedicalRoomId(Number(selectedAnchor));
     if (roomRes.code !== 0 || !roomRes.data?.roomid) {
-      showToast(roomRes.message || "获取直播间号失败");
+      showToast(roomRes.message || "获取直播间号失败", "error");
       return;
     }
     const res = await sendDanmaku(roomRes.data.roomid, text);
     if (res.code === 0) {
       showToast("弹幕已发送");
     } else {
-      showToast(res.message || res.msg || "发送弹幕失败");
+      showToast(res.message || res.msg || "发送弹幕失败", "error");
     }
   };
 

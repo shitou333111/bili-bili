@@ -951,6 +951,20 @@ async fn close_real_activity_panel(app: tauri::AppHandle) -> Result<(), String> 
 // （直播姬源、编辑 iframe）。编辑/测试通过 APP 内模态框 iframe（/display?mode=edit），不再新建窗口。
 mod server;
 
+// ==================== 原始录屏（礼物自动录屏） ====================
+// 仅 Windows：抓 WSA 里 B 站 APP 窗口（Windows Graphics Capture）→ 裁掉标题栏 →
+// Media Foundation SinkWriter 编 H.264 mp4 落盘到 exe 同级「礼物录屏」。
+// WSA 控制、adb 探测、标题栏 overlay 分别见 wsa.rs / overlay.rs。
+#[cfg(windows)]
+pub mod recorder;
+#[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod wsa;
+// 录屏环境初始化：检测 WSA / adb / B 站 APP 是否就绪，并提供一键下载安装
+#[cfg(windows)]
+mod setup;
+
 /// 弹出原生文件选择框，让用户为本账号指定"入场动画"视频文件。
 /// 返回所选文件的绝对路径；用户取消时返回 null。
 #[tauri::command]
@@ -1463,6 +1477,306 @@ fn apply_in_place_update(_new_exe_path: String, _old_version: String) -> Result<
     Err("apply_in_place_update 仅在 Windows 平台可用".into())
 }
 
+// ==================== 原始录屏（命令层） ====================
+// 职责划分：**前端当"触发脑"**（阈值比较、15 秒尾窗计时、礼物名累积与文件名字串生成），
+// 这里只当"执行器"：拉 WSA / 两阶段进房 / 挂 overlay / 开录 / 收尾命名。
+
+/// 原始录屏会话。`dir` 在开始监听时定下、收尾时复用，避免中途写入权限变化导致产物找不到。
+#[cfg(windows)]
+struct RawSession {
+    dir: Option<std::path::PathBuf>,
+    room_id: Option<i64>,
+}
+
+#[cfg(windows)]
+static RAW_SESSION: std::sync::Mutex<RawSession> = std::sync::Mutex::new(RawSession {
+    dir: None,
+    room_id: None,
+});
+
+/// 录屏状态快照（`wsa-recording:state` 事件负载）。`recording` 态由前端决定（它才是触发脑），
+/// 这里只报 WSA 侧的状态：`idle` / `starting` / `listening` / `error`。
+#[cfg(windows)]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecState {
+    state: String,
+    room_id: Option<i64>,
+    error: Option<String>,
+}
+
+#[cfg(windows)]
+fn emit_rec_state(app: &tauri::AppHandle, state: &str, room_id: Option<i64>, error: Option<&str>) {
+    let _ = app.emit(
+        "wsa-recording:state",
+        RecState {
+            state: state.to_string(),
+            room_id,
+            error: error.map(str::to_string),
+        },
+    );
+}
+
+/// 开始监听：拉起 WSA + B 站 APP（两阶段进房）→ 钉窗口 → 挂标题栏 overlay。
+/// 全程约 30 秒（两段各 14 秒进房等待是原型实测值），所以走 spawn_blocking，别卡住 UI 线程。
+#[cfg(windows)]
+#[tauri::command]
+async fn start_wsa_recording(app: tauri::AppHandle, room_id: i64) -> Result<RecState, String> {
+    let adb = wsa::resolve_adb(&app).await?;
+    emit_rec_state(&app, "starting", Some(room_id), None);
+
+    let raised = tauri::async_runtime::spawn_blocking(move || wsa::bring_up(adb, room_id))
+        .await
+        .map_err(|e| format!("DEEPLINK_FAILED::启动任务异常: {e}"))?;
+    if let Err(e) = raised {
+        emit_rec_state(&app, "error", Some(room_id), Some(&e));
+        return Err(e);
+    }
+
+    // 标题栏 overlay 在 wsa::bring_up 里、窗口一出现就打上（不再等这里）
+    let dir = recorder::resolve_output_dir(&app);
+    match RAW_SESSION.lock() {
+        Ok(mut g) => *g = RawSession {
+            dir: Some(dir),
+            room_id: Some(room_id),
+        },
+        Err(_) => return Err("CAPTURE_INIT_FAILED::会话状态锁异常".into()),
+    }
+    emit_rec_state(&app, "listening", Some(room_id), None);
+    Ok(RecState {
+        state: "listening".into(),
+        room_id: Some(room_id),
+        error: None,
+    })
+}
+
+/// 停止监听：收尾还挂着的录制（按临时名保留文件）→ 销毁 overlay → 关 B 站 APP 与 WSA。
+#[cfg(windows)]
+#[tauri::command]
+async fn stop_wsa_recording(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = RAW_SESSION.lock().ok().and_then(|g| g.dir.clone());
+    if let Some(dir) = dir {
+        let _ = tauri::async_runtime::spawn_blocking(move || recorder::stop(&dir, None)).await;
+    }
+    overlay::hide();
+    let _ = tauri::async_runtime::spawn_blocking(wsa::shutdown).await;
+    if let Ok(mut g) = RAW_SESSION.lock() {
+        *g = RawSession {
+            dir: None,
+            room_id: None,
+        };
+    }
+    emit_rec_state(&app, "idle", None, None);
+    Ok(())
+}
+
+/// 开录：抓当前 WSA 窗口，返回录制中的临时文件路径（正式文件名在收尾时给）。
+#[cfg(windows)]
+#[tauri::command]
+async fn start_raw_record() -> Result<String, String> {
+    use windows::Win32::Foundation::HWND;
+
+    let dir = RAW_SESSION
+        .lock()
+        .ok()
+        .and_then(|g| g.dir.clone())
+        .ok_or_else(|| "CAPTURE_INIT_FAILED::尚未开始监听，请先点「启动自动录屏」".to_string())?;
+    let raw = wsa::current_window_raw()
+        .ok_or_else(|| "WINDOW_NOT_FOUND::B 站 APP 窗口当前不可用".to_string())?;
+
+    let temp = tauri::async_runtime::spawn_blocking(move || {
+        recorder::start(HWND(raw as *mut std::ffi::c_void), &dir)
+    })
+    .await
+    .map_err(|e| format!("CAPTURE_INIT_FAILED::录制任务异常: {e}"))??;
+
+    overlay::set_recording(true);
+    Ok(temp.to_string_lossy().to_string())
+}
+
+/// 收尾并命名。`file_stem` = 「日期-礼物名1-礼物名2…」——一段录制里可能先后来了好几个礼物，
+/// 只有收尾时名字才是全的，所以整串由前端生成，Rust 只做非法字符过滤 + 重名追加 + 重命名。
+#[cfg(windows)]
+#[tauri::command]
+async fn stop_raw_record(file_stem: String) -> Result<Option<String>, String> {
+    let dir = RAW_SESSION
+        .lock()
+        .ok()
+        .and_then(|g| g.dir.clone())
+        .ok_or_else(|| "CAPTURE_INIT_FAILED::尚未开始监听".to_string())?;
+    let stem = file_stem.trim().to_string();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        recorder::stop(
+            &dir,
+            if stem.is_empty() {
+                None
+            } else {
+                Some(stem.as_str())
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("ENCODE_FAILED::收尾任务异常: {e}"))?;
+
+    // 无论成败，这一次录制都已经结束
+    overlay::set_recording(false);
+    Ok(res?.map(|p| p.to_string_lossy().to_string()))
+}
+
+/// 状态查询：热更新后前端 JS 状态会重置，用它跟 Rust 侧对齐一次界面。
+#[cfg(windows)]
+#[tauri::command]
+fn wsa_recording_status() -> Result<RecState, String> {
+    if !wsa::is_active() {
+        return Ok(RecState {
+            state: "idle".into(),
+            room_id: None,
+            error: None,
+        });
+    }
+    let room_id = RAW_SESSION.lock().ok().and_then(|g| g.room_id);
+    Ok(RecState {
+        state: "listening".into(),
+        room_id,
+        error: None,
+    })
+}
+
+/// 检测录屏环境（WSA / adb / B 站 APP）是否就绪。前端据此显示红/绿灯与开始按钮门禁。
+/// APK 那一项可能要跑 adb 实测（几百毫秒），故走 `status_async` 放到阻塞线程池。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn wsa_setup_status(app: tauri::AppHandle) -> Result<setup::SetupStatus, String> {
+    Ok(setup::status_async(&app).await)
+}
+
+/// 一键安装录屏环境：WSA → adb → B 站 APP，依次进行、已装则跳过。
+/// 下载大体积包（WSA 约 1.5GB）耗时长，过程经 `wsa-setup:progress` 事件持续回执。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn wsa_setup_install(app: tauri::AppHandle) -> Result<setup::SetupStatus, String> {
+    setup::install(app).await
+}
+
+/// 中止正在进行的安装。只是置个标志：下载循环、各步骤入口与等待循环每轮查一次，
+/// 命中就尽快收手；**不删**已下载的 `.part` 与已解压的 `pkg`，下次点安装从中断处继续。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn wsa_setup_abort() {
+    setup::request_cancel();
+}
+
+/// 产物目录的绝对路径（exe 同级「礼物截图录屏」，不可写则回退应用数据目录）。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn output_dir(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(recorder::output_dir_string(&app))
+}
+
+/// 在文件管理器里打开产物目录（三个模块标题右侧的文件夹图标）。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn open_output_folder(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = recorder::resolve_output_dir(&app);
+    std::process::Command::new("explorer.exe")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("SPAWN_FAILED::打开文件夹失败：{e}"))?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// 把已落盘的临时文件收进产物目录。
+/// 礼物截图与礼物模拟录屏都走这条：先在（已授权的）应用数据目录写盘，收尾再移进统一产物目录，
+/// 避免把几 MB 的产物字节当数组塞过 IPC。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn commit_output_file(
+    app: tauri::AppHandle,
+    src_path: String,
+    file_name: String,
+) -> Result<String, String> {
+    let dir = recorder::resolve_output_dir(&app);
+    let dst = recorder::output_path(&dir, &file_name);
+    let src = std::path::PathBuf::from(&src_path);
+    if std::fs::rename(&src, &dst).is_err() {
+        std::fs::copy(&src, &dst).map_err(|e| format!("COPY_FAILED::移动失败：{e}"))?;
+        let _ = std::fs::remove_file(&src);
+    }
+    Ok(dst.to_string_lossy().to_string())
+}
+
+// 非 Windows：同样名字的 stub，保证 invoke_handler 在三端都能编译过
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn start_wsa_recording(_app: tauri::AppHandle, _room_id: i64) -> Result<serde_json::Value, String> {
+    Err("原始录屏仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn stop_wsa_recording(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("原始录屏仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn start_raw_record() -> Result<String, String> {
+    Err("原始录屏仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn stop_raw_record(_file_stem: String) -> Result<Option<String>, String> {
+    Err("原始录屏仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn wsa_recording_status() -> Result<serde_json::Value, String> {
+    Err("原始录屏仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn wsa_setup_status() -> Result<serde_json::Value, String> {
+    Err("环境初始化仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn wsa_setup_install() -> Result<serde_json::Value, String> {
+    Err("环境初始化仅在 Windows 平台可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn wsa_setup_abort() {}
+
+// 产物目录相关（桌面端文件管理器）：移动端保持存相册/分享，不走这几条
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn output_dir(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("产物目录仅在 Windows 桌面端可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn open_output_folder(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("产物目录仅在 Windows 桌面端可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn commit_output_file(
+    _app: tauri::AppHandle,
+    _src_path: String,
+    _file_name: String,
+) -> Result<String, String> {
+    Err("产物目录仅在 Windows 桌面端可用".into())
+}
+
 /// Windows：原地替换更新 helper 主逻辑。
 /// 由旧进程复制自身到 %TEMP% 后以
 /// --in-place-update <new_exe> <target_exe> <parent_pid> <old_version> 启动。
@@ -1741,6 +2055,20 @@ pub fn run() {
             download_exe,
             apply_in_place_update,
             restart_app,
+            // 原始录屏（WSA 拉起 B 站 APP 监听礼物 → 自动录屏）
+            start_wsa_recording,
+            stop_wsa_recording,
+            wsa_recording_status,
+            start_raw_record,
+            stop_raw_record,
+            // 录屏环境初始化（WSA / adb / B 站 APP 检测与一键安装）
+            wsa_setup_status,
+            wsa_setup_install,
+            wsa_setup_abort,
+            // 统一产物目录（exe 同级「礼物截图录屏」）
+            output_dir,
+            open_output_folder,
+            commit_output_file,
         ])
         .run(context)
         .expect("error while running tauri application");

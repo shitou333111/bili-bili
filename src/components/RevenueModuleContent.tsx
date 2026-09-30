@@ -10,6 +10,7 @@ import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
 import { sendDanmaku } from "@/lib/barrage";
 import { fetchMedicalRoomId } from "@/lib/medical-client";
+import { type ToastKind } from "@/lib/toast";
 
 // ===== Type definitions =====
 type Snapshot = {
@@ -294,7 +295,7 @@ interface RevenueModuleContentProps {
   openAnchorBubbleChart: () => void;
 
   // Utility functions
-  showToast: (msg: string) => void;
+  showToast: (msg: string, kind?: ToastKind) => void;
   downloadJsonFile: () => void;
   formatTimestamp: (ts: number) => string;
   formatDateShort: (dateStr: string) => string;
@@ -675,14 +676,14 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     const text = buildBlindBoxDanmakuText(stat, blindBoxFilters[stat.blindBoxId]?.dateRange ?? "all");
     const roomRes = await fetchMedicalRoomId(Number(ruid));
     if (roomRes.code !== 0 || !roomRes.data?.roomid) {
-      showToast(roomRes.message || "获取直播间号失败");
+      showToast(roomRes.message || "获取直播间号失败", "error");
       return;
     }
     const res = await sendDanmaku(roomRes.data.roomid, text);
     if (res.code === 0) {
       showToast("弹幕已发送");
     } else {
-      showToast(res.message || res.msg || "发送弹幕失败");
+      showToast(res.message || res.msg || "发送弹幕失败", "error");
     }
   };
 
@@ -754,7 +755,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                     return;
                   }
                   if (!isLocalAccount) {
-                    showToast("非本机登录账号，没有登录凭证，无法更新数据");
+                    showToast("非本机登录账号，没有登录凭证，无法更新数据", "error");
                     return;
                   }
                   refreshData();

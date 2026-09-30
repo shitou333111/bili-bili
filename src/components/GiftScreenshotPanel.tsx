@@ -9,6 +9,8 @@ import { ensureGiftCatalogLoaded, getGiftImg, giftIdsByName, resolveGiftAliasNam
 import { getPlatform } from "@/lib/platform";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import { saveToOutputFolder, usesOutputFolder, yyyymmdd } from "@/lib/output-folder";
+import FolderIconButton from "@/components/FolderIconButton";
 import Dropdown from "@/components/Dropdown";
 
 // ==================== 类型定义 ====================
@@ -1561,6 +1563,23 @@ export default function GiftScreenshotPanel({
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
 
+    // 文件名：选中的礼物里最新一条记录的日期 + 粉丝昵称 + 各礼物名
+    // 例：20260930-粉丝昵称-礼物1名称-礼物2名称.png
+    const latestTs = (() => {
+      let max = 0;
+      for (const g of selectedGifts) {
+        for (const r of records) {
+          if (r.gift_id !== g.gift_id || r.uid !== g.fanUid) continue;
+          const t = new Date(r.time).getTime();
+          if (t > max) max = t;
+        }
+      }
+      return max || Date.now();
+    })();
+    const fanName = selectedGifts[0]?.fanName ?? "";
+    const names = selectedGifts.map(g => g.name).filter(Boolean).join("-");
+    const fileName = `${yyyymmdd(latestTs)}-${fanName}-${names}.png`.replace(/^-+|-+$/g, "");
+
     setDownloading(true);
     try {
       await renderCard();
@@ -1568,19 +1587,25 @@ export default function GiftScreenshotPanel({
       if (isMobileDevice()) {
         // 移动端：直接保存到相册（系统分享面板）
         const url = canvas.toDataURL("image/png");
-        const res = await saveMobileOrDownload(url, `gift_screenshot_${Date.now()}.png`);
+        const res = await saveMobileOrDownload(url, fileName);
         // 分享被取消/不可用时，展示预览供长按保存，避免误以为已保存
         if (res === "fallback") {
           setPreviewUrl(url);
           setShowDownloadModal(true);
         }
+      } else if (await usesOutputFolder()) {
+        // Windows 桌面端：落盘到 exe 同级的统一产物目录
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/png"));
+        if (!blob) return;
+        await saveToOutputFolder(new Uint8Array(await blob.arrayBuffer()), fileName);
+        setShowToast("图片已保存");
       } else {
         canvas.toBlob(blob => {
           if (!blob) return;
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `gift_screenshot_${Date.now()}.png`;
+          a.download = fileName;
           a.click();
           URL.revokeObjectURL(url);
           setShowToast("图片已保存");
@@ -1620,9 +1645,13 @@ export default function GiftScreenshotPanel({
   // ==================== 渲染 ====================
 
   return (
-    <div className="space-y-4">
-      {/* 标题（与礼物录屏标题样式一致） */}
-      <h3 className="text-sm font-bold tracking-tight">礼物截图</h3>
+    <section>
+      {/* 标题居中，与「展示」页模块卡片保持一致 */}
+      <h3 className="mb-2.5 flex items-center justify-center gap-1 text-center text-sm font-bold text-black/75">
+        礼物截图
+        <FolderIconButton />
+      </h3>
+      <div className="space-y-4 rounded-2xl border border-sky-400 bg-sky-200 p-4 shadow-[0_1px_2px_rgba(31,28,23,0.04)]">
 
       {/* Toast */}
       {showToast && (
@@ -1689,7 +1718,7 @@ export default function GiftScreenshotPanel({
 
       {/* 礼物按钮区（扁平排列，按钮背景色区分粉丝） */}
       {filteredGifts.length === 0 ? (
-        <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4 text-center">
+        <div className="rounded-lg border border-black/10 bg-sky-100 p-4 text-center">
           <div className="text-sm text-black/35">暂无符合条件的礼物</div>
         </div>
       ) : (
@@ -1834,6 +1863,7 @@ export default function GiftScreenshotPanel({
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </section>
   );
 }

@@ -15,6 +15,7 @@ import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import GiftReplayPanel from "@/components/GiftReplayPanel";
+import RawRecordPanel from "@/components/RawRecordPanel";
 import PieTooltip from "@/components/PieTooltip";
 import DisplayPanel from "@/components/display/DisplayPanel";
 import { showToast } from "@/lib/toast";
@@ -1693,14 +1694,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
               {/* 礼物截图 tab */}
               {activeTab === "gift_screenshot" && (
                 <div className="space-y-6">
-                  {/* 礼物录屏（新功能，置于截图上方） */}
-                  <GiftReplayPanel
-                    anchorName={anchorName}
-                    anchorFace={anchorFace}
-                    anchorUid={mid}
-                  />
-                  {/* 分割线：区分录屏与截图两个功能模块 */}
-                  <div className="border-t-2 border-dashed border-black/15" />
                   <GiftScreenshotPanel
                     records={stats.records}
                     anchorName={anchorName}
@@ -1710,6 +1703,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
                     mid={mid}
                     uname={uname}
                   />
+                  <GiftReplayPanel
+                    anchorName={anchorName}
+                    anchorFace={anchorFace}
+                    anchorUid={mid}
+                  />
+                  <RawRecordPanel mid={mid} />
                 </div>
               )}
 

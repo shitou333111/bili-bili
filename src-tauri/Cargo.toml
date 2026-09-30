@@ -4,6 +4,9 @@ version = "1.0.0"
 description = "B瓜 - B站直播数据分析工具"
 authors = ["you"]
 edition = "2021"
+# 除主程序外还有人工验收入口 bin/wgc_spike（WGC + MF 采集编码），
+# 不指定 default-run 时 `cargo run`（tauri dev 用的就是它）会报"无法确定要跑哪个二进制"。
+default-run = "bili-live"
 
 [lib]
 name = "app_lib"
@@ -29,6 +32,25 @@ tauri-plugin-ios-webview-insets = "=0.1.0"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 # 仅 Windows：展示模块"选择入场动画视频"用原生文件选择框。
 rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+# 仅 Windows：「原始录屏」用 Windows Graphics Capture 抓 WSA 里的 B 站 APP 窗口纹理，
+# 直接喂 Media Foundation SinkWriter 编 H.264 mp4（不引入 ffmpeg、不带外部 exe）；
+# 标题栏 overlay 用原生 Win32 窗口（GDI 绘制 + SetWindowRgn 挖洞 + 子类化 hit-test）。
+windows = { version = "0.61", features = [
+  "Foundation", "Foundation_Collections",
+  "Graphics_Capture", "Graphics_DirectX", "Graphics_DirectX_Direct3D11",
+  "Win32_Foundation", "Win32_System_Com", "Win32_System_WinRT",
+  "Win32_System_WinRT_Graphics_Capture", "Win32_System_WinRT_Direct3D11",
+  "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D10", "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi", "Win32_Graphics_Imaging",
+  "Win32_Media_MediaFoundation",
+  # 标题栏静音按钮走 per-session 静音（ISimpleAudioVolume / IAudioSessionManager2），
+  # 目标进程探测用 IAudioMeterInformation 读会话峰值 —— 都在 Media_Audio 与
+  # Media_Audio_Endpoints 里。
+  "Win32_Media_Audio", "Win32_Media_Audio_Endpoints",
+  "Win32_UI_HiDpi", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging",
+  "Win32_System_LibraryLoader", "Win32_System_Threading",
+] }
 
 [dependencies]
 tauri = { version = "2", features = ["unstable", "protocol-asset"] }
@@ -75,7 +97,17 @@ futures-util = "0.3"
 mime_guess = "2"
 # tokio：with_timeout 用的 tokio::time::timeout（各命令请求超时，配合全局 reqwest Client 复用）
 tokio = { version = "1", features = ["time", "net", "rt-multi-thread", "sync", "io-util", "macros"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# 仅 Windows：「原始录屏」在找不到 adb 时按需下载 Google 官方 platform-tools（zip 包）并解压。
+# 走 flate2 后端（工程里已有），不带 zlib-rs/zopfli/zstd 等压缩后端，只是解压用。
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
+# 仅 Windows：初始化模块要下载 WSA 官方分发包（.7z，约 530MB）并解压 →
+# 纯 Rust 的 7z 解包，不依赖用户机器上装没装 7z.exe / WinRAR。
+# 用 sevenz-rust2（sevenz-rust 的维护分支）而非原版：WSABuilds 的包用
+# `ARM64 LZMA2:25 BCJ` 压缩，含 **BCJ ARM64 过滤器**（7z 方法 ID 0x0A），
+# 原版 sevenz-rust 0.6 未实现该过滤器，会报 UnsupportedCompressionMethod("[10]") 解压失败。
+# 只用到解压：关掉默认 feature，仅开 `util`（提供 decompress_file）。
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["util"] }
 
 # 本地 vendor 的 tauri-plugin-hotswap：修复 Android 热更新目录路径（identifier 含 '-'，
 # 而 Android 包名将其替换为 '_'，原插件硬编码 /data/data/<identifier>/ 指向不存在目录，

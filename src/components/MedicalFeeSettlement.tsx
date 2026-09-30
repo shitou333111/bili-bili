@@ -328,7 +328,7 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
   const applyUid = useCallback(async () => {
     const uid = Number(uidInput.trim());
     if (!uid) {
-      showToast("请输入正确的 UID");
+      showToast("请输入正确的 UID", "error");
       return;
     }
     setQueriedUid(uid);
@@ -589,7 +589,7 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
       if (!file) return;
       // 限定常用静态图片格式
       if (!QR_ACCEPT_TYPES.includes(file.type)) {
-        showToast("仅支持 PNG/JPG/WebP/GIF 图片");
+        showToast("仅支持 PNG/JPG/WebP/GIF 图片", "error");
         e.target.value = "";
         return;
       }
@@ -597,7 +597,7 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
       reader.onload = async () => {
         const dataUrl = String(reader.result || "");
         if (!dataUrl.startsWith("data:image/")) {
-          showToast("请选择图片文件");
+          showToast("请选择图片文件", "error");
           return;
         }
         const op = operatorRef.current;
@@ -680,14 +680,14 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
     }
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
     if (!blob) {
-      showToast("生成失败");
+      showToast("生成失败", "error");
       return;
     }
     try {
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       showToast("所有收款码已复制，去微信粘贴发送到文件助手，然后依次识别付款");
     } catch {
-      showToast("复制失败，请手动保存");
+      showToast("复制失败，请手动保存", "error");
     }
   }, [roles, participants]);
 

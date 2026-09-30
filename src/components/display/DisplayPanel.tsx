@@ -39,6 +39,7 @@ import {
 import { sendDanmakuWithRetry } from "@/lib/barrage";
 import { dataFetch } from "@/lib/client-fetch";
 import { getEffectiveBlindBoxConfig, getAllBlindBoxInfo } from "@/lib/stats-client";
+import { type ToastKind } from "@/lib/toast";
 import DisplayEditModal from "./DisplayEditModal";
 
 interface GuardItem {
@@ -53,7 +54,7 @@ interface Props {
   mid: number;
   /** 本机是否持有该账号的 B站 登录凭证（服务器账号无凭证，无法监听自家直播间） */
   isLocalAccount?: boolean;
-  showToast?: (msg: string) => void;
+  showToast?: (msg: string, kind?: ToastKind) => void;
 }
 
 // 统一的开关行组件
@@ -366,8 +367,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   }, [config.danmaku.text]);
 
   const toast = useCallback(
-    (msg: string) => {
-      showToast?.(msg);
+    (msg: string, kind?: ToastKind) => {
+      showToast?.(msg, kind);
     },
     [showToast],
   );
@@ -466,7 +467,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       if (enabling) return;
       if (displayDanmaku.getServerPort() && displayDanmaku.isActive()) return; // 已在运行
       if (!isLocalAccount) {
-        toast("该功能需要登录凭证，服务器账号无法使用");
+        toast("该功能需要登录凭证，服务器账号无法使用", "error");
         return;
       }
       if (!isNative || !mid) return;
@@ -487,7 +488,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         if (!displayNeedsService(await loadDisplayConfig(mid))) displayDanmaku.stop();
       } catch (e: any) {
         console.error("[展示]启动弹幕监听失败", e);
-        toast(`启动弹幕监听失败：${e?.message || e}`);
+        toast(`启动弹幕监听失败：${e?.message || e}`, "error");
       } finally {
         setEnabling(false);
       }
@@ -532,7 +533,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       await navigator.clipboard.writeText(browserSourceUrl);
       toast("浏览器源地址已复制");
     } catch {
-      toast("复制失败，请手动选择复制");
+      toast("复制失败，请手动选择复制", "error");
     }
   }, [browserSourceUrl, toast]);
 
@@ -543,7 +544,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       try {
         await displayDanmaku.setOrientation(orientation, mid);
       } catch (e: any) {
-        toast(`切换朝向失败：${e?.message || e}`);
+        toast(`切换朝向失败：${e?.message || e}`, "error");
       }
     },
     [update, toast, mid],
@@ -599,14 +600,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             collect(list);
           }
           setGuards(all);
-          if (!all.length) toast("未获取到舰长列表，请确认直播间与登录状态");
+          if (!all.length) toast("未获取到舰长列表，请确认直播间与登录状态", "error");
         })(),
         12000,
         "获取舰长列表",
       );
     } catch (e: any) {
       console.error("[展示]获取舰长列表失败", e);
-      toast(`获取舰长列表失败：${e?.message || e}`);
+      toast(`获取舰长列表失败：${e?.message || e}`, "error");
     } finally {
       setGuardsLoading(false);
     }
@@ -735,7 +736,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             .catch(() => {});
         }
       } catch (e: any) {
-        toast(`选择视频失败：${e?.message || e}`);
+        toast(`选择视频失败：${e?.message || e}`, "error");
       }
     },
     [updateAnime, toast, isNative],

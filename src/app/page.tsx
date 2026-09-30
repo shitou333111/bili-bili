@@ -1107,7 +1107,7 @@ export default function HomePage() {
   // 重建账号数据库：删除 uid_<mid> 下所有数据文件，成功后刷新页面从空开始加载
   async function handleRebuildDatabase() {
     if (!isLoggedIn) {
-      showToast("请先登录账号");
+      showToast("请先登录账号", "error");
       return;
     }
     setRebuildDbLoading(true);
@@ -1129,10 +1129,10 @@ export default function HomePage() {
           window.location.reload();
         }, 1200);
       } else {
-        showToast(res.message || "重建失败");
+        showToast(res.message || "重建失败", "error");
       }
     } catch (err: any) {
-      showToast(`重建失败: ${err?.message || String(err)}`);
+      showToast(`重建失败: ${err?.message || String(err)}`, "error");
     } finally {
       setRebuildDbLoading(false);
     }
@@ -2400,7 +2400,7 @@ export default function HomePage() {
       if (currentAccount?.mid) setLikedToday(loadLikedAnchorsToday(currentAccount.mid));
     } catch (err) {
       setLikeList([]);
-      showToast(err instanceof Error ? err.message : "获取关注列表失败");
+      showToast(err instanceof Error ? err.message : "获取关注列表失败", "error");
     } finally {
       setLikeLoading(false);
     }
@@ -2409,7 +2409,7 @@ export default function HomePage() {
   async function likeOne(anchor: LikeAnchor) {
     if (likeLiking) return;
     const mid = currentAccount?.mid;
-    if (!mid) { showToast("未登录，无法点赞"); return; }
+    if (!mid) { showToast("未登录，无法点赞", "error"); return; }
     if (likedToday.has(anchor.uid)) { showToast("该主播今日已点过 1000 赞"); return; }
     if (likedToday.size >= DAILY_ANCHOR_LIMIT) { showToast("今日点赞已达上限（5 位主播）"); return; }
     setLikeLiking(true);
@@ -2424,10 +2424,10 @@ export default function HomePage() {
         setLikedToday(loadLikedAnchorsToday(mid));
         showToast(r.message || "点赞成功");
       } else {
-        showToast(r.message || "点赞失败");
+        showToast(r.message || "点赞失败", "error");
       }
     } catch {
-      showToast("点赞失败，请检查网络");
+      showToast("点赞失败，请检查网络", "error");
     } finally {
       setLikeLiking(false);
     }

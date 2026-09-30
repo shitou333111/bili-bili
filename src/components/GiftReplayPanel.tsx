@@ -22,10 +22,12 @@ import {
 } from "@/lib/gift-catalog-client";
 import { fetchGiftEffects } from "@/lib/gift-effects-client";
 import { saveVideoFile, saveVideoFileFromPath, isTauriMobile } from "@/lib/save-image";
+import { saveToOutputFolder, usesOutputFolder, yyyymmdd } from "@/lib/output-folder";
 import { open, remove, type FileHandle } from "@tauri-apps/plugin-fs";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { showToast } from "@/lib/toast";
 import Dropdown from "@/components/Dropdown";
+import FolderIconButton from "@/components/FolderIconButton";
 
 // ==================== 常量 ====================
 
@@ -400,12 +402,6 @@ function fmtDur(sec: number): string {
   const s = Math.max(0, Math.round(sec));
   const m = Math.floor(s / 60);
   return `${m}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function fmtFileTs(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
 // ==================== 合并播放器（多段按时间拼接成一个视频） ====================
@@ -1730,7 +1726,11 @@ function MergedPlayer({
         : "video/webm";
       const ext = mimeBase === "video/mp4" ? "mp4" : "webm";
       const isMobile = isTauriMobile();
-      const fileName = `礼物录屏_${fmtFileTs(Date.now())}.${ext}`;
+      // 文件名：选中的礼物里最新一条记录的日期 + 礼物名（多个礼物依次拼接，去掉重复）
+      // 例：20260930-礼物1名称-礼物2名称.mp4
+      const latestTs = sorted.length > 0 ? Math.max(...sorted.map((c) => c.giftTime)) : Math.floor(Date.now() / 1000);
+      const giftNames = Array.from(new Set(sorted.map((c) => c.group.giftName))).filter(Boolean).join("-");
+      const fileName = `${yyyymmdd(latestTs * 1000)}-${giftNames || "礼物"}.${ext}`.replace(/^-+|-+$/g, "");
       // 边录边写：移动端长视频把每个 500ms chunk 用 plugin-fs 流式追加写到应用沙盒文件，
       // JS/WebKit 只短暂持有单个 chunk，避免整段 mp4 在 Blob→ArrayBuffer→IPC 里整体拷贝，
       // 导致 iOS 长视频 WKWebView 内存吃紧闪退回首页。写完后一次性用文件路径导入相册。
@@ -1809,9 +1809,15 @@ function MergedPlayer({
       } else {
         const blob = new Blob(chunks, { type: mimeBase });
         if (blob.size === 0) throw new Error("录制结果为空");
-        const buf = await blob.arrayBuffer();
-        const res = await saveVideoFile(buf, fileName, mimeBase);
-        if (res === "fallback") showToast("视频保存失败，请重试");
+        if (await usesOutputFolder()) {
+          // Windows 桌面端：落盘到 exe 同级的统一产物目录
+          await saveToOutputFolder(new Uint8Array(await blob.arrayBuffer()), fileName);
+          showToast("视频已保存");
+        } else {
+          const buf = await blob.arrayBuffer();
+          const res = await saveVideoFile(buf, fileName, mimeBase);
+          if (res === "fallback") showToast("视频保存失败，请重试", "error");
+        }
       }
     } catch (e) {
       console.error("[GiftReplay] 保存视频失败:", e);
@@ -1819,7 +1825,7 @@ function MergedPlayer({
       if (abortPath) {
         try { await remove(abortPath); } catch { /* ignore */ }
       }
-      showToast("保存视频失败");
+      showToast("保存视频失败", "error");
     } finally {
       savingRef.current = false;
       recRef.current = null;
@@ -2399,17 +2405,18 @@ export default function GiftReplayPanel({
   // ==================== 渲染 ====================
 
   return (
-    <div className="space-y-4">
+    <section>
+      {/* 标题居中，与「展示」页模块卡片保持一致 */}
+      <h3 className="mb-2.5 flex items-center justify-center gap-1 text-center text-sm font-bold text-black/75">
+        礼物模拟录屏
+        <FolderIconButton />
+      </h3>
+      <div className="space-y-4 rounded-2xl border border-pink-400 bg-pink-200 p-4 shadow-[0_1px_2px_rgba(31,28,23,0.04)]">
       {showToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] bg-black/85 text-white px-4 py-2 rounded-lg text-sm shadow-lg transition-opacity">
           {showToast}
         </div>
       )}
-
-      {/* 标题 */}
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold tracking-tight">礼物录屏</h3>
-      </div>
 
       {/* 筛选栏 */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -2463,7 +2470,7 @@ export default function GiftReplayPanel({
       </div>
 
       {generating && (
-        <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-3 text-xs text-black/55">
+        <div className="rounded-lg border border-black/10 bg-pink-100 p-3 text-xs text-black/55">
           正在生成录屏（{genProgress}/{genTotal}）...
           <div className="mt-2 h-1.5 bg-black/10 rounded-full overflow-hidden">
             <div
@@ -2476,12 +2483,12 @@ export default function GiftReplayPanel({
 
       {/* 场次加载状态 */}
       {sessionError && (
-        <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4 text-center text-sm text-black/45">
+        <div className="rounded-lg border border-black/10 bg-pink-100 p-4 text-center text-sm text-black/45">
           {sessionError}
         </div>
       )}
       {sessionLoading && !sessionError && (
-        <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4 text-center text-sm text-black/45">
+        <div className="rounded-lg border border-black/10 bg-pink-100 p-4 text-center text-sm text-black/45">
           正在获取直播场次...
         </div>
       )}
@@ -2489,11 +2496,11 @@ export default function GiftReplayPanel({
       {/* 礼物列表（按钮按粉丝着色） */}
       {!sessionLoading && !sessionError && (
         giftLoading ? (
-          <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4 text-center text-sm text-black/45">
+          <div className="rounded-lg border border-black/10 bg-pink-100 p-4 text-center text-sm text-black/45">
             正在获取礼物列表...
           </div>
         ) : filteredGroups.length === 0 ? (
-          <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-4 text-center text-sm text-black/45">
+          <div className="rounded-lg border border-black/10 bg-pink-100 p-4 text-center text-sm text-black/45">
             暂无符合条件的礼物
           </div>
         ) : (
@@ -2547,13 +2554,14 @@ export default function GiftReplayPanel({
             />
           )}
           {errorClips.map((c) => (
-            <div key={c.id} className="rounded-xl border border-black/10 bg-[#f9f4ea] p-3 text-xs text-black/45">
+            <div key={c.id} className="rounded-xl border border-black/10 bg-pink-100 p-3 text-xs text-black/45">
               {c.group.nickname} · {c.group.giftName}：{c.error}
             </div>
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </section>
   );
 }
 

@@ -31,6 +31,17 @@
     "allow-download-exe",
     "allow-apply-in-place-update",
     "allow-restart-app",
+    "allow-start-wsa-recording",
+    "allow-stop-wsa-recording",
+    "allow-wsa-recording-status",
+    "allow-start-raw-record",
+    "allow-stop-raw-record",
+    "allow-wsa-setup-status",
+    "allow-wsa-setup-install",
+    "allow-wsa-setup-abort",
+    "allow-output-dir",
+    "allow-open-output-folder",
+    "allow-commit-output-file",
     {
       "identifier": "http:default",
       "allow": [

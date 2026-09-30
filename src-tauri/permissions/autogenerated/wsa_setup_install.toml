@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wsa-setup-install"
+description = "Enables the wsa_setup_install command without any pre-configured scope."
+commands.allow = ["wsa_setup_install"]
+
+[[permission]]
+identifier = "deny-wsa-setup-install"
+description = "Denies the wsa_setup_install command without any pre-configured scope."
+commands.deny = ["wsa_setup_install"]

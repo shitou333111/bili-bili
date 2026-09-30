@@ -28,7 +28,7 @@ function fixImageUrl(url: string): string {
  */
 async function openBiliLiveRoom(roomId: number) {
   if (!roomId) {
-    showToast("房间号无效");
+    showToast("房间号无效", "error");
     return;
   }
   const platform = await getPlatform();

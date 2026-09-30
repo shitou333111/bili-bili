@@ -55,7 +55,7 @@ export default function AutostartCard() {
       setEnabled(next);
       showToast(next ? "已开启开机自启动" : "已关闭开机自启动");
     } catch {
-      showToast(next ? "开启失败，请稍后重试" : "关闭失败，请稍后重试");
+      showToast(next ? "开启失败，请稍后重试" : "关闭失败，请稍后重试", "error");
     } finally {
       setLoading(false);
     }

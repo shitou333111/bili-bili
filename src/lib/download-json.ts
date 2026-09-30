@@ -35,7 +35,7 @@ async function buildLocalExport(): Promise<{ blob: Blob; filename: string } | nu
     const sid = state.currentSid;
     const session = state.sessions.find((s) => s.sid === sid);
     if (!session) {
-      showToast("未找到本地会话，请先登录");
+      showToast("未找到本地会话，请先登录", "error");
       return null;
     }
 
@@ -67,7 +67,7 @@ async function buildLocalExport(): Promise<{ blob: Blob; filename: string } | nu
     return { blob: new Blob([jsonStr], { type: "application/json" }), filename: `bili-revenue-${month}.json` };
   } catch (err) {
     console.error("[downloadJson] 本地导出失败:", err);
-    showToast("本地导出失败");
+    showToast("本地导出失败", "error");
     return null;
   }
 }
@@ -105,7 +105,7 @@ export async function downloadJsonFile() {
       if (m && m[1]) filename = m[1];
     } catch (err) {
       console.error("[downloadJson] 下载失败:", err);
-      showToast("JSON 下载失败，请检查网络连接");
+      showToast("JSON 下载失败，请检查网络连接", "error");
       return;
     }
   }
@@ -126,10 +126,10 @@ export async function downloadJsonFile() {
       }
     } catch (err) {
       console.error("[downloadJson] 插件保存失败:", err);
-      showToast("JSON 保存失败，请检查网络与存储权限");
+      showToast("JSON 保存失败，请检查网络与存储权限", "error");
       return;
     }
-    showToast("JSON 保存失败，请重试");
+    showToast("JSON 保存失败，请重试", "error");
     return;
   }
 

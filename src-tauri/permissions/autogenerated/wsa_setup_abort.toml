@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wsa-setup-abort"
+description = "Enables the wsa_setup_abort command without any pre-configured scope."
+commands.allow = ["wsa_setup_abort"]
+
+[[permission]]
+identifier = "deny-wsa-setup-abort"
+description = "Denies the wsa_setup_abort command without any pre-configured scope."
+commands.deny = ["wsa_setup_abort"]

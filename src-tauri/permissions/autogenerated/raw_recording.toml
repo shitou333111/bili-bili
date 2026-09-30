@@ -1,0 +1,81 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-wsa-recording"
+description = "Enables the start_wsa_recording command without any pre-configured scope."
+commands.allow = ["start_wsa_recording"]
+
+[[permission]]
+identifier = "deny-start-wsa-recording"
+description = "Denies the start_wsa_recording command without any pre-configured scope."
+commands.deny = ["start_wsa_recording"]
+
+[[permission]]
+identifier = "allow-stop-wsa-recording"
+description = "Enables the stop_wsa_recording command without any pre-configured scope."
+commands.allow = ["stop_wsa_recording"]
+
+[[permission]]
+identifier = "deny-stop-wsa-recording"
+description = "Denies the stop_wsa_recording command without any pre-configured scope."
+commands.deny = ["stop_wsa_recording"]
+
+[[permission]]
+identifier = "allow-wsa-recording-status"
+description = "Enables the wsa_recording_status command without any pre-configured scope."
+commands.allow = ["wsa_recording_status"]
+
+[[permission]]
+identifier = "deny-wsa-recording-status"
+description = "Denies the wsa_recording_status command without any pre-configured scope."
+commands.deny = ["wsa_recording_status"]
+
+[[permission]]
+identifier = "allow-start-raw-record"
+description = "Enables the start_raw_record command without any pre-configured scope."
+commands.allow = ["start_raw_record"]
+
+[[permission]]
+identifier = "deny-start-raw-record"
+description = "Denies the start_raw_record command without any pre-configured scope."
+commands.deny = ["start_raw_record"]
+
+[[permission]]
+identifier = "allow-stop-raw-record"
+description = "Enables the stop_raw_record command without any pre-configured scope."
+commands.allow = ["stop_raw_record"]
+
+[[permission]]
+identifier = "deny-stop-raw-record"
+description = "Denies the stop_raw_record command without any pre-configured scope."
+commands.deny = ["stop_raw_record"]
+
+[[permission]]
+identifier = "allow-output-dir"
+description = "Enables the output_dir command without any pre-configured scope."
+commands.allow = ["output_dir"]
+
+[[permission]]
+identifier = "deny-output-dir"
+description = "Denies the output_dir command without any pre-configured scope."
+commands.deny = ["output_dir"]
+
+[[permission]]
+identifier = "allow-open-output-folder"
+description = "Enables the open_output_folder command without any pre-configured scope."
+commands.allow = ["open_output_folder"]
+
+[[permission]]
+identifier = "deny-open-output-folder"
+description = "Denies the open_output_folder command without any pre-configured scope."
+commands.deny = ["open_output_folder"]
+
+[[permission]]
+identifier = "allow-commit-output-file"
+description = "Enables the commit_output_file command without any pre-configured scope."
+commands.allow = ["commit_output_file"]
+
+[[permission]]
+identifier = "deny-commit-output-file"
+description = "Denies the commit_output_file command without any pre-configured scope."
+commands.deny = ["commit_output_file"]

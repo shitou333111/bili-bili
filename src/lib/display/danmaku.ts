@@ -1009,6 +1009,13 @@ class DisplayDanmakuService {
           const guardLevel = Number(d.guard_level) || 0;
           const name = String(d.gift_name || d.role_name || "").trim() || GUARD_LEVEL_GIFT_NAME[guardLevel] || "";
           if (!name) return;
+          // 「原始录屏」只读订阅点：审计口径 `price` 单位是金瓜子（1 电池 = 100 金瓜子），
+          // 故舰长 138000 金瓜子 → 1380 电池。放在展示配置判定之前（录制不吃展示配置）。
+          notifyQualifyingGift({
+            giftName: name,
+            priceBattery: (Number(d.price) || 0) / 100,
+            ts: Math.floor(Date.now() / 1000),
+          });
           const config = await loadDisplayConfig(mid);
           if (!config.giftEffect?.enabled) return;
           // 两条命令可能对同一次开通同时下发，短窗口内按"用户 + 等级"去重，避免特效播两遍
@@ -1203,6 +1210,9 @@ class DisplayDanmakuService {
     });
     this.pushDebug("gift", "记录", { uid, uname, giftId, giftName: d.giftName, num: Number(d.num) || 1, hasImg: !!giftImg });
 
+    // 「原始录屏」只读订阅点：与展示开关无关（录制不吃展示配置），放在 native 判定之前
+    notifyQualifyingGift({ giftName: String(d.giftName || ""), priceBattery, ts });
+
     if (!this.isNative()) return;
 
     const config = await loadDisplayConfig(mid);
@@ -1285,6 +1295,39 @@ export async function getTodayQualifyingGifts(mid: number): Promise<DisplayGiftI
   }
   const config = await loadDisplayConfig(mid);
   return loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
+}
+
+/** 收礼事件（只读订阅点用）。`priceBattery` = 礼物单价，单位电池。 */
+export type QualifyingGiftEvent = {
+  /** 礼物名；大航海为「舰长 / 提督 / 总督」 */
+  giftName: string;
+  /** 单价（电池） */
+  priceBattery: number;
+  /** 送礼时刻（秒） */
+  ts: number;
+};
+
+const qualifyingGiftListeners = new Set<(e: QualifyingGiftEvent) => void>();
+
+/**
+ * 订阅「收到礼物」的只读通知（送礼分支 + 大航海分支各回调一次），与展示配置无关：
+ * 「原始录屏」用它做触发判定（阈值比较 / 尾窗计时都在订阅方）。返回退订函数。
+ */
+export function subscribeQualifyingGift(cb: (e: QualifyingGiftEvent) => void): () => void {
+  qualifyingGiftListeners.add(cb);
+  return () => {
+    qualifyingGiftListeners.delete(cb);
+  };
+}
+
+function notifyQualifyingGift(e: QualifyingGiftEvent) {
+  for (const cb of qualifyingGiftListeners) {
+    try {
+      cb(e);
+    } catch (err) {
+      console.error("[展示] 收礼订阅回调异常", err);
+    }
+  }
 }
 
 /** 全局单例服务 */

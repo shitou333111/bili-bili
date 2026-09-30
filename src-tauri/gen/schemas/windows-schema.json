@@ -2337,6 +2337,12 @@
           "markdownDescription": "Enables the close_real_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the commit_output_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-commit-output-file",
+          "markdownDescription": "Enables the commit_output_file command without any pre-configured scope."
+        },
+        {
           "description": "Enables the debug_acl command without any pre-configured scope.",
           "type": "string",
           "const": "allow-debug-acl",
@@ -2373,10 +2379,22 @@
           "markdownDescription": "Enables the open_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_output_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-output-folder",
+          "markdownDescription": "Enables the open_output_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_real_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-real-activity-panel",
           "markdownDescription": "Enables the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the output_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-output-dir",
+          "markdownDescription": "Enables the output_dir command without any pre-configured scope."
         },
         {
           "description": "Enables the pick_video_file command without any pre-configured scope.",
@@ -2397,10 +2415,58 @@
           "markdownDescription": "Enables the start_display_server command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_raw_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-raw-record",
+          "markdownDescription": "Enables the start_raw_record command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_wsa_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-wsa-recording",
+          "markdownDescription": "Enables the start_wsa_recording command without any pre-configured scope."
+        },
+        {
           "description": "Enables the stop_display_server command without any pre-configured scope.",
           "type": "string",
           "const": "allow-stop-display-server",
           "markdownDescription": "Enables the stop_display_server command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_raw_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-raw-record",
+          "markdownDescription": "Enables the stop_raw_record command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_wsa_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-wsa-recording",
+          "markdownDescription": "Enables the stop_wsa_recording command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the wsa_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-wsa-recording-status",
+          "markdownDescription": "Enables the wsa_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the wsa_setup_abort command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-wsa-setup-abort",
+          "markdownDescription": "Enables the wsa_setup_abort command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the wsa_setup_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-wsa-setup-install",
+          "markdownDescription": "Enables the wsa_setup_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the wsa_setup_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-wsa-setup-status",
+          "markdownDescription": "Enables the wsa_setup_status command without any pre-configured scope."
         },
         {
           "description": "禁止调用 apply_in_place_update 命令",
@@ -2431,6 +2497,12 @@
           "type": "string",
           "const": "deny-close-real-activity-panel",
           "markdownDescription": "Denies the close_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the commit_output_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-commit-output-file",
+          "markdownDescription": "Denies the commit_output_file command without any pre-configured scope."
         },
         {
           "description": "Denies the debug_acl command without any pre-configured scope.",
@@ -2469,10 +2541,22 @@
           "markdownDescription": "Denies the open_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_output_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-output-folder",
+          "markdownDescription": "Denies the open_output_folder command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_real_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-real-activity-panel",
           "markdownDescription": "Denies the open_real_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the output_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-output-dir",
+          "markdownDescription": "Denies the output_dir command without any pre-configured scope."
         },
         {
           "description": "Denies the pick_video_file command without any pre-configured scope.",
@@ -2493,10 +2577,58 @@
           "markdownDescription": "Denies the start_display_server command without any pre-configured scope."
         },
         {
+          "description": "Denies the start_raw_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-raw-record",
+          "markdownDescription": "Denies the start_raw_record command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_wsa_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-wsa-recording",
+          "markdownDescription": "Denies the start_wsa_recording command without any pre-configured scope."
+        },
+        {
           "description": "Denies the stop_display_server command without any pre-configured scope.",
           "type": "string",
           "const": "deny-stop-display-server",
           "markdownDescription": "Denies the stop_display_server command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_raw_record command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-raw-record",
+          "markdownDescription": "Denies the stop_raw_record command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_wsa_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-wsa-recording",
+          "markdownDescription": "Denies the stop_wsa_recording command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the wsa_recording_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-wsa-recording-status",
+          "markdownDescription": "Denies the wsa_recording_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the wsa_setup_abort command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-wsa-setup-abort",
+          "markdownDescription": "Denies the wsa_setup_abort command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the wsa_setup_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-wsa-setup-install",
+          "markdownDescription": "Denies the wsa_setup_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the wsa_setup_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-wsa-setup-status",
+          "markdownDescription": "Denies the wsa_setup_status command without any pre-configured scope."
         },
         {
           "description": "Allows installing APKs and managing the install-unknown-apps permission.\n#### This default permission set includes:\n\n- `allow-install`\n- `allow-can-install`\n- `allow-request-install-permission`",

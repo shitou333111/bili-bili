@@ -47,6 +47,7 @@
 - **主播数据模块**：查看主播维度的收入统计，以及"消费主播分布图"（把每个主播按消费金额大小呈现为气泡/泡泡图）。
 - **直播投屏展示面板（展示）**：把直播间入场与礼物实时投屏到独立画布窗口（主播页"盲盒"与"大礼物"之间），含入场提示粒子胶囊、今日礼物轮换、高级用户自定义入场动画、盲盒盈亏弹幕查询、定时发弹幕，软件启动即按配置自动启用全部监听。
 - **大礼物录屏**：在主播的"大礼物"页，从近 7 天直播场次中多选大礼物（按电池档位/粉丝筛选），把礼物的录播片段与官方特效动画合成为一个竖屏视频（720×1280），可播放预览并一键保存到相册/下载。
+- **礼物完整录屏（原始录屏，仅 Windows 桌面端）**：在 WSA（Windows Subsystem for Android）里跑 B 站 APP 并监听当前主播的直播间，收到达到阈值的礼物就自动录下**完整直播画面**（PK 分数、弹幕、飘屏都在，与手机录屏效果一致），停手 15 秒自动收尾，文件名带日期与礼物名。首次使用可一键安装 WSA / adb / B 站 APP 插件。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需要登录凭证才能使用）。
 - **复活区截图工具**：托管在网站服务器上的工具页面，帮助直播多人局投屏复活曲倒计时、解决医药费争议。
 - **B站 直播送礼模拟器**：内置"神豪模式"模拟器——输入主播UID可加载**真实直播流**作为背景（竖屏流自动填满全屏），所有礼物随便送（含大礼物特效、连击、横幅通知），还有"山海工坊"合成活动可玩。礼物面板的"礼物"选项卡数据来自直播间礼物面板 API（roomGiftList，12h 缓存自动更新）。
@@ -354,6 +355,46 @@ bili_live/
 - 保存视频：`canvas.captureStream(30)` + MediaRecorder 录制真实播放一遍；桌面/Web 用 `<a download>` 下载，移动端通过 `tauri-plugin-pldownloader` **边录边分块写入相册**（避免 iOS 长视频内存吃紧）。固定码率 6Mbps，帧率按时长调整（≤120s 为 30fps，超过为 24fps）。
 - 特效合成用 `requestVideoFrameCallback` **事件驱动**（视频真正出新帧才做像素级 alpha 合成，每个特效元素独立结果画布），既消除 `willReadFrequently` 警告又保证帧率。
 
+#### 礼物完整录屏（原始录屏，[RawRecordPanel.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/RawRecordPanel.tsx)）
+
+同一页签里的第三个模块（在「礼物截图」「礼物录屏」之后）。**把 WSA 里的 B 站 APP 当作一台"手机"来录**：自动拉起 WSA 与 APP、进当前主播的直播间、监听礼物，收到达标的礼物就录下完整直播画面，停手 15 秒后收尾落盘。
+
+**为什么不在 Android 端录**：B 站 Android 客户端会把 `screenrecord` 一类的绘制内容一起录进画面（污染画面），所以改成**在 Windows 侧录 WSA 里的 B 站 APP 窗口**（Windows Graphics Capture）。采集链路留了独立的人工验收入口 `wgc_spike`（见文末「给未来自己的备忘」）。
+
+**界面元素**
+
+| 元素 | 说明 |
+|------|------|
+| 环境三指示灯 | `WSA` / `ADB` / `APP`，全绿 = 插件已就绪，红 = 未装齐 |
+| 插件按钮 | 未装齐时「首次使用点击安装插件」；点击先**检测**，缺东西才弹确认框（4 条须知，读完点「开始安装」），安装中变「安装中··· 点击中止」（可中止，已下载/已解压的部分保留，下次接着来） |
+| 安装进度 | 「第 N / 3 步」+ 阶段文案（1 WSA / 2 adb / 3 B 站 APP）+ 下载进度条（收满才改名落盘，中断可续传） |
+| 直播间房间号 | 默认当前登录账号的直播间，可手动覆盖，留空即用默认 |
+| 阈值档 | `≥1`（测试档，任何礼物都触发）/ `≥199` / `≥1000`（默认）/ `≥10000`，口径是**礼物单价**（电池） |
+| 启停按钮 | 「启动自动录屏」/「停止自动录屏」（同一个按钮随状态切换） |
+| 自启动 | 全账号共用，落盘保存；开启后软件启动即自动开始监听（环境没装齐则不硬启） |
+| 状态文案 | 未启动 / 正在拉起 WSA 与 B 站 APP（约 30 秒）··· / 监听礼物，自动录制中··· / 礼物录屏中··· / 启动失败 |
+
+**触发链路（前端当"触发脑"，Rust 当"执行器"）**
+
+1. 点「启动自动录屏」→ 复用展示模块的弹幕监听（`displayDanmaku.start(roomId, mid)`，幂等）→ 调 `start_wsa_recording` 拉 WSA + 两阶段进房 + 定型窗口 + 挂标题栏 overlay。
+2. 收礼通知走 [danmaku.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/display/danmaku.ts) 的只读订阅点 `subscribeQualifyingGift(cb)`（送礼分支与大航海 `GUARD_BUY` / `USER_TOAST_MSG` 分支各回调一次，不改动既有 `emitTo` 语义）。大航海月费按 `price / 100` 换算成电池（舰长 1380 / 提督 5000 / 总督 20000）。
+3. [wsa-recorder-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/wsa-recorder-client.ts) 做阈值比较与 **15 秒尾窗**：首个达标礼物 → 乐观置位并调 `start_raw_record` 开录；尾窗内再来达标礼物只重置计时（不重开录）；停手 15 秒 → `stop_raw_record` 收尾。**同一段录制里先后出现的礼物名会去重保序累积**，一起进文件名。
+4. 文件名由**前端**生成（`YYYYMMDD-礼物名1-礼物名2`）在 stop 时传给 Rust —— 因为只有到收尾时礼物名才是完整的（Rust 侧也就不用取本地日期），Rust 只做非法字符替换 + 重名追加 `-2`。
+
+**采集与编码**（[recorder/](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/recorder/mod.rs)）
+
+- 窗口查找**不能按标题**（标题随直播间变）：按 class 含 `danmaku` + 可见 + 客户区最大。随后定型成竖屏（禁缩放/最大化，client 调到 900×1658）。
+- WGC `CreateForWindow` + `CreateFreeThreaded` 帧池（`B8G8R8A8`，**3 个缓冲**：CPU 读回 + 拷贝约 10ms，给 2 个缓冲时源约 35fps 会饿死丢帧）→ `CopySubresourceRegion` 裁掉顶部 **58px** 标题栏到 staging 纹理 → 逐行 memcpy 进 `MFCreateMemoryBuffer` → Media Foundation SinkWriter 编 H.264 mp4（**30fps / 固定 4Mbps**，900×1600）。**不引入 ffmpeg、不带外部 exe**。
+- 标题栏 overlay（[overlay.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/overlay.rs)）是原生 Win32 窗口（不是 Tauri 窗口，省内存）：`SetWindowRgn` 三块并集**挖洞穿透**（中间空白点击直接落到 WSA 自己的标题栏，于是拖动窗口是白送的）、150ms 采样 WSA 真实标题栏像素跟随激活/失活底色、最右按钮把窗口置底（等价最小化但**不影响录制**）、静音按钮走 per-session 音量（[recorder/audio.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/recorder/audio.rs)，只静目标进程，不动整机音量）。
+
+**产物**：exe 同级 `礼物截图录屏/`（无写权限回退应用数据目录），与「礼物截图」「礼物录屏」共用同一目录（标题右侧文件夹图标可直接打开）。
+
+**首次安装插件（[setup.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/setup.rs)）**：三步依次进行、**已装好的自动跳过**（绝不重复下载那 528MB 的 WSA），结果以**实测复核**为准，状态与「已安装」标记都落在应用数据目录（所有账号共用，切账号不重装）：
+
+1. **WSA**：下载 MustardChef/WSABuilds 的 LTS 8 分发包（约 528MB，按 Win11/Win10 + x64/ARM64 选包）→ 解压 → 提权跑 `Run.bat` 注册（会有一次 UAC 授权，请点「是」）。
+2. **adb**：先探测本机（`PATH` → `%LOCALAPPDATA%\Android\Sdk\platform-tools`），找不到才按需下载 platform-tools 到应用数据目录。
+3. **B 站 APP**：装官方 APK（`install -r -g`：覆盖安装 + 一次性授予运行时权限，避免首次使用时弹权限框打断自动化）。
+
 ### 3. 展示（直播投屏面板）
 
 > 作用对象是**主播本人开的直播间**：把入场与礼物实时投屏到**独立画布窗口**（Tauri 桌面）。入口在主播页「盲盒」与「大礼物」**之间**；**服务器账号禁用总开关**。
@@ -478,6 +519,34 @@ Tauri 的图标由 `cargo tauri icon <源图>` 生成。CI 打包时若**不指�
 - **`gift-db.json` 已废弃**：所有上传/下载/合并逻辑已移除，`/api/gift-db` 路由已删除，服务器上的 `gift-db.json` 可删除，不再需要维护。
 
 > **模拟器"礼物"选项卡复用这份目录**：它以**直播间礼物面板 API**（`roomGiftList`，无需登录，12h 缓存）返回的 `gold_list` 顺序为基准，补上 `public/gift-extra-ids.json` 的额外礼物并去重；礼物详情从目录联表获取，因此随目录 12h 自动更新（见 [BiliSimulator.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/bili-simulator/BiliSimulator.tsx)）。
+
+### 9. 原始录屏：为什么在 Windows 侧录 WSA 窗口
+
+**为什么不在 Android 端录**：B 站 Android 客户端会把 `screenrecord` 一类的绘制内容一并录进画面（污染画面，PK 分数/弹幕会重影）。所以改成**在 Windows 侧采集 WSA 里 B 站 APP 的窗口**（Windows Graphics Capture）。
+
+**职责分工是硬约束**：前端当"触发脑"（阈值比较、15 秒尾窗、礼物名累积、文件名字串），Rust 当"执行器"（拉 WSA / 两阶段进房 / 开录 / 收尾命名）。**状态机必须是模块级单例、不能挂组件** —— 用户切到别的 tab 时面板会卸载，计时器若挂在组件上就丢了尾窗，那段录制永远不收尾（[wsa-recorder-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/wsa-recorder-client.ts) 开头有注释说明）。
+
+**三条实测结论（代码注释里都有）**：
+
+1. **DXGI 纹理直通不可用**：`MFCreateDXGISurfaceBuffer` 恒定返回 `E_INVALIDARG`，挂 D3D 设备管理器 / `VIDEO_SUPPORT` / `MISC_SHARED` / `SetMultithreadProtected` 四种修法均无效 → 只能走 **CPU staging**（`Map` → 逐行 memcpy → `MFCreateMemoryBuffer`）。
+2. **必须 `BeginWriting()`**，否则 `WriteSample` / `Finalize` 一律 `MF_E_INVALIDREQUEST (0xC00D36B2)`。
+3. **节流要按采集帧自带的时间戳归 1/30s 时间槽**（`frame.SystemRelativeTime() / 333333`）。用"距上次写入的耗时"算，会把编码耗时算进帧间隔，30fps 掉到 ~19fps；用"距上帧 ≥33ms"判断，在源约 35fps 时会退化成每两帧取一帧（~17fps）。
+
+**其它容易踩的**：帧池给 **3 个缓冲**（给 2 个时源约 35fps 会饿死丢帧）；裁剪靠 `CopySubresourceRegion` 的 src box（`top=58`）拷到 staging 纹理；staging 纹理跨帧复用（尺寸不变就 `take()` 回来），别每帧新建；窗口**不能按标题找**（标题随直播间变），按 class 含 `danmaku` + 可见 + 客户区最大；`hide_capture_border` 要调，否则录制期间被采集窗口四周整圈发黄。
+
+### 10. 录屏环境初始化（WSA 自动安装）的坑
+
+- **WSA 是"开发模式注册目录"安装**（`Add-AppxPackage -Register`），注册目录就是 `WsaClient.exe` 被激活时读文件的地方 → **绝不能删**。曾经为了"回收 2.4GB"把注册目录删掉，结果 WsaClient 一启动就崩（`0xc0000602` in `combase.dll`），表现为「WSA 显示已安装却永远卡在启动阶段」。`.7z` 分发包与解压目录都保留（下载慢，留着修复/重装直接用）。
+- **「已安装」判定不能只看 `WsaClient.exe` 别名存在**：别名在、注册目录缺文件时一启动就崩，只看别名会变成「卡片常绿 + 跳过安装」把问题永久锁死。要按包内 `filelist.txt` **逐项核对完整性**（这也是 `Install.ps1` 自己的判据），缺文件即判坏，走重装修复。
+- **下载一律「收满才改名」**：`.part` 断点续传（HTTP Range），只有 `received == total` 才 rename 成最终名，于是「最终文件存在」就等于「下载完整」；7z 还要按签名头里的 `nextHeaderOffset + nextHeaderSize` 算出应有总长，校验结构完整（CDN 慢网下经常提前断流）。
+- **安装脚本（我们那份副本）要改三处**：① 去掉成功路径末尾的 `Press any key to exit`（否则提权窗口要用户手动关）；② 掐掉 `Finish` 里拉起 Magisk / Play 商店的两行 `Start-Process "wsa://…"`（这两个 APP 一启动就弹**模态**权限申请，时机不定，正好砸在紧接着的自动化上）；③ 在**注册之前**删掉清单里的 `webcam / microphone / location` 三条 `<DeviceCapability>`。
+- ⚠️ **但清单剥离只影响"注册时声明"，压不住"运行时申请"** —— 实测仍然会弹宿主侧隐私框。所以还要在**启动 WSA 之前预写 `ConsentStore`**（`HKCU\...\CapabilityAccessManager\ConsentStore\<能力>\<WSA 包族名>` 的 `Value` 写成 `Allow`），从源头掐掉；三个能力键值三态是 `Allow` / `Deny` / 键不存在（才弹）。
+- **`WsaClient.exe` 别名可直接 `CreateProcess` 拉起子系统**（无界面），比经 `explorer shell:appsFolder\…!App` 少一层。但**"打开 WSA 设置窗口"不会把子系统拉起来**（实测：窗口开着、开发人员模式开关也报了成功，端口照样不监听）→ 必须显式拉 `WsaClient.exe`。
+- **`vmmemWSA` 不能当就绪信号**（出现得太早，1.4s 就有，而 adb 端口 7.4s 才监听）；**端口监听也不等于启动完成**，要等 `sys.boot_completed == 1`。
+- **首次 userdata 初始化实测 130 秒**（端口早就监听了，卡在 `sys.boot_completed` 迟迟不为 1），所以 `WSA_BOOT_BUDGET` 给 180 秒 —— 按热启动的几秒去估必然误报「连不上 WSA」。
+- **切「开发人员模式」不需要重启子系统**：安装流程已经把 WSA 提前拉起来了，这时切开关照样能让端口监听，直接 `adb connect` 就行（以前那套 `shutdown + relaunch` 是多余的一轮，且会把设置窗口自动化拖到 ~30 秒）。
+- **adb 授权弹窗（`#32770`）**：不点它 `adb devices` 永远停在 `unauthorized`（端口监听也白搭）。用 UI Automation 认**标题里的 `ADB`**（语言无关）+「始终允许从此计算机」+「允许」，模拟鼠标点。勾上「始终允许」后 Android 会把公钥写进 `/data/misc/adb/adb_keys`，之后不再弹。
+- **子进程一律 `CREATE_NO_WINDOW` + `stdin/stdout/stderr` 全 `null`**：只设 `CREATE_NO_WINDOW` 挡不住句柄继承，`WsaClient.exe` 及其 ANGLE/vulkan 子进程会把 `SharedLibrary::open for [vulkan-1.dll]` 之类的噪音打到我们的控制台。
 
 ---
 
@@ -745,3 +814,9 @@ minisign -G -p hot-update.pub -s hot-update.key
 - **依赖补丁依赖 postinstall**：patch-foamtree / patch-bilibili-ws（弹幕心跳固定 30s + op=5 批量 JSON 数组展开）/ patch-particle-effect-button（React 18/19 生命周期兼容、卸载清理、色调映射、showing 起始帧修复、视觉缩放；**粒子死亡时序保持原库不动**）。改这些库源码或新增 patch 必须同步 `package.json` 的 `postinstall`（CI 用 `npm ci` 会自动执行，无需额外步骤）；**任何 node_modules 手动改动必须立即固化进对应 patch 脚本**（含 marker 幂等标记 + 原库 old 文本），否则下次 `npm ci` 必然丢失。
 - **粒子消散时序教训（补丁循环的根因）**：原库 death 公式（`frames-20+rand×40`）本就自洽——粒子按生成线从左到右渐进生成，死亡顺序天然 = 出生顺序 = 从左到右，与 badge 从左往右消失方向一致，最后一批粒子在动画结束后约 1.6s 才触发 onComplete（自然尾巴、无闪现）。曾误诊"粒子死亡时机与 badge 滑出进度不一致"而改 death 公式 → 引发左侧吊尾 / 竖直成簇 / onComplete 提前闪现，又为修这些继续打补丁。**结论：粒子库的死亡时序不要改**；真正的"消散结束闪现"根因是 showing 起始帧（progress 未同步 + 挂载未测量 _rect，见补丁 7/8）。
 - **Tauri 2 权限校验全平台共享**：capabilities 文件所有平台共用，tauri-build 在**每个平台**构建时都校验全部权限标识；权限只能由"被编译进当前平台依赖图"的插件注册。因此**平台相关插件要放全局 `[dependencies]`**（`tauri-plugin-autostart` 同 `android-installer` 先例），`lib.rs` 里才用 `cfg(target_os = "windows")` 条件注册；放 target-specific dependencies 会导致其它平台构建 panic（`Permission xxx not found`）。
+- **原始录屏模块全貌（改动前先读这两段）**：Rust 侧 [wsa.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/wsa.rs)（WSA/adb 控制）+ [setup.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/setup.rs)（环境检测/一键安装）+ [overlay.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/overlay.rs)（标题栏）+ [recorder/](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/recorder/mod.rs)（WGC 采集 + MF 编码 + 进程静音）；前端 [wsa-recorder-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/wsa-recorder-client.ts)（触发脑，单例）+ [RawRecordPanel.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/RawRecordPanel.tsx)（面板）+ [RawRecordAutoStarter.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/RawRecordAutoStarter.tsx)（挂在 layout 上的自启动触发）+ [danmaku.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/display/danmaku.ts) 的 `subscribeQualifyingGift`（只读收礼订阅点）。坑点与实测结论全在「难点与特殊点」第 9、10 节。
+- **触发脑别挂组件**：原始录屏的阈值比较 / 15 秒尾窗 / 礼物名累积必须在 `wsa-recorder-client.ts` 的**模块级单例**里，挂到 `RawRecordPanel` 上会在切 tab（面板卸载）时丢尾窗 → 录制永不收尾。
+- **产物目录名是「礼物截图录屏」**（不是"礼物录屏"）：`recorder::resolve_output_dir` 优先 exe 同级、不可写回退应用数据目录；礼物截图 / 礼物录屏 / 原始录屏三个模块共用它，标题右侧的文件夹图标也由它（[output-folder.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/output-folder.ts) + [FolderIconButton.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/FolderIconButton.tsx)）。
+- **WSA 相关三件绝不要做的事**：① 删注册目录（WsaClient 直接崩，`0xc0000602`）；② 把 `WSA_BOOT_BUDGET` 调回一两分钟（首次 userdata 初始化实测 130s，会误报「连不上 WSA」）；③ 只看 `WsaClient.exe` 别名就判定"已安装"（注册目录缺文件时是"能显示却永远起不来"的假绿）。
+- **`wgc_spike` 是人工验收入口**：`cargo run --bin wgc_spike -- <输出目录> [秒数] [文件名]`，它直接驱动产品代码，跑通即产品链路可用。Cargo.toml 里的 `default-run = "bili-live"` 就是为它加的（否则 `cargo run` / tauri dev 会报"无法确定跑哪个二进制"），**别删**。
+- **录屏环境初始化的权限文件是自动生成的**：`wsa_setup_status / wsa_setup_install / wsa_setup_abort` 列在 [build.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/build.rs) 的 `AppManifest::commands` 里，tauri-build 生成 `permissions/autogenerated/<cmd>.toml`，**还必须在 `capabilities/default.json` 里引用**，否则前端 invoke 报「<command> not allowed」。
