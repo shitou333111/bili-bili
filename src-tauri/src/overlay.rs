@@ -32,7 +32,6 @@ use windows::Win32::Graphics::Gdi::{
     FF_DONTCARE, FW_NORMAL, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGBRUSH, NULL_PEN, OUT_DEFAULT_PRECIS,
     PAINTSTRUCT, PS_ENDCAP_ROUND, PS_GEOMETRIC, PS_JOIN_ROUND, PS_SOLID, RGN_OR, TRANSPARENT,
 };
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{
     SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
@@ -140,11 +139,6 @@ static BG: AtomicU32 = AtomicU32::new(C_BG_FALLBACK.0);
 static RECORDING: AtomicBool = AtomicBool::new(false);
 /// 鼠标悬停的按钮（-1 无 / 0 置底 / 1 静音）
 static HOVER_BTN: AtomicI32 = AtomicI32::new(-1);
-/// B 站 APP 的**期望**静音状态。默认静音：录屏时不外放 APP 声音，
-/// 想看/想听再点一下取消（音频会话可能要过一会儿才出现，靠定时器反复落实）
-static MUTED: AtomicBool = AtomicBool::new(true);
-/// 当前被静音的进程 pid（0 = 没静音）。取消静音时要按它来，不能重新解析
-static MUTED_PID: AtomicU32 = AtomicU32::new(0);
 static CLASS_READY: AtomicBool = AtomicBool::new(false);
 
 fn overlay_hwnd() -> HWND {
@@ -207,22 +201,17 @@ pub fn set_recording(rec: bool) {
 // ==================== 线程主体 ====================
 
 fn run(wsa_raw: isize, tx: mpsc::Sender<Result<(), String>>) {
-    // 静音按钮要调 WASAPI（端点音量），消息循环线程先备好 COM 套间
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     match unsafe { create(HWND(wsa_raw as *mut c_void)) } {
         Ok(hwnd) => {
             WSA.store(wsa_raw, Ordering::SeqCst);
             OVERLAY.store(hwnd.0 as isize, Ordering::SeqCst);
             BG.store(C_BG_FALLBACK.0, Ordering::SeqCst);
-            // 每次新会话都回到默认：静音、无悬停、没有已生效的 pid
-            MUTED.store(true, Ordering::SeqCst);
-            MUTED_PID.store(0, Ordering::SeqCst);
+            // 每次新会话都回到默认：无悬停。
             HOVER_BTN.store(-1, Ordering::SeqCst);
             let _ = tx.send(Ok(()));
             unsafe { message_loop() };
             OVERLAY.store(0, Ordering::SeqCst);
             WSA.store(0, Ordering::SeqCst);
-            unsafe { CoUninitialize() };
             eprintln!("[overlay] 已销毁");
         }
         Err(e) => {
@@ -426,11 +415,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_ERASEBKGND => LRESULT(1),
         WM_TIMER => {
             match wparam.0 {
-                TIMER_SYNC => {
-                    sync();
-                    // 默认静音：音频会话可能比 overlay 晚出现，每拍补一次静音
-                    enforce_mute();
-                }
+                TIMER_SYNC => sync(),
                 TIMER_BG => sample_bg(),
                 _ => {}
             }
@@ -465,13 +450,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if icon != 0 {
                 let _ = DestroyIcon(HICON(icon as *mut c_void));
             }
-            // 别把 B 站 APP 留在静音状态
-            if MUTED.swap(false, Ordering::SeqCst) {
-                let pid = MUTED_PID.swap(0, Ordering::SeqCst);
-                if pid != 0 {
-                    let _ = crate::recorder::audio::set_process_mute(pid, false);
-                }
-            }
+            // 静音的收尾不在这里做：overlay 只表达「期望状态」，真正静音的常驻守护线程
+            // 由 `wsa::shutdown` 停掉，停的时候它自己会把目标进程还原（见 `stop_mute_guard`）。
             WIDTH.store(0, Ordering::SeqCst);
             PostQuitMessage(0);
             LRESULT(0)
@@ -567,75 +547,16 @@ unsafe fn on_click(hwnd: HWND, lparam: LPARAM) {
     }
 }
 
-/// B 站 APP 窗口所属进程（不一定就是出声进程，只是解析的起点）
-fn window_pid() -> u32 {
-    let mut pid = 0u32;
-    let h = wsa_hwnd();
-    if !h.0.is_null() {
-        unsafe {
-            let _ = GetWindowThreadProcessId(h, Some(&mut pid));
-        }
-    }
-    pid
-}
-
-/// 静音开关：只静音 B 站 APP 的音频会话（`ISimpleAudioVolume`），不动端点音量。
-/// 这里只翻转「期望状态」，真正落到音频会话上交 [`enforce_mute`]（它会重试到成功为止）。
-unsafe fn toggle_mute(hwnd: HWND) {
-    let want = !MUTED.load(Ordering::Relaxed);
-    MUTED.store(want, Ordering::Relaxed);
-    if !want {
-        // 取消静音必须用「当初静音的那个 pid」：静音之后该进程峰值归零，
-        // 再解析一次很可能解析到别的进程，就解不掉了。
-        let pid = MUTED_PID.swap(0, Ordering::Relaxed);
-        if pid != 0 {
-            let _ = crate::recorder::audio::set_process_mute(pid, false);
-        }
-    }
-    let _ = InvalidateRect(Some(hwnd), None, false);
-    enforce_mute();
-}
-
-/// 把「期望的静音状态」落实到音频会话上。
+/// 静音开关：只翻转「期望状态」（`recorder::audio::muted()`），不动端点音量、
+/// 也不在这里碰音频会话。
 ///
-/// 默认就是静音：overlay 刚建好时 B 站 APP 可能还没出声、音频会话还没建起来，
-/// 所以定时器每一拍都试一次，成功后就记住 pid（`MUTED_PID`）不再重复调用。
-unsafe fn enforce_mute() {
-    let want = MUTED.load(Ordering::Relaxed);
-    let muted_pid = MUTED_PID.load(Ordering::Relaxed);
-    let (target, next) = if want {
-        if muted_pid != 0 {
-            return; // 已经在静音
-        }
-        let wp = window_pid();
-        if wp == 0 {
-            return;
-        }
-        (crate::recorder::audio::resolve_target_pid(wp), true)
-    } else {
-        if muted_pid == 0 {
-            return; // 本来就没静音
-        }
-        (muted_pid, false)
-    };
-    if target == 0 {
-        return;
-    }
-    match crate::recorder::audio::set_process_mute(target, next) {
-        Ok(()) => {
-            MUTED_PID.store(if next { target } else { 0 }, Ordering::Relaxed);
-            let hwnd = overlay_hwnd();
-            if !hwnd.0.is_null() {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            }
-        }
-        // 会话还没出现属常见情况（APP 还没开始播音），等下一拍再试，不刷日志
-        Err(e) => {
-            if !e.contains("没找到") {
-                eprintln!("[overlay] 静音切换失败: {e}");
-            }
-        }
-    }
+/// 真正把状态落到音频会话上的是 `wsa::start_mute_guard` 起的**常驻守护线程**：
+/// 它每 50ms 读一次这个状态并重新枚举目标进程的**所有**会话设一遍。这样：
+/// - 无论音频会话什么时候才建出来（APP 开始播音那一刻）都能被静音到，不用在这里重试；
+/// - 按钮本身不做任何耗时操作，点了立刻有反馈（图标也是立刻重画）。
+unsafe fn toggle_mute(hwnd: HWND) {
+    crate::recorder::audio::set_muted(!crate::recorder::audio::muted());
+    let _ = InvalidateRect(Some(hwnd), None, false);
 }
 
 // ==================== 绘制 ====================
@@ -729,7 +650,7 @@ unsafe fn paint(hwnd: HWND) {
 unsafe fn draw_mute_icon(hdc: HDC, x: i32, h: i32) {
     let cx = x + recorder::px(BTN_W) / 2;
     let cy = h / 2;
-    let muted = MUTED.load(Ordering::Relaxed);
+    let muted = crate::recorder::audio::muted();
 
     // 喇叭：矩形箱体 + 喇叭口，用 Polygon 一次填出来
     let body = [

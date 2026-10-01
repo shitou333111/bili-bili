@@ -30,7 +30,7 @@ use windows::Win32::Media::MediaFoundation::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
-/// 目标码率：固定 4 Mbps。900×1800 竖屏手机画面这个量级足够清晰
+/// 目标码率：固定 4 Mbps。900×1700 竖屏手机画面这个量级足够清晰
 /// （B 站直播源本身就在 2~6 Mbps），15 秒片段约 7.5MB。
 pub const BITRATE: u32 = 4_000_000;
 /// 目标帧率

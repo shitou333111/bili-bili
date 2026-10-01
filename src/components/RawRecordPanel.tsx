@@ -336,53 +336,13 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
           自动录制收到礼物时的完整直播画面，包括PK分数 弹幕 飘屏，和自己手机录制的完全一样。首次使用会安装插件，比较耗时，需要在弹出的APP内登录一次。
         </p>
 
-        {/* 环境状态：红灯 = 未装齐，绿灯 = 已就绪。两种情况都可点：先检测，缺什么装什么 */}
-        {supported ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void (setupBusy ? abortInstall() : setupAction())}
-              title={
-                setupBusy
-                  ? "点击中止当前安装（已下载 / 已解压的部分会保留，下次接着进行）"
-                  : envReady
-                    ? "点击可重新检测环境是否完整"
-                    : "点击自动检测并安装缺少的组件（已装好的会跳过）"
-              }
-              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                setupBusy
-                  ? "border-black/20 bg-black/10 text-black/70 hover:bg-black/20"
-                  : envReady
-                    ? "border-emerald-300 bg-emerald-100 text-black/70 hover:bg-emerald-200"
-                    : "border-red-300 bg-red-100 text-black/75 hover:bg-red-200"
-              }`}
-            >
-              {setupBusy ? "安装中··· 点击中止" : envReady ? "插件已安装" : "首次使用点击安装插件"}
-              {/* 三个指示灯（ADB / WSA / APP）：全绿 = 插件已安装，不再另加文字标签 */}
-              <span className="flex shrink-0 items-center gap-1">
-                {SETUP_LIGHTS.map((k, i) => (
-                  <span
-                    key={k}
-                    className={`h-1.5 w-1.5 rounded-full ${lightClass(
-                      i,
-                      setup?.[k] === true,
-                      setupBusy,
-                      progress?.step ?? 0
-                    )}`}
-                  />
-                ))}
-              </span>
-            </button>
-          </div>
-        ) : null}
-
         {/* 首次安装提示 */}
-        {supported && !envReady && !setupBusy ? (
+        {/* {supported && !envReady && !setupBusy ? (
           <p className="text-xs leading-relaxed text-black/50">
             首次使用需安装三样工具：ADB、WSA、哔哩哔哩客户端。占用磁盘与内存较多，并需要一次管理员授权；
             这些工具全账号共用，装一次即可，切换账号不会重复安装。
           </p>
-        ) : null}
+        ) : null} */}
 
         {/* 安装进度与结果回执 */}
         {setupBusy && progress ? (
@@ -406,17 +366,56 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
           </div>
         ) : null}
 
-        {/* 直播间号：默认当前登录账号的直播间，可指定别人的房间 */}
-        <div className="flex items-center gap-2 text-xs">
-          <span className="shrink-0 text-black/45">直播间房间号</span>
-          <input
-            value={roomInput}
-            onChange={(e) => setRoomInput(e.target.value.replace(/[^\d]/g, ""))}
-            disabled={!supported || active}
-            placeholder={defaultRoomId ? `默认 ${defaultRoomId}` : "留空用当前账号直播间"}
-            className="w-[150px] rounded-lg border border-black/10 bg-white/90 px-2 py-1 text-xs text-black/75 outline-none transition placeholder:text-black/30 focus:bg-white disabled:opacity-50"
-          />
-          <span className="text-black/35">留空即当前登录账号的直播间</span>
+        {/* 插件安装按钮在左、房间号在右：两端对齐铺满一行（窄窗口下按钮自动换行） */}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs">
+          {/* 环境状态：红灯 = 未装齐，绿灯 = 已就绪。两种情况都可点：先检测，缺什么装什么 */}
+          {supported ? (
+            <button
+              type="button"
+              onClick={() => void (setupBusy ? abortInstall() : setupAction())}
+              title={
+                setupBusy
+                  ? "点击中止当前安装（已下载 / 已解压的部分会保留，下次接着进行）"
+                  : envReady
+                    ? "点击可重新检测环境是否完整"
+                    : "点击自动检测并安装缺少的组件（已装好的会跳过）"
+              }
+              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-medium transition ${
+                setupBusy
+                  ? "border-black/20 bg-black/10 text-black/70 hover:bg-black/20"
+                  : envReady
+                    ? "border-emerald-300 bg-emerald-100 text-black/70 hover:bg-emerald-200"
+                    : "border-red-300 bg-red-100 text-black/75 hover:bg-red-200"
+              }`}
+            >
+              {setupBusy ? "安装中··· 点击中止" : envReady ? "插件已安装" : "首次使用点击安装插件"}
+              {/* 三个指示灯（ADB / WSA / APP）：全绿 = 插件已安装，不再另加文字标签 */}
+              <span className="flex shrink-0 items-center gap-1">
+                {SETUP_LIGHTS.map((k, i) => (
+                  <span
+                    key={k}
+                    className={`h-1.5 w-1.5 rounded-full ${lightClass(
+                      i,
+                      setup?.[k] === true,
+                      setupBusy,
+                      progress?.step ?? 0
+                    )}`}
+                  />
+                ))}
+              </span>
+            </button>
+          ) : null}
+
+          <span className="flex items-center gap-2">
+            <span className="shrink-0 text-black/45">指定房间号</span>
+            <input
+              value={roomInput}
+              onChange={(e) => setRoomInput(e.target.value.replace(/[^\d]/g, ""))}
+              disabled={!supported || active}
+              placeholder={defaultRoomId ? `默认 ${defaultRoomId}` : "留空用当前账号直播间"}
+              className="w-[150px] rounded-lg border border-black/10 bg-white/90 px-2 py-1 text-xs text-black/75 outline-none transition placeholder:text-black/30 focus:bg-white disabled:opacity-50"
+            />
+          </span>
         </div>
 
         {/* 阈值组在最左：标题在上、档位按钮在下（两行）；与启停按钮、自启动横向均匀分布 */}

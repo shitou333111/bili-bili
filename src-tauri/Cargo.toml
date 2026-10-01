@@ -41,12 +41,17 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Gdi", "Win32_Graphics_Imaging",
   "Win32_Media_MediaFoundation",
-  # 标题栏静音按钮走 per-session 静音（ISimpleAudioVolume / IAudioSessionManager2），
-  # 目标进程探测用 IAudioMeterInformation 读会话峰值 —— 都在 Media_Audio 与
-  # Media_Audio_Endpoints 里。
+  # 标题栏静音按钮走 per-session 静音（ISimpleAudioVolume / IAudioSessionManager2）
+  # —— 都在 Media_Audio 与 Media_Audio_Endpoints 里。
   "Win32_Media_Audio", "Win32_Media_Audio_Endpoints",
   "Win32_UI_HiDpi", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging",
   "Win32_System_LibraryLoader", "Win32_System_Threading",
+  # 诊断日志 `wsa::wlog` 的时间戳（GetLocalTime）—— 音频静音这类"时机"问题，
+  # 没有时间戳就分不清"静音发生在拉活 APP 之前还是之后"。
+  "Win32_System_SystemInformation",
+  # 按进程名找 WSA 宿主（`WsaClient.exe`）：静音目标**不能靠 B 站窗口来认**
+  # （窗口要等 Android 画出来，冷启动慢时白屏好几秒、声音早就出来了）。
+  "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 [dependencies]

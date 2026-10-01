@@ -5,7 +5,7 @@
 #![cfg(windows)]
 
 use windows::core::{Interface, BOOL};
-use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
@@ -13,7 +13,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, ID3D11Device, ID3D11DeviceContext,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTOPRIMARY,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -87,6 +88,26 @@ pub fn monitor_work_area(hwnd: HWND) -> (i32, i32) {
     monitor_work_rect(hwnd)
         .map(|r| (r.right - r.left, r.bottom - r.top))
         .unwrap_or((0, 0))
+}
+
+/// **主显示器**的可用区尺寸（物理像素，已扣掉任务栏）。取不到返回 `0,0`。
+///
+/// 给「B 站 APP 还没起来、拿不到窗口」时算定型目标用（见 `wsa::pre_launch_geometry`）：
+/// WSA 窗口总是冷启在主显示器上，按主显示器算与按窗口算只差一个外框尺寸。
+pub fn primary_work_area() -> (i32, i32) {
+    unsafe {
+        // 坐标系原点必然落在主显示器上
+        let mon = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(mon, &mut mi).as_bool() {
+            (mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top)
+        } else {
+            (0, 0)
+        }
+    }
 }
 
 /// 「窗口外框 − 客户区」的差值（边框 + 原生标题栏）。

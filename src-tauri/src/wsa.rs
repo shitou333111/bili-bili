@@ -16,10 +16,14 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 use windows::core::BOOL;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
@@ -31,8 +35,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW, IsWindowVisible, PostMessageW,
-    SetCursorPos, SetForegroundWindow, WM_CLOSE,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetCursorPos, SetForegroundWindow,
+    WM_CLOSE,
 };
 
 use crate::recorder;
@@ -95,10 +100,29 @@ const ADB_AUTH_POLL: Duration = Duration::from_millis(1000);
 /// （见 `ensure_wsa` 里的提前失败分支）。
 const ADB_AUTH_BUDGET_SETUP: Duration = Duration::from_secs(120);
 const ADB_AUTH_BUDGET_RECORD: Duration = Duration::from_secs(12);
+/// **整台重启 WSA** 之后，等设备侧重新授权 / 重新起来的预算（只走一次，且只在安装 / 修复
+/// 路径上 —— 见 [`restart_wsa_and_reconnect`]）。
+const WSA_RESTART_AUTH: Duration = Duration::from_secs(90);
+const WSA_RESTART_BOOT: Duration = Duration::from_secs(150);
 /// 等窗口出现的预算（进房后 Android 顶层窗口可能还要几秒才可见）
 const WINDOW_BUDGET: Duration = Duration::from_secs(30);
 /// 等窗口出现的轮询间隔
 const WINDOW_POLL: Duration = Duration::from_millis(200);
+/// 「进直播间**之前**定型」这一步愿意为主界面窗口等多久。
+///
+/// 主界面（`MainActivityV2`）起来了，它的窗口通常同时就有；只有 WSA 刚整台冷启、
+/// APP 首次加载很慢时才会拖到十几秒（实测那一次超过了 10 秒）。
+/// 所以这里直接给足 [`WINDOW_BUDGET`] —— 等的是**同一个窗口**，只是把「等」提前到
+/// DeepLink 之前，成功路径上不多花一秒；而退到「先进房再定型」是要付出黑屏重载代价的。
+const PRE_FIT_BUDGET: Duration = WINDOW_BUDGET;
+/// 定型（改窗口尺寸）后、发 DeepLink 前等 APP 消化这次 Android 配置变更的时间
+const CONFIG_SETTLE: Duration = Duration::from_millis(2500);
+/// 「静音守护线程」的轮询间隔（见 [`start_mute_guard`]）。
+///
+/// 录屏是纯视频、默认**全程静音**，所以从拉起 APP 之前就要盯住音频会话：会话一露头
+/// （这时往往还在缓冲、根本没出声）就静音。50ms 是「人耳听不出来」与「不白烧 CPU」
+/// 的折中 —— 会话重建到被重新静音之间最多漏 50ms 的音频。
+const MUTE_POLL: Duration = Duration::from_millis(50);
 
 /// 诊断日志文件：`%APPDATA%\com.bili-live.app\setup\wsa-setup.log`
 /// （与 platform-tools、APK 同目录，用户和我们都能一眼找到）。
@@ -116,11 +140,15 @@ fn log_file() -> Option<PathBuf> {
     )
 }
 
-/// 记一条诊断日志：**追加写文件**（release 可见）+ 同时打 stderr（dev 可见）。
-/// 不带时间戳：每次面向用户的安装流程开始时会清空日志（见 [`wlog_reset`]），
-/// 所以文件里就是本次尝试的完整有序过程（std 拿不到本地时间，不值得为此加依赖）。
+/// 记一条诊断日志：**追加写文件**（release 可见）+ 同时打 stderr（dev 可见），
+/// 行首带本地时间 `[HH:MM:SS.mmm]`。
+///
+/// 为什么要时间戳：日志是**多线程**写进去的（进房、静音守护、安装流程各写各的），
+/// 行与行之间没有先后保证。实测「打开直播间先出声、过几秒才静音」这类**时机**问题，
+/// 没有时间戳就分不清某条 `[音频]` 到底发生在拉活 APP 之前还是之后 —— 只能来回猜。
 pub(crate) fn wlog(msg: &str) {
-    eprintln!("{msg}");
+    let ts = local_stamp();
+    eprintln!("[{ts}] {msg}");
     let Some(path) = log_file() else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -130,23 +158,47 @@ pub(crate) fn wlog(msg: &str) {
         .append(true)
         .open(&path)
     {
-        let _ = std::io::Write::write_all(&mut f, format!("{msg}\n").as_bytes());
+        let _ = std::io::Write::write_all(&mut f, format!("[{ts}] {msg}\n").as_bytes());
     }
 }
 
-/// 清空日志，只保留本次尝试。**只在面向用户的流程入口调用**（`setup::install`）。
+/// 本地时间 `HH:MM:SS.mmm`（`GetLocalTime` 直接给本地时区，不用自己算偏移）
+fn local_stamp() -> String {
+    let st = unsafe { GetLocalTime() };
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
+    )
+}
+
+/// 在面向用户的流程入口（`setup::install`）打一条「新一轮」分隔线。**不清空**旧内容，
+/// 只顺手清掉一次性的诊断额度。
 ///
 /// 首行必写「原生包日期戳 + exe 路径」：release 下我们看不到任何控制台输出，而
 /// "日志没生成" 最常见的两个原因就是「跑的不是这份二进制」和「文件在别的目录」——
 /// 把这两件事写进第一行，一眼就能排除。
+///
+/// **为什么不再清空**：清空会把「同一进程里更早那次尝试」的证据整段抹掉。实测吃过这个亏 ——
+/// 用户点「录屏」失败（那一轮才换过密钥、才 dump 过窗口），再点「安装/修复」时日志被清，
+/// 于是剩下这轮里孤零零一句 `本进程是否已换过密钥=true` 却找不到对应的换钥记录，现场直接断线。
 pub(crate) fn wlog_reset() {
     let path = log_file();
     if let Some(p) = &path {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, "");
+        // 只在文件过大时截断，避免长跑之后无限增长
+        const MAX_LEN: u64 = 4 * 1024 * 1024;
+        if std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) > MAX_LEN {
+            let _ = std::fs::write(p, "");
+        }
     }
+    // 顶层窗口 dump 也按「新一轮」重新给额度：上一轮用光后，这一轮就再也看不到窗口快照了
+    AUTH_DUMPED.store(0, Ordering::Relaxed);
+    // 两个「只做一次」的自救标志同样复位：用户点一次「安装/修复」就是在要求重新自愈一轮。
+    // 不复位的话，第一次失败后后续几次点安装都变成空跑（实测用户会连点好几次）。
+    ADB_KEY_ROTATED.store(false, Ordering::Relaxed);
+    WSA_RESTARTED.store(false, Ordering::Relaxed);
     wlog(&format!(
         "===== 安装 / 修复流程开始（原生包 {}）=====",
         env!("BILI_BUILD_DATE")
@@ -429,18 +481,34 @@ fn adb_home_dir() -> Option<PathBuf> {
 /// 当前 adb 用户目录（`None` = 用系统默认的 `%USERPROFILE%\.android`）。由 [`output_of`] 注入。
 static ADB_HOME: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// 换用私有 adb 用户目录（见 [`adb_home_dir`]）。整个进程只切一次，之后一路沿用同一把密钥。
+/// **换一把全新密钥**：切到私有 adb 用户目录（见 [`adb_home_dir`]）并删掉里面已有的密钥文件。
+///
+/// 删文件是必要的：光切目录，adb 第二次还是接着用同一把密钥，等于白换。整个进程内由
+/// [`ADB_KEY_ROTATED`] 保证只换一次（每轮安装会复位它，见 [`wlog_reset`]）。
 fn use_private_adb_home() -> bool {
-    let Some(dir) = adb_home_dir() else { return false };
+    let Some(dir) = adb_home_dir() else {
+        // 不留静默分支：这条路一旦悄悄失败，日志里就会出现「已换过密钥=true」却没有换钥记录，
+        // 现场直接断线（实测吃过这个亏）。
+        wlog("[adb] 取不到 %APPDATA%，无法改用私有密钥目录");
+        return false;
+    };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         wlog(&format!("[adb] 建私有密钥目录 {} 失败：{e}", dir.display()));
         return false;
+    }
+    // 删掉旧密钥 → adb 下次调用时会现场生成一把全新的
+    for name in ["adbkey", "adbkey.pub"] {
+        let f = dir.join(name);
+        if f.exists() {
+            let _ = std::fs::remove_file(&f);
+            wlog(&format!("[adb] 已删除旧密钥 {}", f.display()));
+        }
     }
     if let Ok(mut g) = ADB_HOME.lock() {
         *g = Some(dir.clone());
     }
     wlog(&format!(
-        "[adb] 已改用私有密钥目录 {}（不再使用用户自己的 .android 密钥）",
+        "[adb] 已改用私有密钥目录 {} 并将生成全新密钥（不碰用户自己的 .android）",
         dir.display()
     ));
     true
@@ -646,16 +714,16 @@ fn is_allow_label(name: &str) -> bool {
     )
 }
 
-/// `dump_top_windows` 的次数上限（见该函数的说明）。
+/// `dump_top_windows` 的次数上限（见该函数的说明）。额度每次 [`wlog_reset`] 重新给。
 static AUTH_DUMPED: AtomicU8 = AtomicU8::new(0);
 
-/// 把当前**可见顶层窗口**的 `类名 | 标题` 打一遍日志（每进程最多 2 次）。
+/// 把当前**可见顶层窗口**的 `类名 | 标题` 打一遍日志（每轮安装最多 8 次）。
 ///
 /// 为什么需要它：`accept_adb_auth` 认不到弹窗时是**静默**返回 `false` 的，日志里什么痕迹都没有，
 /// 于是「弹窗压根没出现」和「弹窗在、只是认法不匹配」这两种截然不同的病因在现场分不开 ——
 /// 实测就是卡在这儿来回猜了好几轮（Win10 授权永远失败、日志一片空白）。
 fn dump_top_windows() {
-    if AUTH_DUMPED.fetch_add(1, Ordering::Relaxed) >= 2 {
+    if AUTH_DUMPED.fetch_add(1, Ordering::Relaxed) >= 8 {
         return;
     }
     unsafe extern "system" fn hit(hwnd: HWND, lp: LPARAM) -> BOOL {
@@ -775,6 +843,10 @@ fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
     // 换钥时刻：一半预算处（见上面那段说明）。进程内已换过就不再换。
     let rotate_at = Instant::now() + total / 2;
     let mut can_rotate = !ADB_KEY_ROTATED.load(Ordering::Relaxed);
+    // **定时给桌面拍快照**：只在「认不到弹窗时」顺手 dump 是不够的 —— 那两次额度往往在
+    // 等待刚开始的一秒内就被用光，而那时弹窗根本还没渲染出来，于是最关键的中段一片空白
+    // （实测就是这样：120s 等待里一条窗口快照都没有）。改成按时间点强制 dump。
+    let mut next_dump = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         accept_adb_auth();
         // 无条件复查：用户手动点过「允许」时 accept 找不到弹窗会返回 false，
@@ -782,6 +854,10 @@ fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
         if adb_usable(cand) {
             wlog("[wsa] 设备已授权，adb 可用");
             return Some(cand.clone());
+        }
+        if Instant::now() >= next_dump {
+            next_dump = Instant::now() + Duration::from_secs(30);
+            dump_top_windows();
         }
         if can_rotate && Instant::now() >= rotate_at {
             can_rotate = false;
@@ -1440,15 +1516,22 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
                 return Ok(adb);
             }
         }
-        // 授权预算已尽、设备还卡在 `unauthorized` → **立刻失败**，不必再陪跑冷启动预算。
-        // 这一条正是「点录制后一直卡住没反应」的止血点：冷启动预算还有近 3 分钟，
-        // 但既然授权窗口一整个预算都没人点，剩下这些秒数只是让用户干等。
+        // 授权预算已尽、设备还卡在 `unauthorized` → 不等冷启动预算了（那一整段只是让用户干等）。
+        // 这是「点录制后一直卡住没反应」的止血点。
         if Instant::now() >= auth_deadline
             && ADB_PORTS
                 .iter()
                 .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
         {
-            wlog("[wsa] 授权等待预算用尽且设备仍未授权 → 立即失败，不再等冷启动预算");
+            wlog("[wsa] 授权等待预算用尽且设备仍未授权 → 立即结束本轮冷启动等待");
+            // 安装 / 修复路径上再试最后一招：整台重启 WSA（见 restart_wsa_and_reconnect）。
+            // 点录屏那条路不给做 —— 那里用户只等着窗口弹出来，会直接报错引导去点「安装/修复」。
+            if show_settings {
+                if let Some(adb) = restart_wsa_and_reconnect(exe) {
+                    close_wsa_settings();
+                    return Ok(adb);
+                }
+            }
             return Err(err_adb_unauthorized());
         }
     }
@@ -1468,6 +1551,46 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
     Err("ADB_CONNECT_FAILED::连不上 WSA（等待启动超时）。已为你打开 WSA 的设置窗口：请在左侧「高级设置」里把「开发人员模式」打开 —— adb 端口 58526 只有开了它才监听。若 WSA 自己都打不开，请回到「完整录屏」卡片点「首次使用点击安装插件」修复".into())
 }
 
+/// 进程内是否已经整台重启过 WSA（见 [`restart_wsa_and_reconnect`]）。
+static WSA_RESTARTED: AtomicBool = AtomicBool::new(false);
+
+/// 最后一招：**整台重启 WSA**（`WsaClient.exe /shutdown` → 重新拉起），复位设备侧的 adb 状态。
+///
+/// 与 `adb kill-server` 有**本质区别**：`kill-server` 只动 Windows 这头的 adb 服务，Android 侧
+/// 「这台计算机的密钥已被处理过」那个结论还留在子系统里 —— 实测反复重做握手、换新公钥、
+/// 耐心等满 120s，全都无效。只有把整台子系统重启，guest 侧的 adbd 状态才会被一起清掉，
+/// 让公钥重新走一遍「没见过 → 弹授权框」的流程。
+///
+/// 只在安装 / 修复路径上做，且整个进程只做一次；点「开始录制」时**不给做** —— 那一刻用户
+/// 只等着窗口弹出来，不该被卷进一次几分钟的子系统重启（那条路会直接报错并引导去点安装）。
+fn restart_wsa_and_reconnect(exe: &Path) -> Option<Adb> {
+    if WSA_RESTARTED.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    wlog("[wsa] 整台重启 WSA，以复位设备侧的 adb 授权状态（kill-server 做不到这件事）…");
+    let _ = output_of(exe, &["kill-server".to_string()]);
+    shutdown_wsa();
+    launch_wsa();
+    let t = Instant::now();
+    let auth_deadline = Instant::now() + WSA_RESTART_AUTH;
+    let boot_deadline = Instant::now() + WSA_RESTART_BOOT;
+    while Instant::now() < boot_deadline {
+        std::thread::sleep(WSA_POLL);
+        let Some(adb) = connect_waiting_auth(exe, auth_deadline) else {
+            continue;
+        };
+        if boot_completed(&adb) {
+            wlog(&format!(
+                "[wsa] 重启 WSA 后已连上且启动完成（{:.1}s）",
+                t.elapsed().as_secs_f32()
+            ));
+            return Some(adb);
+        }
+    }
+    wlog("[wsa] 重启 WSA 后仍未拿到可用 adb");
+    None
+}
+
 /// 设备未授权时的统一错误串（几处出口共用，免得文案各自漂移）。
 /// 带上日志路径：这条错误几乎必然要用户把日志发回来，路径直接写给他省一轮来回。
 fn err_adb_unauthorized() -> String {
@@ -1477,20 +1600,25 @@ fn err_adb_unauthorized() -> String {
     format!(
         "ADB_UNAUTHORIZED::已连上 WSA 的 adb 端口，但设备侧始终未授权。\
          请在 WSA 弹出的「是否允许 ADB 调试？」窗口点「允许」（建议勾上「始终允许从此计算机」）；\
-         若窗口一直不出现、或点完仍无效，请重启 WSA 再试一次。\
+         若窗口一直不出现、或点完仍无效，请回到「完整录屏」卡片点「首次使用点击安装插件」——\
+         安装 / 修复流程会整台重启一次 WSA，把设备侧的授权状态复位。\
          详细过程见日志：{log}"
     )
 }
 
 // ==================== 进房 / 窗口 ====================
 
-/// 两阶段进房（原型 launch_room.ps1 验证：先冷启主界面，再 DeepLink 到直播间）。
-/// 调用前应已 `force-stop` 过 APP —— 早挂 overlay 的线程要确保不会抓到上一个实例的残留窗口。
+/// 进房**第一段**：冷启主界面。返回结束时前台的 Activity 名（第二段拿它当"有没有切走"的基准）。
 ///
-/// 两段都不再死等固定时长：`am start -W` 本身就会阻塞到 Activity 真正启动，之后只轮询
-/// `dumpsys` 拿一个**信号**（主界面已就绪 / 前台已从主界面切走 = 直播间接手），
-/// 信号一到就只补一小段渲染静置时间。信号拿不到时退回等满预算 —— 即原来的行为。
-fn enter_room(adb: &Adb, room_id: i64) -> Result<(), String> {
+/// 两段都不死等固定时长：`am start -W` 本身就会阻塞到 Activity 真正启动，之后只轮询
+/// `dumpsys` 拿一个**信号**，信号一到就只补一小段渲染静置时间。信号拿不到时退回等满预算。
+///
+/// **调用方必须在第二段（DeepLink）之前把窗口定型好** —— 见 [`enter_and_show`]。
+/// 写 `wm density` 与改窗口尺寸都会让 Android 发生**配置变更**，当前前台 Activity 会被重建。
+/// 密度赶在 APP 起来之前写（前台只有 WSA 自己的界面）；尺寸改在主界面上做，重建的也是主界面，
+/// 用户看不出来。要是等进了直播间才做，直播播放器会被整个重建一遍 —— 现象就是「画面黑一下、
+/// 然后从头重新加载」（用户实测反馈的就是这个，而且是**每一次**都会发生）。
+fn open_app(adb: &Adb) -> Result<Option<String>, String> {
     // 录制期间不能息屏：Android 一旦息屏 WGC 就只能拿到静止画面
     let _ = adb.shell("svc power stayon true");
     let _ = adb.shell("settings put global stay_on_while_plugged_in 7");
@@ -1500,13 +1628,16 @@ fn enter_room(adb: &Adb, room_id: i64) -> Result<(), String> {
         .map_err(|e| format!("DEEPLINK_FAILED::启动 B 站 APP 失败: {e}"))?;
     wait_until_with_grace(WAIT_MAIN, || resumed_activity(adb).is_some(), "B 站 APP 主界面起来");
     std::thread::sleep(SETTLE_MAIN);
-    let main = resumed_activity(adb);
+    Ok(resumed_activity(adb))
+}
 
+/// 进房**第二段**：DeepLink 进直播间。`main` 是第一段结束时前台的 Activity ——
+/// 直播间接手后前台不再是它，等到这个变化就算进房完成。
+fn open_live(adb: &Adb, room_id: i64, main: Option<String>) -> Result<(), String> {
     adb.shell(&format!(
         "am start -a android.intent.action.VIEW -d bilibili://live/{room_id}"
     ))
     .map_err(|e| format!("DEEPLINK_FAILED::进入直播间失败: {e}"))?;
-    // 直播间接手后前台 Activity 不再是冷启那一个；等到这个变化就算进房完成
     wait_until_with_grace(
         WAIT_ROOM,
         || match (resumed_activity(adb), main.as_deref()) {
@@ -1533,13 +1664,19 @@ pub fn current_window_raw() -> Option<isize> {
 }
 
 fn wait_window() -> Result<HWND, String> {
-    let deadline = Instant::now() + WINDOW_BUDGET;
+    wait_window_within(WINDOW_BUDGET)
+        .ok_or_else(|| "WINDOW_NOT_FOUND::找不到 B 站 APP 窗口（WSA 可能没正常显示）".to_string())
+}
+
+/// 同上，但只等 `budget` 且不报错（拿不到就 `None`）—— 给「顺手定型，拿不到就退回老顺序」用
+fn wait_window_within(budget: Duration) -> Option<HWND> {
+    let deadline = Instant::now() + budget;
     loop {
         if let Some(h) = current_window() {
-            return Ok(h);
+            return Some(h);
         }
         if Instant::now() >= deadline {
-            return Err("WINDOW_NOT_FOUND::找不到 B 站 APP 窗口（WSA 可能没正常显示）".into());
+            return None;
         }
         std::thread::sleep(WINDOW_POLL);
     }
@@ -1567,35 +1704,140 @@ fn fit_window(hwnd: HWND, want_w: i32, want_h: i32) -> Result<(), String> {
     }
 }
 
-/// 按显示器定窗口尺寸，并把 Android 密度按同一比例写进去。
+/// 本次会话的定型目标，**在 B 站 APP 起来之前**就算好（`enter_and_show` 第一步）。
 ///
-/// 尺寸由 [`recorder::fit_geometry`] 现算：**整窗高度占所在显示器可用区的 90%**，宽度按
-/// 标定比例（1800:900 = 18:9）反算。参考几何（900×1858px = 450×929dp）只有物理高度 ≥1900
-/// 的显示器才装得下，100% 缩放的 1080p 屏装不下（窗口下沿会跑到屏幕外）。现在拆成
-/// 「等比缩小 + 密度同步下调」，dp 尺寸不变 —— 版式与礼物动画和标定时一致，只是分辨率变化。
-/// 密度写进 Android 是全局生效的，下次换显示器会被 `fit_geometry` 按新屏幕重算，不必手动复位。
-fn fit_to_monitor(hwnd: HWND, adb: &Adb) -> Result<(), String> {
-    let g = recorder::fit_geometry(hwnd);
-    // 先落全局密度：overlay 与录制的「顶栏高度」都按它换算（`recorder::bar_h()`）
-    recorder::set_density(g.density);
-    wlog(&format!(
-        "[几何] 定型目标：客户区 {}x{}，Android 密度 {}（参考 {}x{}@{}；整窗高按可用区 90%，宽度按 18:9 反算）",
-        g.client_w,
-        g.client_h,
-        g.density,
-        recorder::REF_CLIENT_W,
-        recorder::REF_CLIENT_H,
-        recorder::REF_DENSITY
-    ));
-    // 密度得真的写进 Android：写不进去（旧版 WSA / 权限不足）画面就会按原密度排版，
-    // 与窗口尺寸对不上，所以把实测值记下来 —— 别让日志和实际状态对不上号。
-    if let Err(e) = adb.shell(&format!("wm density {}", g.density)) {
-        wlog(&format!("[几何] 写 wm density 失败：{e}"));
-    }
-    fit_window(hwnd, g.client_w, g.client_h)
+/// 为什么不能等窗口出来再算：写 `wm density` 会让 Android 发生**配置变更**、重建前台
+/// Activity —— APP 起来之后再写，重建的就是 APP；直播间起来之后再写，重建的就是直播间
+/// （「画面黑一下、然后从头重新加载」）。所以密度必须赶在 `am start` **之前**写进 Android，
+/// 那时前台只有 WSA 自己的界面，重建它没人看得出来。
+///
+/// 几何按**主显示器可用区**算：此刻还拿不到窗口（APP 没起、WSA 宿主窗口可能也不可见），
+/// 量不到外框，就按 0 算 —— WSA 窗口总是冷启在主显示器上，与按窗口算只差十几像素。
+/// 算出来的目标全程复用（密度与窗口尺寸都用它），**整场只有一次配置变更**。
+fn pre_launch_geometry() -> recorder::Geometry {
+    let (wa_w, wa_h) = recorder::primary_work_area();
+    recorder::fit_geometry_for(wa_w, wa_h, 0, 0)
+}
+
+/// 定型（改窗口尺寸）后、发 DeepLink 前，等 APP 把这次 Android **配置变更**消化完。
+///
+/// 配置变更会**重建当前前台 Activity**（此刻是主界面）。重建没结束就发 DeepLink，
+/// 直播间会在「半重建」的主界面上启动 —— 实测（用户反馈）这比「进房后再定型」黑屏更严重，
+/// 所以这一段静置是必须的：主界面的重建 + 重绘都在这段时间里结束。
+fn settle_after_config() {
+    std::thread::sleep(CONFIG_SETTLE);
 }
 
 // ==================== 对外流程 ====================
+
+/// 守护线程是否该继续跑（`stop_mute_guard` 置 false）
+static MUTE_RUNNING: AtomicBool = AtomicBool::new(false);
+/// 守护线程句柄（同一时刻只留一个；停止时要 join，别让它和收尾打架）
+static MUTE_GUARD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+
+/// WSA 宿主进程（Android 侧的声音全由它渲染到默认播放设备上，就是 Windows「音量合成器」
+/// 里 WSA 那一项）。
+const WSA_CLIENT_EXE: &str = "WsaClient.exe";
+
+/// 该静音哪些进程：**按进程名找 WSA 宿主**，找不到才退回「B 站窗口所属进程」。
+///
+/// 为什么不认窗口：B 站窗口是 Android 侧 Activity 画出来的，**冷启动慢时窗口会先白屏
+/// 好几秒，而声音在那之前就出来了**（实测：窗口空白的几秒里一直有声）。窗口没出来就
+/// 认不到目标 → 一整段漏音。`WsaClient.exe` 只要 WSA 起着就在，与直播间加载快慢无关。
+///
+/// **绝不去猜「当前正在出声的会话」**：会话是 APP 开始播音那一刻才建出来的，猜法在窗口
+/// 还没起来时会静音到别的正在播音的程序上（浏览器 / 音乐播放器），而且一旦认下来就再改
+/// 不回来 —— 第一轮实测就是这个。
+fn wsa_audio_pids() -> Vec<u32> {
+    let mut pids = process_ids(WSA_CLIENT_EXE);
+    if pids.is_empty() {
+        // 兜底：万一哪天宿主改名了，至少还能按窗口进程认（窗口没出来时这里是空的，
+        // 所以它只是保险，不是主路径）
+        if let Some(hwnd) = current_window() {
+            let mut pid = 0u32;
+            unsafe {
+                let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            }
+            if pid != 0 {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+/// **全程静音守护**：从拉起 B 站 APP **之前**一直盯到本次会话结束。
+///
+/// 为什么必须是**常驻**线程，而不是「进房阶段盯一下、之后交给 overlay」：
+/// - overlay 要等「进房 → 等窗口 → 定型 → 激活」全走完才建得起来，实测那几秒里
+///   声音早就外放出来了；
+/// - 静音是 **per-session** 的：APP 换播放器 / 换线路 / 重新拉起时音频会话都会**重建**，
+///   新会话默认不静音。只在开头设一次必然漏。
+///
+/// 每 [`MUTE_POLL`] 一拍：解析目标 pid（拿不到就等下一拍）→ 按 `recorder::audio::muted()`
+/// 的**期望状态**把它名下**所有**会话设一遍。所以无论会话什么时候冒出来、重建多少次，
+/// 最多 50ms 内就会被静音 —— APP 还没出声就已经哑了。
+///
+/// 目标 pid 解析失败（会话还没建出来 / 进程没了）只会重置 pid 下拍重来，不算错误。
+fn start_mute_guard() {
+    let Ok(mut slot) = MUTE_GUARD.lock() else {
+        return;
+    };
+    if slot.is_some() {
+        return;
+    }
+    MUTE_RUNNING.store(true, Ordering::SeqCst);
+    // 每个新会话都回到默认：静音。用户上一次取消静音的选择不带过来。
+    crate::recorder::audio::set_muted(true);
+    let spawned = std::thread::Builder::new()
+        .name("bili-mute-guard".into())
+        .spawn(|| {
+            let mut logged = false;
+            while MUTE_RUNNING.load(Ordering::Relaxed) {
+                let want = crate::recorder::audio::muted();
+                let pids = wsa_audio_pids();
+                let mut hit = Vec::new();
+                for pid in &pids {
+                    // 会话还没建出来（APP 还没开始播音）时这里是 Err，下一拍再试即可 ——
+                    // pids 每拍重算，进程/会话重建都能跟上。
+                    if crate::recorder::audio::set_process_mute(*pid, want).is_ok() {
+                        hit.push(*pid);
+                    }
+                }
+                if !hit.is_empty() {
+                    if want && !logged {
+                        logged = true;
+                        wlog(&format!(
+                            "[音频] 全程静音：已静音 WSA（{WSA_CLIENT_EXE}）的音频会话（pid {}）—— 与直播间加载快慢无关",
+                            hit.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
+                        ));
+                    } else if !want && logged {
+                        // 用户点了按钮取消静音 → 之后再静音时重新记一条
+                        logged = false;
+                    }
+                }
+                std::thread::sleep(MUTE_POLL);
+            }
+            // 收尾：把静音还原。WSA 正常会被整个关掉，这行是兜底 ——
+            // 万一关不干净，也别让用户之后再手动用 WSA 时一直是哑的。
+            for pid in wsa_audio_pids() {
+                let _ = crate::recorder::audio::set_process_mute(pid, false);
+            }
+        });
+    match spawned {
+        Ok(h) => *slot = Some(h),
+        Err(_) => MUTE_RUNNING.store(false, Ordering::SeqCst),
+    }
+}
+
+/// 停守护线程并等它退出（收尾顺序：**先停它**，再关 APP / 关 WSA，免得它在中途又把目标静音回去）
+fn stop_mute_guard() {
+    MUTE_RUNNING.store(false, Ordering::SeqCst);
+    let handle = MUTE_GUARD.lock().ok().and_then(|mut g| g.take());
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+}
 
 /// 完整启动流程（阻塞，调用方放 `spawn_blocking` 里）：连 WSA → 清掉旧实例 → 两阶段进房
 /// → 找窗口 → 定型成竖屏 → 打 overlay。成功后进入「监听中」。
@@ -1618,16 +1860,74 @@ fn bring_up_session(exe: PathBuf, room_id: i64) -> Result<(), String> {
         );
     }
 
+    // 全程静音：**赶在拉活 APP 之前**就把静音守护挂上（见 [`start_mute_guard`]）。
+    // 放在 `am force-stop` 之前也一样 —— 那时守护还在等 APP 窗口出现，只是把「盯」的开始
+    // 时间提前到最靠前，越早越没有漏音的可能。
+    start_mute_guard();
+    let shown = enter_and_show(adb, room_id);
+    if shown.is_err() {
+        // 进房/定型失败：不会有会话了，把守护收掉，别让它一直空转、也别把它静音过的
+        // 旧实例（上一轮残留）留在静音状态。
+        stop_mute_guard();
+    }
+    shown
+}
+
+/// `bring_up_session` 的后半段：清旧实例 → 写密度 → 冷启 APP → 定型窗口 → DeepLink 进房
+/// → 挂 overlay → 记会话。单独拆出来是为了让 [`start_mute_guard`] 的收尾只在「本次会话真的失败」时发生。
+///
+/// **顺序是这一整套的关键**（详见 [`pre_launch_geometry`] / [`settle_after_config`]）：
+/// Android 的配置变更会重建当前前台 Activity，所以两处配置都必须在「没有直播播放器在前台」
+/// 的时候落下去，并且要让 APP 消化完再进房，否则直播画面就会黑一下、重新加载一遍。
+fn enter_and_show(adb: Adb, room_id: i64) -> Result<(), String> {
     // 先把可能还开着的旧实例清掉
     let _ = adb.shell(&format!("am force-stop {PACKAGE}"));
 
-    enter_room(&adb, room_id)?;
+    // ① 定型目标 + 写密度：**赶在 APP 起来之前**。此刻前台只有 WSA 自己的界面，
+    //    密度变更重建它也看不见。目标算一次、全程复用，后面不再改写密度。
+    let g = pre_launch_geometry();
+    recorder::set_density(g.density);
+    wlog(&format!(
+        "[几何] 定型目标（APP 起来前）：客户区 {}x{}，Android 密度 {}（参考 {}x{}@{}；整窗高按可用区 90%，宽度按 17:9 反算）",
+        g.client_w,
+        g.client_h,
+        g.density,
+        recorder::REF_CLIENT_W,
+        recorder::REF_CLIENT_H,
+        recorder::REF_DENSITY
+    ));
+    // 密度得真的写进 Android：写不进去（旧版 WSA / 权限不足）画面就会按原密度排版，
+    // 与窗口尺寸对不上，所以把实测值记下来 —— 别让日志和实际状态对不上号。
+    if let Err(e) = adb.shell(&format!("wm density {}", g.density)) {
+        wlog(&format!("[几何] 写 wm density 失败：{e}"));
+    }
+
+    // ② 第一段：冷启主界面
+    let main = open_app(&adb)?;
+
+    // ③ 趁还在主界面把窗口尺寸定下来（这是进房前的最后一处配置变更），并等 APP 消化完。
+    //    窗口要等主界面画出来才有，所以只能排在这一段之后。
+    //    主界面一直没建出窗口时**不勉强**：退回老顺序（先进房、再定型），流程不会坏，只是黑闪一次。
+    let fitted = match wait_window_within(PRE_FIT_BUDGET) {
+        Some(h) => {
+            fit_window(h, g.client_w, g.client_h)?;
+            settle_after_config();
+            true
+        }
+        None => false,
+    };
+
+    // ④ 第二段：DeepLink 进直播间（尺寸 / 密度都已就位，进去之后不再动配置）
+    open_live(&adb, room_id, main)?;
+
     let hwnd = wait_window()?;
-    // 先把窗口缩放/定型好再挂 overlay：冷启动期间窗口是默认横屏大小，
-    // 若在定型前就挂，overlay 会贴在错的尺寸上，还得等位置同步慢慢追
-    fit_to_monitor(hwnd, &adb)?;
+    if !fitted {
+        // 冷启动慢到主界面阶段一直没抓到窗口：只能现在补。这次配置变更落在直播间上，
+        // 会黑一下 —— 但比例是错的更糟，只能两害相权。
+        fit_window(hwnd, g.client_w, g.client_h)?;
+    }
     // 把「窗口 / 显示器 / Android 显示配置」的实测值记进日志：窗口是不是装不下、
-    // 裁掉的 58px 是不是正好等于 Android 状态栏，全靠这几行判断（release 看不到 stderr）。
+    // 裁掉的 56px 是不是正好等于 Android 状态栏，全靠这几行判断（release 看不到 stderr）。
     wlog_geometry(hwnd, &adb);
     // 冷启动刚结束时 B 站窗口还是失活状态，此时挂上去的 overlay 不会立刻显示
     // （要手动点一下窗口激活它才冒出来）—— 先把窗口拉到前台，再挂 overlay
@@ -1649,8 +1949,11 @@ fn bring_up_session(exe: PathBuf, room_id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// 停止监听：关 B 站 APP → 关 WSA → 清会话。
+/// 停止监听：停静音守护 → 关 B 站 APP → 关 WSA → 清会话。
 pub fn shutdown() {
+    // **先停守护再动手**：它每 50ms 就会把目标静音一次，不收掉的话会和后面的
+    // 「还原静音」抢，收尾完还可能被它静音回去。
+    stop_mute_guard();
     let adb = ACTIVE.lock().ok().and_then(|mut g| g.take());
     if let Some(adb) = &adb {
         let _ = adb.shell(&format!("am force-stop {PACKAGE}"));
@@ -1708,4 +2011,37 @@ fn process_running(name: &str) -> bool {
         text.contains(&name.to_lowercase())
     })
     .unwrap_or(false)
+}
+
+/// 按映像名（如 `WsaClient.exe`）找出**所有**同名进程的 pid。
+///
+/// 用进程快照（`CreateToolhelp32Snapshot`）而不是 `tasklist`：快照是本机 API、一次约 1ms，
+/// 可以放进 50ms 的静音守护循环里每拍都做；`tasklist` 每拍起一个子进程，太贵。
+fn process_ids(name: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return out;
+        };
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut entry).is_ok() {
+            loop {
+                let end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|c| *c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let image = String::from_utf16_lossy(&entry.szExeFile[..end]);
+                if image.eq_ignore_ascii_case(name) {
+                    out.push(entry.th32ProcessID);
+                }
+                if Process32NextW(snap, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+    out
 }

@@ -13,8 +13,8 @@ mod encoder;
 
 pub use capture::{
     activate_window, client_size, create_device, find_wsa_window, harden_window,
-    hide_capture_border, is_unusable, monitor_work_area, monitor_work_rect, window_dpi,
-    window_frame,
+    hide_capture_border, is_unusable, monitor_work_area, monitor_work_rect, primary_work_area,
+    window_dpi, window_frame,
 };
 
 use std::path::{Path, PathBuf};
@@ -43,14 +43,14 @@ use tauri::Manager;
 
 // ==================== 参考几何与本次会话的定型目标 ====================
 //
-// 标定基准：WSA 的原始物理密度 320（2.0 px/dp）下的竖屏手机画面 —— 900×1858px = 450×929dp，
-// 裁掉顶部 58px（29dp 的 Android 状态栏）后录 900×1800，即 **18:9**（现代手机的长屏比例，
-// 高是宽的 2 倍）。**只有这套尺寸做过实测**。
+// 标定基准：WSA 的原始物理密度 320（2.0 px/dp）下的竖屏手机画面 —— 900×1758px = 450×879dp，
+// 裁掉顶部 58px（29dp 的 Android 状态栏）后录 900×1700，即 **17:9**（宽 9 : 高 17，
+// 与现代手机的长屏比例一致）。**只有这套尺寸做过实测**。
 //
-// 但窗口尺寸是**物理像素**：900×1858 加上外框（标题栏+边框）约 40px，整窗约 1900px 高，
+// 但窗口尺寸是**物理像素**：900×1758 加上外框（标题栏+边框）约 40px，整窗约 1800px 高，
 // 100% 缩放的 1080p 屏可用高度只有约 1030，窗口下沿会跑到屏幕外（实测反馈："窗口大小过大"）。
 // 所以真正用的尺寸由 [`fit_geometry`] 现算：**整窗高度固定占显示器可用区的 90%**，宽度按
-// 标定的 9:18 比例反算，Android 密度按同比例下调 —— dp 尺寸（版式、礼物动画）保持不变，
+// 标定的 9:17 比例反算，Android 密度按同比例下调 —— dp 尺寸（版式、礼物动画）保持不变，
 // 只是画面分辨率随屏幕大小伸缩。
 
 /// 参考密度（WSA 原始物理密度，px/dp × 160）
@@ -62,8 +62,8 @@ pub const REF_BAR_H: i32 = 58;
 /// 参考客户区宽度（px）= 450dp
 pub const REF_CLIENT_W: i32 = 900;
 
-/// 参考**录制区**高度（px）= 宽度 × 2 = 1800，即 18:9 竖屏（裁掉状态栏后录到的画面）
-pub const REF_REC_H: i32 = 1800;
+/// 参考**录制区**高度（px）= 宽度 × 17/9 = 1700，即 17:9 竖屏（裁掉状态栏后录到的画面）
+pub const REF_REC_H: i32 = 1700;
 
 /// 参考客户区高度（px）= 录制区 + 顶部状态栏
 pub const REF_CLIENT_H: i32 = REF_REC_H + REF_BAR_H;
@@ -99,17 +99,26 @@ pub struct Geometry {
     pub density: i32,
 }
 
-/// 算本次会话该把窗口定成多大：**高度固定占 `hwnd` 所在显示器可用区的 90%**，宽度按标定
-/// 比例（录制区 1800:900 = 18:9）反算，Android 密度同比例换算。于是任何分辨率下都装得下、
+/// 按窗口所在显示器算定型目标（见 [`fit_geometry_for`]）。
+pub fn fit_geometry(hwnd: HWND) -> Geometry {
+    let (frame_w, frame_h) = window_frame(hwnd);
+    let (wa_w, wa_h) = monitor_work_area(hwnd);
+    fit_geometry_for(wa_w, wa_h, frame_w, frame_h)
+}
+
+/// 算本次会话该把窗口定成多大：**高度固定占显示器可用区的 90%**，宽度按标定
+/// 比例（录制区 1700:900 = 17:9）反算，Android 密度同比例换算。于是任何分辨率下都装得下、
 /// 版式（dp 尺寸、礼物动画比例）与标定完全一致，只是画面分辨率随屏幕大小伸缩。
+///
+/// **接受参数而不是直接收窗口**：B 站 APP 起来之前窗口还不存在，但密度必须在那之前
+/// 写进 Android（见 `wsa::pre_launch_geometry`），所以几何得能从「可用区 + 外框」直接算。
+/// 外框还量不到时按 0 传：整窗会比可用区 90% 多出十几像素，安全范围内。
 ///
 /// 上限 1.0：密度超过标定的 320 属于没实测过的区域，而录制码率是固定的 4Mbps，
 /// 画面再放大只会更糊 —— 4K 以上的屏就当按标定尺寸录，不再放大。
-pub fn fit_geometry(hwnd: HWND) -> Geometry {
+pub fn fit_geometry_for(wa_w: i32, wa_h: i32, frame_w: i32, frame_h: i32) -> Geometry {
     /// 窗口（含外框）占显示器可用区高度的比例
     const FILL: f64 = 0.90;
-    let (frame_w, frame_h) = window_frame(hwnd);
-    let (wa_w, wa_h) = monitor_work_area(hwnd);
     let scale = if wa_w <= 0 || wa_h <= 0 {
         1.0 // 量不到显示器（异常情况）→ 按标定尺寸来，别把画面缩没了
     } else {
