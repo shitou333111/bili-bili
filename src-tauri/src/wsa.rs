@@ -111,7 +111,7 @@ fn log_file() -> Option<PathBuf> {
 /// 记一条诊断日志：**追加写文件**（release 可见）+ 同时打 stderr（dev 可见）。
 /// 不带时间戳：每次面向用户的安装流程开始时会清空日志（见 [`wlog_reset`]），
 /// 所以文件里就是本次尝试的完整有序过程（std 拿不到本地时间，不值得为此加依赖）。
-fn wlog(msg: &str) {
+pub(crate) fn wlog(msg: &str) {
     eprintln!("{msg}");
     let Some(path) = log_file() else { return };
     if let Some(dir) = path.parent() {
@@ -126,12 +126,65 @@ fn wlog(msg: &str) {
     }
 }
 
-/// 清空日志，只保留本次尝试（面向用户的安装流程入口调用一次）
-fn wlog_reset() {
-    if let Some(path) = log_file() {
-        let _ = std::fs::write(&path, "");
+/// 清空日志，只保留本次尝试。**只在面向用户的流程入口调用**（`setup::install`）。
+///
+/// 首行必写「原生包日期戳 + exe 路径」：release 下我们看不到任何控制台输出，而
+/// "日志没生成" 最常见的两个原因就是「跑的不是这份二进制」和「文件在别的目录」——
+/// 把这两件事写进第一行，一眼就能排除。
+pub(crate) fn wlog_reset() {
+    let path = log_file();
+    if let Some(p) = &path {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, "");
     }
-    wlog("===== 安装 / 修复流程开始 =====");
+    wlog(&format!(
+        "===== 安装 / 修复流程开始（原生包 {}）=====",
+        env!("BILI_BUILD_DATE")
+    ));
+    if let Ok(exe) = std::env::current_exe() {
+        wlog(&format!("[env] exe={}", exe.display()));
+    }
+    match &path {
+        Some(p) => wlog(&format!("[env] 日志文件={}", p.display())),
+        None => wlog("[env] 取不到 APPDATA，日志只打 stderr"),
+    }
+}
+
+/// 记一条「屏幕 / 窗口几何」诊断。
+///
+/// 为什么值得单独记：窗口尺寸是**物理像素**、按所在显示器现算的（整窗高 = 可用区高 × 90%），
+/// 而画面排版又取决于 Android 侧的 `wm density` —— 密度没写进去或写错了，录制就会
+/// 「留一条黑边」或「切掉一截内容」。到底对不对，看这几行就知道，不必再猜。
+pub(crate) fn wlog_geometry(hwnd: HWND, adb: &Adb) {
+    let (cw, ch) = recorder::client_size(hwnd);
+    let (wa_w, wa_h) = recorder::monitor_work_area(hwnd);
+    let dpi = recorder::window_dpi(hwnd);
+    wlog(&format!(
+        "[几何] 客户区 {cw}x{ch}；所在显示器可用区 {wa_w}x{wa_h}；窗口 DPI={dpi}（96=100%）；\
+         参考 {}x{}@{}（裁掉顶部 {}px 后录 {}x{}）",
+        recorder::REF_CLIENT_W,
+        recorder::REF_CLIENT_H,
+        recorder::REF_DENSITY,
+        recorder::bar_h(),
+        cw,
+        ch - recorder::bar_h()
+    ));
+    if wa_h > 0 && ch > wa_h {
+        wlog(&format!(
+            "[几何] 窗口比显示器可用区高 {}px —— 下沿装不下（WGC 仍能完整采集，只是看不全）",
+            ch - wa_h
+        ));
+    }
+    // Android 侧的显示尺寸 / 密度：客户区应当与 `wm size` 一致；状态栏高度（= 裁掉的 BAR_H）
+    // 与密度成正比，密度一旦不同，裁切就会「留一条黑边」或「切掉一截内容」。
+    if let Ok(o) = adb.shell("wm size") {
+        wlog(&format!("[几何] wm size: {}", o.replace('\n', " | ").trim()));
+    }
+    if let Ok(o) = adb.shell("wm density") {
+        wlog(&format!("[几何] wm density: {}", o.replace('\n', " | ").trim()));
+    }
 }
 
 /// 已连上的 adb：可执行文件路径 + 设备序列号（后续命令都带 `-s`）
@@ -1058,9 +1111,10 @@ fn enable_developer_mode() -> bool {
 /// 切开关**不需要**重启子系统：安装流程早就把 WSA 提前拉起来了（见 [`boot_wsa_early`]），
 /// 这时候切开关照样能让端口监听，直接连上就行 —— 以前那套 shutdown + 再 launch 是多余的一轮。
 pub(crate) fn ensure_wsa(exe: &Path, show_settings: bool) -> Result<Adb, String> {
+    // 日志的「清空」只在 `setup::install` 入口做一次 —— 若在这里也清，会把安装第 1、2 步
+    // 的记录一起抹掉（本函数是第 3 步才被调到的）。
     if show_settings {
-        // 面向用户的安装 / 修复流程：清空日志，只留本次尝试的完整过程
-        wlog_reset();
+        wlog("[wsa] ===== 安装 / 修复：ensure_wsa(show_settings=true) =====");
     }
     wlog("[wsa] ensure_wsa 开始：先试直连现有 adb");
     if let Some(adb) = connect_waiting_auth(exe) {
@@ -1095,7 +1149,8 @@ pub(crate) fn ensure_wsa(exe: &Path, show_settings: bool) -> Result<Adb, String>
         } else {
             eprintln!("[wsa] 没能自动操作「开发人员模式」开关，请在弹出的设置窗口里手动打开");
         }
-        eprintln!("[wsa][计时] 设置窗口自动化：{:.1}s", t1.elapsed().as_secs_f32());
+        // 耗时一律走 wlog：release 下没有控制台，用户「觉得安装很慢」时只能靠日志里的这几行定位
+        wlog(&format!("[wsa][计时] 设置窗口自动化：{:.1}s", t1.elapsed().as_secs_f32()));
     }
     // 设置窗口只是 UI，它自己**不会**把子系统拉起来（实测：窗口开着、开关也报了成功，端口照样
     // 不监听）—— 所以这里要显式拉。但 WSA 已经在跑（安装流程提前拉的）就别再拉一次，
@@ -1127,12 +1182,12 @@ pub(crate) fn ensure_wsa(exe: &Path, show_settings: bool) -> Result<Adb, String>
         }
         std::thread::sleep(WSA_POLL);
     }
-    eprintln!(
+    wlog(&format!(
         "[wsa][计时] 首启等待：{:.1}s（adb {}；累计 {:.1}s）",
         t_grace.elapsed().as_secs_f32(),
         if early.is_some() { "已连上" } else { "尚未连上" },
         t0.elapsed().as_secs_f32()
-    );
+    ));
     if show_settings && early.is_some() {
         // 面板（刚打开但现在已多余 / 上一轮超时留下的）既然 adb 通了就顺手收起，别一直挂桌面上。
         // 只在这条会自己开面板的路上收；录屏那条路（`show_settings == false`）从不碰它，
@@ -1168,7 +1223,7 @@ pub(crate) fn ensure_wsa(exe: &Path, show_settings: bool) -> Result<Adb, String>
                 ));
             }
             if booted {
-                eprintln!("[wsa][计时] 等 WSA 启动完成：{:.1}s", t2.elapsed().as_secs_f32());
+                wlog(&format!("[wsa][计时] 等 WSA 启动完成：{:.1}s", t2.elapsed().as_secs_f32()));
                 // 设置窗口的使命（代开开关）已经完成，收起它再交差 —— 别把面板留在桌面上
                 if show_settings {
                     close_wsa_settings();
@@ -1256,10 +1311,9 @@ fn wait_window() -> Result<HWND, String> {
     }
 }
 
-/// 把窗口客户区钉到目标尺寸。`SetWindowPos` 后尺寸要过一会儿才落定，故复核最多三轮。
+/// 把窗口客户区钉到 `want_w × want_h`。`SetWindowPos` 后尺寸要过一会儿才落定，故复核最多三轮。
 /// 冷启动期间窗口一直是 WSA 的默认横屏尺寸，必须钉成竖屏后才好挂 overlay。
-fn fit_window(hwnd: HWND) -> Result<(), String> {
-    let (want_w, want_h) = (recorder::WANT_CLIENT_W, recorder::WANT_CLIENT_H);
+fn fit_window(hwnd: HWND, want_w: i32, want_h: i32) -> Result<(), String> {
     recorder::harden_window(hwnd, want_w, want_h)?;
     for _ in 0..3 {
         std::thread::sleep(Duration::from_millis(300));
@@ -1277,6 +1331,34 @@ fn fit_window(hwnd: HWND) -> Result<(), String> {
             "CAPTURE_INIT_FAILED::窗口定型失败（期望 {want_w}x{want_h}，实际 {w}x{h}）"
         ))
     }
+}
+
+/// 按显示器定窗口尺寸，并把 Android 密度按同一比例写进去。
+///
+/// 尺寸由 [`recorder::fit_geometry`] 现算：**整窗高度占所在显示器可用区的 90%**，宽度按
+/// 标定比例（1800:900 = 18:9）反算。参考几何（900×1858px = 450×929dp）只有物理高度 ≥1900
+/// 的显示器才装得下，100% 缩放的 1080p 屏装不下（窗口下沿会跑到屏幕外）。现在拆成
+/// 「等比缩小 + 密度同步下调」，dp 尺寸不变 —— 版式与礼物动画和标定时一致，只是分辨率变化。
+/// 密度写进 Android 是全局生效的，下次换显示器会被 `fit_geometry` 按新屏幕重算，不必手动复位。
+fn fit_to_monitor(hwnd: HWND, adb: &Adb) -> Result<(), String> {
+    let g = recorder::fit_geometry(hwnd);
+    // 先落全局密度：overlay 与录制的「顶栏高度」都按它换算（`recorder::bar_h()`）
+    recorder::set_density(g.density);
+    wlog(&format!(
+        "[几何] 定型目标：客户区 {}x{}，Android 密度 {}（参考 {}x{}@{}；整窗高按可用区 90%，宽度按 18:9 反算）",
+        g.client_w,
+        g.client_h,
+        g.density,
+        recorder::REF_CLIENT_W,
+        recorder::REF_CLIENT_H,
+        recorder::REF_DENSITY
+    ));
+    // 密度得真的写进 Android：写不进去（旧版 WSA / 权限不足）画面就会按原密度排版，
+    // 与窗口尺寸对不上，所以把实测值记下来 —— 别让日志和实际状态对不上号。
+    if let Err(e) = adb.shell(&format!("wm density {}", g.density)) {
+        wlog(&format!("[几何] 写 wm density 失败：{e}"));
+    }
+    fit_window(hwnd, g.client_w, g.client_h)
 }
 
 // ==================== 对外流程 ====================
@@ -1307,9 +1389,12 @@ fn bring_up_session(exe: PathBuf, room_id: i64) -> Result<(), String> {
 
     enter_room(&adb, room_id)?;
     let hwnd = wait_window()?;
-    // 先定型成竖屏再挂 overlay：冷启动期间窗口是默认横屏大小，
+    // 先把窗口缩放/定型好再挂 overlay：冷启动期间窗口是默认横屏大小，
     // 若在定型前就挂，overlay 会贴在错的尺寸上，还得等位置同步慢慢追
-    fit_window(hwnd)?;
+    fit_to_monitor(hwnd, &adb)?;
+    // 把「窗口 / 显示器 / Android 显示配置」的实测值记进日志：窗口是不是装不下、
+    // 裁掉的 58px 是不是正好等于 Android 状态栏，全靠这几行判断（release 看不到 stderr）。
+    wlog_geometry(hwnd, &adb);
     // 冷启动刚结束时 B 站窗口还是失活状态，此时挂上去的 overlay 不会立刻显示
     // （要手动点一下窗口激活它才冒出来）—— 先把窗口拉到前台，再挂 overlay
     recorder::activate_window(hwnd);
@@ -1318,7 +1403,11 @@ fn bring_up_session(exe: PathBuf, room_id: i64) -> Result<(), String> {
         eprintln!("[overlay] 显示失败（不影响录制）: {e}");
     }
     let (w, h) = recorder::client_size(hwnd);
-    eprintln!("[wsa] 窗口就绪 {w}x{h}（录 {w}x{}）", h - recorder::BAR_H);
+    eprintln!(
+        "[wsa] 窗口就绪 {w}x{h}（录 {w}x{}，密度 {}）",
+        h - recorder::bar_h(),
+        recorder::density()
+    );
 
     *ACTIVE
         .lock()

@@ -12,6 +12,10 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, ID3D11Device, ID3D11DeviceContext,
 };
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetClientRect, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOZORDER,
@@ -64,6 +68,44 @@ pub fn client_size(hwnd: HWND) -> (i32, i32) {
     (r.right - r.left, r.bottom - r.top)
 }
 
+/// 窗口所在显示器的**可用区矩形**（物理像素，已扣掉任务栏）。取不到返回 `None`。
+pub fn monitor_work_rect(hwnd: HWND) -> Option<RECT> {
+    unsafe {
+        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        GetMonitorInfoW(mon, &mut mi)
+            .as_bool()
+            .then_some(mi.rcWork)
+    }
+}
+
+/// 窗口所在显示器的可用区尺寸（取不到返回 `0,0`）
+pub fn monitor_work_area(hwnd: HWND) -> (i32, i32) {
+    monitor_work_rect(hwnd)
+        .map(|r| (r.right - r.left, r.bottom - r.top))
+        .unwrap_or((0, 0))
+}
+
+/// 「窗口外框 − 客户区」的差值（边框 + 原生标题栏）。
+/// `SetWindowPos` 给的是**外框**尺寸，要按客户区算可用高度就得先把这个差值减掉。
+pub fn window_frame(hwnd: HWND) -> (i32, i32) {
+    let mut wr = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut wr) }.is_err() {
+        return (0, 0);
+    }
+    let (cw, ch) = client_size(hwnd);
+    ((wr.right - wr.left) - cw, (wr.bottom - wr.top) - ch)
+}
+
+/// 窗口所在显示器的 DPI（96 = 100% 缩放）。只用于诊断：窗口尺寸是物理像素，
+/// 100% 缩放的屏幕拿到的是"同样数字但更占地方"的窗口。
+pub fn window_dpi(hwnd: HWND) -> u32 {
+    unsafe { GetDpiForWindow(hwnd) }
+}
+
 /// 窗口是否被最小化或客户区尺寸为 0（此时 WGC 拿不到帧，应进 paused 态重试）
 pub fn is_unusable(hwnd: HWND) -> bool {
     let (w, h) = client_size(hwnd);
@@ -85,7 +127,8 @@ pub fn hide_capture_border(capture: &windows::Graphics::Capture::GraphicsCapture
 /// 窗口定型：禁缩放/禁最大化（**保留最小化与关闭按钮**），并把**客户区**精确调到 `want_w × want_h`。
 ///
 /// 直接 `SetWindowPos` 给客户区尺寸会多出边框，所以先量出「窗口尺寸 − 客户区尺寸」的
-/// 边框差值再补上；保持左上角不动，避免窗口跑出屏幕被 WSA 裁剪。
+/// 边框差值再补上。位置也要夹进所在显示器的**可用区**：窗口原来可能贴着屏幕下沿（WSA 冷启动
+/// 的默认位置、或上一轮留下的位置），只改尺寸不搬位置的话，缩小后的窗口照样有一截在屏幕外。
 pub fn harden_window(hwnd: HWND, want_w: i32, want_h: i32) -> Result<(), String> {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -96,14 +139,23 @@ pub fn harden_window(hwnd: HWND, want_w: i32, want_h: i32) -> Result<(), String>
         let (cw, ch) = client_size(hwnd);
         let frame_w = (wr.right - wr.left) - cw;
         let frame_h = (wr.bottom - wr.top) - ch;
+        let (full_w, full_h) = (want_w + frame_w, want_h + frame_h);
+
+        // `clamp` 的上界可能小于下界（窗口比可用区还大，极端分辨率下会发生），
+        // 那样 `clamp` 会 panic —— 用 max() 兜住，等价于「贴左上角」。
+        let (mut x, mut y) = (wr.left, wr.top);
+        if let Some(wa) = monitor_work_rect(hwnd) {
+            x = x.clamp(wa.left, (wa.right - full_w).max(wa.left));
+            y = y.clamp(wa.top, (wa.bottom - full_h).max(wa.top));
+        }
 
         SetWindowPos(
             hwnd,
             None,
-            wr.left,
-            wr.top,
-            want_w + frame_w,
-            want_h + frame_h,
+            x,
+            y,
+            full_w,
+            full_h,
             SWP_NOZORDER | SWP_NOACTIVATE,
         )
         .map_err(|e| format!("CAPTURE_INIT_FAILED::SetWindowPos 失败: {e}"))?;

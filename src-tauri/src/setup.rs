@@ -1,8 +1,9 @@
 //! 录屏环境初始化（检测 + 安装）。
 //!
-//! 「完整录屏」依赖三样东西：WSA、adb(platform-tools)、B 站 APP(APK)。
+//! 「完整录屏」依赖三样东西：adb(platform-tools)、WSA、WSA 里的 B 站 APP(APK)。
 //! 本模块负责**检测**这三样是否就绪，并提供**一键安装**：下载 → 解压 → 安装，
 //! 每一步都通过 `wsa-setup:progress` 事件回执（阶段 / 进度 / 结果），前端据此画进度条。
+//! 安装顺序与上面一致（前两步互不依赖，第三步才需要前两步都就绪），见 [`STEP_ADB`]。
 //!
 //! 三条铁律：
 //! 1. 每一步先检测再动手，已装好就跳过（绝不重复下载 1.5GB 的 WSA）。
@@ -32,6 +33,15 @@ static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// 中止错误的前缀。前端据此把提示显示成「已中止」而不是「安装失败」。
 const CANCEL_CODE: &str = "CANCELLED";
+
+/// 三步的步号。**顺序就是安装顺序**：先 adb（体积小、与 WSA 互不依赖，先让用户看到进展），
+/// 再 WSA（528MB 的大包，装完顺手后台冷启动），最后才是在 WSA 里装 B 站 APP ——
+/// 只有这第 3 步需要「adb 就绪 + WSA 已注册」两个前提同时满足。
+/// 前端进度条的「第 N / 3 步」与 `emit` / `download` 的 `step` 参数都用这几个常量，
+/// 免得日后调顺序时漏改某一处、让进度条指错步骤。
+const STEP_ADB: u8 = 1;
+const STEP_WSA: u8 = 2;
+const STEP_APK: u8 = 3;
 
 /// 请求中止安装（`wsa_setup_abort` 命令调用）。
 pub fn request_cancel() {
@@ -64,15 +74,15 @@ pub struct SetupStatus {
     pub ready: bool,
     /// 形如「Windows 11 x64」，给前端提示用
     pub platform: String,
-    /// 第 1 步：WSA
-    pub wsa: bool,
-    /// 第 2 步：adb（platform-tools）
+    /// 第 1 步：adb（platform-tools）
     pub adb: bool,
-    /// 第 3 步：B 站 APP（APK）
+    /// 第 2 步：WSA
+    pub wsa: bool,
+    /// 第 3 步：B 站 APP（APK）。WSA 没就绪时恒为 `false`（APP 装在 WSA 里，子系统坏了它必然不可用）
     pub apk: bool,
 }
 
-/// 安装进度负载。`step`：1 WSA / 2 adb / 3 APK（0 = 整轮结束）。
+/// 安装进度负载。`step`：1 adb / 2 WSA / 3 APK（0 = 整轮结束）。
 /// `phase`：`download` / `extract` / `install` / `skip` / `done` / `error`。
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,7 +273,10 @@ fn wsa_ready(app: &AppHandle) -> bool {
 pub fn status(app: &AppHandle) -> SetupStatus {
     let wsa_ok = wsa_ready(app);
     let adb_ok = wsa::adb_exe(app).is_some();
-    let apk_ok = apk_installed(app);
+    // WSA 没就绪时 APP 一律按「未装」算：APP 是装在 WSA 里的，子系统起不来它就一定用不了。
+    // 这也顺手挡掉了那个假绿灯 —— 此时问 adb 问不到、只会退回标记文件，而标记文件在
+    // 「用户手动卸载了 APP」或「WSA 坏了」时都是过期的。WSA 修好后下次检测会自动恢复真实状态。
+    let apk_ok = wsa_ok && apk_installed(app);
     let supported = wsa_url().is_some();
     SetupStatus {
         supported,
@@ -295,7 +308,15 @@ pub async fn status_async(app: &AppHandle) -> SetupStatus {
 /// 任一步失败即中止并把错误抛给前端（错误串 `CODE::中文`，CODE 为 `CANCELLED` 表示用户中止）。
 pub async fn install(app: AppHandle) -> Result<SetupStatus, String> {
     CANCELLED.store(false, Ordering::SeqCst);
+    // 日志在这里清空 + 落第一行（原生包日期戳 / exe 路径 / 日志路径）。
+    // 放在**入口**而不是 `ensure_wsa` 里：三步里任何一步跳过时都要保证文件已经存在，
+    // 否则用户按提示去找、只会看到"根本没生成日志"。
+    wsa::wlog_reset();
     let st = status_async(&app).await;
+    wsa::wlog(&format!(
+        "[安装] 平台={}（supported={}）起始状态：WSA={} adb={} APK={}",
+        st.platform, st.supported, st.wsa, st.adb, st.apk
+    ));
     if !st.supported {
         return Err(format!(
             "UNSUPPORTED::当前环境（{}）暂无对应的 WSA 分发包，请按页面提示手动安装",
@@ -303,14 +324,46 @@ pub async fn install(app: AppHandle) -> Result<SetupStatus, String> {
         ));
     }
 
-    let run = async {
-        install_wsa(&app).await?;
+    // 三步各自的耗时都进日志：用户只说得出"比较耗时"，到底慢在下载 WSA、解压、还是拉起
+    // WSA 等授权，只能靠这几行区分（release 没有控制台）。
+    //
+    // 顺序：adb → WSA → B 站 APP。前两步**互不依赖**（`install_adb` 只碰 platform-tools，
+    // `install_wsa` 只碰注册目录/注册表），换顺序不会互相拖累；只有第 3 步同时需要两者
+    // （先 `adb_exe` 取到 adb，再由 `ensure_wsa` 连上 WSA），所以它必须排最后。
+    let t_start = Instant::now();
+    let mut step = 0u8;
+    let mut t_step = Instant::now();
+    let run: Result<(), String> = async {
+        step = STEP_ADB;
+        t_step = Instant::now();
         install_adb(&app).await?;
-        install_bili_apk(&app).await
+        wsa::wlog(&format!(
+            "[安装][计时] 第 {STEP_ADB} 步 adb：{:.1}s",
+            t_step.elapsed().as_secs_f32()
+        ));
+        step = STEP_WSA;
+        t_step = Instant::now();
+        install_wsa(&app).await?;
+        wsa::wlog(&format!(
+            "[安装][计时] 第 {STEP_WSA} 步 WSA：{:.1}s",
+            t_step.elapsed().as_secs_f32()
+        ));
+        step = STEP_APK;
+        t_step = Instant::now();
+        install_bili_apk(&app).await?;
+        wsa::wlog(&format!(
+            "[安装][计时] 第 {STEP_APK} 步 B站APP：{:.1}s",
+            t_step.elapsed().as_secs_f32()
+        ));
+        Ok(())
     }
     .await;
 
     if let Err(e) = run {
+        wsa::wlog(&format!(
+            "[安装][计时] 第 {step} 步失败（总 {:.1}s）：{e}",
+            t_start.elapsed().as_secs_f32()
+        ));
         let cancelled = e.starts_with(CANCEL_CODE);
         emit(
             &app,
@@ -343,7 +396,7 @@ pub async fn install(app: AppHandle) -> Result<SetupStatus, String> {
     Ok(done)
 }
 
-/// 第 1 步：WSA。拆成三段各自判断，**任何一段做完都会被下一轮跳过**：
+/// 第 2 步（`STEP_WSA`）：WSA。拆成三段各自判断，**任何一段做完都会被下一轮跳过**：
 /// ① 工作区里已有解压产物（含包根 `filelist.txt`，按它逐项核对完整性）→ 下载与解压全跳过
 /// ② 否则下载 `.7z`（带 `.part` 断点续传，并按包结构校验已有文件）
 /// ③ 再解压到 `pkg.tmp`（**完整才搬到最终位置**，半成品不会被误认成已完成）
@@ -356,13 +409,13 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
     let dir = setup_dir(app)?;
 
     if wsa_ready(app) {
-        emit(app, 1, "skip", "已检测到 WSA，跳过安装", 0, 0);
+        emit(app, STEP_WSA, "skip", "已检测到 WSA，跳过安装", 0, 0);
         cleanup_extract_tmp(&dir);
         return Ok(());
     }
     if wsa::wsa_installed() {
         // 别名在、但注册目录缺文件：这种 WSA 是打不开的，必须重新解压 + 重新注册才能修好
-        emit(app, 1, "install", "正在修复 WSA…", 0, 0);
+        emit(app, STEP_WSA, "install", "正在修复 WSA…", 0, 0);
     }
     let url = wsa_url().ok_or_else(|| {
         format!("UNSUPPORTED::当前平台（{}）没有对应的 WSA 分发包", platform_label())
@@ -383,7 +436,7 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
     // 这一步必须排在下载检查之前 —— 旧版本解压完会把 528MB 的包删掉，
     // 若先查包的存在性，就会白下一遍（用户报的「已下载已解压还从头下」正是如此）。
     let bat = if let Some(pkg) = extracted_wsa(&dir) {
-        emit(app, 1, "skip", "WSA 已下载完成，跳过下载", 0, 0);
+        emit(app, STEP_WSA, "skip", "WSA 已下载完成，跳过下载", 0, 0);
         find_file(&pkg, "Run.bat").ok_or_else(|| {
             format!("EXTRACT_FAILED::解压目录中未找到 Run.bat：{}", pkg.display())
         })?
@@ -392,13 +445,13 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
         // 早期版本直写最终名、没有 `.part`，中断会留下「名字对、内容不全」的包，必须挡住；
         // 不完整就降级成 `.part` 交给下载器从断点续传，绝不从头再来。
         if archive.is_file() && sevenz_complete(&archive) {
-            emit(app, 1, "skip", "WSA 分发包上次已下载完成，跳过下载", 0, 0);
+            emit(app, STEP_WSA, "skip", "WSA 分发包上次已下载完成，跳过下载", 0, 0);
         } else {
             if archive.is_file() {
                 let _ = std::fs::rename(&archive, part_path(&archive));
             }
-            emit(app, 1, "download", "正在下载 WSA…", 0, 0);
-            download(app, 1, "WSA", url, &archive).await?;
+            emit(app, STEP_WSA, "download", "正在下载 WSA…", 0, 0);
+            download(app, STEP_WSA, "WSA", url, &archive).await?;
         }
         // 下完（或本来就在）再核一次结构，杜绝把半成品送进解压
         if !sevenz_complete(&archive) {
@@ -412,7 +465,7 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
         check_cancel()?;
 
         // ② 解压到 `pkg.tmp`，**完整才搬到工作区根下** —— 那个最终目录存在即代表「解压完整」
-        emit(app, 1, "extract", "正在解压 WSA…", 0, 0);
+        emit(app, STEP_WSA, "extract", "正在解压 WSA…", 0, 0);
         // 上次可能解压到一半被打断：半成品先清掉
         let tmp = dir.join("pkg.tmp");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -469,7 +522,7 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
     if wsa_ready(app) {
         emit(
             app,
-            1,
+            STEP_WSA,
             "install",
             "已补齐 WSA 注册目录（无需重新注册），修复完成",
             0,
@@ -494,13 +547,13 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
     strip_wsa_device_capabilities(pkg_dir);
     // 注册前先把中文资源合进包 —— 否则装出来的 WSA 设置界面永远是英文。失败不拦路。
     if pri_pending(pkg_dir) {
-        emit(app, 1, "install", "正在配置 WSA 界面…", 0, 0);
+        emit(app, STEP_WSA, "install", "正在配置 WSA 界面…", 0, 0);
         merge_pri_resources(pkg_dir).await;
     }
-    emit(app, 1, "install", "即将弹出授权窗口，请点「是」…", 0, 0);
+    emit(app, STEP_WSA, "install", "即将弹出授权窗口，请点「是」…", 0, 0);
     run_run_bat(&bat).await?;
 
-    emit(app, 1, "install", "正在等待 WSA 安装完成…", 0, 0);
+    emit(app, STEP_WSA, "install", "正在等待 WSA 安装完成…", 0, 0);
     let deadline = Instant::now() + Duration::from_secs(240);
     while Instant::now() < deadline {
         check_cancel()?;
@@ -508,10 +561,9 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
             // 注册成功。分发包**留着**（下载慢，以后重装/修复直接用）；解压目录是注册目录，必须留
             cleanup_extract_tmp(&dir);
             // **第一时间把 WSA 拉起来**：它冷启动要几十秒（首次还要初始化 userdata，更慢），
-            // 而接下来两步（下 platform-tools、下 120MB 的 APK）正好是纯等待 —— 让它边下边启动，
-            // 把那几十秒藏进下载里，等第 3 步真要连 adb 时子系统往往已经跑完了。
+            // 这里先把它踢起来、下面的第 3 步再连 adb（`ensure_wsa`），冷启动的等待就没白等。
             // 绝不靠"打开设置面板"来启动它：设置窗口只是 UI，实测它不会把子系统拉起来。
-            emit(app, 1, "install", "正在后台启动 WSA…", 0, 0);
+            emit(app, STEP_WSA, "install", "正在后台启动 WSA…", 0, 0);
             tauri::async_runtime::spawn_blocking(wsa::boot_wsa_early)
                 .await
                 .ok();
@@ -525,12 +577,13 @@ async fn install_wsa(app: &AppHandle) -> Result<(), String> {
     ))
 }
 
-/// 第 2 步：adb（platform-tools.zip → 剥掉顶层目录解压到应用数据目录）。
+/// 第 1 步（`STEP_ADB`）：adb（platform-tools.zip → 剥掉顶层目录解压到应用数据目录）。
 /// 与 WSA 同理分段：zip 已在就跳过下载，解压后 `adb.exe` 在就直接返回。
+/// **与 WSA 没有任何依赖**：只用到文件系统与网络，所以能与 WSA 互换先后。
 async fn install_adb(app: &AppHandle) -> Result<(), String> {
     check_cancel()?;
     if wsa::adb_exe(app).is_some() {
-        emit(app, 2, "skip", "已检测到 adb，跳过下载", 0, 0);
+        emit(app, STEP_ADB, "skip", "已检测到 adb，跳过下载", 0, 0);
         return Ok(());
     }
     let dir = wsa::platform_tools_dir(app)?;
@@ -539,14 +592,14 @@ async fn install_adb(app: &AppHandle) -> Result<(), String> {
     let zip = dir.join("platform-tools.zip");
 
     if zip.is_file() {
-        emit(app, 2, "skip", "adb 压缩包上次已下载完成，跳过下载", 0, 0);
+        emit(app, STEP_ADB, "skip", "adb 压缩包上次已下载完成，跳过下载", 0, 0);
     } else {
-        emit(app, 2, "download", "正在下载 adb…", 0, 0);
-        download(app, 2, "adb", wsa::PLATFORM_TOOLS_URL, &zip).await?;
+        emit(app, STEP_ADB, "download", "正在下载 adb…", 0, 0);
+        download(app, STEP_ADB, "adb", wsa::PLATFORM_TOOLS_URL, &zip).await?;
     }
     check_cancel()?;
 
-    emit(app, 2, "extract", "正在解压 adb…", 0, 0);
+    emit(app, STEP_ADB, "extract", "正在解压 adb…", 0, 0);
     let (src, dest) = (zip.clone(), dir.clone());
     tauri::async_runtime::spawn_blocking(move || wsa::extract_platform_tools(&src, &dest))
         .await
@@ -560,16 +613,17 @@ async fn install_adb(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-/// 第 3 步：B 站 APP（下载 APK → adb install → 写「已安装」标记）。
+/// 第 3 步（`STEP_APK`）：B 站 APP（下载 APK → adb install → 写「已安装」标记）。
+/// **唯一有前提的一步**：既要 adb（第 1 步）、又要 WSA 已注册（第 2 步），所以排在最后。
 async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     check_cancel()?;
     let exe = wsa::adb_exe(app)
-        .ok_or_else(|| "ADB_NOT_FOUND::未找到 adb，请先完成上一步".to_string())?;
+        .ok_or_else(|| format!("ADB_NOT_FOUND::未找到 adb，请先完成第 {STEP_ADB} 步（adb）"))?;
 
     // 先做一次**不唤醒 WSA** 的实测：WSA 正开着就有准确结论，直接跳过。
     if apk_probe(app) == Some(true) {
         mark_apk(app);
-        emit(app, 3, "skip", "WSA 中已安装 B 站 APP，跳过安装", 0, 0);
+        emit(app, STEP_APK, "skip", "WSA 中已安装 B 站 APP，跳过安装", 0, 0);
         return Ok(());
     }
 
@@ -580,7 +634,7 @@ async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     // `ensure_wsa`：先 `boot_and_check_package`，后面 `install_apk` 再走一遍。第一段连不上就
     // 整段作废，第二段把「拉起 WSA / 开开发者模式 / 应答授权弹窗」原封不动再做一次 ——
     // 用户看到的就是「所有步骤又重来了一遍」。
-    emit(app, 3, "install", "正在检查 B 站 APP…", 0, 0);
+    emit(app, STEP_APK, "install", "正在检查 B 站 APP…", 0, 0);
     let exe_conn = exe.clone();
     let t_check = Instant::now();
     let adb = tauri::async_runtime::spawn_blocking(move || wsa::ensure_wsa(&exe_conn, true))
@@ -590,7 +644,7 @@ async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     match wsa::has_package(&adb, wsa::PACKAGE) {
         Some(true) => {
             mark_apk(app);
-            emit(app, 3, "skip", "WSA 中已安装 B 站 APP，跳过下载与安装", 0, 0);
+            emit(app, STEP_APK, "skip", "WSA 中已安装 B 站 APP，跳过下载与安装", 0, 0);
             return Ok(());
         }
         // 实测确认 APP 不在 → 标记是假情报，清掉它再往下走重新安装
@@ -605,14 +659,14 @@ async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     // `download()` 只在**收满**时才把 `.part` 改名成这个最终名，所以「文件在」本身就等于
     // 「上次下载是完整的」，直接用，不必重下（半截的下载会留在 `.part` 里，接着续传）。
     if apk.is_file() {
-        emit(app, 3, "skip", "B 站 APK 本地已有，跳过下载", 0, 0);
+        emit(app, STEP_APK, "skip", "B 站 APK 本地已有，跳过下载", 0, 0);
     } else {
-        emit(app, 3, "download", "正在下载 B 站 APP…", 0, 0);
-        download(app, 3, "B 站 APP", BILI_APK_URL, &apk).await?;
+        emit(app, STEP_APK, "download", "正在下载 B 站 APP…", 0, 0);
+        download(app, STEP_APK, "B 站 APP", BILI_APK_URL, &apk).await?;
     }
     check_cancel()?;
 
-    emit(app, 3, "install", "正在安装 B 站 APP…", 0, 0);
+    emit(app, STEP_APK, "install", "正在安装 B 站 APP…", 0, 0);
     let adb_for_task = adb.clone();
     let apk_for_task = apk.clone();
     let t_install = Instant::now();

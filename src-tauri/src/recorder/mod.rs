@@ -13,10 +13,12 @@ mod encoder;
 
 pub use capture::{
     activate_window, client_size, create_device, find_wsa_window, harden_window,
-    hide_capture_border, is_unusable,
+    hide_capture_border, is_unusable, monitor_work_area, monitor_work_rect, window_dpi,
+    window_frame,
 };
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,14 +41,90 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use encoder::Encoder;
 use tauri::Manager;
 
-/// 顶部标题栏高度（WSA 窗口客户区里 Android 侧渲染的那条，录制时裁掉）
-pub const BAR_H: i32 = 58;
+// ==================== 参考几何与本次会话的定型目标 ====================
+//
+// 标定基准：WSA 的原始物理密度 320（2.0 px/dp）下的竖屏手机画面 —— 900×1858px = 450×929dp，
+// 裁掉顶部 58px（29dp 的 Android 状态栏）后录 900×1800，即 **18:9**（现代手机的长屏比例，
+// 高是宽的 2 倍）。**只有这套尺寸做过实测**。
+//
+// 但窗口尺寸是**物理像素**：900×1858 加上外框（标题栏+边框）约 40px，整窗约 1900px 高，
+// 100% 缩放的 1080p 屏可用高度只有约 1030，窗口下沿会跑到屏幕外（实测反馈："窗口大小过大"）。
+// 所以真正用的尺寸由 [`fit_geometry`] 现算：**整窗高度固定占显示器可用区的 90%**，宽度按
+// 标定的 9:18 比例反算，Android 密度按同比例下调 —— dp 尺寸（版式、礼物动画）保持不变，
+// 只是画面分辨率随屏幕大小伸缩。
 
-/// 目标客户区宽度（竖屏手机画面固定 900 宽）
-pub const WANT_CLIENT_W: i32 = 900;
+/// 参考密度（WSA 原始物理密度，px/dp × 160）
+pub const REF_DENSITY: i32 = 320;
 
-/// 目标客户区高度（900×1658 → 裁掉 58px 后得 900×1600）
-pub const WANT_CLIENT_H: i32 = 1600 + BAR_H;
+/// 参考密度下 Android 状态栏的高度（px）—— 录制裁掉它、overlay 盖住它
+pub const REF_BAR_H: i32 = 58;
+
+/// 参考客户区宽度（px）= 450dp
+pub const REF_CLIENT_W: i32 = 900;
+
+/// 参考**录制区**高度（px）= 宽度 × 2 = 1800，即 18:9 竖屏（裁掉状态栏后录到的画面）
+pub const REF_REC_H: i32 = 1800;
+
+/// 参考客户区高度（px）= 录制区 + 顶部状态栏
+pub const REF_CLIENT_H: i32 = REF_REC_H + REF_BAR_H;
+
+/// 本次会话的 Android 密度（px/dp × 160）。由 [`set_density`] 在定型时写入，
+/// 录制与 overlay 都按它换算物理像素。
+static DENSITY: AtomicI32 = AtomicI32::new(REF_DENSITY);
+
+pub fn density() -> i32 {
+    DENSITY.load(Ordering::Relaxed)
+}
+
+pub fn set_density(d: i32) {
+    DENSITY.store(d.max(80), Ordering::Relaxed);
+}
+
+/// 把参考密度下量出来的尺寸换算成本次会话的物理像素。
+pub fn px(v: i32) -> i32 {
+    let scaled = (v as f64) * density() as f64 / REF_DENSITY as f64;
+    (scaled.round() as i32).max(1)
+}
+
+/// 本次会话 Android 状态栏的高度（px）：密度随窗口等比缩小，所以它不能再是常量。
+pub fn bar_h() -> i32 {
+    px(REF_BAR_H)
+}
+
+/// 本次会话的窗口定型目标：客户区尺寸 + 要写进 Android 的密度。
+#[derive(Clone, Copy)]
+pub struct Geometry {
+    pub client_w: i32,
+    pub client_h: i32,
+    pub density: i32,
+}
+
+/// 算本次会话该把窗口定成多大：**高度固定占 `hwnd` 所在显示器可用区的 90%**，宽度按标定
+/// 比例（录制区 1800:900 = 18:9）反算，Android 密度同比例换算。于是任何分辨率下都装得下、
+/// 版式（dp 尺寸、礼物动画比例）与标定完全一致，只是画面分辨率随屏幕大小伸缩。
+///
+/// 上限 1.0：密度超过标定的 320 属于没实测过的区域，而录制码率是固定的 4Mbps，
+/// 画面再放大只会更糊 —— 4K 以上的屏就当按标定尺寸录，不再放大。
+pub fn fit_geometry(hwnd: HWND) -> Geometry {
+    /// 窗口（含外框）占显示器可用区高度的比例
+    const FILL: f64 = 0.90;
+    let (frame_w, frame_h) = window_frame(hwnd);
+    let (wa_w, wa_h) = monitor_work_area(hwnd);
+    let scale = if wa_w <= 0 || wa_h <= 0 {
+        1.0 // 量不到显示器（异常情况）→ 按标定尺寸来，别把画面缩没了
+    } else {
+        // 目标整窗高 = 可用高 × 90%；扣掉外框得到客户区，客户区再扣掉状态栏就是录制区
+        let by_h = (wa_h as f64 * FILL - frame_h as f64) / REF_CLIENT_H as f64;
+        // 极窄的竖屏显示器上，按高度算出来的宽度会超出可用宽，一并夹住
+        let by_w = (wa_w as f64 - frame_w as f64) / REF_CLIENT_W as f64;
+        by_h.min(by_w).min(1.0).max(0.25)
+    };
+    Geometry {
+        client_w: ((REF_CLIENT_W as f64) * scale).round() as i32,
+        client_h: ((REF_CLIENT_H as f64) * scale).round() as i32,
+        density: ((REF_DENSITY as f64) * scale).round() as i32,
+    }
+}
 
 /// 产物目录名。三个模块（礼物截图 / 礼物模拟录屏 / 完整录屏）的产物都落在这里。
 const OUT_DIR_NAME: &str = "礼物截图录屏";
@@ -116,13 +194,16 @@ pub fn start(hwnd: HWND, dir: &Path) -> Result<PathBuf, String> {
         return Err("CAPTURE_INIT_FAILED::系统不支持 Windows Graphics Capture".into());
     }
 
+    // 顶部状态栏高度按**本次会话的密度**算：窗口为装进小屏显示器会整体缩小，
+    // 密度同步下调，这个值不再是常量（见 `fit_geometry`）。
+    let bh = bar_h();
     let (cw, ch) = client_size(hwnd);
-    if cw <= 0 || ch <= BAR_H {
+    if cw <= 0 || ch <= bh {
         return Err(format!(
             "CAPTURE_INIT_FAILED::窗口客户区尺寸异常（{cw}x{ch}），请确认 B 站 APP 窗口正常显示"
         ));
     }
-    let (ow, oh) = (cw as u32, (ch - BAR_H) as u32);
+    let (ow, oh) = (cw as u32, (ch - bh) as u32);
 
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("NO_WRITE_PERMISSION::创建录制目录失败: {e}"))?;
@@ -135,7 +216,7 @@ pub fn start(hwnd: HWND, dir: &Path) -> Result<PathBuf, String> {
         .cast()
         .map_err(|e| format!("CAPTURE_INIT_FAILED::cast IDirect3DDevice 失败: {e}"))?;
 
-    let encoder = Encoder::new(&temp, &device, ow, oh, BAR_H as u32)?;
+    let encoder = Encoder::new(&temp, &device, ow, oh, bh as u32)?;
 
     let interop: IGraphicsCaptureItemInterop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
         .map_err(|e| format!("CAPTURE_INIT_FAILED::取 IGraphicsCaptureItemInterop 失败: {e}"))?;
@@ -225,9 +306,10 @@ pub fn start(hwnd: HWND, dir: &Path) -> Result<PathBuf, String> {
         .map_err(|e| format!("CAPTURE_INIT_FAILED::StartCapture 失败: {e}"))?;
 
     eprintln!(
-        "[recorder] 开始录制 {}x{}（裁掉顶部 {BAR_H}px）-> {}",
+        "[recorder] 开始录制 {}x{}（裁掉顶部 {bh}px，密度 {}）-> {}",
         ow,
         oh,
+        density(),
         temp.display()
     );
 

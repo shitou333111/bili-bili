@@ -50,10 +50,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::recorder;
 
-// ==================== 尺寸（物理像素，与原型一致） ====================
+// ==================== 尺寸（参考密度 320 下的设计值） ====================
+//
+// 下面这些常量都按参考密度 320（2.0 px/dp）标定。窗口会随显示器可用区等比缩小并
+// 同步下调安卓密度，所以每个使用点都要经 `recorder::px(...)` 换算成本次会话的物理
+// 像素，不能拿设计值直接画。标题栏高度不在这里写死：一律用 `recorder::bar_h()`。
 
-/// 标题栏高度（与 `recorder::BAR_H` 同一数值：WSA 客户区顶部 Android 自绘的那条）
-const BAR_H: i32 = 58;
 /// 顶部通条高度（把窗口顶边封住）
 const TOP_BAND: i32 = 13;
 /// 左块宽度（图标 + 「B瓜录屏」+ 静音按钮）——实际宽度见 [`left_block_w`]，它只会更宽
@@ -91,8 +93,6 @@ const BTN_W: i32 = 46;
 const BTN_PAD: i32 = 8;
 /// 状态灯直径
 const DOT_D: i32 = 14;
-/// 底色采样点相对 WSA 客户区原点的偏移（取「洞」正中，y 取标题栏中线）
-const SAMPLE_OFF_Y: i32 = 29;
 
 /// 定时器 id 与周期
 const TIMER_SYNC: usize = 1;
@@ -264,7 +264,7 @@ unsafe fn create(wsa: HWND) -> Result<HWND, String> {
         pt.x,
         pt.y,
         cw,
-        BAR_H,
+        recorder::bar_h(),
         // 认 WSA 窗口作 **owner**：被拥有的窗口恒在其 owner 之上，且不占任务栏。
         // 必须在创建时就传，不能事后 `SetWindowLongPtrW` 补 —— 事后补的话
         // owner 关系生效了但 z-order 不会刷新，表现就是「WSA 窗口没被激活时
@@ -296,7 +296,7 @@ unsafe fn create(wsa: HWND) -> Result<HWND, String> {
         pt.x,
         pt.y,
         cw,
-        BAR_H,
+        recorder::bar_h(),
         SWP_NOACTIVATE | SWP_SHOWWINDOW,
     )
     .map_err(|e| format!("OVERLAY_FAILED::SetWindowPos 失败: {e}"))?;
@@ -360,7 +360,7 @@ unsafe fn sync() {
         pt.x,
         pt.y,
         cw,
-        BAR_H,
+        recorder::bar_h(),
         SWP_NOACTIVATE,
     );
 }
@@ -387,7 +387,7 @@ unsafe fn sample_bg() {
     let c = GetPixel(
         dc,
         pt.x + (left_block_w() + (cw - right_block_w())) / 2,
-        pt.y + SAMPLE_OFF_Y,
+        pt.y + recorder::bar_h() / 2,
     );
     let _ = ReleaseDC(None, dc);
 
@@ -482,25 +482,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 /// 最右侧「隐藏」按钮与「紧跟标题」的静音按钮的左边界
 fn button_x(cw: i32) -> (i32, i32) {
-    (cw - BTN_PAD - hide_button_w(), mute_button_x())
+    (cw - recorder::px(BTN_PAD) - hide_button_w(), mute_button_x())
 }
 
 /// 静音按钮的左边界：紧跟在标题文字后面
 fn mute_button_x() -> i32 {
-    TITLE_X + TITLE_W.load(Ordering::Relaxed) + TITLE_GAP
+    recorder::px(TITLE_X) + TITLE_W.load(Ordering::Relaxed) + recorder::px(TITLE_GAP)
 }
 
 /// 左块宽度：图标 + 标题 + 紧跟在标题之后的静音按钮（标题一宽就跟着宽）。
 /// 挖洞与底色采样都用它 —— 采样点必须落在「洞」里，用定值 BAR_L 会在标题偏宽时
 /// 把采样点落到左块自身上，采到的就成了我们自己画的底色。
 fn left_block_w() -> i32 {
-    (mute_button_x() + BTN_W + BTN_PAD).max(BAR_L)
+    (mute_button_x() + recorder::px(BTN_W) + recorder::px(BTN_PAD)).max(recorder::px(BAR_L))
 }
 
 /// 右块宽度（量不出来时退回 [`BAR_RW_FALLBACK`]）
 fn right_block_w() -> i32 {
     match RIGHT_W.load(Ordering::Relaxed) {
-        0 => BAR_RW_FALLBACK,
+        0 => recorder::px(BAR_RW_FALLBACK),
         v => v,
     }
 }
@@ -508,7 +508,7 @@ fn right_block_w() -> i32 {
 /// 「隐藏」按钮宽度（量不出来时退回图标按钮的宽度）
 fn hide_button_w() -> i32 {
     match HIDE_W.load(Ordering::Relaxed) {
-        0 => BTN_W,
+        0 => recorder::px(BTN_W),
         v => v,
     }
 }
@@ -516,7 +516,7 @@ fn hide_button_w() -> i32 {
 /// 命中哪个按钮（-1 无 / 0 「隐藏」（置底）/ 1 静音）。只看 X，与原型一致
 fn hit_button(cw: i32, x: i32) -> i32 {
     let (down, mute) = button_x(cw);
-    if x >= mute && x < mute + BTN_W {
+    if x >= mute && x < mute + recorder::px(BTN_W) {
         1
     } else if x >= down && x < down + hide_button_w() {
         0
@@ -659,15 +659,16 @@ unsafe fn paint(hwnd: HWND) {
     // ---- 左：图标 + B瓜录屏 + 静音按钮（紧跟标题）----
     let icon = HICON(ICON.load(Ordering::Relaxed) as *mut c_void);
     if !icon.0.is_null() {
-        let _ = DrawIconEx(hdc, 14, (h - ICON_PX) / 2, icon, ICON_PX, ICON_PX, 0, None, DI_NORMAL);
+        let ic = recorder::px(ICON_PX);
+        let _ = DrawIconEx(hdc, recorder::px(14), (h - ic) / 2, icon, ic, ic, 0, None, DI_NORMAL);
     }
-    draw_text(hdc, TITLE, TITLE_X, h, C_INK_TITLE);
+    draw_text(hdc, TITLE, recorder::px(TITLE_X), h, C_INK_TITLE);
 
     // ---- 右：隐藏按钮（最右） ← 状态灯 + 状态文字 ----
     let (btn_x, mute_x) = button_x(w);
     let hide_w = hide_button_w();
     let hovered = HOVER_BTN.load(Ordering::Relaxed);
-    for (id, x, bw) in [(0, btn_x, hide_w), (1, mute_x, BTN_W)] {
+    for (id, x, bw) in [(0, btn_x, hide_w), (1, mute_x, recorder::px(BTN_W))] {
         if hovered == id {
             let hover = CreateSolidBrush(shade(bg, -38));
             let rc_btn = RECT {
@@ -687,19 +688,19 @@ unsafe fn paint(hwnd: HWND) {
         (STATUS_LISTEN, C_INK_STATUS, C_GREEN)
     };
     let txt_w = text_width(hdc, txt);
-    let stat_right = btn_x - BTN_GAP;
+    let stat_right = btn_x - recorder::px(BTN_GAP);
     let mut stat_x = stat_right - txt_w;
-    let mut dot_x = stat_x - DOT_D - DOT_GAP;
-    if dot_x < w - right_block_w() + SIDE_PAD {
+    let mut dot_x = stat_x - recorder::px(DOT_D) - recorder::px(DOT_GAP);
+    if dot_x < w - right_block_w() + recorder::px(SIDE_PAD) {
         // 别越出右块的裁剪边界
-        dot_x = w - right_block_w() + SIDE_PAD;
-        stat_x = dot_x + DOT_D + DOT_GAP;
+        dot_x = w - right_block_w() + recorder::px(SIDE_PAD);
+        stat_x = dot_x + recorder::px(DOT_D) + recorder::px(DOT_GAP);
     }
     draw_text(hdc, txt, stat_x, h, ink);
     let dot_brush = CreateSolidBrush(dot);
     let old_brush = SelectObject(hdc, HGDIOBJ(dot_brush.0));
-    let dot_y = (h - DOT_D) / 2;
-    let _ = Ellipse(hdc, dot_x, dot_y, dot_x + DOT_D, dot_y + DOT_D);
+    let dot_y = (h - recorder::px(DOT_D)) / 2;
+    let _ = Ellipse(hdc, dot_x, dot_y, dot_x + recorder::px(DOT_D), dot_y + recorder::px(DOT_D));
     SelectObject(hdc, old_brush);
     let _ = DeleteObject(HGDIOBJ(dot_brush.0));
 
@@ -726,7 +727,7 @@ unsafe fn paint(hwnd: HWND) {
 
 /// 静音按钮图形：喇叭本体（填充多边形）+ 两道声波；已静音时画红色斜杠代替声波
 unsafe fn draw_mute_icon(hdc: HDC, x: i32, h: i32) {
-    let cx = x + BTN_W / 2;
+    let cx = x + recorder::px(BTN_W) / 2;
     let cy = h / 2;
     let muted = MUTED.load(Ordering::Relaxed);
 
@@ -834,9 +835,9 @@ unsafe fn apply_region(hwnd: HWND, cw: i32) {
     // 按钮就可能越过 BAR_L 而被裁掉 —— 看不见也点不到。
     let bar_l = left_block_w();
     let full = CreateRectRgn(0, 0, 0, 0);
-    let left = CreateRectRgn(0, 0, bar_l, BAR_H);
-    let right = CreateRectRgn(cw - right_block_w(), 0, cw, BAR_H);
-    let top = CreateRectRgn(0, 0, cw, TOP_BAND);
+    let left = CreateRectRgn(0, 0, bar_l, recorder::bar_h());
+    let right = CreateRectRgn(cw - right_block_w(), 0, cw, recorder::bar_h());
+    let top = CreateRectRgn(0, 0, cw, recorder::px(TOP_BAND));
     CombineRgn(Some(full), Some(full), Some(left), RGN_OR);
     CombineRgn(Some(full), Some(full), Some(right), RGN_OR);
     CombineRgn(Some(full), Some(full), Some(top), RGN_OR);
@@ -871,21 +872,22 @@ unsafe fn measure_right_block() -> (i32, i32) {
     let font = HFONT(FONT.load(Ordering::Relaxed) as *mut c_void);
     let dc = GetDC(None);
     if dc.0.is_null() || font.0.is_null() {
-        return (BTN_W, BAR_RW_FALLBACK);
+        return (recorder::px(BTN_W), recorder::px(BAR_RW_FALLBACK));
     }
     let old = SelectObject(dc, HGDIOBJ(font.0));
     let stat_w = text_width(dc, STATUS_LISTEN).max(text_width(dc, STATUS_RECORD));
-    let hide_w = text_width(dc, HIDE_LABEL) + 2 * HIDE_PAD;
+    let hide_w = text_width(dc, HIDE_LABEL) + 2 * recorder::px(HIDE_PAD);
     SelectObject(dc, old);
     let _ = ReleaseDC(None, dc);
 
-    let right_w = SIDE_PAD + hide_w + BTN_GAP + stat_w + DOT_GAP + DOT_D + SIDE_PAD;
+    let right_w = recorder::px(SIDE_PAD) + hide_w + recorder::px(BTN_GAP) + stat_w
+        + recorder::px(DOT_GAP) + recorder::px(DOT_D) + recorder::px(SIDE_PAD);
     (hide_w, right_w)
 }
 
 unsafe fn make_font() -> HFONT {
     let mut lf = LOGFONTW {
-        lfHeight: -FS,
+        lfHeight: -recorder::px(FS),
         lfWeight: FW_NORMAL.0 as i32,
         lfCharSet: DEFAULT_CHARSET,
         lfOutPrecision: OUT_DEFAULT_PRECIS,
@@ -927,15 +929,15 @@ fn load_icon() -> Option<HICON> {
         }
     }
     // 按「离目标尺寸的差距」排序，逐个试：ICO 里 256px 条目常是 PNG 压缩，GDI 解不了，跳过即可
-    entries.sort_by_key(|(px, _, _)| (*px - ICON_PX).unsigned_abs());
+    entries.sort_by_key(|(px, _, _)| (*px - recorder::px(ICON_PX)).unsigned_abs());
     for (_, at, size) in &entries {
         let ic = unsafe {
             CreateIconFromResourceEx(
                 &ICO[*at..*at + *size],
                 true,
                 0x0003_0000,
-                ICON_PX,
-                ICON_PX,
+                recorder::px(ICON_PX),
+                recorder::px(ICON_PX),
                 IMAGE_FLAGS(0),
             )
         };

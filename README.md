@@ -47,7 +47,7 @@
 - **主播数据模块**：查看主播维度的收入统计，以及"消费主播分布图"（把每个主播按消费金额大小呈现为气泡/泡泡图）。
 - **直播投屏展示面板（展示）**：把直播间入场与礼物实时投屏到独立画布窗口（主播页"盲盒"与"大礼物"之间），含入场提示粒子胶囊、今日礼物轮换、高级用户自定义入场动画、盲盒盈亏弹幕查询、定时发弹幕，软件启动即按配置自动启用全部监听。
 - **大礼物录屏**：在主播的"大礼物"页，从近 7 天直播场次中多选大礼物（按电池档位/粉丝筛选），把礼物的录播片段与官方特效动画合成为一个竖屏视频（720×1280），可播放预览并一键保存到相册/下载。
-- **礼物完整录屏（原始录屏，仅 Windows 桌面端）**：在 WSA（Windows Subsystem for Android）里跑 B 站 APP 并监听当前主播的直播间，收到达到阈值的礼物就自动录下**完整直播画面**（PK 分数、弹幕、飘屏都在，与手机录屏效果一致），停手 15 秒自动收尾，文件名带日期与礼物名。首次使用可一键安装 WSA / adb / B 站 APP 插件。
+- **礼物完整录屏（原始录屏，仅 Windows 桌面端）**：在 WSA（Windows Subsystem for Android）里跑 B 站 APP 并监听当前主播的直播间，收到达到阈值的礼物就自动录下**完整直播画面**（PK 分数、弹幕、飘屏都在，与手机录屏效果一致），停手 15 秒自动收尾，文件名带日期与礼物名。首次使用可一键安装 adb / WSA / B 站 APP 插件（前两步互不依赖，可任意先后）。
 - **B站 小工具**：粉丝清理、粉丝牌清理、查询用户信息等（需要登录凭证才能使用）。
 - **复活区截图工具**：托管在网站服务器上的工具页面，帮助直播多人局投屏复活曲倒计时、解决医药费争议。
 - **B站 直播送礼模拟器**：内置"神豪模式"模拟器——输入主播UID可加载**真实直播流**作为背景（竖屏流自动填满全屏），所有礼物随便送（含大礼物特效、连击、横幅通知），还有"山海工坊"合成活动可玩。礼物面板的"礼物"选项卡数据来自直播间礼物面板 API（roomGiftList，12h 缓存自动更新）。
@@ -383,17 +383,19 @@ bili_live/
 
 **采集与编码**（[recorder/](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/recorder/mod.rs)）
 
-- 窗口查找**不能按标题**（标题随直播间变）：按 class 含 `danmaku` + 可见 + 客户区最大。随后定型成竖屏（禁缩放/最大化，client 调到 900×1658）。
-- WGC `CreateForWindow` + `CreateFreeThreaded` 帧池（`B8G8R8A8`，**3 个缓冲**：CPU 读回 + 拷贝约 10ms，给 2 个缓冲时源约 35fps 会饿死丢帧）→ `CopySubresourceRegion` 裁掉顶部 **58px** 标题栏到 staging 纹理 → 逐行 memcpy 进 `MFCreateMemoryBuffer` → Media Foundation SinkWriter 编 H.264 mp4（**30fps / 固定 4Mbps**，900×1600）。**不引入 ffmpeg、不带外部 exe**。
+- 窗口查找**不能按标题**（标题随直播间变）：按 class 含 `danmaku` + 可见 + 客户区最大。随后定型成竖屏（禁缩放/最大化）。标定几何是 **900×1858px @ 密度 320**（450×929dp 竖屏手机，裁掉顶部 58px 状态栏后录 900×1800 = 18:9）；真正用的尺寸由 `fit_geometry` 按**窗口所在显示器的可用区**现算：**整窗高固定占可用区的 90%**，宽度按标定的 18:9 比例反算，再用 `wm density` 把 Android 密度按同一比例写进去 —— dp 尺寸（版式、礼物动画）与标定时一致，只是分辨率随屏幕大小伸缩（上限 1.0，4K 以上不再放大）。位置也夹进可用区。
+- WGC `CreateForWindow` + `CreateFreeThreaded` 帧池（`B8G8R8A8`，**3 个缓冲**：CPU 读回 + 拷贝约 10ms，给 2 个缓冲时源约 35fps 会饿死丢帧）→ `CopySubresourceRegion` 裁掉顶部状态栏（参考密度下 **58px**，随缩放同比变小）到 staging 纹理 → 逐行 memcpy 进 `MFCreateMemoryBuffer` → Media Foundation SinkWriter 编 H.264 mp4（**30fps / 固定 4Mbps**，参考几何下 900×1800）。**不引入 ffmpeg、不带外部 exe**。
 - 标题栏 overlay（[overlay.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/overlay.rs)）是原生 Win32 窗口（不是 Tauri 窗口，省内存）：`SetWindowRgn` 三块并集**挖洞穿透**（中间空白点击直接落到 WSA 自己的标题栏，于是拖动窗口是白送的）、150ms 采样 WSA 真实标题栏像素跟随激活/失活底色、最右按钮把窗口置底（等价最小化但**不影响录制**）、静音按钮走 per-session 音量（[recorder/audio.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/recorder/audio.rs)，只静目标进程，不动整机音量）。
 
 **产物**：exe 同级 `礼物截图录屏/`（无写权限回退应用数据目录），与「礼物截图」「礼物录屏」共用同一目录（标题右侧文件夹图标可直接打开）。
 
 **首次安装插件（[setup.rs](file:///c:/Users/song/vscode_projects/bili_live/src-tauri/src/setup.rs)）**：三步依次进行、**已装好的自动跳过**（绝不重复下载那 528MB 的 WSA），结果以**实测复核**为准，状态与「已安装」标记都落在应用数据目录（所有账号共用，切账号不重装）：
 
-1. **WSA**：下载 MustardChef/WSABuilds 的 LTS 8 分发包（约 528MB，按 Win11/Win10 + x64/ARM64 选包）→ 解压 → 提权跑 `Run.bat` 注册（会有一次 UAC 授权，请点「是」）。
-2. **adb**：先探测本机（`PATH` → `%LOCALAPPDATA%\Android\Sdk\platform-tools`），找不到才按需下载 platform-tools 到应用数据目录。
+1. **adb**：先探测本机（`PATH` → `%LOCALAPPDATA%\Android\Sdk\platform-tools`），找不到才按需下载 platform-tools 到应用数据目录。
+2. **WSA**：下载 MustardChef/WSABuilds 的 LTS 8 分发包（约 528MB，按 Win11/Win10 + x64/ARM64 选包）→ 解压 → 提权跑 `Run.bat` 注册（会有一次 UAC 授权，请点「是」），装完顺手后台冷启动 WSA。
 3. **B 站 APP**：装官方 APK（`install -r -g`：覆盖安装 + 一次性授予运行时权限，避免首次使用时弹权限框打断自动化）。
+
+> 顺序：前两步**互不依赖**（adb 只碰 platform-tools，WSA 只碰注册目录/注册表），可任意互换；只有第 3 步同时需要「adb 就绪 + WSA 已注册」，所以它必须排最后。步号都走 `setup.rs` 里的 `STEP_ADB / STEP_WSA / STEP_APK` 常量，别再写裸数字。
 
 ### 3. 展示（直播投屏面板）
 

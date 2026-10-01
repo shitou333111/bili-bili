@@ -7,7 +7,7 @@
  * `@/lib/wsa-recorder-client` 的单例里（面板卸载不会中断录制与尾窗）。
  *
  * 仅 Windows 桌面客户端可用（依赖 WSA + Windows Graphics Capture），其它平台整体置灰。
- * 首次使用要先在「插件」里装齐 WSA / adb / B 站 APP —— 未装齐时开始按钮置灰。
+ * 首次使用要先在「插件」里装齐 ADB / WSA / B 站 APP —— 未装齐时开始按钮置灰。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -52,6 +52,19 @@ type SetupProgress = {
 };
 
 const SETUP_PROGRESS_EVENT = "wsa-setup:progress";
+
+/** 按钮里那三个指示灯的键与顺序：**与安装顺序一致**（见 Rust `STEP_ADB`：adb → WSA → APP）。 */
+const SETUP_LIGHTS = ["adb", "wsa", "apk"] as const;
+
+/**
+ * 指示灯配色。安装中按进度点亮（已过的步骤绿、当前琥珀、未开始灰），
+ * 否则按检测结果（就绪绿、未就绪灰）。`index` 从 0 起、`step` 从 1 起。
+ */
+function lightClass(index: number, ok: boolean, busy: boolean, step: number) {
+  if (!busy || step <= 0) return ok ? "bg-emerald-500" : "bg-black/25";
+  if (index + 1 < step) return "bg-emerald-500";
+  return index + 1 === step ? "bg-amber-500" : "bg-black/25";
+}
 
 async function invokeCmd<T>(cmd: string): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
@@ -344,36 +357,29 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
                     : "border-red-300 bg-red-100 text-black/75 hover:bg-red-200"
               }`}
             >
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${
-                  setupBusy ? "bg-amber-500" : envReady ? "bg-emerald-500" : "bg-red-500"
-                }`}
-              />
               {setupBusy ? "安装中··· 点击中止" : envReady ? "插件已安装" : "首次使用点击安装插件"}
-            </button>
-            {setup ? (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50">
-                {[
-                  { label: "WSA", ok: setup.wsa },
-                  { label: "ADB", ok: setup.adb },
-                  { label: "APP", ok: setup.apk },
-                ].map((s) => (
-                  <span key={s.label} className="flex items-center gap-1">
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${s.ok ? "bg-emerald-500" : "bg-black/25"}`}
-                    />
-                    {s.label}
-                  </span>
+              {/* 三个指示灯（ADB / WSA / APP）：全绿 = 插件已安装，不再另加文字标签 */}
+              <span className="flex shrink-0 items-center gap-1">
+                {SETUP_LIGHTS.map((k, i) => (
+                  <span
+                    key={k}
+                    className={`h-1.5 w-1.5 rounded-full ${lightClass(
+                      i,
+                      setup?.[k] === true,
+                      setupBusy,
+                      progress?.step ?? 0
+                    )}`}
+                  />
                 ))}
-              </div>
-            ) : null}
+              </span>
+            </button>
           </div>
         ) : null}
 
         {/* 首次安装提示 */}
         {supported && !envReady && !setupBusy ? (
           <p className="text-xs leading-relaxed text-black/50">
-            首次使用需安装三样工具：WSA、ADB、哔哩哔哩客户端。占用磁盘与内存较多，并需要一次管理员授权；
+            首次使用需安装三样工具：ADB、WSA、哔哩哔哩客户端。占用磁盘与内存较多，并需要一次管理员授权；
             这些工具全账号共用，装一次即可，切换账号不会重复安装。
           </p>
         ) : null}
