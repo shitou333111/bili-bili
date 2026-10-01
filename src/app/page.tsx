@@ -3214,7 +3214,9 @@ export default function HomePage() {
                 />
                 <h2 className="mt-4 text-xl font-semibold text-[#1f1c17]">主播功能</h2>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-black/60">
-                  这些功能需要在客户端中使用，下载安装软件后即可解锁：
+                  这些功能需要在客户端中使用，下载安装软件后即可解锁。
+                  <br />
+                  主播账号才会有内容，如果你是粉丝，可以推荐爱播安装。
                 </p>
               </div>
               {/* 功能亮点：卡片网格 */}
@@ -3237,7 +3239,7 @@ export default function HomePage() {
                   rel="noopener noreferrer"
                   className="inline-flex w-full max-w-xs items-center justify-center rounded-full bg-[#1f1c17] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
                 >
-                  下载客户端
+                  下载客户端（免费）
                 </a>
                 <a
                   href="https://bili-bili.icu/"

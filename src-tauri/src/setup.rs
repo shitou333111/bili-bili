@@ -644,7 +644,7 @@ async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     let adb = tauri::async_runtime::spawn_blocking(move || wsa::ensure_wsa(&exe_conn, true))
         .await
         .map_err(|e| format!("ADB_CONNECT_FAILED::连接 WSA 的任务异常: {e}"))??;
-    eprintln!("[wsa][计时] 拉起 WSA 并确认 B 站 APP 是否已装：{:.1}s", t_check.elapsed().as_secs_f32());
+    wsa::wlog(&format!("[wsa][计时] 拉起 WSA 并确认 B 站 APP 是否已装：{:.1}s", t_check.elapsed().as_secs_f32()));
     match wsa::has_package(&adb, wsa::PACKAGE) {
         Some(true) => {
             mark_apk(app);
@@ -677,7 +677,7 @@ async fn install_bili_apk(app: &AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || wsa::install_apk_on(&adb_for_task, &apk_for_task))
         .await
         .map_err(|e| format!("APK_INSTALL_FAILED::安装任务异常: {e}"))??;
-    eprintln!("[wsa][计时] 安装 B 站 APP：{:.1}s", t_install.elapsed().as_secs_f32());
+    wsa::wlog(&format!("[wsa][计时] 安装 B 站 APP：{:.1}s", t_install.elapsed().as_secs_f32()));
     // 装完**不删 APK**：留着，下次重装 / 修复直接用（见上面那段注释）
 
     // 标记「已安装」：所有账号共用，切账号不再重复下载安装

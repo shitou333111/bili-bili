@@ -80,22 +80,19 @@ const WSA_POLL: Duration = Duration::from_secs(1);
 /// 这段等待与 WSA 冷启动**重叠**：冷启动本来就要几十秒才连得上 adb，这里边等边轮询，
 /// 连上就立刻结束 —— 只有真的在冷启动时才等得满，WSA 只是睡着了的时候几乎不花时间。
 const WSA_FIRST_RUN_GRACE: Duration = Duration::from_secs(12);
-/// 等**设备侧 adb 授权**（Android 弹出的「是否允许 ADB 调试？」）的单轮窗口。
+/// 等**设备侧 adb 授权**（WSA 弹出的「是否允许 ADB 调试？」）时的轮询间隔。
+///
 /// 实测（Win10）：这个弹窗要等 Android 的**系统 UI 就绪**才渲染得出来，约 1~2 分钟；
-/// 而 adb 端口早在第 7 秒就监听了。窗口内持续尝试自动应答 + 复查。
-const ADB_AUTH_WINDOW: Duration = Duration::from_secs(30);
-/// 授权窗口的轮数上限。每轮都以一次**全新握手**开始（见 [`wait_for_adb_auth`]）。
-const ADB_AUTH_ROUNDS: u8 = 3;
-/// 授权窗口内的轮询间隔
+/// 而 adb 端口早在第 7 秒就监听了 —— 所以只能**耐心等**，见 [`wait_for_adb_auth`]。
 const ADB_AUTH_POLL: Duration = Duration::from_millis(1000);
 /// **单次 `ensure_wsa` 的授权等待总预算**，按场景给：安装/修复（会摆设置窗口、可能整台冷启动）
 /// 给足；点「开始录制」只给一点点 —— 那一刻用户正等着窗口弹出来，不该为授权干等。
 ///
-/// 为什么必须封顶：`ensure_wsa` 里两个轮询循环**每轮**都会调一次 `connect_waiting_auth`，
-/// 而它命中 `unauthorized` 时会走满 `ADB_AUTH_ROUNDS × ADB_AUTH_WINDOW`（90s）。不封顶时
-/// 单次 `ensure_wsa` 能拖到 5 分钟以上 —— 实测反馈「点录制后一直卡住没响应」就是这个。
-/// 预算花完后授权等待降级成「一次应答 + 复查」（几乎不花时间），轮询恢复每秒一次的节奏；
-/// 若那时设备仍卡在 `unauthorized`，直接报错（见 `ensure_wsa` 里的提前失败分支）。
+/// 为什么必须封顶：以前 `wait_for_adb_auth` 内部是「3 轮 × 30s」的嵌套循环，而 `ensure_wsa`
+/// 的两个轮询循环**每秒**都会调进来一次 —— 单次 `ensure_wsa` 能拖到 5 分钟以上
+/// （实测反馈「点录制后一直卡住没响应」就是这个）。预算花完后授权等待降级成
+/// 「一次应答 + 复查」（几乎不花时间）；若那时设备仍卡在 `unauthorized`，直接报错
+/// （见 `ensure_wsa` 里的提前失败分支）。
 const ADB_AUTH_BUDGET_SETUP: Duration = Duration::from_secs(120);
 const ADB_AUTH_BUDGET_RECORD: Duration = Duration::from_secs(12);
 /// 等窗口出现的预算（进房后 Android 顶层窗口可能还要几秒才可见）
@@ -345,7 +342,7 @@ async fn download_platform_tools(dir: &Path) -> Result<(), String> {
     if adb.is_file() {
         return Ok(());
     }
-    eprintln!("[wsa] 本机未找到 adb，开始下载 platform-tools …");
+    wlog("[wsa] 本机未找到 adb，开始下载 platform-tools …");
     let resp = crate::shared_client()
         .get(PLATFORM_TOOLS_URL)
         .send()
@@ -565,23 +562,16 @@ fn accept_adb_auth() -> bool {
         let mut saw_adb = false;
         for i in 0..tops.Length().unwrap_or(0) {
             let Ok(top) = tops.GetElement(i) else { continue };
-            // 先过一道**便宜的**门槛，免得在不相干窗口里乱找按钮（尤其下面放宽了类名要求，
-            // 没有这道门槛就可能去点 WSA 设置窗口里的「确定」）：
-            // 要么是标准 Win32 对话框（`#32770`，原来只认这一种），要么**标题**里带 `ADB`。
             let title = top
                 .CurrentName()
                 .map(|n| n.to_string())
                 .unwrap_or_default();
             let title_has_adb = title.to_lowercase().contains("adb");
-            let class = top.CurrentClassName().map(|c| c.to_string()).unwrap_or_default();
-            if class != "#32770" && !title_has_adb {
-                continue;
-            }
             let Ok(kids) = top.FindAll(TreeScope_Descendants, &cond) else {
                 continue;
             };
             let (mut checkbox, mut allow) = (None, None);
-            let mut desc_has_adb = false;
+            let (mut desc_has_adb, mut desc_has_rsa) = (false, false);
             for k in 0..kids.Length().unwrap_or(0) {
                 let Ok(el) = kids.GetElement(k) else { continue };
                 let name = el.CurrentName().map(|n| n.to_string()).unwrap_or_default();
@@ -591,13 +581,24 @@ fn accept_adb_auth() -> bool {
                     // 注意**必须也看标题**（就是上面的 `title_has_adb`）：原来只在后代里找，
                     // 而「是否允许 ADB 调试？」这类弹窗的关键字恰恰在标题上、不在后代里。
                     desc_has_adb = true;
+                } else if low.contains("rsa") {
+                    // 授权框正文写着「本计算机的 RSA 密钥指纹是 …」——`RSA` 各语言界面都不翻译，
+                    // 是比 `ADB` 更稳的佐证（有的版本标题/正文里就是不出现 `ADB` 三个字母）。
+                    desc_has_rsa = true;
                 } else if low.contains("始终允许") || low.contains("always allow") {
                     checkbox = el.CurrentBoundingRectangle().ok();
                 } else if is_allow_label(&name) {
                     allow = el.CurrentBoundingRectangle().ok();
                 }
             }
-            let matched = title_has_adb || desc_has_adb;
+            // **像不像对话框**：标准 Win32 对话框（`#32770`，原来只认这一种）、标题里带 `ADB`、
+            // 或正文里带 `RSA`。加这道门槛是因为下面放宽了类名要求 —— 没有它就可能去点
+            // WSA 设置窗口里的「确定」（那窗口里也常有 `ADB` 字样和一排按钮）。
+            let class = top.CurrentClassName().map(|c| c.to_string()).unwrap_or_default();
+            if class != "#32770" && !title_has_adb && !desc_has_rsa {
+                continue;
+            }
+            let matched = title_has_adb || desc_has_adb || desc_has_rsa;
             saw_adb |= matched;
             // 认到 `ADB` 字样 + 「允许」按钮才算数：只撞上 `ADB` 字样（正文里的 RSA 指纹、
             // 别的对话框）就动手，等于赌运气。
@@ -737,52 +738,60 @@ fn adb_usable(cand: &Adb) -> bool {
     cand.shell("echo ok").map(|s| s.contains("ok")).unwrap_or(false)
 }
 
-/// 等设备侧完成 adb 授权（Android 的「是否允许 ADB 调试？」弹窗）。
+/// 等设备侧完成 adb 授权（WSA 弹出的「是否允许 ADB 调试？」）。
 ///
 /// **为什么不能"睡一下再复查一次"**：实测（Win10，DESKNEATH）——adb 端口在第 7 秒就监听了，
 /// 而那个授权弹窗要等 Android 的**系统 UI 就绪**才渲染得出来，实测约 1~2 分钟。于是第一次
 /// 握手必然发生在 UI 就绪**之前**，弹窗请求根本发不出来；更糟的是 adb 一旦把这个 serial 记成
 /// 已连接，后续 `adb connect` 只回 `already connected to ...`、**不会重新协商**，于是
-/// 「握手太早」会永久卡在 `unauthorized`，怎么等都不会自己好（实测：反复 `connect` 无效，
-/// 用户手点「允许」也无效）。`adb disconnect` 同样无效——adb 对 TCP 设备会自动重连，刚断开
-/// 就又被接回去，所以拿不到新传输。
+/// 「握手太早」会永久卡在 `unauthorized`，怎么等都不会自己好（实测：反复 `connect` 无效）。
+/// 所以开头要做**一次**全新握手（`kill-server` 丢掉陈旧传输 → 重新 `connect`）。
 ///
-/// 因此这里每轮都先**重做一次全新握手**（`kill-server` 丢掉陈旧传输 → 重新 `connect`），
-/// 让授权请求能在 UI 就绪后被重新发出；然后在窗口期内持续尝试自动应答弹窗并复查连接。
-/// `kill-server` 会顺带停掉本机其它 adb 使用方（如 Android Studio），但这是拿到新握手最可靠
-/// 的手段，且只在已判定 `unauthorized` 时才会走到。
+/// **握手只做一次，之后一路安静等** —— 这条是实测踩出来的：原实现是「3 轮 × 30s，每轮开头
+/// 都 kill-server」，而 `kill-server` 会把 adb server 连同它那条**正在等授权的连接**一起掐掉，
+/// WSA 侧的授权框是挂在那条连接上的，于是刚弹出来就跟着消失。用户的现场描述是弹窗
+/// 「闪现了一下就没了」，日志里则从头到尾看不到任何授权框 —— 正是我们自己把它点掉了。
 ///
-/// **必须受 `deadline` 约束**：本函数一轮就是 `ADB_AUTH_ROUNDS × ADB_AUTH_WINDOW` = 90 秒，
-/// 而 [`ensure_wsa`] 的两个轮询循环**每秒**都会调进来一次 —— 不封顶时单次 `ensure_wsa` 能拖到
-/// 五分钟以上（实测反馈「点录制后一直卡住没反应」正是它）。预算花完后降级成
-/// 「一次应答 + 复查」，几乎不花时间，轮询恢复每秒一次的节奏。
+/// 等掉一半预算仍没动静就**换一把全新公钥**（见 [`ADB_KEY_ROTATED`]）：WSA 只对**没见过的**
+/// 公钥弹授权框，旧公钥一旦被它记成「已处理」，用同一把再连就永远不弹。换钥那一次不可避免
+/// 要重做握手（会掐掉当前连接），所以放在「原密钥已经给足机会」之后。
+///
+/// **必须受 `deadline` 约束**：否则 `ensure_wsa` 的两个轮询循环每秒调进来一次，能把单次调用
+/// 拖到五分钟以上（实测「点录制后一直卡住没反应」就是它）。预算花完就降级成
+/// 「一次应答 + 复查」，几乎不花时间。
 fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
     if Instant::now() >= deadline {
-        // 预算已尽：不进入整轮等待，只顺手替用户点一下弹窗（若正好在）并复查一次。
+        // 预算已尽：不进入等待，只顺手替用户点一下弹窗（若正好在）并复查一次。
         accept_adb_auth();
         return adb_usable(cand).then(|| cand.clone());
     }
-    for round in 1..=ADB_AUTH_ROUNDS {
-        if Instant::now() >= deadline {
-            break;
+    let total = deadline.saturating_duration_since(Instant::now());
+    let _ = output_of(&cand.exe, &["kill-server".to_string()]);
+    let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
+    wlog(&format!(
+        "[wsa] 设备未授权：已重做一次全新握手，之后一路安静等授权框（总预算 {:.0}s，中途不再 kill-server）",
+        total.as_secs_f32()
+    ));
+    // 换钥时刻：一半预算处（见上面那段说明）。进程内已换过就不再换。
+    let rotate_at = Instant::now() + total / 2;
+    let mut can_rotate = !ADB_KEY_ROTATED.load(Ordering::Relaxed);
+    while Instant::now() < deadline {
+        accept_adb_auth();
+        // 无条件复查：用户手动点过「允许」时 accept 找不到弹窗会返回 false，
+        // 若写成 `accept() && usable()` 就会短路掉这条最该走通的路。
+        if adb_usable(cand) {
+            wlog("[wsa] 设备已授权，adb 可用");
+            return Some(cand.clone());
         }
-        let _ = output_of(&cand.exe, &["kill-server".to_string()]);
-        let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
-        wlog(&format!(
-            "[wsa] 设备未授权，已重做全新握手（第 {round}/{ADB_AUTH_ROUNDS} 轮），等授权窗口 {}s …",
-            ADB_AUTH_WINDOW.as_secs()
-        ));
-        let until = (Instant::now() + ADB_AUTH_WINDOW).min(deadline);
-        while Instant::now() < until {
-            accept_adb_auth();
-            // 无条件复查：用户手动点过「允许」时 accept 找不到弹窗会返回 false，
-            // 若写成 `accept() && usable()` 就会短路掉这条最该走通的路。
-            if adb_usable(cand) {
-                wlog(&format!("[wsa] 设备已授权，adb 可用（第 {round} 轮）"));
-                return Some(cand.clone());
+        if can_rotate && Instant::now() >= rotate_at {
+            can_rotate = false;
+            if !ADB_KEY_ROTATED.swap(true, Ordering::Relaxed) && use_private_adb_home() {
+                wlog("[wsa] 等掉一半预算仍没等到授权框 —— 换一把全新 adb 公钥，重做握手后继续等");
+                let _ = output_of(&cand.exe, &["kill-server".to_string()]);
+                let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
             }
-            std::thread::sleep(ADB_AUTH_POLL);
         }
+        std::thread::sleep(ADB_AUTH_POLL);
     }
     wlog("[wsa] 等设备授权超时：adb 端口在监听，但设备侧始终未授权");
     None
@@ -985,7 +994,7 @@ fn dismiss_first_run_dialog() -> bool {
             if inv.Invoke().is_ok() {
                 std::thread::sleep(Duration::from_millis(400));
                 if find_first_run_dialog(&uia, &cond).is_none() {
-                    eprintln!("[wsa] 已自动点掉「可选诊断数据」说明框：继续");
+                    wlog("[wsa] 已自动点掉「可选诊断数据」说明框：继续");
                     return true;
                 }
             }
@@ -1003,10 +1012,10 @@ fn dismiss_first_run_dialog() -> bool {
         click_at(r.left + (r.right - r.left) / 2, r.top + (r.bottom - r.top) / 2);
         std::thread::sleep(Duration::from_millis(400));
         if find_first_run_dialog(&uia, &cond).is_none() {
-            eprintln!("[wsa] 已自动点掉「可选诊断数据」说明框：继续（坐标点击）");
+            wlog("[wsa] 已自动点掉「可选诊断数据」说明框：继续（坐标点击）");
             return true;
         }
-        eprintln!("[wsa] 点了说明框的「继续」但它没关掉，这一轮放弃重试");
+        wlog("[wsa] 点了说明框的「继续」但它没关掉，这一轮放弃重试");
         false
     }
 }
@@ -1091,11 +1100,11 @@ fn wait_until_with_grace(budget: Duration, mut ready: impl FnMut() -> bool, what
     if wait_until(budget, &mut ready) {
         return true;
     }
-    eprintln!(
+    wlog(&format!(
         "[wsa] {what}的信号一直没来 —— 可能是有系统弹窗（权限申请 / 诊断反馈之类）挡在前面，\
          请手动关掉它；这里再等 {} 秒。",
         USER_GRACE.as_secs()
-    );
+    ));
     wait_until(USER_GRACE, &mut ready)
 }
 
@@ -1150,7 +1159,7 @@ unsafe fn toggle_developer_mode(
                 .ok()
         },
     ) else {
-        eprintln!("[wsa] 设置窗口里没找到「{NAV_ADVANCED}」导航项，跳过自动开关");
+        wlog(&format!("[wsa] 设置窗口里没找到「{NAV_ADVANCED}」导航项，跳过自动开关"));
         return false;
     };
     let _ = nav.Select();
@@ -1165,7 +1174,7 @@ unsafe fn toggle_developer_mode(
                 .ok()
         },
     ) else {
-        eprintln!("[wsa] 「{NAV_ADVANCED}」页里没找到带 TogglePattern 的「{DEV_MODE}」开关");
+        wlog(&format!("[wsa] 「{NAV_ADVANCED}」页里没找到带 TogglePattern 的「{DEV_MODE}」开关"));
         return false;
     };
     match tp.CurrentToggleState() {
@@ -1242,7 +1251,7 @@ fn enable_developer_mode() -> bool {
             }
             std::thread::sleep(Duration::from_millis(500)); // 窗口可能还在启动
         }
-        eprintln!("[wsa] 没找到可操作的 WSA 设置窗口（标题里没有 android），无法自动切到「高级设置」");
+        wlog("[wsa] 没找到可操作的 WSA 设置窗口（标题里没有 android），无法自动切到「高级设置」");
         false
     }
 }
@@ -1298,9 +1307,23 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
     // WSA 宿主的授权弹窗只对**没见过的**公钥弹；旧公钥一旦被它记成「已处理」，用同一把再连
     // 就永远是 unauthorized 且再也不弹窗（实测日志：三轮全新握手 × 多次，全超时、零痕迹）。
     // 这里换一把全新公钥（换到应用私有目录，不碰用户自己的 .android），整个进程只换一次。
-    let stuck = ADB_PORTS
+    let unauth: Vec<bool> = ADB_PORTS
         .iter()
-        .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")));
+        .map(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
+        .collect();
+    let stuck = unauth.iter().any(|&b| b);
+    // 留痕：这一行能同时回答「设备到底什么状态」和「换钥为什么没触发」（进程内已换过 / 没卡在
+    // unauthorized）。上一轮实测里换钥分支静默没生效，正是缺这一行。
+    wlog(&format!(
+        "[adb] 直连失败后的端口状态：{}；本进程是否已换过密钥={}",
+        ADB_PORTS
+            .iter()
+            .zip(&unauth)
+            .map(|(p, u)| format!("{p} unauthorized={u}"))
+            .collect::<Vec<_>>()
+            .join("，"),
+        ADB_KEY_ROTATED.load(Ordering::Relaxed)
+    ));
     if stuck && !ADB_KEY_ROTATED.swap(true, Ordering::Relaxed) {
         wlog("[wsa] 设备停在 unauthorized 且迟迟不弹授权窗 —— 换一把全新 adb 公钥再试");
         if use_private_adb_home() {
@@ -1314,7 +1337,7 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
             wlog("[wsa] 换钥后仍未授权（用户需在弹窗里点「允许」）");
         }
     }
-    eprintln!("[wsa] adb 未连上，拉起 WSA 并等待启动 …");
+    wlog("[wsa] adb 未连上，拉起 WSA 并等待启动 …");
     let t0 = Instant::now();
     if show_settings {
         let t1 = Instant::now();
@@ -1331,9 +1354,9 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
         // 把「开发人员模式」打开 —— adb 端口 58526 只有开了它才监听。
         // 开关成不成都会当场把设置窗口收掉（`enable_developer_mode` 末尾那处）。
         if enable_developer_mode() {
-            eprintln!("[wsa] 已自动打开「开发人员模式」并收起设置窗口");
+            wlog("[wsa] 已自动打开「开发人员模式」并收起设置窗口");
         } else {
-            eprintln!("[wsa] 没能自动操作「开发人员模式」开关，请在弹出的设置窗口里手动打开");
+            wlog("[wsa] 没能自动操作「开发人员模式」开关，请在弹出的设置窗口里手动打开");
         }
         // 耗时一律走 wlog：release 下没有控制台，用户「觉得安装很慢」时只能靠日志里的这几行定位
         wlog(&format!("[wsa][计时] 设置窗口自动化：{:.1}s", t1.elapsed().as_secs_f32()));
@@ -1352,10 +1375,10 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
     // 一看已有结论就直接放行。万一还有别的弹窗（时机不定，压不住），这里只把时间留出来，
     // 交回用户。这段等待与冷启动**重叠** —— 冷启动本来就要几十秒才连得上 adb，
     // 这里边等边轮询，连上就提前结束，不空等。
-    eprintln!(
+    wlog(&format!(
         "[wsa] 正在启动 WSA，最多等 {} 秒，连上就继续 …",
         WSA_FIRST_RUN_GRACE.as_secs()
-    );
+    ));
     // 顺带把「这一轮有没有问到 adb」记下来：问到就说明开发者模式本来就开着，后面不用再碰
     // 设置窗口（也顺手把可能残留的面板收起）。
     let t_grace = Instant::now();
