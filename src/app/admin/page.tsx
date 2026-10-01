@@ -66,7 +66,34 @@ type User = {
   isLocal?: boolean;
 };
 
-type BlindBoxItem = { id: number; name: string; icon: string };
+/** 盲盒内礼物明细（含过期盲盒的完整信息，可手动补充奖励礼物） */
+type BlindBoxGiftItemData = {
+  gift_id: number;
+  gift_name: string;
+  /** 电池单价 */
+  price: number;
+  gift_img?: string;
+  /** true = 额外奖励礼物：只计价值，成本 0 */
+  is_reward?: boolean;
+};
+type BlindBoxItem = {
+  /** 客户端本地唯一 key（不持久化，仅用于折叠状态等 UI 稳定性） */
+  _k?: string;
+  id: number;
+  name: string;
+  icon: string;
+  /** 盲盒单价（电池）；0/缺失回退礼物目录 */
+  blind_price?: number;
+  /** 礼物明细 */
+  gifts?: BlindBoxGiftItemData[];
+};
+
+/** 盲盒卡片本地唯一 key 生成器（不持久化，服务端保存时会丢弃） */
+let boxKeySeq = 0;
+function nextBoxKey(): string {
+  boxKeySeq += 1;
+  return `bb_${Date.now().toString(36)}_${boxKeySeq}`;
+}
 type ActivityItem = {
   active?: boolean;
   name?: string;
@@ -157,8 +184,18 @@ export default function AdminPage() {
   const [serverLoading, setServerLoading] = useState(false);
   // 礼物目录（用于盲盒按名称搜索：gift_id -> { name, img }）
   const [giftCatalog, setGiftCatalog] = useState<Record<number, { name: string; img: string }>>({});
+  // 礼物单价映射（gift_id -> 电池单价），用于礼物明细联想自动填价
+  const [giftPriceCatalog, setGiftPriceCatalog] = useState<Record<number, number>>({});
   // 盲盒名称搜索建议（当前展开的行索引）
   const [blindBoxSearchIndex, setBlindBoxSearchIndex] = useState<number | null>(null);
+  // 盲盒卡片展开状态（按本地 key；默认全部折叠）
+  const [expandedBoxKeys, setExpandedBoxKeys] = useState<Record<string, boolean>>({});
+  // 图标链接编辑弹窗（点击图标弹出）
+  const [iconEditor, setIconEditor] = useState<{ title: string; value: string; apply: (v: string) => void } | null>(null);
+  // 盲盒礼物名称搜索建议（当前展开的 {box,gift} 行）
+  const [blindBoxGiftSearch, setBlindBoxGiftSearch] = useState<{ box: number; gift: number } | null>(null);
+  // 正在从B站获取盲盒信息的盲盒索引
+  const [fetchingBoxInfo, setFetchingBoxInfo] = useState<number | null>(null);
   // 合成产物名称搜索建议（当前展开的产品行）
   const [productSearch, setProductSearch] = useState<{ act: number; product: number } | null>(null);
   // 配置模块折叠状态：盲盒配置 / 模拟器活动配置 / 合成活动盈亏配置 默认折叠
@@ -334,7 +371,24 @@ export default function AdminPage() {
           current_activity_blind_box_ids: Array.isArray(data.current_activity_blind_box_ids)
             ? data.current_activity_blind_box_ids
             : [],
-          blind_boxes: Array.isArray(data.blind_boxes) ? data.blind_boxes : [],
+          blind_boxes: Array.isArray(data.blind_boxes)
+            ? data.blind_boxes.map((b: any): BlindBoxItem => ({
+                _k: nextBoxKey(),
+                id: Number(b?.id) || 0,
+                name: String(b?.name ?? ""),
+                icon: String(b?.icon ?? ""),
+                blind_price: Number(b?.blind_price) || 0,
+                gifts: Array.isArray(b?.gifts)
+                  ? b.gifts.map((g: any): BlindBoxGiftItemData => ({
+                      gift_id: Number(g?.gift_id) || 0,
+                      gift_name: String(g?.gift_name ?? ""),
+                      price: Number(g?.price) || 0,
+                      gift_img: g?.gift_img ? String(g.gift_img) : undefined,
+                      is_reward: g?.is_reward === true,
+                    }))
+                  : [],
+              }))
+            : [],
           blind_box_profit_ids: Array.isArray(data.blind_box_profit_ids)
             ? data.blind_box_profit_ids
             : [],
@@ -374,6 +428,12 @@ export default function AdminPage() {
           if (catalogData.code === 0 && catalogData.data?.gifts) {
             const catalog: Record<number, { name: string; img: string }> = catalogData.data.gifts;
             setGiftCatalog(catalog);
+            // 礼物单价映射（分 → 电池），用于礼物明细联想自动填价
+            const priceMap: Record<number, number> = {};
+            for (const g of Array.isArray(catalogData.data.list) ? catalogData.data.list : []) {
+              if (g?.id && g?.coin_type === "gold" && g?.price) priceMap[Number(g.id)] = Math.round(Number(g.price) / 100);
+            }
+            setGiftPriceCatalog(priceMap);
             // 自动填充名称为空的盲盒
             let modified = false;
             const boxes = normalized.blind_boxes.map((b) => {
@@ -697,10 +757,13 @@ export default function AdminPage() {
 
   const addBlindBox = () => {
     if (!config) return;
+    // 新元素加到列表最上方，方便直接编辑
+    const key = nextBoxKey();
     setConfig({
       ...config,
-      blind_boxes: [...config.blind_boxes, { id: 0, name: "", icon: "" }],
+      blind_boxes: [{ _k: key, id: 0, name: "", icon: "", blind_price: 0, gifts: [] }, ...config.blind_boxes],
     });
+    setExpandedBoxKeys((m) => ({ ...m, [key]: true }));
   };
 
   const removeBlindBox = (index: number) => {
@@ -744,6 +807,115 @@ export default function AdminPage() {
     setBlindBoxSearchIndex(null);
   };
 
+  // ====== 盲盒单价 / 礼物明细（含过期盲盒） ======
+  const updateBlindBoxPrice = (index: number, value: string) => {
+    if (!config) return;
+    const boxes = [...config.blind_boxes];
+    boxes[index] = { ...boxes[index], blind_price: Number(value) || 0 };
+    setConfig({ ...config, blind_boxes: boxes });
+  };
+
+  const addBlindBoxGift = (index: number) => {
+    if (!config) return;
+    const boxes = [...config.blind_boxes];
+    const key = boxes[index]._k;
+    boxes[index] = {
+      ...boxes[index],
+      // 新礼物加到明细最下方
+      gifts: [...(boxes[index].gifts ?? []), { gift_id: 0, gift_name: "", price: 0 }],
+    };
+    setConfig({ ...config, blind_boxes: boxes });
+    if (key) setExpandedBoxKeys((m) => ({ ...m, [key]: true }));
+  };
+
+  const updateBlindBoxGift = (index: number, giftIndex: number, patch: Partial<BlindBoxGiftItemData>) => {
+    if (!config) return;
+    const boxes = [...config.blind_boxes];
+    const gifts = [...(boxes[index].gifts ?? [])];
+    gifts[giftIndex] = { ...gifts[giftIndex], ...patch };
+    boxes[index] = { ...boxes[index], gifts };
+    setConfig({ ...config, blind_boxes: boxes });
+  };
+
+  const removeBlindBoxGift = (index: number, giftIndex: number) => {
+    if (!config) return;
+    const boxes = [...config.blind_boxes];
+    boxes[index] = { ...boxes[index], gifts: (boxes[index].gifts ?? []).filter((_, i) => i !== giftIndex) };
+    setConfig({ ...config, blind_boxes: boxes });
+  };
+
+  // 选中礼物联想建议：填充 gift_id/名称/图标/单价（保留原有的奖励勾选）
+  const selectGiftForBlindBoxGift = (index: number, giftIndex: number, gift: { id: number; name: string; img: string }) => {
+    updateBlindBoxGift(index, giftIndex, {
+      gift_id: gift.id,
+      gift_name: gift.name,
+      gift_img: gift.img,
+      price: giftPriceCatalog[gift.id] ?? 0,
+    });
+    setBlindBoxGiftSearch(null);
+  };
+
+  // 从B站获取盲盒信息（服务器代读 B站 blindFirstWin/getInfo），自动回填名称/单价/礼物列表
+  const fetchBlindBoxFromBili = async (index: number) => {
+    if (!config) return;
+    const box = config.blind_boxes[index];
+    if (!box || box.id <= 0) return;
+    setFetchingBoxInfo(index);
+    try {
+      // 取当前 App 登录会话的 B站 Cookie 传给服务器
+      const cookies: string[] = [];
+      try {
+        const platform = await getPlatform();
+        const state = await platform.getSessionState();
+        const current = state.sessions.find((s: any) => s.sid === state.currentSid);
+        if (current) {
+          if (current.biliCookies?.length) cookies.push(...current.biliCookies);
+          if (current.biliSessdata && !cookies.some((c) => c.startsWith("SESSDATA="))) {
+            cookies.push(`SESSDATA=${current.biliSessdata}`);
+          }
+        }
+      } catch { /* 取会话失败则交由服务器端现有会话兜底 */ }
+
+      const res = await adminFetch(serverApiUrl("/api/admin/blind-box-info"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gift_id: box.id, cookies }),
+      });
+      const data = await res.json();
+      if (data.code !== 0 || !data.data) {
+        alert(data.message || "从B站获取失败");
+        return;
+      }
+      const info = data.data;
+      const boxes = [...config.blind_boxes];
+      const existingGifts: BlindBoxGiftItemData[] = boxes[index].gifts ?? [];
+      // 奖励礼物（手动添加、B站接口不返回的）在回填时保留
+      const rewardGifts = existingGifts.filter((g) => g.is_reward);
+      boxes[index] = {
+        ...boxes[index],
+        name: info.name || boxes[index].name,
+        icon: info.icon || boxes[index].icon,
+        blind_price: info.blind_price || boxes[index].blind_price,
+        gifts: [
+          ...(info.gifts ?? []).map((g: any): BlindBoxGiftItemData => ({
+            gift_id: Number(g.gift_id) || 0,
+            gift_name: String(g.gift_name ?? ""),
+            price: Number(g.price) || 0,
+            gift_img: g.gift_img ? String(g.gift_img) : undefined,
+          })),
+          ...rewardGifts,
+        ],
+      };
+      setConfig({ ...config, blind_boxes: boxes });
+      const key = boxes[index]._k;
+      if (key) setExpandedBoxKeys((m) => ({ ...m, [key]: true }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "从B站获取失败");
+    } finally {
+      setFetchingBoxInfo(null);
+    }
+  };
+
   const updateActivity = (index: number, field: keyof ActivityItem, value: string | number | boolean | undefined) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
@@ -755,9 +927,10 @@ export default function AdminPage() {
     if (!config) return;
     setConfig({
       ...config,
+      // 新活动加到列表最上方
       synthesis_activities: [
-        ...config.synthesis_activities,
         { name: "", products: [], materials: [] },
+        ...config.synthesis_activities,
       ],
     });
   };
@@ -781,7 +954,7 @@ export default function AdminPage() {
   const addActivityProduct = (actIndex: number) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
-    const products = [...(acts[actIndex].products || []), ""];
+    const products = ["", ...(acts[actIndex].products || [])];
     acts[actIndex] = { ...acts[actIndex], products };
     setConfig({ ...config, synthesis_activities: acts });
   };
@@ -808,7 +981,7 @@ export default function AdminPage() {
   const addActivityMaterial = (actIndex: number) => {
     if (!config) return;
     const acts = [...config.synthesis_activities];
-    const materials = [...(acts[actIndex].materials || []), ""];
+    const materials = ["", ...(acts[actIndex].materials || [])];
     acts[actIndex] = { ...acts[actIndex], materials };
     setConfig({ ...config, synthesis_activities: acts });
   };
@@ -845,8 +1018,8 @@ export default function AdminPage() {
     if (!config) return;
     setConfig({
       ...config,
+      // 新活动加到列表最上方
       simulator_activities: [
-        ...config.simulator_activities,
         {
           id: "",
           title: "",
@@ -858,6 +1031,7 @@ export default function AdminPage() {
           algorithmType: "stone-gongfang",
           algorithmParams: "",
         },
+        ...config.simulator_activities,
       ],
     });
   };
@@ -920,16 +1094,19 @@ export default function AdminPage() {
         alert("未查询到主播昵称，请检查UID是否正确");
         return;
       }
-      const list = [...config.recommended_anchors];
-      const nextOrder = list.reduce((m, a) => Math.max(m, a.order), 0) + 1;
-      list.push({
-        uid,
-        uname: info.uname,
-        face: info.face ? fixImageUrl(info.face) : undefined,
-        room_id: info.room_id || 0,
-        visible: true,
-        order: nextOrder,
-      });
+      // 新主播加到列表最上方，随后统一重排 order
+      const list = [
+        {
+          uid,
+          uname: info.uname,
+          face: info.face ? fixImageUrl(info.face) : undefined,
+          room_id: info.room_id || 0,
+          visible: true,
+          order: 1,
+        },
+        ...config.recommended_anchors,
+      ];
+      list.forEach((a, i) => { a.order = i + 1; });
       setConfig({ ...config, recommended_anchors: list });
       setNewAnchorUid("");
     } catch {
@@ -1043,7 +1220,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
+    <div className="admin-root min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
       <SafeAreaStyler />
       <WindowTitleBar />
       <div className="max-w-3xl mx-auto space-y-5">
@@ -1153,7 +1330,7 @@ export default function AdminPage() {
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold">帮助页常见问题</h3>
                 <button
-                  onClick={() => setConfig({ ...config, faq: [...(config.faq ?? []), { q: "", a: "" }] })}
+                  onClick={() => setConfig({ ...config, faq: [{ q: "", a: "" }, ...(config.faq ?? [])] })}
                   className="text-xs text-[#00a1d6] hover:underline shrink-0"
                 >
                   + 添加问题
@@ -1225,10 +1402,21 @@ export default function AdminPage() {
               </div>
               <div className="space-y-2">
                 {/* 所有盲盒统一逻辑：心动/幸运盲盒同样可勾选、可排序，无默认固定状态 */}
-                {config.blind_boxes.map((box, realIndex) => (
-                  <div key={realIndex} className={`rounded-lg border border-black/10 p-2 space-y-2 ${!config.current_activity_blind_box_ids.includes(box.id) && !config.blind_box_profit_ids.includes(box.id) ? "opacity-50" : ""}`}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <div className="flex flex-col shrink-0">
+                {config.blind_boxes.map((box, realIndex) => {
+                  const boxKey = box._k ?? `idx_${realIndex}`;
+                  const expanded = !!expandedBoxKeys[boxKey];
+                  const dimmed =
+                    !config.current_activity_blind_box_ids.includes(box.id) &&
+                    !config.blind_box_profit_ids.includes(box.id);
+                  return (
+                  <div key={boxKey} className={`rounded-lg border border-black/10 ${dimmed ? "opacity-50" : ""}`}>
+                    {/* 标题行 = 折叠选项卡：箭头 + 排序 + 图标 + 名称 + gift_id + 单价 */}
+                    <div
+                      onClick={() => setExpandedBoxKeys((m) => ({ ...m, [boxKey]: !m[boxKey] }))}
+                      className="flex items-center gap-2 flex-wrap px-2 py-1.5 cursor-pointer hover:bg-black/[0.03]"
+                    >
+                      <svg className={`w-3 h-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                      <div className="flex flex-col shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => moveBlindBox(realIndex, -1)}
                           disabled={realIndex === 0}
@@ -1242,43 +1430,39 @@ export default function AdminPage() {
                           title="下移"
                         >▼</button>
                       </div>
-                      <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
-                        <input
-                          type="checkbox"
-                          checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
-                          onChange={() => toggleCurrentBoxId(box.id)}
-                          disabled={box.id <= 0}
-                          className="w-3.5 h-3.5 accent-[#00a1d6]"
-                        />
-                        <span className="text-[10px] text-black/50">卡片</span>
-                      </label>
-                      <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
-                        <input
-                          type="checkbox"
-                          checked={box.id > 0 && config.blind_box_profit_ids.includes(box.id)}
-                          onChange={() => toggleProfitBoxId(box.id)}
-                          disabled={box.id <= 0}
-                          className="w-3.5 h-3.5 accent-[#00a1d6]"
-                        />
-                        <span className="text-[10px] text-black/50">盈亏</span>
-                      </label>
-                      {box.id > 0 && box.icon && (
-                        <img src={box.icon} alt="" className="w-7 h-7 rounded shrink-0" />
-                      )}
+                      {/* 图标：点击弹出链接编辑框 */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIconEditor({
+                            title: "盲盒图标链接",
+                            value: box.icon,
+                            apply: (v) => updateBlindBox(realIndex, "icon", v),
+                          });
+                        }}
+                        title="点击编辑图标链接"
+                        className="w-7 h-7 rounded shrink-0 border border-dashed border-black/20 flex items-center justify-center overflow-hidden hover:border-[#00a1d6]"
+                      >
+                        {box.icon ? (
+                          <img src={box.icon} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-[9px] text-black/30">图</span>
+                        )}
+                      </button>
                       {/* 名称输入 + 下拉搜索建议 */}
-                      <div className="relative flex-1 min-w-[120px]">
+                      <div className="relative flex-1 min-w-[70px]" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="text"
                           value={box.name}
                           onChange={(e) => {
+                            // 名称可自由自定义（过期盲盒搜索不到时直接手输），不清空已有 id
                             updateBlindBox(realIndex, "name", e.target.value);
-                            // 输入名称时清除已匹配的 id 和 icon（待重新选择）
-                            if (box.id > 0) updateBlindBox(realIndex, "id", 0);
                             setBlindBoxSearchIndex(realIndex);
                           }}
                           onFocus={() => setBlindBoxSearchIndex(realIndex)}
                           onBlur={() => setTimeout(() => setBlindBoxSearchIndex(null), 200)}
-                          placeholder="输入盲盒名称搜索"
+                          placeholder="盲盒名称（可搜索，也可直接输入）"
                           className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
                         />
                         {blindBoxSearchIndex === realIndex && box.name.trim() && (
@@ -1304,12 +1488,186 @@ export default function AdminPage() {
                           </div>
                         )}
                       </div>
-                      <span className="text-xs text-black/50 shrink-0">{box.id > 0 ? box.id : "?"}</span>
-                      <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
+                      {/* gift_id 可直接输入：过期盲盒在目录中搜索不到时手填 */}
+                      <input
+                        type="number"
+                        value={box.id || ""}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => updateBlindBox(realIndex, "id", e.target.value)}
+                        placeholder="gift_id"
+                        title="盲盒的 gift_id（过期盲盒搜不到时可直接填写）"
+                        className="w-[68px] rounded border border-black/10 px-1.5 py-1.5 text-xs focus:outline-none focus:border-black/30 shrink-0"
+                      />
+                      {/* 单价 */}
+                      <label className="flex items-center gap-1 shrink-0" title="盲盒单价（电池），用于计算花费" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="number"
+                          value={box.blind_price ?? 0}
+                          onChange={(e) => updateBlindBoxPrice(realIndex, e.target.value)}
+                          className="w-[58px] rounded border border-black/10 px-1.5 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                        />
+                        <span className="text-[10px] text-black/40">电池</span>
+                      </label>
+                    </div>
+                    {/* 卡片 / 盈亏 / 从B站获取 / 删除（折叠卡内） */}
+                    {expanded && (
+                      <div className="border-t border-black/5 bg-black/[0.03] px-3 py-2 space-y-1.5">
+                        <div className="flex items-center gap-3 flex-wrap pb-1">
+                          <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
+                            <input
+                              type="checkbox"
+                              checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
+                              onChange={() => toggleCurrentBoxId(box.id)}
+                              disabled={box.id <= 0}
+                              className="w-3.5 h-3.5 accent-[#00a1d6]"
+                            />
+                            <span className="text-[10px] text-black/50">卡片</span>
+                          </label>
+                          <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
+                            <input
+                              type="checkbox"
+                              checked={box.id > 0 && config.blind_box_profit_ids.includes(box.id)}
+                              onChange={() => toggleProfitBoxId(box.id)}
+                              disabled={box.id <= 0}
+                              className="w-3.5 h-3.5 accent-[#00a1d6]"
+                            />
+                            <span className="text-[10px] text-black/50">盈亏</span>
+                          </label>
+                          <button
+                            onClick={() => fetchBlindBoxFromBili(realIndex)}
+                            disabled={box.id <= 0 || fetchingBoxInfo === realIndex}
+                            className="text-xs text-[#00a1d6] hover:underline disabled:text-black/30 disabled:no-underline shrink-0"
+                            title="由服务器代读 B站接口，自动回填名称/单价/礼物列表（需先填写盲盒 ID）"
+                          >
+                            {fetchingBoxInfo === realIndex ? "获取中…" : "从B站获取"}
+                          </button>
+                          <button onClick={() => removeBlindBox(realIndex)} className="text-xs text-[#e74c3c] hover:underline shrink-0 ml-auto">删除</button>
+                        </div>
+                        {(box.gifts ?? []).length === 0 && (
+                          <p className="text-[10px] text-black/40">暂无明细。可「从B站获取」，或手动添加（含过期盲盒礼物 / 奖励礼物）</p>
+                        )}
+                        {(box.gifts ?? []).map((gift, giftIndex) => (
+                          <div key={giftIndex} className="flex items-center gap-1.5">
+                            {/* 礼物图标：点击弹出链接编辑框 */}
+                            <button
+                              type="button"
+                              onClick={() => setIconEditor({
+                                title: `「${gift.gift_name || "礼物"}」图标链接`,
+                                value: gift.gift_img ?? "",
+                                apply: (v) => updateBlindBoxGift(realIndex, giftIndex, { gift_img: v }),
+                              })}
+                              title="点击编辑图标链接"
+                              className="w-6 h-6 rounded shrink-0 border border-dashed border-black/20 flex items-center justify-center overflow-hidden hover:border-[#00a1d6]"
+                            >
+                              {gift.gift_img ? (
+                                <img src={gift.gift_img} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="text-[8px] text-black/30">图</span>
+                              )}
+                            </button>
+                            {/* 礼物名称 + 联想搜索 */}
+                            <div className="relative flex-1 min-w-[70px]">
+                              <input
+                                type="text"
+                                value={gift.gift_name}
+                                onChange={(e) => {
+                                  updateBlindBoxGift(realIndex, giftIndex, { gift_name: e.target.value });
+                                  setBlindBoxGiftSearch({ box: realIndex, gift: giftIndex });
+                                }}
+                                onFocus={() => setBlindBoxGiftSearch({ box: realIndex, gift: giftIndex })}
+                                onBlur={() => setTimeout(() => setBlindBoxGiftSearch(null), 200)}
+                                placeholder="礼物名称（可自由输入）"
+                                className="w-full rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                              />
+                              {blindBoxGiftSearch?.box === realIndex && blindBoxGiftSearch?.gift === giftIndex && gift.gift_name.trim() && (
+                                <div className="absolute z-10 mt-1 w-full rounded-lg border border-black/10 bg-white shadow-lg max-h-40 overflow-y-auto">
+                                  {searchGiftsByName(gift.gift_name).length > 0 ? (
+                                    searchGiftsByName(gift.gift_name).map((g) => (
+                                      <button
+                                        key={g.id}
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          selectGiftForBlindBoxGift(realIndex, giftIndex, g);
+                                        }}
+                                        className="flex items-center gap-2 w-full px-2 py-1.5 text-left hover:bg-black/5 text-xs"
+                                      >
+                                        {g.img && <img src={g.img} alt="" className="w-5 h-5 rounded shrink-0" />}
+                                        <span className="truncate">{g.name}</span>
+                                        <span className="ml-auto text-black/40 shrink-0">id:{g.id}</span>
+                                      </button>
+                                    ))
+                                  ) : (
+                                    <div className="px-2 py-1.5 text-xs text-black/40">未找到匹配的礼物（可直接使用输入的名称）</div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            {/* gift_id */}
+                            <input
+                              type="number"
+                              value={gift.gift_id || ""}
+                              onChange={(e) => updateBlindBoxGift(realIndex, giftIndex, { gift_id: Number(e.target.value) || 0 })}
+                              placeholder="gift_id"
+                              className="w-[68px] rounded border border-black/10 px-1.5 py-1 text-xs focus:outline-none focus:border-black/30 shrink-0"
+                            />
+                            {/* 价格 */}
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <input
+                                type="number"
+                                value={gift.price || ""}
+                                onChange={(e) => updateBlindBoxGift(realIndex, giftIndex, { price: Number(e.target.value) || 0 })}
+                                placeholder="价格"
+                                className="w-[58px] rounded border border-black/10 px-1.5 py-1 text-xs focus:outline-none focus:border-black/30"
+                              />
+                              <span className="text-[10px] text-black/40">电池</span>
+                            </div>
+                            {/* 奖励勾选 */}
+                            <label className="flex items-center gap-1 shrink-0" title="额外奖励礼物：只计价值，不计抽数与成本">
+                              <input
+                                type="checkbox"
+                                checked={!!gift.is_reward}
+                                onChange={(e) => updateBlindBoxGift(realIndex, giftIndex, { is_reward: e.target.checked })}
+                                className="w-3.5 h-3.5 accent-[#00a1d6]"
+                              />
+                              <span className="text-[10px] text-black/50">奖励</span>
+                            </label>
+                            <button
+                              onClick={() => removeBlindBoxGift(realIndex, giftIndex)}
+                              className="text-xs text-[#e74c3c] hover:underline shrink-0"
+                              title="删除该礼物"
+                            >×</button>
+                          </div>
+                        ))}
+                        <button onClick={() => addBlindBoxGift(realIndex)} className="text-xs text-[#00a1d6] hover:underline">+ 添加礼物</button>
+                      </div>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+              {/* 图标链接编辑弹窗（点击图标弹出） */}
+              {iconEditor && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setIconEditor(null)}>
+                  <div className="w-[min(90vw,420px)] rounded-xl bg-white p-4 shadow-xl space-y-3" onClick={(e) => e.stopPropagation()}>
+                    <h4 className="text-xs font-semibold">{iconEditor.title}</h4>
+                    <input
+                      autoFocus
+                      type="text"
+                      value={iconEditor.value}
+                      onChange={(e) => setIconEditor({ ...iconEditor, value: e.target.value })}
+                      placeholder="图标链接（留空则不显示）"
+                      className="w-full rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+                    />
+                    <div className="flex justify-end gap-3">
+                      <button onClick={() => setIconEditor(null)} className="text-xs text-black/50 hover:underline">取消</button>
+                      <button
+                        onClick={() => { iconEditor.apply(iconEditor.value.trim()); setIconEditor(null); }}
+                        className="text-xs text-[#00a1d6] hover:underline"
+                      >确定</button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
               </>)}
             </div>
 

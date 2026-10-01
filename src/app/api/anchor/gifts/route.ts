@@ -1364,8 +1364,10 @@ export async function GET(request: Request) {
 
     let totalHamster = 0;
 
-    // 盲盒统计：记录每种盲盒的接收次数和收益
+    // 盲盒统计：记录每种盲盒的接收次数和收益（收益含奖励礼物，次数含全部礼物）
     const blindBoxCountMap = new Map<number, { num: number; hamster: number }>();
+    // 盲盒成本计数：仅统计非奖励礼物（奖励礼物成本 0，不计抽数/成本）
+    const blindBoxCostCountMap = new Map<number, number>();
     // 盲盒内各礼物分别计数
     const blindBoxGiftCountMap = new Map<number, Map<number, { name: string; num: number; hamster: number }>>();
     // 盲盒粉丝统计
@@ -1384,29 +1386,40 @@ export async function GET(request: Request) {
     const blindBoxIds = [...activityBoxIds, ...extraProfitIds];
     const allBlindBoxInfo = await getAllBlindBoxInfo(0, "");
 
-    // 如果本地没有盲盒信息，尝试从B站API获取（离线时跳过）
-    // 注意：名称/图标/价格已从 gift-catalog 获取，此处仅获取盲盒内 gift_id 列表用于反向映射
+    // 各盲盒的奖励礼物 id 集合（admin 配置，成本 0），供成本计数与名称标注使用
+    const rewardGiftIdsByBox = new Map<number, Set<number>>();
+    for (const [idStr, box] of Object.entries(blindBoxConfig.boxes)) {
+      if (box.rewardGiftIds.size > 0) rewardGiftIdsByBox.set(Number(idStr), box.rewardGiftIds);
+    }
+
+    // 如果本地/配置缺少盲盒礼物列表，尝试从B站API获取（离线时跳过）。
+    // 仅在「该盲盒无礼物的 gift_id 列表」时才探测，且不覆盖 admin 配置的名称/单价。
     for (const blindBoxId of blindBoxIds) {
-      if (!localOnly && !allBlindBoxInfo[blindBoxId]) {
+      const existing = allBlindBoxInfo[blindBoxId];
+      const needProbe = !existing || existing.gifts.length === 0;
+      if (!localOnly && needProbe) {
         try {
-          console.log(`[AnchorGifts] 本地无盲盒 ${blindBoxId} 信息，尝试从B站API获取...`);
+          console.log(`[AnchorGifts] 盲盒 ${blindBoxId} 无礼物列表，尝试从B站API获取...`);
           const checkResult = await checkBlindBox(blindBoxId, biliCookie);
           if (checkResult) {
+            const mergedName = existing?.blind_box_name || checkResult.blindGiftName;
+            const mergedImg = existing?.blind_box_img || "";
+            const mergedPrice = existing?.blind_price || checkResult.blindPrice;
             await saveBlindBoxInfo(validSession.mid, validSession.uname, blindBoxId, {
-              gift_name: checkResult.blindGiftName,
-              gift_img: "",
-              price: checkResult.blindPrice,
+              gift_name: mergedName,
+              gift_img: mergedImg,
+              price: mergedPrice,
               gifts: checkResult.gifts,
             });
             allBlindBoxInfo[blindBoxId] = {
               blind_box_id: blindBoxId,
-              blind_box_name: checkResult.blindGiftName,
-              blind_box_img: "",
-              blind_price: checkResult.blindPrice,
+              blind_box_name: mergedName,
+              blind_box_img: mergedImg,
+              blind_price: mergedPrice,
               gifts: checkResult.gifts,
               updated_at: getBeijingTime(),
             };
-            console.log(`[AnchorGifts] 盲盒 ${blindBoxId}(${checkResult.blindGiftName}) 信息获取成功，包含 ${checkResult.gifts.length} 个礼物`);
+            console.log(`[AnchorGifts] 盲盒 ${blindBoxId}(${mergedName}) 信息获取成功，包含 ${checkResult.gifts.length} 个礼物`);
           } else {
             console.log(`[AnchorGifts] 盲盒 ${blindBoxId} API返回为空，可能已过期`);
           }
@@ -1421,7 +1434,8 @@ export async function GET(request: Request) {
       const blindBoxId = Number(blindBoxIdStr);
       if (info.gifts) {
         for (const g of info.gifts) {
-          giftIdToBlindBoxId.set(g.gift_id, blindBoxId);
+          // gift_id=0 的奖励礼物（过期、无法确定 id）不参与反向映射，避免污染
+          if (g.gift_id > 0 && !giftIdToBlindBoxId.has(g.gift_id)) giftIdToBlindBoxId.set(g.gift_id, blindBoxId);
         }
       }
     }
@@ -1475,6 +1489,11 @@ export async function GET(request: Request) {
           bbExisting.hamster += r.hamster;
         } else {
           blindBoxCountMap.set(bbId, { num: r.num, hamster: r.hamster });
+        }
+
+        // 成本计数：奖励礼物成本 0，不计抽数/成本
+        if (!rewardGiftIdsByBox.get(bbId)?.has(r.gift_id)) {
+          blindBoxCostCountMap.set(bbId, (blindBoxCostCountMap.get(bbId) ?? 0) + r.num);
         }
 
         // 盲盒内各礼物分别计数
@@ -1599,21 +1618,25 @@ export async function GET(request: Request) {
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
       // blind_box_img 在 saveBlindBoxInfo 时为空，从 gift-catalog 或 admin-config 获取
       const boxImg = getGiftImg(blindBoxId) || blindBoxConfig.icons[blindBoxId] || info?.blind_box_img || "";
-      const drawCount = count?.num ?? 0;
+      // 抽数/成本仅计非奖励礼物（奖励礼物成本 0）
+      const drawCount = blindBoxCostCountMap.get(blindBoxId) ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;
-      // blind_price 单位是电池，乘以50转换为 hamster（收益已/2，成本也需/2）
-      const blindPrice = (info?.blind_price ?? 0) * 50;
+      // blind_price 单位是电池，乘以50转换为 hamster（收益已/2，成本也需/2）；admin 配置优先
+      const rawBlindPrice = blindBoxConfig.boxes[blindBoxId]?.blindPrice || info?.blind_price || 0;
+      const blindPrice = rawBlindPrice * 50;
       const cost = drawCount * blindPrice;
+      const rewardGiftIds = rewardGiftIdsByBox.get(blindBoxId);
 
-      // 礼物列表：从盲盒信息中获取，实际数量从收益记录中统计
+      // 礼物列表：从盲盒信息中获取，实际数量从收益记录中统计；奖励礼物名称后标注（奖励）
       const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }> = [];
       const giftCountMap = blindBoxGiftCountMap.get(blindBoxId);
       if (info?.gifts) {
         for (const g of info.gifts) {
           const actualCount = giftCountMap?.get(g.gift_id);
+          const isReward = rewardGiftIds?.has(g.gift_id) ?? false;
           gifts.push({
             gift_id: g.gift_id,
-            name: g.gift_name,
+            name: isReward ? `${g.gift_name}（奖励）` : g.gift_name,
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
             img: g.gift_img,
@@ -1663,7 +1686,7 @@ export async function GET(request: Request) {
         profit: totalHamsterBB - cost,
         gifts,
         img: boxImg,
-        blindPrice: (info?.blind_price ?? 0) / 2,  // 电池单位，/2 与收益对齐
+        blindPrice: rawBlindPrice / 2,  // 电池单位，/2 与收益对齐
         anchors,
         dateRange,
         castleFans,

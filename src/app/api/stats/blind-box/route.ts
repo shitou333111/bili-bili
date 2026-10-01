@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { fetchBlindBoxDrawStream } from "@/lib/bilibili/gift-api";
+import { fetchBlindBoxDrawStream, fetchBagList } from "@/lib/bilibili/gift-api";
 import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftPrice } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
-import type { BlindBoxCalcRecord, BlindBoxGiftMeta } from "@/lib/blind-box-calc";
+import {
+  computeBlindBoxFromRecords,
+  type BlindBoxCalcRecord,
+  type BlindBoxGiftMeta,
+  type BlindBoxRewardBagGift,
+} from "@/lib/blind-box-calc";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -72,6 +77,8 @@ type BlindBoxProfitResult = {
   anchorNames?: Record<number, string>;
   /** gift_id → 礼物名称/图标/单价 */
   giftMeta?: Record<number, BlindBoxGiftMeta>;
+  /** 该盲盒的额外奖励礼物（包裹补充，成本 0），供浏览器端本地重算 */
+  rewardGifts?: BlindBoxRewardBagGift[];
 };
 
 // 数据存储目录
@@ -79,45 +86,6 @@ const DATA_DIR = path.join(process.cwd(), ".data");
 
 // 浪漫城堡 gift_id
 const CASTLE_ID = 32132;
-
-// 计算城堡统计
-function calculateCastleStats(
-  drawRecords: BlindBoxDrawRecord[],
-): { castleStats: CastleStat[]; castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null } {
-  const castleRecords = drawRecords.filter((r) => r.gift_id === CASTLE_ID);
-  if (castleRecords.length === 0) {
-    return { castleStats: [], castleGift: null };
-  }
-
-  const anchorMap = new Map<number, { rname: string; totalCount: number; dates: Map<string, number> }>();
-
-  for (const record of castleRecords) {
-    const date = record.timestamp.split(" ")[0];
-    let anchor = anchorMap.get(record.ruid);
-    if (!anchor) {
-      anchor = { rname: record.rname, totalCount: 0, dates: new Map() };
-      anchorMap.set(record.ruid, anchor);
-    }
-    anchor.totalCount += record.gift_num;
-    anchor.dates.set(date, (anchor.dates.get(date) ?? 0) + record.gift_num);
-  }
-
-  const castleStats: CastleStat[] = Array.from(anchorMap.entries()).map(([ruid, anchor]) => ({
-    ruid,
-    rname: anchor.rname,
-    totalCount: anchor.totalCount,
-    dates: Array.from(anchor.dates.entries())
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => b.date.localeCompare(a.date)),
-  }));
-
-  castleStats.sort((a, b) => b.totalCount - a.totalCount);
-
-  return {
-    castleStats,
-    castleGift: { gift_id: CASTLE_ID, gift_name: getGiftName(CASTLE_ID), gift_img: getGiftImg(CASTLE_ID), price: getGiftPrice(CASTLE_ID) },
-  };
-}
 
 function getBlindBoxRecordsDir(mid: number, _uname?: string): string {
   return path.join(DATA_DIR, `uid_${mid}`);
@@ -252,153 +220,6 @@ function mergeRecords(existing: BlindBoxDrawRecord[], newRecords: BlindBoxDrawRe
   return [...newRecordsToAdd, ...sortedExisting];
 }
 
-// 日期筛选函数
-function getDateRangeFilter(type: string): { start: Date; end: Date } | null {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  switch (type) {
-    case "today": {
-      const end = new Date(today);
-      end.setDate(end.getDate() + 1);
-      return { start: today, end };
-    }
-    case "yesterday": {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayEnd = new Date(today);
-      return { start: yesterday, end: yesterdayEnd };
-    }
-    case "thisWeek": {
-      const dayOfWeek = today.getDay();
-      const monday = new Date(today);
-      monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const nextMonday = new Date(monday);
-      nextMonday.setDate(nextMonday.getDate() + 7);
-      return { start: monday, end: nextMonday };
-    }
-    case "thisMonth": {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      return { start, end };
-    }
-    default:
-      return null; // "all" - 不筛选
-  }
-}
-
-// 过滤记录
-function filterRecords(
-  records: BlindBoxDrawRecord[],
-  ruid: number | null,
-  dateRange: string,
-): BlindBoxDrawRecord[] {
-  let filtered = records;
-
-  // 主播筛选
-  if (ruid !== null) {
-    filtered = filtered.filter((r) => r.ruid === ruid);
-  }
-
-  // 日期筛选
-  const range = getDateRangeFilter(dateRange);
-  if (range) {
-    filtered = filtered.filter((r) => {
-      const t = new Date(r.timestamp).getTime();
-      return t >= range.start.getTime() && t < range.end.getTime();
-    });
-  }
-
-  return filtered;
-}
-
-// 构建主播列表（按送出个数降序）
-function buildAnchorList(records: BlindBoxDrawRecord[]): Array<{ ruid: number; rname: string; count: number }> {
-  const map = new Map<number, { rname: string; count: number }>();
-  for (const r of records) {
-    const existing = map.get(r.ruid) ?? { rname: r.rname, count: 0 };
-    existing.count += r.gift_num;
-    map.set(r.ruid, existing);
-  }
-  return Array.from(map.entries())
-    .map(([ruid, v]) => ({ ruid, rname: v.rname, count: v.count }))
-    .sort((a, b) => b.count - a.count);
-}
-
-// 计算时间范围
-function getDateRange(records: BlindBoxDrawRecord[]): { start: string; end: string } | null {
-  if (records.length === 0) return null;
-  let earliest = records[0].timestamp;
-  let latest = records[0].timestamp;
-  for (const r of records) {
-    if (r.timestamp < earliest) earliest = r.timestamp;
-    if (r.timestamp > latest) latest = r.timestamp;
-  }
-  return { start: earliest, end: latest };
-}
-
-// 计算盲盒盈亏
-function calculateProfit(
-  blindBoxId: number,
-  drawRecords: BlindBoxDrawRecord[],
-): BlindBoxProfitResult {
-  const blindPrice = getGiftPrice(blindBoxId);
-  const blindBoxName = getGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
-  const blindBoxImg = getGiftImg(blindBoxId) || "";
-
-  // 统计每种爆出礼物的数量和价值
-  const giftStats = new Map<number, { gift_name: string; count: number; totalValue: number }>();
-
-  for (const record of drawRecords) {
-    const existing = giftStats.get(record.gift_id) ?? {
-      gift_name: record.gift_name,
-      count: 0,
-      totalValue: 0,
-    };
-    existing.count += record.gift_num;
-    const giftPrice = getGiftPrice(record.gift_id);
-    existing.totalValue += giftPrice * record.gift_num;
-    giftStats.set(record.gift_id, existing);
-  }
-
-  let totalEarned = 0;
-  for (const record of drawRecords) {
-    totalEarned += getGiftPrice(record.gift_id) * record.gift_num;
-  }
-
-  const drawCount = drawRecords.reduce((sum, r) => sum + r.gift_num, 0);
-  const totalSpent = drawCount * blindPrice;
-
-  const gifts = Array.from(giftStats.entries()).map(([gift_id, stats]) => {
-    return {
-      gift_id,
-      gift_name: stats.gift_name,
-      gift_img: getGiftImg(gift_id),
-      unitPrice: getGiftPrice(gift_id),
-      count: stats.count,
-      totalValue: stats.totalValue,
-    };
-  });
-
-  return {
-    blindBoxId,
-    blindBoxName,
-    blindBoxImg,
-    blindPrice,
-    totalSpent,
-    totalEarned,
-    profit: totalEarned - totalSpent,
-    drawCount,
-    recordCount: drawRecords.length,
-    dateRange: { start: "", end: "" },
-    anchors: [],
-    filter: { ruid: null, dateRange: "all" },
-    gifts,
-    castleStats: [],
-    castleGift: null,
-  };
-}
-
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const cookieHeader = request.headers.get("cookie") ?? "";
@@ -446,6 +267,12 @@ export async function GET(request: Request) {
 
     const results: BlindBoxProfitResult[] = [];
 
+    // 请求级拉取一次包裹礼物（奖励礼物来源于包裹）；仅当有盲盒配置了奖励礼物时才请求
+    const anyReward = blindBoxIds.some(
+      (id) => (effectiveBlindBoxConfig.boxes[id]?.rewardGiftNames.length ?? 0) > 0,
+    );
+    const bagGifts = !offline && anyReward ? await fetchBagList(biliCookie) : [];
+
     for (const blindBoxId of blindBoxIds) {
       try {
         // 解析该盲盒的筛选参数
@@ -469,8 +296,11 @@ export async function GET(request: Request) {
           ? [...newRecords, ...existingRecords]
           : existingRecords;
 
-        // 盲盒名称直接从礼物目录获取（用于文件名）
-        const blindBoxNameForFile = getGiftName(blindBoxId) || undefined;
+        // admin 配置优先（含过期盲盒完整信息），礼物目录兜底
+        const boxCfg = effectiveBlindBoxConfig.boxes[blindBoxId];
+
+        // 盲盒名称（用于文件名）
+        const blindBoxNameForFile = boxCfg?.name || getGiftName(blindBoxId) || undefined;
 
         // 保存（只有有新记录时才保存）
         if (newRecords.length > 0) {
@@ -479,53 +309,16 @@ export async function GET(request: Request) {
 
         console.log(`[BlindBoxStats] 盲盒 ${blindBoxId}: 新记录 ${newRecords.length} 条, 已存储 ${existingRecords.length} 条, 合并后 ${mergedRecords.length} 条`);
 
-        // 从全部记录构建元数据
-        const dateRange = getDateRange(mergedRecords);
+        // 元数据取值顺序：admin 配置 → 礼物目录 → 0（过期盲盒在目录中无价/无数据）
+        const blindPrice = boxCfg?.blindPrice || getGiftPrice(blindBoxId) || 0;
+        const blindBoxName = boxCfg?.name || getGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
+        const blindBoxImg = boxCfg?.icon || getGiftImg(blindBoxId) || "";
 
-        // 主播下拉列表只按日期筛选（不受主播筛选影响）：
-        // 仅显示所选时间段内有数据的主播，count 为该时段内的送出个数
-        const dateOnlyFiltered = filterRecords(mergedRecords, null, filterDateRange);
-        const anchors = buildAnchorList(dateOnlyFiltered);
-
-        // 按筛选条件过滤记录（含主播筛选，用于盈亏明细）
-        const filteredRecords = filterRecords(mergedRecords, ruid, filterDateRange);
-
-        // 计算盈亏（名称/图标/价格全部从礼物目录获取，无需调用 blindFirstWin API）
-        const profit = calculateProfit(blindBoxId, filteredRecords);
-        // 补充 admin-config 中的 icon 作为图标 fallback
-        if (!profit.blindBoxImg) {
-          profit.blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
-        }
-        // 活动盲盒可能不在礼物目录中，此时名称显示"盲盒_编号"；补充 admin-config 中的名称作为 fallback
-        if (profit.blindBoxName === `盲盒_${blindBoxId}` || !profit.blindBoxName) {
-          profit.blindBoxName = effectiveBlindBoxConfig.names[blindBoxId] ?? profit.blindBoxName;
-        }
-
-        // 填充元数据
-        profit.dateRange = dateRange;
-        profit.anchors = anchors;
-        profit.filter = { ruid, dateRange: filterDateRange };
-
-        // 计算城堡统计（仅心动盲盒）
-        if (blindBoxId === 32251) {
-          const { castleStats, castleGift } = calculateCastleStats(mergedRecords);
-          profit.castleStats = castleStats;
-          profit.castleGift = castleGift;
-        }
-
-        // 浏览器端本地筛选所需的一次性载荷（精简记录，不含昵称/礼物名以减小体积）
-        profit.records = mergedRecords.map((r) => ({
-          gift_id: r.gift_id,
-          gift_num: r.gift_num,
-          ruid: r.ruid,
-          timestamp: r.timestamp,
-        }));
-        const anchorNames: Record<number, string> = {};
-        for (const r of mergedRecords) {
-          if (anchorNames[r.ruid] === undefined) anchorNames[r.ruid] = r.rname;
-        }
-        profit.anchorNames = anchorNames;
+        // 礼物元数据：admin 配置优先，抽取记录/礼物目录兜底
         const giftMeta: Record<number, BlindBoxGiftMeta> = {};
+        for (const g of boxCfg?.gifts ?? []) {
+          if (g.giftId > 0) giftMeta[g.giftId] = { name: g.giftName, img: g.img, price: g.price };
+        }
         for (const r of mergedRecords) {
           if (giftMeta[r.gift_id]) continue;
           giftMeta[r.gift_id] = {
@@ -534,13 +327,68 @@ export async function GET(request: Request) {
             price: getGiftPrice(r.gift_id),
           };
         }
-        // 盲盒本身用已解析好的名称/图标（含 admin-config fallback）
-        giftMeta[blindBoxId] = { name: profit.blindBoxName, img: profit.blindBoxImg, price: getGiftPrice(blindBoxId) };
+        // 盲盒本身用已解析好的名称/图标
+        giftMeta[blindBoxId] = { name: blindBoxName, img: blindBoxImg, price: blindPrice };
         // 浪漫城堡（心动盲盒的本地重算需要它的名称/图标/单价）
         if (blindBoxId === 32251 && !giftMeta[CASTLE_ID]) {
           giftMeta[CASTLE_ID] = { name: getGiftName(CASTLE_ID), img: getGiftImg(CASTLE_ID), price: getGiftPrice(CASTLE_ID) };
         }
-        profit.giftMeta = giftMeta;
+
+        // 奖励礼物：按 admin 配置的奖励礼物名称匹配包裹；单价/图标以配置为准（过期礼物目录无价）
+        const rewardCfgByName = new Map(
+          (boxCfg?.gifts ?? []).filter((g) => g.isReward).map((g) => [g.giftName, g] as const),
+        );
+        const rewardGifts: BlindBoxRewardBagGift[] = [];
+        if (rewardCfgByName.size > 0) {
+          for (const g of bagGifts) {
+            const cfg = rewardCfgByName.get(g.gift_name);
+            if (!cfg) continue;
+            rewardGifts.push({
+              gift_id: g.gift_id || cfg.giftId,
+              gift_name: g.gift_name,
+              gift_num: g.gift_num,
+              // 奖励礼物实际价格来自包裹（含单价与数量），配置价格仅在包裹无价时兜底
+              price: g.price || cfg.price,
+              img: g.img || cfg.img,
+              is_locked: g.is_locked,
+              locked_text: g.locked_text,
+            });
+          }
+        }
+
+        const anchorNames: Record<number, string> = {};
+        for (const r of mergedRecords) {
+          if (anchorNames[r.ruid] === undefined) anchorNames[r.ruid] = r.rname;
+        }
+
+        const calcRecords: BlindBoxCalcRecord[] = mergedRecords.map((r) => ({
+          gift_id: r.gift_id,
+          gift_num: r.gift_num,
+          ruid: r.ruid,
+          timestamp: r.timestamp,
+        }));
+
+        // 计算盈亏（镜像实现：src/lib/blind-box-calc.ts，两边语义必须一致）
+        const calc = computeBlindBoxFromRecords({
+          blindBoxId,
+          records: calcRecords,
+          anchorNames,
+          giftMeta,
+          blindPrice,
+          blindBoxName,
+          blindBoxImg,
+          filter: { ruid, dateRange: filterDateRange },
+          rewardGifts,
+        });
+
+        // 浏览器端本地筛选所需的一次性载荷（精简记录 + 元数据，切筛选 0 请求）
+        const profit: BlindBoxProfitResult = {
+          ...calc,
+          records: calcRecords,
+          anchorNames,
+          giftMeta,
+          rewardGifts,
+        };
 
         results.push(profit);
       } catch (err) {

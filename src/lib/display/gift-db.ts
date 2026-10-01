@@ -235,6 +235,8 @@ interface BoxCtx {
   info: Record<number, BlindBoxInfo>;
   /** 爆出礼物 gift_id → 盲盒 id */
   giftIdToBoxId: Map<number, number>;
+  /** 盲盒 id → 奖励礼物 gift_id 集合（成本 0，仅计价值） */
+  rewardGiftIdsByBox: Map<number, Set<number>>;
 }
 
 /** 盲盒上下文短缓存（10 分钟）：查询弹幕每次触发都读取太频繁，活动盲盒/单价变化按此周期自动刷新 */
@@ -256,7 +258,12 @@ async function loadBoxCtx(platform: Platform): Promise<BoxCtx> {
       }
     }
   }
-  boxCtxCache = { at: Date.now(), ctx: { config, info, giftIdToBoxId } };
+  // 奖励礼物 id 集合（admin 配置，成本 0）
+  const rewardGiftIdsByBox = new Map<number, Set<number>>();
+  for (const [idStr, box] of Object.entries(config.boxes)) {
+    if (box.rewardGiftIds.size > 0) rewardGiftIdsByBox.set(Number(idStr), box.rewardGiftIds);
+  }
+  boxCtxCache = { at: Date.now(), ctx: { config, info, giftIdToBoxId, rewardGiftIdsByBox } };
   return boxCtxCache.ctx;
 }
 
@@ -278,7 +285,8 @@ export async function computeFromIncome(
   const platform = await getPlatform();
   const ctx = await loadBoxCtx(platform);
   const records = await loadIncomeRecords(mid);
-  const blindPrice = ctx.info[boxId]?.blind_price ?? 0;
+  const blindPrice = ctx.config.boxes[boxId]?.blindPrice || ctx.info[boxId]?.blind_price || 0;
+  const rewardGiftIds = ctx.rewardGiftIdsByBox.get(boxId);
 
   let drawCount = 0;
   let totalEarned = 0;
@@ -289,7 +297,8 @@ export async function computeFromIncome(
       if (!t || t < range.start.getTime() || t >= range.end.getTime()) continue;
     }
     if (ctx.giftIdToBoxId.get(r.gift_id) !== boxId) continue;
-    drawCount += r.num;
+    // 奖励礼物成本 0：只计价值，不计抽数/成本
+    if (!rewardGiftIds?.has(r.gift_id)) drawCount += r.num;
     // 金仓鼠 → 电池：主播收益 ×2 = 礼物单价（金仓鼠），再 ÷100 转电池（与 GiftScreenshotPanel 一致）
     totalEarned += (r.hamster * 2) / 100;
   }
@@ -321,14 +330,16 @@ export async function computeFromDanmu(
   const platform = await getPlatform();
   const ctx = await loadBoxCtx(platform);
   const rows = await loadGiftRecordsByRange(mid, range);
-  const blindPrice = ctx.info[boxId]?.blind_price ?? 0;
+  const blindPrice = ctx.config.boxes[boxId]?.blindPrice || ctx.info[boxId]?.blind_price || 0;
+  const rewardGiftIds = ctx.rewardGiftIdsByBox.get(boxId);
 
   let drawCount = 0;
   let totalEarned = 0;
   for (const r of rows) {
     if (uid > 0 && r.uid !== uid) continue;
     if (ctx.giftIdToBoxId.get(r.giftId) !== boxId) continue;
-    drawCount += r.num;
+    // 奖励礼物成本 0：只计价值，不计抽数/成本
+    if (!rewardGiftIds?.has(r.giftId)) drawCount += r.num;
     totalEarned += r.price * r.num; // 爆出价值（电池）
   }
   const cost = drawCount * blindPrice; // 电池；弹幕已是实际花费，不乘 50

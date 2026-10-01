@@ -25,6 +25,22 @@ export type BlindBoxGiftMeta = {
   price: number;
 };
 
+/**
+ * 盲盒额外奖励礼物（来自包裹 bag_list）。
+ * 摆出的盲盒礼物满足组合后，B站会把奖励礼物赠送到用户包裹；
+ * 奖励礼物不消费、不出现在抽取记录中，需从包裹补充计入产出（成本 0）。
+ */
+export type BlindBoxRewardBagGift = {
+  gift_id: number;
+  gift_name: string;
+  gift_num: number;
+  /** 电池单价 */
+  price: number;
+  img: string;
+  is_locked?: boolean;
+  locked_text?: string;
+};
+
 export type BlindBoxCalcCastleStat = {
   ruid: number;
   rname: string;
@@ -81,6 +97,11 @@ export type BlindBoxCalcInput = {
   blindBoxImg: string;
   /** 当前筛选条件（主播 + 时间段） */
   filter?: BlindBoxCalcFilter;
+  /**
+   * 该盲盒的额外奖励礼物（已按 admin 配置的奖励礼物名称从包裹过滤好）。
+   * 成本 0，仅计价值；不计抽数/成本；不受日期筛选影响（包裹为当前持快照），主播筛选生效。
+   */
+  rewardGifts?: BlindBoxRewardBagGift[];
 };
 
 /** 心动盲盒 gift_id（含浪漫城堡统计） */
@@ -236,6 +257,55 @@ function calculateCastleStats(
   };
 }
 
+/** 主播锁定文本解析（惰性匹配，允许主播昵称中含“的”） */
+const REWARD_ANCHOR_MATCHER = /该礼物仅限(.+?)的直播间使用/;
+
+/**
+ * 为包裹中的奖励礼物归属主播（镜像合成活动 calcPayRecordActivityProfit 的包裹补充逻辑）。
+ * - 锁定礼物：按 `locked_text` 解析主播名，再映射到记录中的最新 ruid；
+ * - 未锁定礼物：盲盒记录无 room_id，退化为「记录仅剩单一 ruid」时归属该主播，否则跳过。
+ * 无法归属的礼物保守跳过并记日志。
+ */
+export function attributeRewardGifts(
+  rewardGifts: BlindBoxRewardBagGift[],
+  records: BlindBoxCalcRecord[],
+  anchorNames?: Record<number, string>,
+): Array<BlindBoxRewardBagGift & { ruid: number }> {
+  const out: Array<BlindBoxRewardBagGift & { ruid: number }> = [];
+  if (rewardGifts.length === 0) return out;
+
+  // 主播昵称 → ruid（取首次出现，与记录顺序无关）
+  const nameRuids = new Map<string, number>();
+  if (anchorNames) {
+    for (const [ruidStr, name] of Object.entries(anchorNames)) {
+      const rid = Number(ruidStr);
+      if (name && !nameRuids.has(name)) nameRuids.set(name, rid);
+    }
+  }
+
+  // 记录中的唯一 ruid（未锁定包裹礼物的兜底归属）
+  const recordRuids = new Set<number>();
+  for (const r of records) recordRuids.add(r.ruid);
+  const singleRuid = recordRuids.size === 1 ? Array.from(recordRuids)[0] : undefined;
+
+  for (const g of rewardGifts) {
+    let ruid: number | undefined;
+    if (g.is_locked) {
+      const m = g.locked_text?.match(REWARD_ANCHOR_MATCHER);
+      const anchorName = m ? m[1] : "";
+      ruid = anchorName ? nameRuids.get(anchorName) : undefined;
+    } else {
+      ruid = singleRuid;
+    }
+    if (ruid === undefined) {
+      console.log(`[attributeRewardGifts] 无法归属奖励礼物「${g.gift_name}」(locked=${g.is_locked})，已跳过`);
+      continue;
+    }
+    out.push({ ...g, ruid });
+  }
+  return out;
+}
+
 /**
  * 用“全部原始记录 + 元数据 + 筛选条件”本地重算盲盒盈亏。
  * 语义与 route.ts 的无筛选响应完全一致（除筛选部分外，其余字段均取自全量记录）。
@@ -277,6 +347,30 @@ export function computeBlindBoxFromRecords(input: BlindBoxCalcInput): BlindBoxCa
     count: stats.count,
     totalValue: stats.totalValue,
   }));
+
+  // ===== 奖励礼物补充（成本 0，仅计价值） =====
+  // 奖励礼物赠送到包裹，不出现在抽取记录中；用 admin 配置的奖励礼物名称匹配包裹礼物后补充产出。
+  // 不影响 drawCount/totalSpent（成本 0），主播筛选生效，日期筛选不生效（包裹为当前持快照）。
+  if (input.rewardGifts && input.rewardGifts.length > 0) {
+    const attributed = attributeRewardGifts(input.rewardGifts, records, anchorNames);
+    for (const g of attributed) {
+      // 重复计数保护：若抽取记录中已含该 gift_id，则包裹补充会重复
+      if (g.gift_id > 0 && records.some((r) => r.gift_id === g.gift_id)) continue;
+      // 主播筛选：奖励礼物归属主播需与当前筛选一致
+      if (ruid !== null && g.ruid !== ruid) continue;
+
+      const totalValue = g.price * g.gift_num;
+      totalEarned += totalValue;
+      gifts.push({
+        gift_id: g.gift_id,
+        gift_name: `${g.gift_name}（奖励）`,
+        gift_img: g.img,
+        unitPrice: g.price,
+        count: g.gift_num,
+        totalValue,
+      });
+    }
+  }
 
   let castleStats: BlindBoxCalcCastleStat[] = [];
   let castleGift: BlindBoxCalcResult["castleGift"] = null;

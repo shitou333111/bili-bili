@@ -15,7 +15,8 @@ import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
 import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice, getGiftList as getCatalogGiftList } from "./gift-catalog-client";
-import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta } from "./blind-box-calc";
+import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "./blind-box-calc";
+import { buildEffectiveBlindBoxBoxes, type EffectiveBlindBoxBoxes } from "./blind-box-config";
 import {
   BLIND_BOX_CONFIG,
   BLIND_BOX_API,
@@ -379,18 +380,68 @@ async function getBlindBoxInfo(
   return readJson<BlindBoxInfo>(platform, `${dir}/${blindBoxId}.json`);
 }
 
-/** 读取本地所有盲盒信息（对应服务器 getAllBlindBoxInfo） */
+/**
+ * 读取所有盲盒信息（对应服务器 getAllBlindBoxInfo）。
+ * 数据源优先级：远程 admin-config.json 的 blind_boxes（唯一数据源，含过期盲盒完整信息）
+ * → 回退到本地 blindbox_info/*.json（legacy，仅补齐配置缺失的盲盒/礼物）。
+ */
 async function getAllBlindBoxInfo(platform: Platform): Promise<Record<number, BlindBoxInfo>> {
-  const dir = await blindBoxInfoDir(platform);
   const result: Record<number, BlindBoxInfo> = {};
+  const now = getBeijingTime();
+
+  // 1) 远程 admin 配置优先
+  const adminConfig = (await platform.fetchRemoteConfig()) as JsonObject & {
+    blind_boxes?: Array<{
+      id: number;
+      name?: string;
+      icon?: string;
+      blind_price?: number;
+      gifts?: Array<{ gift_id?: number; gift_name?: string; price?: number; gift_img?: string }>;
+    }>;
+  } | null;
+
+  for (const box of adminConfig?.blind_boxes ?? []) {
+    if (!box?.id || box.id <= 0) continue;
+    result[box.id] = {
+      blind_box_id: box.id,
+      blind_box_name: box.name ?? "",
+      blind_box_img: box.icon ?? "",
+      blind_price: box.blind_price ?? 0,
+      gifts: (box.gifts ?? []).map((g) => ({
+        gift_id: g.gift_id ?? 0,
+        price: g.price ?? 0,
+        gift_name: g.gift_name ?? "",
+        gift_img: g.gift_img ?? "",
+        is_win_gift: 0,
+        chance: "",
+      })),
+      updated_at: now,
+    };
+  }
+
+  // 2) 本地 legacy 文件回退：仅补齐配置中没有、或配置中 gifts 为空的盲盒
+  const dir = await blindBoxInfoDir(platform);
   try {
     const files = await platform.readdir(dir);
     for (const file of files) {
       const match = file.match(/^(\d+)\.json$/);
       if (!match) continue;
       const blindBoxId = Number(match[1]);
+      const existing = result[blindBoxId];
+      if (existing && existing.gifts.length > 0) continue; // 配置已提供礼物，忽略 legacy
       const info = await readJson<BlindBoxInfo>(platform, `${dir}/${file}`);
-      if (info) result[blindBoxId] = info;
+      if (!info) continue;
+      if (existing) {
+        // 配置有盲盒但无礼物：名称/单价/图标以配置非空值为准，礼物列表用 legacy
+        result[blindBoxId] = {
+          ...info,
+          blind_box_name: existing.blind_box_name || info.blind_box_name,
+          blind_box_img: existing.blind_box_img || info.blind_box_img,
+          blind_price: existing.blind_price || info.blind_price,
+        };
+      } else {
+        result[blindBoxId] = info;
+      }
     }
   } catch {
     // 目录不存在则返回空
@@ -596,6 +647,8 @@ type EffectiveBlindBoxConfig = {
   names: Record<number, string>;
   /** 盲盒盈亏查询配置：admin 指定的可查询盈亏的盲盒 id（有序） */
   profitIds: number[];
+  /** 盲盒完整配置（单价/礼物列表/奖励礼物） */
+  boxes: EffectiveBlindBoxBoxes;
 };
 
 export type { EffectiveBlindBoxConfig };
@@ -614,7 +667,7 @@ async function getEffectiveSynthesisConfig(platform: Platform) {
 
 export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<EffectiveBlindBoxConfig> {
   const adminConfig = (await platform.fetchRemoteConfig()) as JsonObject & {
-    blind_boxes?: Array<{ id: number; icon: string; name: string }>;
+    blind_boxes?: Array<{ id: number; icon: string; name: string; blind_price?: number; gifts?: unknown[] }>;
     current_activity_blind_box_ids?: number[];
     blind_box_profit_ids?: number[];
   } | null;
@@ -636,6 +689,7 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
       icons: BLIND_BOX_CONFIG.icons,
       names,
       profitIds: ids,
+      boxes: {},
     };
   }
 
@@ -666,6 +720,7 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
     icons,
     names,
     profitIds,
+    boxes: buildEffectiveBlindBoxBoxes(adminConfig.blind_boxes),
   };
 }
 
@@ -1970,6 +2025,8 @@ type BlindBoxProfitResult = {
   anchorNames?: Record<number, string>;
   /** gift_id → 礼物名称/图标/单价 */
   giftMeta?: Record<number, BlindBoxGiftMeta>;
+  /** 该盲盒的额外奖励礼物（包裹补充，成本 0），供浏览器端本地重算 */
+  rewardGifts?: BlindBoxRewardBagGift[];
 };
 
 function getLatestTimestamp(records: BlindBoxDrawRecord[]): string | undefined {
@@ -1998,13 +2055,20 @@ function buildAnchorNames(records: BlindBoxDrawRecord[]): Record<number, string>
   return names;
 }
 
-/** 从礼物目录构建 gift_id → {name,img,price} 元数据（供浏览器本地重算使用） */
+/**
+ * 构建 gift_id → {name,img,price} 元数据（供浏览器本地重算使用）。
+ * 取值顺序：admin 配置礼物 → 抽取记录 → 礼物目录（过期盲盒在目录中无价）。
+ */
 function buildGiftMeta(
   records: BlindBoxDrawRecord[],
   blindBoxId: number,
   extraIds: number[] = [],
+  configGifts: Array<{ giftId: number; giftName: string; price: number; img: string }> = [],
 ): Record<number, BlindBoxGiftMeta> {
   const meta: Record<number, BlindBoxGiftMeta> = {};
+  for (const g of configGifts) {
+    if (g.giftId > 0) meta[g.giftId] = { name: g.giftName, img: g.img, price: g.price };
+  }
   for (const r of records) {
     if (meta[r.gift_id]) continue;
     meta[r.gift_id] = {
@@ -2047,6 +2111,13 @@ export async function fetchBlindBoxStats(
 
     const results: BlindBoxProfitResult[] = [];
 
+    // 请求级拉取一次包裹礼物（奖励礼物来源于包裹）；仅当有盲盒配置了奖励礼物时才请求
+    const canFetchBag = session.source !== "server";
+    const anyReward = blindBoxIds.some(
+      (id) => (effectiveBlindBoxConfig.boxes[id]?.rewardGiftNames.length ?? 0) > 0,
+    );
+    const bagGifts = canFetchBag && anyReward ? await fetchBagList(platform, cookie) : [];
+
     for (const blindBoxId of blindBoxIds) {
       try {
         const filter = filters?.[blindBoxId] ?? {};
@@ -2065,8 +2136,11 @@ export async function fetchBlindBoxStats(
 
         const mergedRecords = newRecords.length > 0 ? [...newRecords, ...existingRecords] : existingRecords;
 
-        // 盲盒名称直接从礼物目录获取（用于文件名）
-        const blindBoxNameForFile = getCatalogGiftName(blindBoxId) || undefined;
+        // admin 配置优先（含过期盲盒完整信息），礼物目录兜底
+        const boxCfg = effectiveBlindBoxConfig.boxes[blindBoxId];
+
+        // 盲盒名称（用于文件名）
+        const blindBoxNameForFile = boxCfg?.name || getCatalogGiftName(blindBoxId) || undefined;
 
         if (newRecords.length > 0) {
           await saveBlindBoxRecords(
@@ -2079,18 +2153,44 @@ export async function fetchBlindBoxStats(
           );
         }
 
-        // 盲盒本身名称/图标（礼物目录 + admin-config fallback）
-        const blindBoxPrice = getCatalogGiftPrice(blindBoxId);
-        const blindBoxName = getCatalogGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
-        let blindBoxImg = getCatalogGiftImg(blindBoxId) || "";
-        if (!blindBoxImg) blindBoxImg = effectiveBlindBoxConfig.icons[blindBoxId] ?? "";
+        // 元数据取值顺序：admin 配置 → 礼物目录 → 0
+        const blindBoxPrice = boxCfg?.blindPrice || getCatalogGiftPrice(blindBoxId) || 0;
+        const blindBoxName = boxCfg?.name || getCatalogGiftName(blindBoxId) || `盲盒_${blindBoxId}`;
+        const blindBoxImg = boxCfg?.icon || getCatalogGiftImg(blindBoxId) || "";
 
         // 浏览器端本地筛选所需的一次性载荷（精简记录 + 元数据）
         const calcRecords = toCalcRecords(mergedRecords);
         const anchorNames = buildAnchorNames(mergedRecords);
-        const giftMeta = buildGiftMeta(mergedRecords, blindBoxId, blindBoxId === 32251 ? [CASTLE_ID] : []);
-        // 盲盒本身用已解析好的名称/图标（含 admin-config fallback）
+        const giftMeta = buildGiftMeta(
+          mergedRecords,
+          blindBoxId,
+          blindBoxId === 32251 ? [CASTLE_ID] : [],
+          boxCfg?.gifts ?? [],
+        );
+        // 盲盒本身用已解析好的名称/图标
         giftMeta[blindBoxId] = { name: blindBoxName, img: blindBoxImg, price: blindBoxPrice };
+
+        // 奖励礼物：按 admin 配置的奖励礼物名称匹配包裹；单价/图标以配置为准（过期礼物目录无价）
+        const rewardCfgByName = new Map(
+          (boxCfg?.gifts ?? []).filter((g) => g.isReward).map((g) => [g.giftName, g] as const),
+        );
+        const rewardGifts: BlindBoxRewardBagGift[] = [];
+        if (rewardCfgByName.size > 0) {
+          for (const g of bagGifts) {
+            const cfg = rewardCfgByName.get(g.gift_name);
+            if (!cfg) continue;
+            rewardGifts.push({
+              gift_id: g.gift_id || cfg.giftId,
+              gift_name: g.gift_name,
+              gift_num: g.gift_num,
+              // 奖励礼物实际价格来自包裹（含单价与数量），配置价格仅在包裹无价时兜底
+              price: g.price || cfg.price,
+              img: g.img || cfg.img,
+              is_locked: g.is_locked,
+              locked_text: g.locked_text,
+            });
+          }
+        }
 
         // 用全量记录本地重算（零依赖纯函数，与 route.ts / 浏览器端共享同一份语义）
         const profit: BlindBoxProfitResult = {
@@ -2103,10 +2203,12 @@ export async function fetchBlindBoxStats(
             blindBoxName,
             blindBoxImg,
             filter: { ruid, dateRange: filterDateRange },
+            rewardGifts,
           }),
           records: calcRecords,
           anchorNames,
           giftMeta,
+          rewardGifts,
         };
 
         results.push(profit);

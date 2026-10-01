@@ -5,17 +5,23 @@
     {
       "id": 32251,
       "name": "心动盲盒",
-      "icon": "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png"
+      "icon": "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png",
+      "blind_price": 0,
+      "gifts": []
     },
     {
       "id": 35206,
       "name": "幸运盲盒",
-      "icon": "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png"
+      "icon": "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png",
+      "blind_price": 0,
+      "gifts": []
     },
     {
       "id": 35786,
       "name": "",
-      "icon": "https://s1.hdslb.com/bfs/live/5dd5f6b52956b1de6e3356c572a7ce82ddd50a3f.png"
+      "icon": "https://s1.hdslb.com/bfs/live/5dd5f6b52956b1de6e3356c572a7ce82ddd50a3f.png",
+      "blind_price": 0,
+      "gifts": []
     }
   ],
   "synthesis_activities": [

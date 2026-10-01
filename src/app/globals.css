@@ -314,6 +314,18 @@ body {
   background-color: rgba(255, 255, 255, 0.3);
 }
 
+/* ===== Admin 页面数字输入框：去掉上下三角，节省横向空间 ===== */
+.admin-root input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.admin-root input[type="number"]::-webkit-outer-spin-button,
+.admin-root input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 /* ===== Admin 配置上移/下移按钮（移动端加大，便于操作） ===== */
 .admin-move-btn {
   display: flex;

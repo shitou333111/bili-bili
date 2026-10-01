@@ -100,6 +100,13 @@ const ADB_AUTH_POLL: Duration = Duration::from_millis(1000);
 /// （见 `ensure_wsa` 里的提前失败分支）。
 const ADB_AUTH_BUDGET_SETUP: Duration = Duration::from_secs(120);
 const ADB_AUTH_BUDGET_RECORD: Duration = Duration::from_secs(12);
+/// **点掉一次授权框之后的宽限期**（见 [`wait_for_adb_auth`]）。
+///
+/// 实测（Win10）：授权框常在握手后 60~104 秒才渲染出来，而总预算刚好在「点掉弹窗后 1 秒」
+/// 到期 —— 我们判了失败，设备侧却还在把这次「允许」落定，于是「点了确认仍连不上」。
+/// 所以每成功点掉一次弹窗，就把 deadline 往后推这么久；最多推 3 次（弹两次是常态，
+/// 见下面的循环），推的过程中一旦 `adb_usable` 立刻返回。
+const ADB_AUTH_GRACE: Duration = Duration::from_secs(30);
 /// **整台重启 WSA** 之后，等设备侧重新授权 / 重新起来的预算（只走一次，且只在安装 / 修复
 /// 路径上 —— 见 [`restart_wsa_and_reconnect`]）。
 const WSA_RESTART_AUTH: Duration = Duration::from_secs(90);
@@ -821,9 +828,12 @@ fn adb_usable(cand: &Adb) -> bool {
 /// WSA 侧的授权框是挂在那条连接上的，于是刚弹出来就跟着消失。用户的现场描述是弹窗
 /// 「闪现了一下就没了」，日志里则从头到尾看不到任何授权框 —— 正是我们自己把它点掉了。
 ///
-/// 等掉一半预算仍没动静就**换一把全新公钥**（见 [`ADB_KEY_ROTATED`]）：WSA 只对**没见过的**
-/// 公钥弹授权框，旧公钥一旦被它记成「已处理」，用同一把再连就永远不弹。换钥那一次不可避免
-/// 要重做握手（会掐掉当前连接），所以放在「原密钥已经给足机会」之后。
+/// **等待期间绝不换钥**。实测（4 次换钥 4 次失败、3 次没换 3 次成功）：换钥的那次 `kill-server`
+/// 会掐掉正在等授权的连接，用户点掉的「允许」记在旧钥上，新钥依旧 unauthorized。换钥只允许
+/// 发生在进入等待**之前**（见 [`ensure_wsa_inner`] 的 `ADB_KEY_ROTATED` 分支）。
+///
+/// **点掉弹窗就往后宽限**（见 [`ADB_AUTH_GRACE`]）：弹窗要等系统 UI 就绪才渲染，常在握手后
+/// 60~104 秒才出现，而预算往往在「点掉后 1 秒」就到 —— 设备侧还没来得及把授权落定。
 ///
 /// **必须受 `deadline` 约束**：否则 `ensure_wsa` 的两个轮询循环每秒调进来一次，能把单次调用
 /// 拖到五分钟以上（实测「点录制后一直卡住没反应」就是它）。预算花完就降级成
@@ -835,30 +845,45 @@ fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
         return adb_usable(cand).then(|| cand.clone());
     }
     let total = deadline.saturating_duration_since(Instant::now());
-    // 授权框是**安卓侧**弹的，桌面上得先有安卓界面窗口才渲染得出来（见 [`bring_up_wsa_ui`]）。
-    // **必须排在重做握手之前**：授权请求是挂在「有一条正在等授权的连接」上的，界面先就位、
-    // 再 `connect`，框才弹得出来。
-    //
-    // 但这件事本身要花十几秒（拉起来 + 等窗口出现），所以只在预算宽裕时做 ——
-    // 点「开始录制」那条路只给 12s，用户正等着窗口弹出来，不该被它拖住。
-    if total >= Duration::from_secs(30) {
-        bring_up_wsa_ui();
-    }
+    // 预算宽裕 = 安装 / 修复这条路（≥30s）。点「开始录制」那条路只给 12s，要的是快，
+    // 所以下面「点掉弹窗就再宽限一会儿」只在宽裕时生效。
+    let generous = total >= Duration::from_secs(30);
+    // **从进入等待到结束，密钥必须一动不动。** 实测（4 次换钥 4 次失败、3 次没换 3 次成功）：
+    // 换钥前那次握手会在安卓侧挂起一条「等授权的连接」，它的弹窗往往要等系统起来才渲染出来；
+    // 等它终于弹出来时，`kill-server` 早把服务端换成新钥了 —— 用户点掉的「允许」记在**旧钥**
+    // 上，新钥依旧 unauthorized。换钥只允许发生在进入等待**之前**（见 `ensure_wsa_inner`）。
+    let mut deadline = deadline;
     let _ = output_of(&cand.exe, &["kill-server".to_string()]);
     let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
     wlog(&format!(
         "[wsa] 设备未授权：已重做一次全新握手，之后一路安静等授权框（总预算 {:.0}s，中途不再 kill-server）",
         total.as_secs_f32()
     ));
-    // 换钥时刻：一半预算处（见上面那段说明）。进程内已换过就不再换。
-    let rotate_at = Instant::now() + total / 2;
-    let mut can_rotate = !ADB_KEY_ROTATED.load(Ordering::Relaxed);
     // **定时给桌面拍快照**：只在「认不到弹窗时」顺手 dump 是不够的 —— 那两次额度往往在
     // 等待刚开始的一秒内就被用光，而那时弹窗根本还没渲染出来，于是最关键的中段一片空白
     // （实测就是这样：120s 等待里一条窗口快照都没有）。改成按时间点强制 dump。
     let mut next_dump = Instant::now() + Duration::from_secs(15);
+    // 「点掉了弹窗」还能宽限几次 —— 见 [`ADB_AUTH_GRACE`]。
+    let mut grace_left = 3u8;
+    // 上一次「算数的」点击时刻。弹窗点完不会立刻关，下一秒轮询会再匹配到同一个窗口
+    // （实测「连续弹出两次、间隔约 2 秒」就是这么来的），那次重复点击不该再吃掉一次宽限。
+    let mut last_counted: Option<Instant> = None;
+    let mut clicked = false;
     while Instant::now() < deadline {
-        accept_adb_auth();
+        if accept_adb_auth() {
+            clicked = true;
+            let now = Instant::now();
+            let fresh = last_counted.map(|t| now.duration_since(t) >= Duration::from_secs(5)).unwrap_or(true);
+            if generous && grace_left > 0 && fresh {
+                last_counted = Some(now);
+                grace_left -= 1;
+                deadline = now + ADB_AUTH_GRACE;
+                wlog(&format!(
+                    "[wsa] 已点掉授权框 —— 再宽限 {:.0}s 等设备侧把授权落定（可能还要再点一次）",
+                    ADB_AUTH_GRACE.as_secs_f32()
+                ));
+            }
+        }
         // 无条件复查：用户手动点过「允许」时 accept 找不到弹窗会返回 false，
         // 若写成 `accept() && usable()` 就会短路掉这条最该走通的路。
         if adb_usable(cand) {
@@ -869,17 +894,16 @@ fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
             next_dump = Instant::now() + Duration::from_secs(30);
             dump_top_windows();
         }
-        if can_rotate && Instant::now() >= rotate_at {
-            can_rotate = false;
-            if !ADB_KEY_ROTATED.swap(true, Ordering::Relaxed) && use_private_adb_home() {
-                wlog("[wsa] 等掉一半预算仍没等到授权框 —— 换一把全新 adb 公钥，重做握手后继续等");
-                let _ = output_of(&cand.exe, &["kill-server".to_string()]);
-                let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
-            }
-        }
         std::thread::sleep(ADB_AUTH_POLL);
     }
-    wlog("[wsa] 等设备授权超时：adb 端口在监听，但设备侧始终未授权");
+    wlog(&format!(
+        "[wsa] 等设备授权超时：adb 端口在监听，但设备侧始终未授权（{}）",
+        if clicked {
+            "点掉过授权框，但设备侧没认"
+        } else {
+            "全程没认到授权框"
+        }
+    ));
     None
 }
 
@@ -978,99 +1002,6 @@ fn launch_wsa_settings() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-}
-
-/// [`bring_up_wsa_ui`] 累计试过几次。上限 4 次 —— 界面实在拉不起来时，别让每个轮询周期
-/// 都去 spawn 一个 `explorer`。
-static WSA_UI_TRIES: AtomicU8 = AtomicU8::new(0);
-
-/// 桌面上有没有 WSA 的**安卓界面窗口**。判据是「存在可见顶层窗口属于 `WsaClient.exe`」。
-///
-/// **不能按标题认**：安卓应用窗口的标题是 APP 自己的名字（如「设置」），里面未必有
-/// 「Android」这几个字母，而 [`is_wsa_title`] 正是靠这三个字母。只有 pid 能一刀切出
-/// 「这是 WSA 的窗口」。
-fn wsa_ui_window_present() -> bool {
-    let pids = process_ids(WSA_CLIENT_EXE);
-    if pids.is_empty() {
-        return false;
-    }
-    let mut state = (&pids, false);
-    unsafe extern "system" fn hit(hwnd: HWND, lp: LPARAM) -> BOOL {
-        let (pids, found) = &mut *(lp.0 as *mut (&Vec<u32>, bool));
-        if IsWindowVisible(hwnd).as_bool() {
-            let mut pid = 0u32;
-            let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            if pids.contains(&pid) {
-                *found = true;
-            }
-        }
-        BOOL(1)
-    }
-    unsafe {
-        let _ = EnumWindows(
-            Some(hit),
-            LPARAM(&mut state as *mut (&Vec<u32>, bool) as isize),
-        );
-    }
-    state.1
-}
-
-/// 把 WSA 的**安卓界面层**摆到桌面上（开一个安卓窗口），返回结束时它在不在。
-///
-/// **为什么必须做这件事**：adb 的「是否允许 ADB 调试？」是**安卓侧**弹的框，得桌面上先有
-/// 安卓界面在跑才渲染得出来。而 [`launch_wsa`] 跑的是 `WsaClient.exe` **不带参数** —— 它只把
-/// 子系统虚拟机启起来，桌面上一个安卓窗口都没有。实测（Win10）诊断 dump 里 23 个可见顶层
-/// 窗口从头到尾没有任何 WSA 窗口，于是授权框永远不出现、设备永远停在 `unauthorized`；
-/// 日志里那次「已自动应答」之所以毫无效果，也是同一个病的另一面。
-///
-/// 拉起方式用 WSA 自己注册的 `wsa://` 协议开安卓的**设置**页（`com.android.settings`，
-/// AOSP 自带，连 NoGApps 包也有）。社区里「点『管理开发人员设置』弹出安卓窗口之后再连 adb，
-/// 授权框就正常弹了」说的正是这一步。`wsa://` 没反应时退回 WSA 本体的开始菜单入口。
-///
-/// 界面已经在桌面上就什么都不做（存在性检查约 1ms）。
-fn bring_up_wsa_ui() -> bool {
-    if wsa_ui_window_present() {
-        return true;
-    }
-    if WSA_UI_TRIES.fetch_add(1, Ordering::Relaxed) >= 4 {
-        return false;
-    }
-    wlog("[wsa] 桌面上没有安卓界面窗口 —— 先拉起 WSA 的安卓界面（授权框要靠它才渲染得出来）");
-    let _ = Command::new("explorer.exe")
-        .arg("wsa://com.android.settings")
-        .creation_flags(CREATE_NO_WINDOW.0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let mut up = false;
-    for _ in 0..20 {
-        std::thread::sleep(Duration::from_millis(500));
-        if wsa_ui_window_present() {
-            up = true;
-            break;
-        }
-    }
-    if !up {
-        wlog("[wsa] wsa:// 没能把安卓界面拉起来，退回 WSA 本体入口再试");
-        launch_wsa_shell();
-        for _ in 0..12 {
-            std::thread::sleep(Duration::from_millis(500));
-            if wsa_ui_window_present() {
-                up = true;
-                break;
-            }
-        }
-    }
-    wlog(&format!(
-        "[wsa] 安卓界面层：{}",
-        if up {
-            "已在桌面上（授权框应当能渲染）"
-        } else {
-            "仍未出现（授权框多半还是弹不出来）"
-        }
-    ));
-    up
 }
 
 /// WSA 的包家族名（PackageFamilyName）。写死省一次 `Get-AppxPackage`（那是秒级的 PowerShell），
@@ -1356,11 +1287,25 @@ unsafe fn toggle_developer_mode(
         wlog(&format!("[wsa] 「{NAV_ADVANCED}」页里没找到带 TogglePattern 的「{DEV_MODE}」开关"));
         return false;
     };
-    match tp.CurrentToggleState() {
-        Ok(s) if s == ToggleState_Off => tp.Toggle().is_ok(),
-        Ok(_) => true, // 本来就是 On，不用动
-        Err(_) => false,
+    // **点完必须回读确认**：实测有一次开关"点了没生效"，而这里直接返回 true（`Toggle()` 只要
+    // 调用没报错就当成成功）—— 调用方以为开发者模式开好了，adb 端口却 200 秒从未监听，
+    // 最后报 `ADB_CONNECT_FAILED`。所以只在**读到 On** 时才算成功；读到 Off 就再点一次
+    // （最多 3 轮，避免反复切换把开关来回拨）。
+    for _ in 0..3 {
+        match tp.CurrentToggleState() {
+            Ok(s) if s != ToggleState_Off => return true,
+            Ok(_) => {
+                let _ = tp.Toggle();
+            }
+            Err(_) => return false,
+        }
+        std::thread::sleep(Duration::from_millis(600)); // 等开关状态落定后再回读
     }
+    let on = matches!(tp.CurrentToggleState(), Ok(s) if s != ToggleState_Off);
+    if !on {
+        wlog("[wsa] 反复点「开发人员模式」开关，回读始终不是 On —— 多半没打开");
+    }
+    on
 }
 
 /// 自动打开 WSA 的「开发人员模式」——「WSA 能不能用命令开开发者模式」的答案就落在这里。

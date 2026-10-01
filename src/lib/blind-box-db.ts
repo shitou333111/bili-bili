@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { readAdminConfig } from "./admin-config";
 
 /** 获取北京时间字符串 (UTC+8) */
 function getBeijingTime(): string {
@@ -56,20 +57,57 @@ export async function getBlindBoxInfo(_mid: number, _uname: string, blindBoxId: 
   }
 }
 
-/** 获取所有盲盒信息 */
+/**
+ * 获取所有盲盒信息。
+ * 数据源优先级：admin-config.json 的 blind_boxes（唯一数据源，含过期盲盒完整信息）
+ * → 回退到 `.data/blindbox_info/*.json`（legacy，仅补齐配置缺失的盲盒/礼物）。
+ */
 export async function getAllBlindBoxInfo(_mid: number, _uname: string): Promise<Record<number, BlindBoxInfo>> {
-  await ensureDir(BLIND_BOX_INFO_DIR);
   const result: Record<number, BlindBoxInfo> = {};
+
+  // 1) admin 配置优先
+  const cfg = await readAdminConfig();
+  for (const box of cfg?.blind_boxes ?? []) {
+    if (box.id <= 0) continue;
+    result[box.id] = {
+      blind_box_id: box.id,
+      blind_box_name: box.name || "",
+      blind_box_img: box.icon || "",
+      blind_price: box.blind_price ?? 0,
+      gifts: (box.gifts ?? []).map((g) => ({
+        gift_id: g.gift_id,
+        price: g.price,
+        gift_name: g.gift_name,
+        gift_img: g.gift_img ?? "",
+        is_win_gift: 0,
+        chance: "",
+      })),
+      updated_at: getBeijingTime(),
+    };
+  }
+
+  // 2) legacy 文件回退：仅补齐配置中没有、或配置中 gifts 为空的盲盒
+  await ensureDir(BLIND_BOX_INFO_DIR);
   try {
     const files = await fs.readdir(BLIND_BOX_INFO_DIR);
     for (const file of files) {
       const match = file.match(/^(\d+)\.json$/);
-      if (match) {
-        const blindBoxId = parseInt(match[1]);
-        const info = await getBlindBoxInfo(0, "", blindBoxId);
-        if (info) {
-          result[blindBoxId] = info;
-        }
+      if (!match) continue;
+      const blindBoxId = parseInt(match[1]);
+      const existing = result[blindBoxId];
+      if (existing && existing.gifts.length > 0) continue; // 配置已提供礼物，忽略 legacy
+      const info = await getBlindBoxInfo(0, "", blindBoxId);
+      if (!info) continue;
+      if (existing) {
+        // 配置有盲盒但无礼物：名称/单价/图标以配置非空值为准，礼物列表用 legacy
+        result[blindBoxId] = {
+          ...info,
+          blind_box_name: existing.blind_box_name || info.blind_box_name,
+          blind_box_img: existing.blind_box_img || info.blind_box_img,
+          blind_price: existing.blind_price || info.blind_price,
+        };
+      } else {
+        result[blindBoxId] = info;
       }
     }
   } catch {

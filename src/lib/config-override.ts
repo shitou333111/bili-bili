@@ -4,6 +4,7 @@
  */
 import { readAdminConfig } from "./admin-config";
 import { BLIND_BOX_CONFIG, SYNTHESIS_CONFIG, type SynthesisActivityConfig } from "./config";
+import { buildEffectiveBlindBoxBoxes, type EffectiveBlindBoxBoxes } from "./blind-box-config";
 
 export type EffectiveBlindBoxConfig = {
   xindong: number;
@@ -13,6 +14,8 @@ export type EffectiveBlindBoxConfig = {
   names: Record<number, string>;
   /** 盲盒盈亏查询配置：admin 指定的可查询盈亏的盲盒 id（有序，供"全部盲盒"下拉 + 弹幕查询） */
   profitIds: number[];
+  /** 盲盒完整配置（单价/礼物列表/奖励礼物），供过期盲盒取值与奖励礼物识别 */
+  boxes: EffectiveBlindBoxBoxes;
 };
 
 export async function getEffectiveBlindBoxConfig(): Promise<EffectiveBlindBoxConfig> {
@@ -34,6 +37,7 @@ export async function getEffectiveBlindBoxConfig(): Promise<EffectiveBlindBoxCon
       icons: BLIND_BOX_CONFIG.icons,
       names,
       profitIds: ids,
+      boxes: {},
     };
   }
   const icons: Record<number, string> = { ...BLIND_BOX_CONFIG.icons };
@@ -64,6 +68,7 @@ export async function getEffectiveBlindBoxConfig(): Promise<EffectiveBlindBoxCon
     icons,
     names,
     profitIds,
+    boxes: buildEffectiveBlindBoxBoxes(adminConfig.blind_boxes),
   };
 }
 

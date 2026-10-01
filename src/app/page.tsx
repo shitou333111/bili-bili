@@ -10,7 +10,7 @@ import { serverApiUrl, serverPost, pageUrl, isTauri } from "@/lib/server-api";
 import { dataFetch } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
 import { cacheGet, cacheSet, cacheClearMid, cacheKeys } from "@/lib/idb-cache";
-import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta } from "@/lib/blind-box-calc";
+import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "@/lib/blind-box-calc";
 import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
@@ -179,6 +179,8 @@ type BlindBoxProfitResult = {
   anchorNames?: Record<number, string>;
   /** gift_id → 礼物名称/图标/单价 */
   giftMeta?: Record<number, BlindBoxGiftMeta>;
+  /** 该盲盒的额外奖励礼物（包裹补充，成本 0） */
+  rewardGifts?: BlindBoxRewardBagGift[];
 };
 
 type BlindBoxStats = BlindBoxProfitResult[];
@@ -2018,6 +2020,7 @@ export default function HomePage() {
         blindBoxName: item.blindBoxName,
         blindBoxImg: item.blindBoxImg,
         filter: { ruid: f?.ruid ? Number(f.ruid) : null, dateRange: f?.dateRange ?? "all" },
+        rewardGifts: item.rewardGifts,
       }));
     }
     return next;

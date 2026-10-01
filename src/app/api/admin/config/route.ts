@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readAdminConfig, writeAdminConfig, type AdminConfig } from "@/lib/admin-config";
+import { readAdminConfig, writeAdminConfig, normalizeBlindBoxItem, type AdminConfig } from "@/lib/admin-config";
 
 export const dynamic = "force-dynamic";
 
@@ -77,11 +77,7 @@ export async function POST(request: Request) {
     blind_box_profit_ids: Array.isArray(body.blind_box_profit_ids)
       ? body.blind_box_profit_ids.map(Number).filter((n: number) => n > 0)
       : undefined,
-    blind_boxes: body.blind_boxes.map((b: { id: number; name: string; icon: string }) => ({
-      id: Number(b.id),
-      name: String(b.name || ""),
-      icon: String(b.icon || ""),
-    })),
+    blind_boxes: body.blind_boxes.map((b: unknown) => normalizeBlindBoxItem(b)),
     synthesis_activities: body.synthesis_activities.map((a: any) => ({
       // 用活动名称作为活动标识（id），不再使用独立的 activity-n 输入框
       id: String(a.name || a.id || ""),

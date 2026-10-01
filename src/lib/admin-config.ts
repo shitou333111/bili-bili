@@ -5,11 +5,77 @@ import type { SynthesisActivityConfig } from "./config";
 const CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.json");
 const DEFAULT_CONFIG_FILE = path.join(process.cwd(), "public", "admin-config.default.json");
 
+/** 盲盒内单个礼物（admin 配置的完整信息；过期盲盒不再依赖 B站 接口） */
+export type BlindBoxGiftItem = {
+  /** 礼物 gift_id（过期奖励礼物可能拿不到 id，可为 0，此时按名称匹配） */
+  gift_id: number;
+  /** 礼物名称（自由文本，允许不在礼物目录中） */
+  gift_name: string;
+  /** 电池单价（爆出时计入的价值） */
+  price: number;
+  /** 图标链接（可选） */
+  gift_img?: string;
+  /** true = 额外奖励礼物：只计入爆出价值，不计抽数/成本 */
+  is_reward?: boolean;
+};
+
 export type BlindBoxItem = {
   id: number;
   name: string;
   icon: string;
+  /** 盲盒单价（电池）；0/缺失时回退礼物目录 */
+  blind_price?: number;
+  /** 盲盒礼物列表（含额外奖励礼物） */
+  gifts?: BlindBoxGiftItem[];
 };
+
+/** 归一化单个盲盒礼物（容错任意输入；幂等、不抛错） */
+export function normalizeBlindBoxGift(raw: unknown): BlindBoxGiftItem {
+  const g = (raw ?? {}) as Record<string, unknown>;
+  const isReward = g.is_reward === true;
+  return {
+    gift_id: Number(g.gift_id) || 0,
+    gift_name: String(g.gift_name ?? "").trim(),
+    price: Number(g.price) || 0,
+    gift_img: g.gift_img ? String(g.gift_img) : undefined,
+    is_reward: isReward || undefined,
+  };
+}
+
+/** 归一化单个盲盒条目（兼容仅含 {id,name,icon} 的旧配置） */
+export function normalizeBlindBoxItem(raw: unknown): BlindBoxItem {
+  const b = (raw ?? {}) as Record<string, unknown>;
+  const rawGifts = Array.isArray(b.gifts) ? b.gifts : [];
+  const seen = new Set<number>();
+  const gifts: BlindBoxGiftItem[] = [];
+  for (const rg of rawGifts) {
+    const gift = normalizeBlindBoxGift(rg);
+    // 丢弃完全空行；重复 gift_id（>0）去重，gift_id=0 的奖励礼物按名称保留
+    if (!gift.gift_name && !gift.gift_id) continue;
+    if (gift.gift_id > 0) {
+      if (seen.has(gift.gift_id)) continue;
+      seen.add(gift.gift_id);
+    }
+    gifts.push(gift);
+  }
+  const blindPrice = Number(b.blind_price);
+  return {
+    id: Number(b.id) || 0,
+    name: String(b.name ?? ""),
+    icon: String(b.icon ?? ""),
+    blind_price: Number.isFinite(blindPrice) && blindPrice > 0 ? blindPrice : undefined,
+    gifts,
+  };
+}
+
+/** 归一化 admin 配置（仅重写 blind_boxes，其余字段原样保留） */
+export function normalizeAdminConfig(raw: AdminConfig): AdminConfig {
+  if (!raw || typeof raw !== "object") return raw;
+  return {
+    ...raw,
+    blind_boxes: Array.isArray(raw.blind_boxes) ? raw.blind_boxes.map(normalizeBlindBoxItem) : [],
+  };
+}
 
 export type RecommendedAnchor = {
   /** 主播 UID */
@@ -103,7 +169,8 @@ export async function readAdminConfig(): Promise<AdminConfig | null> {
       // 主文件无效 → 回退到默认模板
       return readDefaultConfig();
     }
-    return parsed as AdminConfig;
+    // 归一化 blind_boxes，兼容仅含 {id,name,icon} 的旧文件
+    return normalizeAdminConfig(parsed as AdminConfig);
   } catch {
     return readDefaultConfig();
   }
@@ -113,7 +180,7 @@ export async function readAdminConfig(): Promise<AdminConfig | null> {
 async function readDefaultConfig(): Promise<AdminConfig | null> {
   try {
     const raw = await fs.readFile(DEFAULT_CONFIG_FILE, "utf8");
-    return JSON.parse(raw) as AdminConfig;
+    return normalizeAdminConfig(JSON.parse(raw) as AdminConfig);
   } catch {
     return null;
   }
