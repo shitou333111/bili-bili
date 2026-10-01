@@ -45,7 +45,7 @@ export type SimulatorActivityConfig = {
   title: string;
   /** 入口卡片图片（外部 URL） */
   entryImage: string;
-  /** 真实 H5 页面 URL 模板，含 {roomId} / {uid} 占位符 */
+  /** 真实 H5 页面 URL 模板，含 {room_id} / {uid} 占位符 */
   urlTemplate: string;
   /** 目标直播间 room_id（实际运行时会被当前主播信息覆盖） */
   roomId: number;
@@ -75,7 +75,7 @@ export type AdminConfig = {
   synthesis_activities: SynthesisActivityConfig[];
   /** 推荐主播列表（管理员配置） */
   recommended_anchors?: RecommendedAnchor[];
-  /** 黑抽（真实合成活动）页面 URL 模板，包含 {roomId} 和 {uid} 占位符；为空则禁用黑抽入口 */
+  /** 黑抽（真实合成活动）页面 URL 模板，包含 {room_id} 和 {uid} 占位符；为空则禁用黑抽入口 */
   real_activity_url?: string;
   /** 模拟器页面活动入口配置（可热更新的玩法算法） */
   simulator_activities?: SimulatorActivityConfig[];

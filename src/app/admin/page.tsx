@@ -18,6 +18,19 @@ function fixImageUrl(url: string): string {
   return url;
 }
 
+/**
+ * 将活动链接中具体的 room_id / uid 数值自动替换为 {room_id} / {uid} 占位符，
+ * 便于管理员直接粘贴带真实参数的链接，无需手动改写。
+ * 只匹配查询参数 room_id / uid（大小写敏感，且前面必须是 ? 或 &），
+ * 因此 {room_id} 等占位符、ruid / anchor_uid 等无关参数都不会被误改。
+ */
+function toActivityUrlTemplate(url: string): string {
+  if (!url) return url;
+  return url
+    .replace(/([?&]room_id=)\d+/g, "$1{room_id}")
+    .replace(/([?&]uid=)\d+/g, "$1{uid}");
+}
+
 /** unix 秒 → date（仅日期）输入框值 */
 function tsToDateInput(ts?: number): string {
   if (!ts) return "";
@@ -1306,11 +1319,11 @@ export default function AdminPage() {
             <div className="space-y-2">
               <h3 className="text-xs font-semibold">黑抽（真实合成活动）页面 URL</h3>
               <p className="text-[10px] text-black/40">
-                填写 B站 真实合成活动页面 URL 模板，使用 {'{roomId}'} 和 {'{uid}'} 作为占位符（{'{roomId}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{roomId}'}&uid={'{uid}'}#/play?config_id=...
+                填写 B站 真实合成活动页面 URL 模板，使用 {'{room_id}'} 和 {'{uid}'} 作为占位符（{'{room_id}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{room_id}'}&uid={'{uid}'}#/play?config_id=...
               </p>
               <textarea
                 value={config.real_activity_url}
-                onChange={(e) => setConfig({ ...config, real_activity_url: e.target.value })}
+                onChange={(e) => setConfig({ ...config, real_activity_url: toActivityUrlTemplate(e.target.value) })}
                 placeholder="粘贴活动 URL 模板"
                 rows={Math.max(1, Math.ceil((config.real_activity_url?.length ?? 0) / 80))}
                 className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
@@ -1398,12 +1411,12 @@ export default function AdminPage() {
                         />
                       </label>
                       <label className="block">
-                        <span className="text-[10px] text-black/50">活动页面 URL 模板（{'{roomId}'}=直播间号、{'{uid}'}=主播UID，打开时替换）</span>
+                        <span className="text-[10px] text-black/50">活动页面 URL 模板（{'{room_id}'}=直播间号、{'{uid}'}=主播UID，打开时替换）</span>
                         <input
                           type="text"
                           value={act.urlTemplate}
                           onChange={(e) => updateSimulatorActivity(i, "urlTemplate", e.target.value)}
-                          placeholder="https://live.bilibili.com/activity/...?room_id={roomId}&uid={uid}#/play?..."
+                          placeholder="https://live.bilibili.com/activity/...?room_id={room_id}&uid={uid}#/play?..."
                           className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
                         />
                       </label>

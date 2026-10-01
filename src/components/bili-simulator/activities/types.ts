@@ -23,7 +23,7 @@ export interface ActivityParams {
   uid: number;
   /** 主播昵称（可选，展示用） */
   anchorName?: string;
-  /** 真实 H5 页面地址模板，{roomId} / {uid} 会被替换为参数值 */
+  /** 真实 H5 页面地址模板，{room_id} / {uid} 会被替换为参数值 */
   url: string;
 }
 
@@ -64,12 +64,12 @@ export interface ActivityPageProps {
 /** 根据配置构建真实 H5 页面 URL */
 export function buildActivityUrl(config: ActivityConfig): string {
   return config.params.url
-    .replace("{roomId}", String(config.params.roomId))
+    .replace("{room_id}", String(config.params.roomId))
     .replace("{uid}", String(config.params.uid));
 }
 
 /**
- * 从 URL 模板中提取字面的 room_id / uid 数值（仅匹配数字，占位符如 {roomId} 不命中）。
+ * 从 URL 模板中提取字面的 room_id / uid 数值（仅匹配数字，占位符如 {room_id} 不命中）。
  * 用于 roomId / uid 配置为 0 时的兜底默认值：优先取 URL 模板中自带的真实参数。
  */
 export function extractRoomUidFromUrl(url: string): { roomId?: number; uid?: number } {

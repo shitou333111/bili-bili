@@ -271,7 +271,11 @@ fn wsa_ready(app: &AppHandle) -> bool {
 
 /// 检测三步是否就绪。
 pub fn status(app: &AppHandle) -> SetupStatus {
-    let wsa_ok = wsa_ready(app);
+    // WSA 这一项还要叠加「adb 通道最近是不是真的建起来过」：`wsa_ready` 只核「注册目录完不完整」，
+    // 于是「WSA 装着、开发者模式开着，但设备侧永远 unauthorized」照样报绿 —— 实测反馈里
+    // 「界面上显示成功、三灯全绿，点录屏却卡住」的矛盾正是它（见 `wsa::adb_channel_ok`）。
+    // 进程刚起来还没试过连 adb 时该标志为 true，不会凭空把灯判红。
+    let wsa_ok = wsa::adb_channel_ok() && wsa_ready(app);
     let adb_ok = wsa::adb_exe(app).is_some();
     // WSA 没就绪时 APP 一律按「未装」算：APP 是装在 WSA 里的，子系统起不来它就一定用不了。
     // 这也顺手挡掉了那个假绿灯 —— 此时问 adb 问不到、只会退回标记文件，而标记文件在

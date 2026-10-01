@@ -19,7 +19,7 @@ import { getPlatform } from "@/lib/platform";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  /** 活动页 URL 模板，使用 {roomId} 和 {uid} 占位符；由 admin 页面配置 */
+  /** 活动页 URL 模板，使用 {room_id} 和 {uid} 占位符；由 admin 页面配置 */
   activityUrlTemplate?: string;
 }
 
@@ -62,7 +62,7 @@ export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate
       return;
     }
     const url = activityUrlTemplate
-      .replace("{roomId}", String(streamer.roomId))
+      .replace("{room_id}", String(streamer.roomId))
       .replace("{uid}", String(streamer.uid));
     try {
       // 取出当前登录账号的 B站 Cookie 注入真实活动 WebView，实现自动登录

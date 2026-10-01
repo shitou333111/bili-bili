@@ -75,7 +75,7 @@ async function main() {
   }
   const id = String(act.id || "activity");
   const url = act.urlTemplate
-    .replace("{roomId}", String(act.roomId ?? 0))
+    .replace("{room_id}", String(act.roomId ?? 0))
     .replace("{uid}", String(act.uid ?? 0));
   const fetchUrl = url.replace(/#.*$/, "");
   console.log("[mirror] 活动 id =", id);
