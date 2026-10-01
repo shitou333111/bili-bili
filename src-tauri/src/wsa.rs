@@ -609,7 +609,9 @@ unsafe fn bring_to_front(hwnd: HWND) -> bool {
 /// 都行；② 原来只在**后代元素**里找 `ADB`，而标题根本不参与 —— 可「是否允许 ADB 调试？」这类
 /// 弹窗的关键字恰恰在标题上。实测 Win10 上自动应答**一次都没生效、日志里也一条痕迹都没有**，
 /// 而「弹窗根本没出现」与「弹窗在、只是认法不匹配」这两种病因在放宽前**分不开**。认不到时
-/// 把顶层窗口清单打进日志（见 [`dump_top_windows`]），下一次现场就能一眼区分开。
+/// 由 [`wait_for_adb_auth`] 定时把顶层窗口清单打进日志（见 [`dump_top_windows`]）——
+/// **不能放在这里**：调用方每秒进来一次，8 次额度会在等待刚开始的头几秒（弹窗还没渲染出来
+/// 的时候）就被吃光，最关键的中段反而一片空白（实测就是这样）。
 fn accept_adb_auth() -> bool {
     unsafe {
         // UI Automation 要求调用线程初始化过 COM。重复初始化、或本线程已是别的套间模型
@@ -627,7 +629,6 @@ fn accept_adb_auth() -> bool {
         let Ok(tops) = root.FindAll(TreeScope_Children, &cond) else {
             return false;
         };
-        let mut saw_adb = false;
         for i in 0..tops.Length().unwrap_or(0) {
             let Ok(top) = tops.GetElement(i) else { continue };
             let title = top
@@ -667,7 +668,6 @@ fn accept_adb_auth() -> bool {
                 continue;
             }
             let matched = title_has_adb || desc_has_adb || desc_has_rsa;
-            saw_adb |= matched;
             // 认到 `ADB` 字样 + 「允许」按钮才算数：只撞上 `ADB` 字样（正文里的 RSA 指纹、
             // 别的对话框）就动手，等于赌运气。
             if !matched || allow.is_none() {
@@ -695,11 +695,12 @@ fn accept_adb_auth() -> bool {
                     r.top + (r.bottom - r.top) / 2,
                 );
             }
-            wlog("[wsa] 已自动应答 adb 授权弹窗（勾选「始终允许」+ 点「允许」）");
+            // 命中窗口的 `类名 | 标题` 一并留痕：上一轮实测里这里只写「已自动应答」却毫无效果，
+            // 分辨不出点的是真授权框还是别的窗口 —— 有了这半行，下次一眼就能定案。
+            wlog(&format!(
+                "[wsa] 已自动应答 adb 授权弹窗（勾选「始终允许」+ 点「允许」）；命中窗口 {class} | {title}"
+            ));
             return true;
-        }
-        if !saw_adb {
-            dump_top_windows();
         }
         false
     }
@@ -834,6 +835,15 @@ fn wait_for_adb_auth(cand: &Adb, deadline: Instant) -> Option<Adb> {
         return adb_usable(cand).then(|| cand.clone());
     }
     let total = deadline.saturating_duration_since(Instant::now());
+    // 授权框是**安卓侧**弹的，桌面上得先有安卓界面窗口才渲染得出来（见 [`bring_up_wsa_ui`]）。
+    // **必须排在重做握手之前**：授权请求是挂在「有一条正在等授权的连接」上的，界面先就位、
+    // 再 `connect`，框才弹得出来。
+    //
+    // 但这件事本身要花十几秒（拉起来 + 等窗口出现），所以只在预算宽裕时做 ——
+    // 点「开始录制」那条路只给 12s，用户正等着窗口弹出来，不该被它拖住。
+    if total >= Duration::from_secs(30) {
+        bring_up_wsa_ui();
+    }
     let _ = output_of(&cand.exe, &["kill-server".to_string()]);
     let _ = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
     wlog(&format!(
@@ -968,6 +978,99 @@ fn launch_wsa_settings() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+/// [`bring_up_wsa_ui`] 累计试过几次。上限 4 次 —— 界面实在拉不起来时，别让每个轮询周期
+/// 都去 spawn 一个 `explorer`。
+static WSA_UI_TRIES: AtomicU8 = AtomicU8::new(0);
+
+/// 桌面上有没有 WSA 的**安卓界面窗口**。判据是「存在可见顶层窗口属于 `WsaClient.exe`」。
+///
+/// **不能按标题认**：安卓应用窗口的标题是 APP 自己的名字（如「设置」），里面未必有
+/// 「Android」这几个字母，而 [`is_wsa_title`] 正是靠这三个字母。只有 pid 能一刀切出
+/// 「这是 WSA 的窗口」。
+fn wsa_ui_window_present() -> bool {
+    let pids = process_ids(WSA_CLIENT_EXE);
+    if pids.is_empty() {
+        return false;
+    }
+    let mut state = (&pids, false);
+    unsafe extern "system" fn hit(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let (pids, found) = &mut *(lp.0 as *mut (&Vec<u32>, bool));
+        if IsWindowVisible(hwnd).as_bool() {
+            let mut pid = 0u32;
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pids.contains(&pid) {
+                *found = true;
+            }
+        }
+        BOOL(1)
+    }
+    unsafe {
+        let _ = EnumWindows(
+            Some(hit),
+            LPARAM(&mut state as *mut (&Vec<u32>, bool) as isize),
+        );
+    }
+    state.1
+}
+
+/// 把 WSA 的**安卓界面层**摆到桌面上（开一个安卓窗口），返回结束时它在不在。
+///
+/// **为什么必须做这件事**：adb 的「是否允许 ADB 调试？」是**安卓侧**弹的框，得桌面上先有
+/// 安卓界面在跑才渲染得出来。而 [`launch_wsa`] 跑的是 `WsaClient.exe` **不带参数** —— 它只把
+/// 子系统虚拟机启起来，桌面上一个安卓窗口都没有。实测（Win10）诊断 dump 里 23 个可见顶层
+/// 窗口从头到尾没有任何 WSA 窗口，于是授权框永远不出现、设备永远停在 `unauthorized`；
+/// 日志里那次「已自动应答」之所以毫无效果，也是同一个病的另一面。
+///
+/// 拉起方式用 WSA 自己注册的 `wsa://` 协议开安卓的**设置**页（`com.android.settings`，
+/// AOSP 自带，连 NoGApps 包也有）。社区里「点『管理开发人员设置』弹出安卓窗口之后再连 adb，
+/// 授权框就正常弹了」说的正是这一步。`wsa://` 没反应时退回 WSA 本体的开始菜单入口。
+///
+/// 界面已经在桌面上就什么都不做（存在性检查约 1ms）。
+fn bring_up_wsa_ui() -> bool {
+    if wsa_ui_window_present() {
+        return true;
+    }
+    if WSA_UI_TRIES.fetch_add(1, Ordering::Relaxed) >= 4 {
+        return false;
+    }
+    wlog("[wsa] 桌面上没有安卓界面窗口 —— 先拉起 WSA 的安卓界面（授权框要靠它才渲染得出来）");
+    let _ = Command::new("explorer.exe")
+        .arg("wsa://com.android.settings")
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut up = false;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(500));
+        if wsa_ui_window_present() {
+            up = true;
+            break;
+        }
+    }
+    if !up {
+        wlog("[wsa] wsa:// 没能把安卓界面拉起来，退回 WSA 本体入口再试");
+        launch_wsa_shell();
+        for _ in 0..12 {
+            std::thread::sleep(Duration::from_millis(500));
+            if wsa_ui_window_present() {
+                up = true;
+                break;
+            }
+        }
+    }
+    wlog(&format!(
+        "[wsa] 安卓界面层：{}",
+        if up {
+            "已在桌面上（授权框应当能渲染）"
+        } else {
+            "仍未出现（授权框多半还是弹不出来）"
+        }
+    ));
+    up
 }
 
 /// WSA 的包家族名（PackageFamilyName）。写死省一次 `Get-AppxPackage`（那是秒级的 PowerShell），
