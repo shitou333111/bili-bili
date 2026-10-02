@@ -22,6 +22,7 @@ import AutostartCard from "@/components/AutostartCard";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
 import PieTooltip from "@/components/PieTooltip";
+import VolumeIcon from "@/components/VolumeIcon";
 import { showToast } from "@/lib/toast";
 import { accountApi } from "@/lib/api";
 import { getFetchRate, setFetchRate, DEFAULT_FETCH_RATE, MIN_FETCH_RATE, MAX_FETCH_RATE } from "@/lib/anchor-gifts-client";
@@ -4236,7 +4237,7 @@ export default function HomePage() {
                 }}
                 className="w-full mt-2 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-black/10 bg-white/60 text-sm text-black/60 active:scale-98 transition-all"
               >
-                <span>{simMuted ? "🔇" : "🔊"}</span>
+                <VolumeIcon muted={simMuted} className="w-4 h-4" />
                 <span>{simMuted ? "直播静音（点击开启）" : "直播声音已开启（点击静音）"}</span>
               </button>
             </div>

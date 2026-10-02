@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DisplayEvent } from "@/lib/display/types";
 import { srcWithFragment } from "@/lib/display/video";
+import VolumeIcon from "@/components/VolumeIcon";
 
 /** 播放片段结束检测容差（秒）：timeupdate 约 4Hz，留出一次触发间隔的余量 */
 const END_EPSILON = 0.3;
@@ -216,7 +217,7 @@ export default function VideoOverlay({
           className="absolute right-4 bottom-4 z-[2] w-16 h-16 rounded-full bg-black/40 text-white text-[28px]
             flex items-center justify-center pointer-events-auto opacity-40 hover:opacity-90 transition-opacity"
         >
-          {muted ? "🔇" : "🔊"}
+          <VolumeIcon muted={muted} className="w-8 h-8" />
         </button>
       )}
     </div>

@@ -136,10 +136,21 @@ export default function RecommendedAnchors() {
                         : a,
                     ),
                   );
-                  // 后台静默上报点击
-                  serverPost("/api/recommended-anchors/click", { uid: anchor.uid }).catch(
-                    () => {},
-                  );
+                  // 后台静默上报点击；用服务器返回的全局累计值校正本地角标
+                  serverPost<{ code: number; data?: { click_count: number } }>(
+                    "/api/recommended-anchors/click",
+                    { uid: anchor.uid },
+                  )
+                    .then((r) => {
+                      const serverCount = r?.code === 0 ? r.data?.click_count : undefined;
+                      if (typeof serverCount !== "number") return;
+                      setAnchors((prev) =>
+                        prev.map((a) =>
+                          a.uid === anchor.uid ? { ...a, click_count: serverCount } : a,
+                        ),
+                      );
+                    })
+                    .catch(() => {});
                   openBiliLiveRoom(anchor.room_id);
                 }}
                 className="group flex flex-col items-center gap-1.5 p-2 rounded-xl border border-black/5 bg-black/[0.02] hover:bg-[#fafafa] hover:border-black/10 transition active:scale-95"

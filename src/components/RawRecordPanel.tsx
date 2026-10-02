@@ -515,6 +515,7 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
                 <li>下载插件网络较慢，比较耗时，有时会中断，那就再次点击按钮重新安装。</li>
                 <li>插件安装是一次性的，以后直接点击「启动自动录屏」即可。</li>
                 <li>第一次启动录屏，需要在 B 站 APP 内登录，和正常的 APP 操作一样。</li>
+                <li>插件安装复杂，如果自动安装失败，可以B站私信作者帮助安装。</li>
               </ol>
             </div>
             <div className="flex gap-2 border-t border-black/10 px-5 py-3">

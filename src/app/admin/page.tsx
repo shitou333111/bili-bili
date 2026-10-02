@@ -1220,10 +1220,10 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="admin-root min-h-screen bg-[#faf9f6] py-6 px-4 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
+    <div className="admin-root min-h-screen bg-[#faf9f6] py-2 px-2 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
       <SafeAreaStyler />
       <WindowTitleBar />
-      <div className="max-w-3xl mx-auto space-y-5">
+      <div className="max-w-3xl mx-auto space-y-2">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-bold">管理后台</h1>
@@ -1232,7 +1232,7 @@ export default function AdminPage() {
 
         {/* 数据加载失败提示 */}
         {loadError && (
-          <div className="rounded-xl border border-[#e74c3c]/30 bg-[#fdf0ef] p-4">
+          <div className="rounded-xl border border-[#e74c3c]/30 bg-[#fdf0ef] p-2">
             <p className="text-sm text-[#e74c3c] font-medium">无法连接服务器，请检查网络或服务器状态</p>
             <button
               onClick={() => loadData()}
@@ -1244,8 +1244,8 @@ export default function AdminPage() {
         )}
 
         {/* Users */}
-        <div className="rounded-xl border border-black/10 bg-white/80 p-4">
-          <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="rounded-xl border border-black/10 bg-white/80 p-2">
+          <div className="flex items-center justify-between mb-1.5 gap-2">
             <h2 className="text-sm font-bold">用户列表 ({filteredUsers.length})</h2>
             <input
               type="text"
@@ -1258,9 +1258,9 @@ export default function AdminPage() {
           {filteredUsers.length === 0 ? (
             <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto">
+            <div className="space-y-1 max-h-80 overflow-y-auto">
               {filteredUsers.map((user) => (
-                <div key={user.mid} className={`flex items-center gap-3 rounded-lg border p-2.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
+                <div key={user.mid} className={`flex items-center gap-2 rounded-lg border p-1.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
                   {user.face ? <img src={fixImageUrl(user.face)} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" /> : <div className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start gap-1.5">
@@ -1298,7 +1298,7 @@ export default function AdminPage() {
 
         {/* Config */}
         {config && (
-          <div className="rounded-xl border border-black/10 bg-white/80 p-4 space-y-4">
+          <div className="rounded-xl border border-black/10 bg-white/80 p-2 space-y-1.5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold">配置管理</h2>
               <div className="flex items-center gap-2">
@@ -1313,7 +1313,7 @@ export default function AdminPage() {
             </div>
 
             {/* 帮助页公告 */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <h3 className="text-xs font-semibold">帮助页公告</h3>
               <p className="text-[10px] text-black/40">显示在“帮助”页面最上方的公告内容，留空则不显示公告卡片。支持换行。</p>
               <textarea
@@ -1326,7 +1326,7 @@ export default function AdminPage() {
             </div>
 
             {/* 帮助页常见问题 */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold">帮助页常见问题</h3>
                 <button
@@ -1340,9 +1340,9 @@ export default function AdminPage() {
               {(config.faq ?? []).length === 0 && (
                 <p className="text-[10px] text-black/30">暂无问题</p>
               )}
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {(config.faq ?? []).map((item, i) => (
-                  <div key={i} className="rounded-lg border border-black/10 p-2 space-y-2">
+                  <div key={i} className="rounded-lg border border-black/10 p-1.5 space-y-1">
                     <div className="flex items-center gap-2">
                       <input
                         value={item.q}
@@ -1383,7 +1383,7 @@ export default function AdminPage() {
             <hr className="border-t-2 border-black/30" />
 
             {/* Blind boxes */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <button
                 type="button"
                 onClick={() => setBlindBoxCollapsed((v) => !v)}
@@ -1400,7 +1400,7 @@ export default function AdminPage() {
                 <p className="text-[10px] text-black/40">☑卡片 = 单独作为一个盲盒卡片显示；☑盈亏 = 纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒</p>
                 <button onClick={addBlindBox} className="text-xs text-[#00a1d6] hover:underline shrink-0">+ 添加盲盒</button>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {/* 所有盲盒统一逻辑：心动/幸运盲盒同样可勾选、可排序，无默认固定状态 */}
                 {config.blind_boxes.map((box, realIndex) => {
                   const boxKey = box._k ?? `idx_${realIndex}`;
@@ -1511,8 +1511,8 @@ export default function AdminPage() {
                     </div>
                     {/* 卡片 / 盈亏 / 从B站获取 / 删除（折叠卡内） */}
                     {expanded && (
-                      <div className="border-t border-black/5 bg-black/[0.03] px-3 py-2 space-y-1.5">
-                        <div className="flex items-center gap-3 flex-wrap pb-1">
+                      <div className="border-t border-black/5 bg-black/[0.03] px-2 py-1 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap pb-1">
                           <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
                             <input
                               type="checkbox"
@@ -1648,7 +1648,7 @@ export default function AdminPage() {
               {/* 图标链接编辑弹窗（点击图标弹出） */}
               {iconEditor && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setIconEditor(null)}>
-                  <div className="w-[min(90vw,420px)] rounded-xl bg-white p-4 shadow-xl space-y-3" onClick={(e) => e.stopPropagation()}>
+                  <div className="w-[min(90vw,420px)] rounded-xl bg-white p-2 shadow-xl space-y-1.5" onClick={(e) => e.stopPropagation()}>
                     <h4 className="text-xs font-semibold">{iconEditor.title}</h4>
                     <input
                       autoFocus
@@ -1674,7 +1674,7 @@ export default function AdminPage() {
             <hr className="border-t-2 border-black/30" />
 
             {/* 黑抽（真实合成活动）URL 配置 */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <h3 className="text-xs font-semibold">黑抽（真实合成活动）页面 URL</h3>
               <p className="text-[10px] text-black/40">
                 填写 B站 真实合成活动页面 URL 模板，使用 {'{room_id}'} 和 {'{uid}'} 作为占位符（{'{room_id}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{room_id}'}&uid={'{uid}'}#/play?config_id=...
@@ -1697,7 +1697,7 @@ export default function AdminPage() {
             <hr className="border-t-2 border-black/30" />
 
             {/* 模拟器活动配置（玩法可热更新） */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <button
                 onClick={() => setSimulatorCollapsed((v) => !v)}
                 className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
@@ -1717,9 +1717,9 @@ export default function AdminPage() {
                 新活动若属于已有算法类型，只需新增配置并选择对应类型即可，无需改代码；全新玩法需实现算法后通过前端热更新推送（无需原生包更新）。
                 所有活动都会列出，勾选前面的复选框即在模拟器显示入口卡片；全部未勾选则模拟器不显示活动入口。
               </p>
-              <div className="space-y-3">
+              <div className="space-y-1.5">
                 {config.simulator_activities.map((act, i) => (
-                  <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${!act.enabled ? "opacity-50" : ""}`}>
+                  <div key={i} className={`rounded-lg border border-black/10 p-1.5 space-y-1 ${!act.enabled ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <input
                         type="checkbox"
@@ -1836,7 +1836,7 @@ export default function AdminPage() {
             <hr className="border-t-2 border-black/30" />
 
             {/* Synthesis activities */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <button
                 onClick={() => setSynthesisCollapsed((v) => !v)}
                 className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
@@ -1853,9 +1853,9 @@ export default function AdminPage() {
               </div>
               <p className="text-[10px] text-black/40">勾选 = 在页面上展示该活动</p>
               <p className="text-[10px] text-black/40">起止时间可选，不填则使用全部消费记录；材料抽取记录在 [起, 止] 内，产物送出记录截止到「止 + 49 小时」（48h 送出窗口 + 1h 容错）。产物为合成的礼物（包裹/送出记录），素材为抽取时的花费记录，素材总花费自动汇总，无需与产物一一对应。起止只填日期，开始=0点、结束=24点。</p>
-              <div className="space-y-3">
+              <div className="space-y-1.5">
                 {config.synthesis_activities.map((act, i) => (
-                  <div key={i} className={`rounded-lg border border-black/10 p-3 space-y-2 ${act.active === false ? "opacity-50" : ""}`}>
+                  <div key={i} className={`rounded-lg border border-black/10 p-1.5 space-y-1 ${act.active === false ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="flex flex-col shrink-0">
                         <button
@@ -1907,7 +1907,7 @@ export default function AdminPage() {
                             />
                           </label>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-2 gap-2">
                         {/* 产物配置 */}
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between">
@@ -1991,7 +1991,7 @@ export default function AdminPage() {
             <hr className="border-t-2 border-black/30" />
 
             {/* 推荐主播管理 */}
-            <div className="space-y-2">
+            <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold">推荐主播配置</h3>
               </div>
@@ -2015,7 +2015,7 @@ export default function AdminPage() {
                 </button>
               </div>
               {/* 主播列表 */}
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {config.recommended_anchors.length === 0 ? (
                   <p className="text-[10px] text-black/30 py-3 text-center">暂无推荐主播，在上方输入UID添加</p>
                 ) : (
@@ -2024,7 +2024,7 @@ export default function AdminPage() {
                     .map((anchor, index) => (
                       <div
                         key={anchor.uid}
-                        className={`rounded-lg border border-black/10 p-2.5 ${!anchor.visible ? "opacity-50" : ""}`}
+                        className={`rounded-lg border border-black/10 p-1.5 ${!anchor.visible ? "opacity-50" : ""}`}
                       >
                         <div className="flex items-center gap-2 flex-wrap">
                           {/* 上下移动按钮 */}
@@ -2076,8 +2076,8 @@ export default function AdminPage() {
         )}
 
         {/* 抽奖记录（页面左下方） */}
-        <div className="rounded-xl border border-black/10 bg-white/80 p-4">
-          <div className="flex items-center justify-between mb-3">
+        <div className="rounded-xl border border-black/10 bg-white/80 p-2">
+          <div className="flex items-center justify-between mb-1.5">
             <h2 className="text-sm font-bold">抽奖记录</h2>
             <span className="text-[10px] text-black/40">
               共 {lotteryRecords.length} 次
@@ -2088,7 +2088,7 @@ export default function AdminPage() {
           </div>
 
           {/* 概率设置：格式 1/n，改后所有平台立即生效 + 抽奖活动开关 */}
-          <div className="flex items-center gap-2 mb-3 rounded-lg border border-black/10 bg-black/[0.02] px-3 py-2">
+          <div className="flex items-center gap-2 mb-1.5 rounded-lg border border-black/10 bg-black/[0.02] px-2 py-1">
             <span className="text-[11px] text-black/50 flex-shrink-0">中奖概率</span>
             <span className="text-[11px] text-black/70 flex-shrink-0">1/</span>
             <input
@@ -2125,7 +2125,7 @@ export default function AdminPage() {
               {lotteryRecords.map((rec) => (
                 <div
                   key={`${rec.mid}_${rec.drawnAt}`}
-                  className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 ${
+                  className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${
                     rec.won
                       ? "border-[#f59e0b]/40 bg-gradient-to-r from-[#fef3c7]/70 to-[#fde68a]/50"
                       : "border-black/10"

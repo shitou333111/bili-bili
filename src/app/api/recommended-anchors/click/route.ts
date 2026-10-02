@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
-import { readAdminConfig, writeAdminConfig } from "@/lib/admin-config";
+import { readAdminConfig } from "@/lib/admin-config";
+import { incrementAnchorClick } from "@/lib/anchor-clicks";
 
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/recommended-anchors/click
  * body: { uid: number }
- * 递增该主播的全局点击次数（所有用户共享）。
- * 采用 read-modify-write 整体写回，不丢失 admin 同时修改的其他字段。
+ * 递增该主播的全局点击次数（所有用户共享、累计）。
+ * 计数存于独立的 .data/anchor-clicks.json（见 anchor-clicks.ts），
+ * 不写 admin-config.json，因此 admin 保存配置不会清空计数。
  */
 export async function POST(req: Request) {
   try {
@@ -18,19 +20,14 @@ export async function POST(req: Request) {
     }
 
     const config = await readAdminConfig();
-    if (!config?.recommended_anchors) {
-      return NextResponse.json({ code: -1, message: "无推荐主播列表" }, { status: 404 });
-    }
-
-    const anchor = config.recommended_anchors.find((a) => a.uid === uid);
+    const anchor = config?.recommended_anchors?.find((a) => a.uid === uid);
     if (!anchor) {
       return NextResponse.json({ code: -1, message: "主播不存在" }, { status: 404 });
     }
 
-    anchor.click_count = (anchor.click_count || 0) + 1;
-    await writeAdminConfig(config);
+    const click_count = await incrementAnchorClick(uid, anchor.click_count || 0);
 
-    return NextResponse.json({ code: 0, data: { click_count: anchor.click_count } });
+    return NextResponse.json({ code: 0, data: { click_count } });
   } catch (e) {
     return NextResponse.json(
       { code: -1, message: "服务器错误: " + (e instanceof Error ? e.message : String(e)) },
