@@ -6,11 +6,13 @@ import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftPrice } from "@/lib/gift-catalog";
 import { isOffline } from "@/lib/offline";
 import {
+  collectRewardGifts,
   computeBlindBoxFromRecords,
   type BlindBoxCalcRecord,
   type BlindBoxGiftMeta,
   type BlindBoxRewardBagGift,
 } from "@/lib/blind-box-calc";
+import { readPayRecords } from "@/lib/user-data";
 import type { ApiResponse } from "@/lib/bilibili/types";
 import { promises as fs } from "fs";
 import path from "path";
@@ -272,6 +274,8 @@ export async function GET(request: Request) {
       (id) => (effectiveBlindBoxConfig.boxes[id]?.rewardGiftNames.length ?? 0) > 0,
     );
     const bagGifts = !offline && anyReward ? await fetchBagList(biliCookie) : [];
+    // 请求级读取一次消费记录：奖励礼物送出后进入消费记录（bag_desc="包裹道具"），与包裹互补
+    const payRecords = anyReward ? await readPayRecords(validSession.mid, validSession.uname || "") : [];
 
     for (const blindBoxId of blindBoxIds) {
       try {
@@ -334,27 +338,13 @@ export async function GET(request: Request) {
           giftMeta[CASTLE_ID] = { name: getGiftName(CASTLE_ID), img: getGiftImg(CASTLE_ID), price: getGiftPrice(CASTLE_ID) };
         }
 
-        // 奖励礼物：按 admin 配置的奖励礼物名称匹配包裹；单价/图标以配置为准（过期礼物目录无价）
-        const rewardCfgByName = new Map(
-          (boxCfg?.gifts ?? []).filter((g) => g.isReward).map((g) => [g.giftName, g] as const),
+        // 奖励礼物：包裹（未送出）+ 消费记录（已送出）两来源互补，
+        // 与合成活动的合成产物口径一致（详见 collectRewardGifts）。
+        const rewardGifts: BlindBoxRewardBagGift[] = collectRewardGifts(
+          (boxCfg?.gifts ?? []).filter((g) => g.isReward),
+          bagGifts,
+          payRecords,
         );
-        const rewardGifts: BlindBoxRewardBagGift[] = [];
-        if (rewardCfgByName.size > 0) {
-          for (const g of bagGifts) {
-            const cfg = rewardCfgByName.get(g.gift_name);
-            if (!cfg) continue;
-            rewardGifts.push({
-              gift_id: g.gift_id || cfg.giftId,
-              gift_name: g.gift_name,
-              gift_num: g.gift_num,
-              // 奖励礼物实际价格来自包裹（含单价与数量），配置价格仅在包裹无价时兜底
-              price: g.price || cfg.price,
-              img: g.img || cfg.img,
-              is_locked: g.is_locked,
-              locked_text: g.locked_text,
-            });
-          }
-        }
 
         const anchorNames: Record<number, string> = {};
         for (const r of mergedRecords) {

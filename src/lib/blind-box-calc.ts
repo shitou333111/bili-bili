@@ -26,9 +26,15 @@ export type BlindBoxGiftMeta = {
 };
 
 /**
- * 盲盒额外奖励礼物（来自包裹 bag_list）。
- * 摆出的盲盒礼物满足组合后，B站会把奖励礼物赠送到用户包裹；
- * 奖励礼物不消费、不出现在抽取记录中，需从包裹补充计入产出（成本 0）。
+ * 盲盒额外奖励礼物（成本 0，仅计产出价值）。
+ *
+ * 奖励礼物有两个互补来源（与合成活动的“合成产物”一致）：
+ *  1. 包裹 bag_list —— 已获得但尚未送出的奖励礼物（当前持快照，无时间）；
+ *  2. 消费记录 pay-records 中 bag_desc="包裹道具" 的送出记录 —— 已送出的奖励礼物
+ *     （送出即离开包裹，故与包裹来源不重复，两者相加 = 全部奖励礼物）。
+ *
+ * 消费记录来源直接带 ruid/rname/timestamp（按送出时间参与日期筛选）；
+ * 包裹来源无主播信息，由 attributeRewardGifts 参考 locked_text 归属。
  */
 export type BlindBoxRewardBagGift = {
   gift_id: number;
@@ -39,6 +45,12 @@ export type BlindBoxRewardBagGift = {
   img: string;
   is_locked?: boolean;
   locked_text?: string;
+  /** 已带主播（消费记录来源直接给出，包裹来源由 attributeRewardGifts 解析后回填） */
+  ruid?: number;
+  /** 主播昵称（消费记录来源） */
+  rname?: string;
+  /** 送出时间（消费记录来源，格式同抽取记录；有值则按日期筛选，包裹来源无值不筛选） */
+  timestamp?: string;
 };
 
 export type BlindBoxCalcCastleStat = {
@@ -98,8 +110,9 @@ export type BlindBoxCalcInput = {
   /** 当前筛选条件（主播 + 时间段） */
   filter?: BlindBoxCalcFilter;
   /**
-   * 该盲盒的额外奖励礼物（已按 admin 配置的奖励礼物名称从包裹过滤好）。
-   * 成本 0，仅计价值；不计抽数/成本；不受日期筛选影响（包裹为当前持快照），主播筛选生效。
+   * 该盲盒的额外奖励礼物（已按 admin 配置的奖励礼物名称过滤好，含包裹 + 消费记录两来源）。
+   * 成本 0，仅计价值；不计抽数/成本；主播筛选生效；
+   * 消费记录来源按 timestamp 参与日期筛选，包裹来源不参与。
    */
   rewardGifts?: BlindBoxRewardBagGift[];
 };
@@ -261,7 +274,8 @@ function calculateCastleStats(
 const REWARD_ANCHOR_MATCHER = /该礼物仅限(.+?)的直播间使用/;
 
 /**
- * 为包裹中的奖励礼物归属主播（镜像合成活动 calcPayRecordActivityProfit 的包裹补充逻辑）。
+ * 为奖励礼物归属主播（镜像合成活动 calcPayRecordActivityProfit 的包裹补充逻辑）。
+ * - 消费记录来源：已带 ruid，直接采用；
  * - 锁定礼物：按 `locked_text` 解析主播名，再映射到记录中的最新 ruid；
  * - 未锁定礼物：盲盒记录无 room_id，退化为「记录仅剩单一 ruid」时归属该主播，否则跳过。
  * 无法归属的礼物保守跳过并记日志。
@@ -290,7 +304,10 @@ export function attributeRewardGifts(
 
   for (const g of rewardGifts) {
     let ruid: number | undefined;
-    if (g.is_locked) {
+    if (g.ruid !== undefined) {
+      // 消费记录来源已直接带主播，无需解析
+      ruid = g.ruid;
+    } else if (g.is_locked) {
       const m = g.locked_text?.match(REWARD_ANCHOR_MATCHER);
       const anchorName = m ? m[1] : "";
       ruid = anchorName ? nameRuids.get(anchorName) : undefined;
@@ -303,6 +320,98 @@ export function attributeRewardGifts(
     }
     out.push({ ...g, ruid });
   }
+  return out;
+}
+
+/** admin 配置中的奖励礼物项（EffectiveBlindBoxGift 的结构子集） */
+export type RewardGiftConfig = { giftId: number; giftName: string; price: number; img: string };
+
+/** 包裹奖励礼物来源（bag_list 项的结构子集） */
+export type RewardBagSource = {
+  gift_id: number;
+  gift_name: string;
+  gift_num: number;
+  price: number;
+  img: string;
+  is_locked?: boolean;
+  locked_text?: string;
+};
+
+/** 消费记录来源（pay-records 项的结构子集） */
+export type RewardPayRecord = {
+  gift_id: number;
+  gift_name: string;
+  gift_num: number;
+  coin?: string;
+  pay_coin?: string;
+  bag_desc?: string;
+  status_msg?: string;
+  ruid: number;
+  r_uname?: string;
+  timestamp: number;
+  gift_img?: string;
+};
+
+/** unix 秒 → 与盲盒抽取记录一致的本地时间串（"YYYY-MM-DD HH:mm:ss"） */
+function formatLocalTs(ts: number): string {
+  const d = new Date(ts * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/**
+ * 汇总某盲盒的全部奖励礼物（包裹 + 消费记录两来源，互补不重复）。
+ * 与合成活动 calcPayRecordActivityProfit 的「产物 = 包裹道具消费记录 + 包裹补充」口径一致：
+ * - 包裹 bag_list：已获得未送出（当前持快照）；
+ * - 消费记录 pay-records 中 bag_desc="包裹道具" 且礼物名匹配的送出记录（已送出，带主播与时间）。
+ * 名称按 admin 配置的奖励礼物名称精确匹配。
+ */
+export function collectRewardGifts(
+  configs: RewardGiftConfig[],
+  bagGifts: RewardBagSource[],
+  payRecords: RewardPayRecord[],
+): BlindBoxRewardBagGift[] {
+  const cfgByName = new Map<string, RewardGiftConfig>();
+  for (const c of configs) {
+    if (c.giftName) cfgByName.set(c.giftName, c);
+  }
+  const out: BlindBoxRewardBagGift[] = [];
+  if (cfgByName.size === 0) return out;
+
+  // 1) 包裹来源：未送出的奖励礼物（价格/图标以实际为准，配置兜底）
+  for (const g of bagGifts) {
+    const cfg = cfgByName.get(g.gift_name);
+    if (!cfg) continue;
+    out.push({
+      gift_id: g.gift_id || cfg.giftId,
+      gift_name: g.gift_name,
+      gift_num: g.gift_num,
+      price: g.price || cfg.price,
+      img: g.img || cfg.img,
+      is_locked: g.is_locked,
+      locked_text: g.locked_text,
+    });
+  }
+
+  // 2) 消费记录来源：已送出的奖励礼物（送出即离开包裹，与来源 1 不重复）
+  for (const r of payRecords) {
+    if (r.status_msg === "已退回") continue;
+    if (r.bag_desc !== "包裹道具") continue;
+    const cfg = cfgByName.get(r.gift_name);
+    if (!cfg) continue;
+    const coins = Number((r.pay_coin || r.coin || "0").replace(/,/g, "")) || 0;
+    out.push({
+      gift_id: r.gift_id || cfg.giftId,
+      gift_name: r.gift_name,
+      gift_num: r.gift_num,
+      price: (r.gift_num > 0 ? Math.round(coins / r.gift_num) : coins) || cfg.price,
+      img: r.gift_img || cfg.img,
+      ruid: r.ruid,
+      rname: r.r_uname,
+      timestamp: formatLocalTs(r.timestamp),
+    });
+  }
+
   return out;
 }
 
@@ -348,26 +457,55 @@ export function computeBlindBoxFromRecords(input: BlindBoxCalcInput): BlindBoxCa
     totalValue: stats.totalValue,
   }));
 
-  // ===== 奖励礼物补充（成本 0，仅计价值） =====
-  // 奖励礼物赠送到包裹，不出现在抽取记录中；用 admin 配置的奖励礼物名称匹配包裹礼物后补充产出。
-  // 不影响 drawCount/totalSpent（成本 0），主播筛选生效，日期筛选不生效（包裹为当前持快照）。
+  // ===== 奖励礼物补充（成本 0，仅计价值；来源：包裹 + 消费记录，两者互补不重复） =====
+  // 奖励礼物不出现在盲盒抽取记录中：未送出时在包裹，送出后进入消费记录。
+  // 不影响 drawCount/totalSpent（成本 0），主播筛选生效；
+  // 消费记录来源按送出时间参与日期筛选，包裹来源为当前持快照、不参与日期筛选。
   if (input.rewardGifts && input.rewardGifts.length > 0) {
     const attributed = attributeRewardGifts(input.rewardGifts, records, anchorNames);
+    const range = getDateRangeFilter(dateRangeKey);
+    const recordGiftIds = new Set(records.map((r) => r.gift_id));
+    // 同种奖励礼物聚合（消费记录可能有多条送出记录）
+    const rewardStats = new Map<
+      string,
+      { gift_id: number; name: string; img: string; count: number; totalValue: number }
+    >();
     for (const g of attributed) {
-      // 重复计数保护：若抽取记录中已含该 gift_id，则包裹补充会重复
-      if (g.gift_id > 0 && records.some((r) => r.gift_id === g.gift_id)) continue;
+      // 重复计数保护：若抽取记录中已含该 gift_id，则奖励补充会重复
+      if (g.gift_id > 0 && recordGiftIds.has(g.gift_id)) continue;
       // 主播筛选：奖励礼物归属主播需与当前筛选一致
       if (ruid !== null && g.ruid !== ruid) continue;
+      // 消费记录来源按送出时间筛选（包裹来源无 timestamp，恒定计入）
+      if (g.timestamp && range) {
+        const t = new Date(g.timestamp).getTime();
+        if (t < range.start.getTime() || t >= range.end.getTime()) continue;
+      }
 
-      const totalValue = g.price * g.gift_num;
-      totalEarned += totalValue;
-      gifts.push({
+      const value = g.price * g.gift_num;
+      const key = g.gift_id > 0 ? `id_${g.gift_id}` : `name_${g.gift_name}`;
+      const cur = rewardStats.get(key);
+      if (cur) {
+        cur.count += g.gift_num;
+        cur.totalValue += value;
+        continue;
+      }
+      rewardStats.set(key, {
         gift_id: g.gift_id,
-        gift_name: `${g.gift_name}（奖励）`,
-        gift_img: g.img,
-        unitPrice: g.price,
+        name: g.gift_name,
+        img: g.img,
         count: g.gift_num,
-        totalValue,
+        totalValue: value,
+      });
+    }
+    for (const s of rewardStats.values()) {
+      totalEarned += s.totalValue;
+      gifts.push({
+        gift_id: s.gift_id,
+        gift_name: `${s.name}（奖励）`,
+        gift_img: s.img,
+        unitPrice: s.count > 0 ? Math.round(s.totalValue / s.count) : 0,
+        count: s.count,
+        totalValue: s.totalValue,
       });
     }
   }

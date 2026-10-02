@@ -15,7 +15,7 @@ import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import type { RawGiftRecord } from "./revenue";
 import { ensureGiftCatalogLoaded, getGiftImg as getCatalogGiftImg, getGiftName as getCatalogGiftName, getGiftPrice as getCatalogGiftPrice, getGiftList as getCatalogGiftList } from "./gift-catalog-client";
-import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "./blind-box-calc";
+import { collectRewardGifts, computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "./blind-box-calc";
 import { buildEffectiveBlindBoxBoxes, type EffectiveBlindBoxBoxes } from "./blind-box-config";
 import {
   BLIND_BOX_CONFIG,
@@ -2117,6 +2117,8 @@ export async function fetchBlindBoxStats(
       (id) => (effectiveBlindBoxConfig.boxes[id]?.rewardGiftNames.length ?? 0) > 0,
     );
     const bagGifts = canFetchBag && anyReward ? await fetchBagList(platform, cookie) : [];
+    // 消费记录：奖励礼物送出后进入消费记录（bag_desc="包裹道具"），与包裹互补
+    const payRecords = anyReward ? await readPayRecords(platform, session.mid, session.uname || "") : [];
 
     for (const blindBoxId of blindBoxIds) {
       try {
@@ -2170,27 +2172,13 @@ export async function fetchBlindBoxStats(
         // 盲盒本身用已解析好的名称/图标
         giftMeta[blindBoxId] = { name: blindBoxName, img: blindBoxImg, price: blindBoxPrice };
 
-        // 奖励礼物：按 admin 配置的奖励礼物名称匹配包裹；单价/图标以配置为准（过期礼物目录无价）
-        const rewardCfgByName = new Map(
-          (boxCfg?.gifts ?? []).filter((g) => g.isReward).map((g) => [g.giftName, g] as const),
+        // 奖励礼物：包裹（未送出）+ 消费记录（已送出）两来源互补，
+        // 与合成活动的合成产物口径一致（详见 collectRewardGifts）。
+        const rewardGifts: BlindBoxRewardBagGift[] = collectRewardGifts(
+          (boxCfg?.gifts ?? []).filter((g) => g.isReward),
+          bagGifts,
+          payRecords,
         );
-        const rewardGifts: BlindBoxRewardBagGift[] = [];
-        if (rewardCfgByName.size > 0) {
-          for (const g of bagGifts) {
-            const cfg = rewardCfgByName.get(g.gift_name);
-            if (!cfg) continue;
-            rewardGifts.push({
-              gift_id: g.gift_id || cfg.giftId,
-              gift_name: g.gift_name,
-              gift_num: g.gift_num,
-              // 奖励礼物实际价格来自包裹（含单价与数量），配置价格仅在包裹无价时兜底
-              price: g.price || cfg.price,
-              img: g.img || cfg.img,
-              is_locked: g.is_locked,
-              locked_text: g.locked_text,
-            });
-          }
-        }
 
         // 用全量记录本地重算（零依赖纯函数，与 route.ts / 浏览器端共享同一份语义）
         const profit: BlindBoxProfitResult = {
