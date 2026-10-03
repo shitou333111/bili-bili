@@ -1,0 +1,211 @@
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #111;
+  position: relative;
+  font-family: system-ui, sans-serif;
+}
+
+/* PARTY BUTTON */
+
+.party-button {
+  position: relative;
+  padding: 18px 40px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: white;
+
+  background: linear-gradient(
+    90deg,
+    #ff006e,
+    #ffbe0b,
+    #00f5d4,
+    #8338ec,
+    #ff006e
+  );
+
+  background-size: 300% 100%;
+
+  box-shadow: 0 0 20px rgba(255, 0, 110, 0.8), 0 0 40px rgba(131, 56, 236, 0.6),
+    0 10px 25px rgba(0, 0, 0, 0.4);
+
+  animation: party-gradient 4s linear infinite;
+
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.party-button::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+
+  background: linear-gradient(
+    90deg,
+    #ff006e,
+    #ffbe0b,
+    #00f5d4,
+    #8338ec,
+    #ff006e
+  );
+
+  background-size: 300% 100%;
+  animation: party-gradient 4s linear infinite;
+
+  filter: blur(18px);
+  opacity: 0.8;
+  z-index: -1;
+}
+
+.party-button:hover {
+  transform: translateY(-4px) scale(1.05);
+
+  box-shadow: 0 0 30px rgba(255, 0, 110, 1), 0 0 60px rgba(131, 56, 236, 0.8),
+    0 15px 35px rgba(0, 0, 0, 0.5);
+}
+
+.party-button:active {
+  transform: translateY(2px) scale(0.98);
+}
+
+/* LINKS */
+
+.links {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.links a {
+  padding: 10px 16px;
+  border-radius: 999px;
+
+  font-size: 0.9rem;
+  font-weight: 700;
+
+  color: white;
+  text-decoration: none;
+
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.links a:nth-child(1) {
+  background: linear-gradient(135deg, #ff006e, #ff4d9d);
+  box-shadow: 0 0 15px rgba(255, 0, 110, 0.5);
+}
+
+.links a:nth-child(2) {
+  background: linear-gradient(135deg, #ffbe0b, #ffd166);
+  color: #222;
+  box-shadow: 0 0 15px rgba(255, 190, 11, 0.5);
+}
+
+.links a:nth-child(3) {
+  background: linear-gradient(135deg, #00f5d4, #00bbf9);
+  box-shadow: 0 0 15px rgba(0, 245, 212, 0.5);
+}
+
+.links a:hover {
+  transform: translateY(-3px) scale(1.05);
+}
+
+.links a:active {
+  transform: scale(0.97);
+}
+
+/* ANIMATIONS */
+
+@keyframes party-gradient {
+  from {
+    background-position: 0% 50%;
+  }
+
+  to {
+    background-position: 300% 50%;
+  }
+}
+
+
+import { confetti } from "https://esm.sh/@tsparticles/confetti";
+import { ribbons } from "https://esm.sh/@tsparticles/ribbons";
+
+let partying = false;
+let confetting = false;
+let ribboning = false;
+
+function updateText() {
+  document.querySelector(".party-button").innerText = partying
+    ? "Party in progress"
+    : "Click for party";
+}
+
+function party() {
+  let start = performance.now();
+
+  const partyConfetti = (ts) => {
+    if (performance.now() - start > 7000) {
+      confetting = false;
+      partying = confetting || ribboning;
+
+      updateText();
+
+      return;
+    }
+
+    confetti({
+      ticks: 0
+    });
+
+    setTimeout(partyConfetti, 150);
+  };
+
+  const partyRibbons = () => {
+    if (performance.now() - start > 4000) {
+      ribboning = false;
+      partying = confetting || ribboning;
+
+      updateText();
+
+      return;
+    }
+
+    ribbons();
+    setTimeout(partyRibbons, 250);
+  };
+
+  partyConfetti();
+  partyRibbons();
+}
+
+document.querySelector(".party-button").addEventListener("click", () => {
+  if (partying) {
+    return;
+  }
+
+  partying = true;
+  confetting = true;
+  ribboning = true;
+
+  updateText();
+
+  party();
+});

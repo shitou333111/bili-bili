@@ -34,6 +34,7 @@ import GiftFlower from "./GiftFlower";
 import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
 import MovableBox from "./MovableBox";
+import BannerButton from "./BannerButton";
 
 type AnimeEvent = Extract<DisplayEvent, { type: "anime" }>;
 type GiftEffectEvent = Extract<DisplayEvent, { type: "giftEffect" }>;
@@ -48,6 +49,57 @@ const TEST_ENTRY_USER: DisplayEntryPayload = {
 };
 /** 测试循环：一轮完整生命周期（聚合→停留→消散）结束后的间隔（重新挂载前） */
 const LOOP_GAP_MS = 1500;
+
+/** 撒花飘带（ribbons）提速：库把粒子 move.speed {min:4,max:6} 硬编码在容器与发射器
+ *  选项里（公开 IRibbonsOptions 覆盖不到，且 ribbonOptions.load 是整体替换、不含 move），
+ *  只能在拿到容器后从三处补丁：
+ *  ① 容器级 actualOptions —— 首个发射器（convertOptions 创建）不带 particles 覆盖，
+ *     粒子 spawn 时实时读容器选项（resolveParticleOptions）→ 改这里即生效；
+ *  ② 包装 addEmitter —— 后续 ribbons() 走容器复用，发射器显式携带 {4,6}，
+ *     在 EmitterInstance 构造缓存（#particlesOptions）之前覆写；
+ *  ③ 首批粒子 spawn 时已把速度缓存进 retina.moveSpeed（move 插件每帧读取）→ 改现值立即生效。 */
+const RIBBON_SPEED = { min: 10, max: 16 }; // 原 {min:4,max:6}，约 2.5~3 倍
+/** 彩带宽度（= 彩带厚度）：库把粒子 size.value 硬编码为 8·scalar（drawRibbon 用
+ *  offsets.mult(radius) 画带宽，radius 随 size.value 线性放大），scalar 是唯一可调项。
+ *  传 scalar:3 → 每条彩带宽度约 3 倍（原 scalar 默认 1）。 */
+const RIBBON_SCALAR = 3;
+interface RibbonsContainerLike {
+  __ribbonsSpeedPatched?: boolean;
+  actualOptions?: { particles?: { move?: { speed?: unknown } } };
+  addEmitter?: (options: unknown) => unknown;
+  particles?: {
+    count: number;
+    get: (index: number) => { retina?: { moveSpeed?: number } } | undefined;
+  };
+  retina?: { pixelRatio?: number };
+}
+function patchRibbonsSpeed(raw: unknown): void {
+  const container = raw as RibbonsContainerLike | undefined;
+  if (!container || container.__ribbonsSpeedPatched) return;
+  container.__ribbonsSpeedPatched = true;
+  // ① 容器级（首个发射器回落容器选项；plain {min,max} 会被 loadRangeProperty 归一化）
+  const move = container.actualOptions?.particles?.move;
+  if (move) move.speed = { ...RIBBON_SPEED };
+  // ② 后续发射器：包装 addEmitter，覆写其显式携带的 particles.move.speed
+  const originalAddEmitter = container.addEmitter;
+  if (originalAddEmitter) {
+    container.addEmitter = (options) => {
+      const opts = options as { particles?: { move?: { speed?: unknown } } };
+      if (opts?.particles?.move) opts.particles.move.speed = { ...RIBBON_SPEED };
+      return originalAddEmitter.call(container, options);
+    };
+  }
+  // ③ 已在场的首批粒子：retina.moveSpeed 在 spawn 时已算好（getRangeValue×pixelRatio）
+  const particles = container.particles;
+  const ratio = container.retina?.pixelRatio ?? 1;
+  for (let i = 0; i < (particles?.count ?? 0); i++) {
+    const p = particles?.get(i);
+    if (p?.retina) {
+      p.retina.moveSpeed =
+        (RIBBON_SPEED.min + Math.random() * (RIBBON_SPEED.max - RIBBON_SPEED.min)) * ratio;
+    }
+  }
+}
 
 /** 画布设计坐标：横屏 1920x1080 / 竖屏 1080x1920（16:9 / 9:16）。
  *  设计分辨率 = 浏览器源目标分辨率：浏览器源设 1920x1080（竖屏 1080x1920）时 fit=1、
@@ -74,12 +126,16 @@ type ServerMsg =
       layouts: DisplayLayout;
       gifts: DisplayGiftItem[];
       animeSample: AnimeSample | null;
+      /** 横幅按钮最新文字（失焦提交后的完整内容） */
+      bannerText: string;
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
   | { type: "layout"; id: LayoutElementId; orientation: ScreenOrientation; rect: MovableRect }
   | { type: "orientation"; v: ScreenOrientation }
-  | { type: "flags"; flags: DisplayFlags };
+  | { type: "flags"; flags: DisplayFlags }
+  | { type: "bannerText"; text: string }
+  | { type: "celebrate" };
 
 /**
  * 测试模式的常驻入场提示：每轮用递增的 key 重新挂载 EntryBadge。
@@ -123,6 +179,9 @@ export default function DisplayCanvas() {
   // 入场提示实际宽度（EntryBadge 挂载后同步测量上报）：默认位置（未定制）时按该宽度
   // 动态水平居中，昵称长短都能居中；用户拖动/缩放后布局不再等于默认，尊重用户保存位置。
   const [entryMeasuredW, setEntryMeasuredW] = useState(0);
+  // 横幅按钮：最新文字（init/bannerText 消息下发；输入中不更新，面板失焦才广播）+ 实测宽度
+  const [bannerText, setBannerText] = useState("");
+  const [bannerMeasuredW, setBannerMeasuredW] = useState(0);
   // 进门动画样本（编辑模式常驻预览；未封装进 init 时为 null）
   const [animeSample, setAnimeSample] = useState<AnimeSample | null>(null);
   // 朝向：由 init/orientation 消息驱动
@@ -136,6 +195,7 @@ export default function DisplayCanvas() {
     gift: true,
     anime: true,
     giftEffect: true,
+    banner: true,
   });
   // flags 的最新 ref（供 applyEvent 读取，避免闭包过期）
   const flagsRef = useRef(flags);
@@ -149,6 +209,8 @@ export default function DisplayCanvas() {
   const mountedRef = useRef(true);
   // 用最新 ref 保存事件处理函数（applyEvent 在下方声明），避免 connect 依赖它导致 TDZ / 反复重建连接
   const applyEventRef = useRef<(p: DisplayEvent) => void>(() => {});
+  // 撒花调度（面板 celebrate 消息 → 画布播放）：同样经 ref 转发，connect 内直接引用不进依赖
+  const startPartyRef = useRef<() => void>(() => {});
 
   // 服务端不可达判定：断线超过宽限仍连不上 → 判定本地服务/应用已关闭，浏览器源清空不再显示
   const [serverDown, setServerDown] = useState(false);
@@ -197,6 +259,7 @@ export default function DisplayCanvas() {
         setLayouts(msg.layouts);
         setGifts(msg.gifts);
         setAnimeSample(msg.animeSample);
+        setBannerText(typeof msg.bannerText === "string" ? msg.bannerText : "");
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -209,6 +272,11 @@ export default function DisplayCanvas() {
         setOrientation(msg.v);
       } else if (msg.type === "flags") {
         setFlags(msg.flags);
+      } else if (msg.type === "bannerText") {
+        setBannerText(msg.text ?? "");
+      } else if (msg.type === "celebrate") {
+        // 面板"撒花"按钮：模块开关关闭时不播放
+        if (flagsRef.current.banner) startPartyRef.current();
       }
     };
     ws.onclose = () => {
@@ -248,6 +316,77 @@ export default function DisplayCanvas() {
     },
     [send, orientation],
   );
+
+  // —— 撒花（纸屑 + 飘带，一次性庆祝）—— 严格参照 scripts/banner-sample.html 的 party()：
+  // 纸屑循环 7s（每 150ms 一发）+ 飘带循环 4s（每 250ms 一发）；期间防重入（面板重复
+  // "撒花"不叠加），7s 后解除防重入。tsparticles 动态 import（两个子库仅在首次撒花时加载）。
+  // 仅由面板经 WS celebrate 触发；画布内横幅是纯展示元素，无任何点击行为。
+  const partyingRef = useRef(false);
+  const partyTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // 递增代际标识：stopParty 后迟到的动态 import 回调/定时回调据此作废
+  const partySeqRef = useRef(0);
+  const stopParty = useCallback(() => {
+    partySeqRef.current += 1;
+    partyingRef.current = false;
+    for (const t of partyTimersRef.current) clearTimeout(t);
+    partyTimersRef.current = [];
+  }, []);
+  const startParty = useCallback(() => {
+    // 模块开关关闭 / 正在庆祝中：忽略（一次性效果，开关只控制"能否触发"）
+    if (!flagsRef.current.banner || partyingRef.current) return;
+    partyingRef.current = true;
+    partyTimersRef.current = [];
+    const seq = ++partySeqRef.current;
+    const schedule = (fn: () => void, ms: number) => {
+      partyTimersRef.current.push(setTimeout(fn, ms));
+    };
+    void (async () => {
+      try {
+        const [{ confetti }, { ribbons }] = await Promise.all([
+          import("@tsparticles/confetti"),
+          import("@tsparticles/ribbons"),
+        ]);
+        if (seq !== partySeqRef.current) return; // 期间被 stopParty → 放弃
+        // 先注册两个子库的插件（只注册、不 load 容器）：共享的 tsParticles 单例一旦
+        // load 过容器（#initialized=true），再 register 会抛 "Register plugins can only
+        // be done before calling tsParticles.load()"，因此必须在 ribbons()/confetti()
+        // 首次 load 之前把两边插件都注册完，否则后注册的一方永远无法撒花。
+        await Promise.all([confetti.init(), ribbons.init()]);
+        if (seq !== partySeqRef.current) return; // 注册期间被 stopParty → 放弃
+        // 再创建/取回 ribbons 容器并打提速补丁（必须先于 ribbonsLoop；失败不阻断撒花）
+        try {
+          patchRibbonsSpeed(await ribbons());
+        } catch {
+          /* 退化为默认飘带速度，撒花照常 */
+        }
+        const start = performance.now();
+        const confettiLoop = () => {
+          if (seq !== partySeqRef.current || performance.now() - start > 7000) return;
+          confetti({ ticks: 0, scalar: 3 }); // 纸屑 3 倍大小（scalar 缩放粒子尺寸）
+          schedule(confettiLoop, 150);
+        };
+        const ribbonsLoop = () => {
+          if (seq !== partySeqRef.current || performance.now() - start > 4000) return;
+          ribbons({ scalar: RIBBON_SCALAR }); // scalar 决定彩带宽度（约 3 倍）
+          schedule(ribbonsLoop, 250);
+        };
+        confettiLoop();
+        ribbonsLoop();
+        // 纸屑 7s 是整个庆祝的最长时长：到点解除防重入（允许再次触发）
+        schedule(() => {
+          if (seq === partySeqRef.current) partyingRef.current = false;
+        }, 7000);
+      } catch {
+        if (seq === partySeqRef.current) partyingRef.current = false;
+      }
+    })();
+  }, []);
+  startPartyRef.current = startParty;
+
+  // 页面卸载：中断撒花定时循环（防御性清理，避免卸载后仍向引擎派发粒子）
+  useEffect(() => {
+    return () => stopParty();
+  }, [stopParty]);
 
   // 动画队列
   const animeRef = useRef<AnimeEvent | null>(null);
@@ -478,6 +617,19 @@ export default function DisplayCanvas() {
     return entryBase;
   }, [entryBase, entryDefault, entryMeasuredW, orientation]);
 
+  // 横幅：无论文字多少，水平方向永远按按钮实测宽度动态居中（x 忽略持久化值，
+  // 仅 y / scale 由用户拖动决定）——文字长短变化都能自动调整居中。
+  const bannerBase = layouts.banner[orientation];
+  const bannerRect = useMemo(() => {
+    if (bannerMeasuredW > 0) {
+      return {
+        ...bannerBase,
+        x: Math.round((CANVAS_SIZE[orientation].w - bannerMeasuredW * bannerBase.scale) / 2),
+      };
+    }
+    return bannerBase;
+  }, [bannerBase, bannerMeasuredW, orientation]);
+
   // —— 礼物特效默认摆放 ——
   // 目标宽度：横屏占画布宽 1/2，竖屏占满宽；默认底边与画布底边对齐、水平居中。
   // 高度按特效自身宽高比等比换算（不同礼物特效尺寸不同，故默认位置动态计算）。
@@ -636,6 +788,23 @@ export default function DisplayCanvas() {
           editable={isEdit}
         >
           <GiftFlower gifts={gifts} emptyPlaceholder={isEdit} />
+        </MovableBox>
+      )}
+
+      {/* 横幅：画布顶部彩虹胶囊（样式严格参照 banner-sample.html，纯展示元素、无点击语义，
+          悬停仅显示拖拽光标）；默认位置距上边界 20px、按实测宽度水平居中。
+          编辑模式常驻预览（空文字显示默认文案）；源模式仅在有已提交文字时渲染（输入中的草稿不会出现）。 */}
+      {flags.banner && (isEdit || bannerText) && (
+        <MovableBox
+          id="banner"
+          rect={bannerRect}
+          onCommit={commitLayout("banner")}
+          editable={isEdit}
+        >
+          <BannerButton
+            text={bannerText || "欢迎来到直播间"}
+            onMeasure={setBannerMeasuredW}
+          />
         </MovableBox>
       )}
 

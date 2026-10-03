@@ -770,9 +770,14 @@ export async function fetchAnchorGifts(
       skipPull = true;
       console.log(`[AnchorGifts-Tauri] ${session.mid} 已标记无收益，跳过收益记录拉取`);
     } else {
-      skipPull = !(await hasLiveRoom(session.mid));
+      const hasRoom = await hasLiveRoom(session.mid);
+      // 三态：true=有房，false=无房，null=查询失败（不确定）。
+      // 仅确定无房才跳过；查询失败按有房处理继续拉取，避免误伤真实主播（与服务端 checkAnchorHasRoom 一致）。
+      skipPull = hasRoom === false;
       if (skipPull) {
         console.log(`[AnchorGifts-Tauri] ${session.mid} 无直播间，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
+      } else if (hasRoom === null) {
+        console.log(`[AnchorGifts-Tauri] ${session.mid} 直播间查询失败（不确定），按有房处理，继续收益记录拉取`);
       }
     }
 

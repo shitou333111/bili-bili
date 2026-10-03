@@ -1872,8 +1872,11 @@ export default function HomePage() {
     }
     try {
       const has = await checkAccountHasLiveRoom(currentAccount.mid);
-      setHasLiveRoom(has);
-      return has;
+      // 三态：true=有房，false=无房，null=查询失败（不确定）。
+      // 不确定按有房处理，避免误判真实主播（与下方 catch 兜底、服务端 checkAnchorHasRoom 一致）。
+      const hasRoom = has ?? true;
+      setHasLiveRoom(hasRoom);
+      return hasRoom;
     } catch {
       setHasLiveRoom(true);
       return true;

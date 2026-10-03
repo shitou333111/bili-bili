@@ -1,126 +1,126 @@
 "use client";
 
 /**
- * 礼物展示（左上方）：在所有"今日单价 > 阈值"的礼物之间每 8s 轮换一次。
- * 礼物图标放在固定不变的黄色 badge 里（无 ×、无圆形角标），
- * 数量以纯文本形式显示在图标正下方；badge 不动，仅内部"图标 + 数量"渐隐渐显轮换。
+ * 礼物展示（左上方）：横条 badge，宽度固定容纳 3 个礼物图标位。
+ * 礼物数 >= 3 时列表补齐铺满后复制两份从右到左无缝循环滚动；< 3 时静态居中展示。
+ * 显示/隐藏裁剪由 badge 自身（.gift-bar 的 overflow:hidden + 圆角）完成，
+ * 与 badge 形状（含圆角端头）完全对齐，礼物滚到 badge 边界才隐藏。
+ * badge 样式：毛玻璃磨砂（半透明 + backdrop-filter + 细白边、中等圆角略方），
+ * 背景叠一层横幅同款 90° 横向颜色滚动（低透明度），与图标滚动同向配合。
  */
-import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { DisplayGiftItem } from "@/lib/display/types";
 
-const CYCLE_MS = 8000;
-const FADE_MS = 1000;
+const SLOTS = 3; // badge 容纳的礼物位数
+const SLOT_W = 96; // 每个礼物位宽度
+const SLOT_GAP = 4; // 礼物位间距（每项自带右边距，复制两份后两半宽度相等，滚动无缝）
+const BAR_W = SLOT_W * SLOTS + 24; // badge 外宽（比 3 个礼物位多 24px，礼物可滚入两端）
+const BAR_H = 100; // badge 高度（扁一些）
+const ICON = 84; // 礼物图标尺寸
+
+/** 单个礼物位：图标 + 右下角金色数量（紧贴图标右下角，数量为 1 时只显示图标） */
+function GiftSlot({ gift }: { gift: DisplayGiftItem }) {
+  return (
+    <div
+      className="flex shrink-0 items-center justify-center"
+      style={{ width: SLOT_W, marginRight: SLOT_GAP }}
+    >
+      <div className="relative" style={{ width: ICON, height: ICON }}>
+        <img
+          src={gift.img}
+          alt={gift.giftName}
+          className="object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.20)]"
+          style={{ width: ICON, height: ICON }}
+        />
+        {gift.count > 1 && (
+          <span className="absolute right-0 bottom-0 text-[19px] font-bold leading-none text-[#ffd54a] [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
+            ×{gift.count}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 空占位礼物位：白色礼物盒图标（编辑模式下摆放用，无数量） */
+function EmptySlot() {
+  return (
+    <div
+      className="flex shrink-0 items-center justify-center"
+      style={{ width: SLOT_W, marginRight: SLOT_GAP }}
+    >
+      <svg
+        viewBox="0 0 24 24 "
+        style={{ width: ICON, height: ICON }}
+        fill="none"
+        stroke="white"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="8" width="18" height="13" rx="1.5" fill="white" stroke="none" opacity="0.95" />
+        <path d="M3 8h18M12 8v13" strokeWidth="1.4" />
+        <path d="M12 8c-2-3.5-5.5-4.2-7-1.6C3.6 9 7 9.5 12 8z" fill="white" stroke="none" />
+        <path d="M12 8c2-3.5 5.5-4.2 7-1.6C20.4 9 17 9.5 12 8z" fill="white" stroke="none" />
+      </svg>
+    </div>
+  );
+}
 
 export default function GiftFlower({
   gifts,
   emptyPlaceholder = false,
 }: {
   gifts: DisplayGiftItem[];
-  /** 无礼物时也渲染占位圆形 badge（供编辑模式摆放/预览） */
+  /** 无礼物时也渲染占位横条（供编辑模式摆放/预览） */
   emptyPlaceholder?: boolean;
 }) {
-  const [shown, setShown] = useState<DisplayGiftItem | null>(null);
-  // true=内部内容可见；轮换时先 false（渐隐）再 true（渐显）
-  const [fadeIn, setFadeIn] = useState(true);
-  const listRef = useRef(gifts);
-  listRef.current = gifts;
-  const idxRef = useRef(0);
-
-  // 清单变化：切回首个并直接显示
-  useEffect(() => {
-    idxRef.current = 0;
-    setShown(gifts[0] ?? null);
-    setFadeIn(true);
-  }, [gifts]);
-
-  // 每 CYCLE_MS 轮换一次：先渐隐旧内容，再换上新内容并渐显
-  useEffect(() => {
-    if (!gifts.length) return;
-    let cancelled = false;
-    const t = setInterval(() => {
-      setFadeIn(false);
-      setTimeout(() => {
-        if (cancelled) return;
-        idxRef.current = (idxRef.current + 1) % listRef.current.length;
-        setShown(listRef.current[idxRef.current]);
-        setFadeIn(true);
-      }, FADE_MS);
-    }, CYCLE_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [gifts]);
-
   if (!gifts.length && !emptyPlaceholder) return null;
 
-  // 无礼物时的占位 badge：仅保留紫渐变正圆底 + 白色礼物图标（无数量），
-  // 让编辑模式下该元素仍可见可摆放，尺寸与实际展示完全一致。
+  const scrolling = gifts.length >= SLOTS;
+  // 滚动速度：每个礼物约 3.5s，最短 9s，避免礼物太少时转得太快
+  const durSec = Math.max(9, gifts.length * 3.5);
+
+  // 内容：>=3 个礼物循环滚动；否则静态居中；无礼物渲染 3 个占位位
+  const row = (items: ReactNode[]) => (
+    <div className="flex w-full items-center justify-center">{items}</div>
+  );
+  let content: ReactNode;
   if (!gifts.length) {
-    return (
-      <div className="relative w-48 h-48 pointer-events-none">
-        <div
-          className="absolute inset-0 rounded-full border border-black/10 shadow-[0_12px_36px_rgba(0,0,0,0.30)]"
-          style={{ background: "linear-gradient(135deg, #9926AF, #0F0874)" }}
-        >
-          <div className="absolute inset-0 flex items-center justify-center">
-            {/* 白色礼物盒图标（SVG，非 emoji，避免平台字体差异） */}
-            <svg
-              viewBox="0 0 24 24"
-              className="w-20 h-20"
-              fill="none"
-              stroke="white"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="8" width="18" height="13" rx="1.5" fill="white" stroke="none" opacity="0.95" />
-              <path d="M3 8h18M12 8v13" strokeWidth="1.4" />
-              <path d="M12 8c-2-3.5-5.5-4.2-7-1.6C3.6 9 7 9.5 12 8z" fill="white" stroke="none" />
-              <path d="M12 8c2-3.5 5.5-4.2 7-1.6C20.4 9 17 9.5 12 8z" fill="white" stroke="none" />
-            </svg>
-          </div>
-        </div>
+    content = row([<EmptySlot key="e0" />, <EmptySlot key="e1" />, <EmptySlot key="e2" />]);
+  } else if (scrolling) {
+    // 一份列表（base）：礼物太少铺不满 badge 可视宽度时整组重复补齐，
+    // 保证滚动全程（周期末尾位移一份宽度时）窗口始终被礼物铺满、无空白；
+    // 轨道 = base 复制两份 + translateX(0 → -50%)：-50% 正好是一份 base 宽度（width:max-content
+    // 保证按内容宽算，否则按容器宽算会跳变），回到 0 时与首帧完全重合，首尾无缝。
+    const copyW = gifts.length * (SLOT_W + SLOT_GAP);
+    const reps = Math.max(1, Math.ceil(BAR_W / copyW));
+    const base = Array.from({ length: reps }, () => gifts).flat();
+    content = (
+      <div
+        className="flex shrink-0 items-center will-change-transform"
+        style={{ width: "max-content", animation: `gift-bar-marquee ${durSec}s linear infinite` }}
+      >
+        {[...base, ...base].map((g, i) => (
+          <GiftSlot key={i} gift={g} />
+        ))}
       </div>
     );
+  } else {
+    content = row(gifts.map((g, i) => <GiftSlot key={i} gift={g} />));
   }
 
-  if (!shown) return null;
-
-  // 礼物展示：紫渐变正圆 badge（仅图标）+ 数量置于圆外右下角（无白底，仅数字）。
-  // 容器 192x192 与圆同大 → 虚线框右/下与圆的最右/最下相切；数字放容器右下角，
-  // 该角落在圆盘外（45° 弧线之外），数字即显示在圆外并紧贴弧线。
   return (
-    <div className="relative w-48 h-48 pointer-events-none">
-      {/* 紫渐变正圆 badge（仅图标）：铺满容器，背景 #9926AF → #0F0874 */}
-      <div
-        className="absolute inset-0 rounded-full border border-black/10 shadow-[0_12px_36px_rgba(0,0,0,0.30)]"
-        style={{ background: "linear-gradient(135deg, #9926AF, #0F0874)" }}
-      >
-        {/* 礼物图标：尽可能大，居中 */}
-        <div
-          className={`absolute inset-0 flex items-center justify-center transition-opacity duration-1000 ${
-            fadeIn ? "opacity-100" : "opacity-0"
-          }`}
-        >
-          <img
-            src={shown.img}
-            alt={shown.giftName}
-            className="w-[11rem] h-[11rem] object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.20)]"
-          />
-        </div>
+    <div
+      className="gift-bar pointer-events-none relative flex items-center"
+      style={{ width: BAR_W, height: BAR_H }}
+    >
+      {/* 滚动轨道靠左铺满（不居中，否则周期末尾右半段露空白）；
+          裁剪由 .gift-bar 自身的 overflow:hidden + 圆角完成，礼物显示/隐藏边界与 badge 形状完全对齐；
+          z-index:1 盖过 .gift-bar::before 颜色滚动层 */}
+      <div className="relative z-[1] flex w-full items-center">
+        {content}
       </div>
-      {/* 数量：置于圆外右下角、虚线框内，贴圆的下右弧；仅数字，无"×"与白底板。
-          bottom-0/right-0 基础上再向下、向右各 4px（底/右用负值外移）。
-          与图标使用同一 fadeIn 状态 + 相同 duration → 切换时完全同步渐隐渐显。
-          数量为 1 时不显示（单个礼物无需计数） */}
-      <span
-        className={`absolute -right-[4px] -bottom-[4px] text-[40px] font-bold text-black/90 leading-none transition-opacity duration-1000 ${
-          fadeIn ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        {shown.count > 1 ? shown.count : ""}
-      </span>
     </div>
   );
 }

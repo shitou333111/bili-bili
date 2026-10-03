@@ -34,7 +34,7 @@ export interface MovableRect {
 }
 
 /** 可编辑布局的元素 ID */
-export type LayoutElementId = "gift" | "giftEffect" | "entry" | "anime";
+export type LayoutElementId = "gift" | "giftEffect" | "entry" | "anime" | "banner";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
@@ -42,6 +42,7 @@ export interface DisplayLayout {
   giftEffect: Record<ScreenOrientation, MovableRect>;
   entry: Record<ScreenOrientation, MovableRect>;
   anime: Record<ScreenOrientation, MovableRect>;
+  banner: Record<ScreenOrientation, MovableRect>;
 }
 
 /** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用）。
@@ -49,9 +50,9 @@ export interface DisplayLayout {
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   gift: {
-    // 恢复迁移前（960 坐标系）的默认位置：左上角（50,50），不水平居中
-    landscape: { x: 50, y: 50, scale: 1 },
-    portrait: { x: 60, y: 60, scale: 1 },
+    // 恢复迁移前（960 坐标系）的默认位置：左上角，不水平居中（较此前默认右移、下移各 10px）
+    landscape: { x: 60, y: 60, scale: 1 },
+    portrait: { x: 70, y: 70, scale: 1 },
   },
   giftEffect: {
     // {0,0,1} 表示"尚未自定义"：渲染时按特效实际尺寸动态摆放（横屏宽 1/4、距下边界 10%，
@@ -69,6 +70,12 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   anime: {
     landscape: { x: 0, y: 0, scale: 1 },
     portrait: { x: 0, y: 0, scale: 1 },
+  },
+  banner: {
+    // 默认：画布正上方、距上边界 30px。水平方向不持久化：渲染时永远按按钮实测宽度
+    // 动态居中（x=(画布宽-按钮宽×scale)/2），文字多少都自动调整；仅 y / scale 可拖动保存。
+    landscape: { x: 0, y: 30, scale: 1 },
+    portrait: { x: 0, y: 30, scale: 1 },
   },
 };
 
@@ -120,6 +127,25 @@ export interface GiftEffectConfig {
   keyword: boolean;
 }
 
+/** 横幅模块配置（画布顶部彩虹胶囊按钮 + 面板触发撒花庆祝） */
+export interface BannerConfig {
+  /** 模块总开关：关闭后画布不显示横幅按钮、撒花特效也不播放 */
+  enabled: boolean;
+  /** 横幅按钮文字（最多 30 个字；输入中不实时同步，失焦才更新到画布） */
+  text: string;
+}
+
+/** 入场冷却时长选项（频繁进出直播间会反复触发入场特效，参考 B 站默认约几分钟的冷却） */
+export type EntryCooldownOption = "bilibili" | "30min" | "1h" | "10h";
+
+/** 各冷却选项对应的毫秒数（bilibili = 约几分钟，取 5 分钟） */
+export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
+  bilibili: 5 * 60_000,
+  "30min": 30 * 60_000,
+  "1h": 60 * 60_000,
+  "10h": 10 * 60 * 60_000,
+};
+
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
   /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
@@ -132,8 +158,18 @@ export interface DisplayConfig {
   anime: boolean;
   /** 模块4 · 礼物特效（收到带特效的礼物时在画布播放） */
   giftEffect: GiftEffectConfig;
+  /** 模块5 · 横幅（画布顶部横幅按钮 + 撒花庆祝，放在入场动画模块下面） */
+  banner: BannerConfig;
   /** 入场筛选 */
   entryFilter: EntryFilter;
+  /** 入场冷却时长（同一用户距上次触发不足该间隔时不再触发入场特效） */
+  entryCooldown: EntryCooldownOption;
+  /** 各用户上次触发入场特效的时间戳（uid → ms，本地记录，随本配置文件持久化） */
+  entryLastSeen: Record<string, number>;
+  /** 入场动画冷却时长（与入场提示同款选项，但独立判定、独立记录） */
+  animeCooldown: EntryCooldownOption;
+  /** 各用户上次触发动画的时间戳（uid → ms，本地记录，随本配置文件持久化） */
+  animeLastSeen: Record<string, number>;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
   giftPriceThreshold: number;
   /** 高级用户入场动画名单 */
@@ -150,13 +186,15 @@ export interface DisplayConfig {
  *  已无独立"总开关"：master 由各画布显示子模块派生（见 config.ts displayMaster），
  *  master=false 时浏览器源整体不渲染任何内容（显示空白）。 */
 export type DisplayFlags = {
-  /** 派生总开关：任一画布显示子模块（礼物展示/礼物特效/入场提示/入场动画）开启即为 true */
+  /** 派生总开关：任一画布显示子模块（礼物展示/礼物特效/入场提示/入场动画/横幅）开启即为 true */
   master: boolean;
   entry: boolean;
   gift: boolean;
   anime: boolean;
   /** 礼物特效模块开关（从 DisplayConfig.giftEffect.enabled 派生） */
   giftEffect: boolean;
+  /** 横幅模块开关（从 DisplayConfig.banner.enabled 派生） */
+  banner: boolean;
 };
 
 /** 默认展示配置 */
@@ -171,12 +209,20 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
     enabled: false,
     keyword: false,
   },
+  banner: {
+    enabled: false,
+    text: "欢迎来到直播间",
+  },
   entryFilter: {
     zongdu: false,
     tidu: false,
     jianzhang: false,
     medalLevelThreshold: 31,
   },
+  entryCooldown: "bilibili",
+  entryLastSeen: {},
+  animeCooldown: "bilibili",
+  animeLastSeen: {},
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   animeList: [],
   layout: DEFAULT_DISPLAY_LAYOUT,

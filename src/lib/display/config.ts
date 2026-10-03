@@ -34,7 +34,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "giftEffect" | "entry" | "anime", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "gift" | "giftEffect" | "entry" | "anime" | "banner", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -47,6 +47,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
     giftEffect: norm("giftEffect", (r as any).giftEffect),
     entry: norm("entry", r.entry),
     anime: norm("anime", r.anime),
+    banner: norm("banner", (r as any).banner),
   };
 }
 /** 把片段秒数规整为非负有限数（0 = 未设置/从头/播到尾），非法值归 0。 */
@@ -78,11 +79,11 @@ export function resolveAnimeSegment(
 
 /**
  * 派生"总开关"：面板已无独立总开关，任一**画布显示子模块**（收到的礼物展示 / 礼物特效 /
- * 入场提示 / 入场动画）开启即视为开启（画布正常渲染），全部关闭即视为关闭（画布空白）。
+ * 入场提示 / 入场动画 / 横幅）开启即视为开启（画布正常渲染），全部关闭即视为关闭（画布空白）。
  * 注意：盲盒盈亏·弹幕查询与弹幕互动不参与触发（它们不显示在画布上）。
  */
 export function displayMaster(cfg: DisplayConfig): boolean {
-  return !!(cfg.gift || cfg.giftEffect?.enabled || cfg.entry || cfg.anime);
+  return !!(cfg.gift || cfg.giftEffect?.enabled || cfg.entry || cfg.anime || cfg.banner?.enabled);
 }
 
 /**
@@ -94,6 +95,25 @@ export function displayMaster(cfg: DisplayConfig): boolean {
  */
 export function displayNeedsService(cfg: DisplayConfig): boolean {
   return displayMaster(cfg) || !!cfg.blindBoxQuery?.enabled;
+}
+
+/** 上次入场时间记录条数上限：超出时按时间戳保留最近的条目，防止文件无限增长 */
+const MAX_ENTRY_LAST_SEEN = 2000;
+
+/** 清洗"上次入场时间"映射：仅保留 uid 键 + 合法时间戳；超限时丢弃最旧的记录。 */
+function normalizeEntryLastSeen(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const t = Number(v);
+    if (k && Number.isFinite(t) && t > 0) out[k] = Math.floor(t);
+  }
+  const keys = Object.keys(out);
+  if (keys.length > MAX_ENTRY_LAST_SEEN) {
+    keys.sort((a, b) => out[a] - out[b]); // 最旧在前
+    for (const k of keys.slice(0, keys.length - MAX_ENTRY_LAST_SEEN)) delete out[k];
+  }
+  return out;
 }
 
 /** 解析一个可能残缺的配置对象，用默认值补齐缺失字段（向前兼容）。 */
@@ -109,6 +129,11 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       enabled: !!r.giftEffect?.enabled,
       keyword: !!r.giftEffect?.keyword,
     },
+    banner: {
+      enabled: !!r.banner?.enabled,
+      // 按钮文字限制 30 个字以内：超出截断，缺失用默认文案
+      text: (typeof r.banner?.text === "string" ? r.banner.text : d.banner.text).slice(0, 30),
+    },
     entryFilter: {
       zongdu: !!r.entryFilter?.zongdu,
       tidu: !!r.entryFilter?.tidu,
@@ -121,6 +146,18 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
           ? Math.floor(r.entryFilter.medalLevelThreshold)
           : d.entryFilter.medalLevelThreshold,
     },
+    // 入场冷却：非法值回退默认（约几分钟）
+    entryCooldown:
+      r.entryCooldown === "30min" || r.entryCooldown === "1h" || r.entryCooldown === "10h"
+        ? r.entryCooldown
+        : d.entryCooldown,
+    entryLastSeen: normalizeEntryLastSeen(r.entryLastSeen),
+    // 入场动画冷却：与入场提示同款选项、独立记录（非法值回退默认）
+    animeCooldown:
+      r.animeCooldown === "30min" || r.animeCooldown === "1h" || r.animeCooldown === "10h"
+        ? r.animeCooldown
+        : d.animeCooldown,
+    animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&

@@ -409,3 +409,139 @@ body {
 .castle-modal-backdrop.closing {
   animation-name: castle-backdrop-out;
 }
+
+/* ========== 展示模块 · 横幅（参照 scripts/banner-sample.html 的 .party-button 彩虹胶囊，
+   纯展示元素、无点击语义：cursor:inherit 随 MovableBox 外层继承（编辑态 = 移动拖拽标记），
+   无 hover/active/click 任何交互样式）。
+   渐变用 135deg 斜向色带 + 固定正方形瓦片 background-size: 480px 480px：
+   135deg 渐变颜色只依赖 s=x+y，色带呈 "/" 斜线。渐变序列写两份（0%~50% 与 50%~100%）
+   后 s 方向颜色周期恰好 = 480px = 瓦片边长 → 瓦片在横向/纵向平铺时，左右上下边缘
+   逐行同色，整个画面是连续的斜向彩虹，任何位置都无竖直/水平分界线。
+   动画只平移 background-position-x（0 → 960px = 2 个瓦片整数倍）：循环回跳点图案
+   逐点重合 → 无缝循环；水平平移斜向色带在视觉上表现为垂直于色带的对角滚动。 ========== */
+.party-button {
+  position: relative;
+  padding: 14px 36px;
+  border-radius: 999px;
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: white;
+  /* 非按钮：光标随外层 MovableBox 继承（编辑态 cursor-move），绝不出现可点击手型 */
+  cursor: inherit;
+  background: linear-gradient(
+    135deg,
+    #ff006e 0%,
+    #ffbe0b 12.5%,
+    #00f5d4 25%,
+    #8338ec 37.5%,
+    #ff006e 50%,
+    #ffbe0b 62.5%,
+    #00f5d4 75%,
+    #8338ec 87.5%,
+    #ff006e 100%
+  );
+  background-size: 480px 480px;
+  box-shadow:
+    0 0 20px rgba(255, 0, 110, 0.8),
+    0 0 40px rgba(131, 56, 236, 0.6),
+    0 10px 25px rgba(0, 0, 0, 0.4);
+  animation: banner-gradient 4s linear infinite;
+}
+
+.party-button::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    #ff006e 0%,
+    #ffbe0b 12.5%,
+    #00f5d4 25%,
+    #8338ec 37.5%,
+    #ff006e 50%,
+    #ffbe0b 62.5%,
+    #00f5d4 75%,
+    #8338ec 87.5%,
+    #ff006e 100%
+  );
+  background-size: 480px 480px;
+  /* 光晕盒四周外扩 4px，取样原点在 x+y 上比按钮多 8px；y 方向补 8px 使光晕与
+     按钮色带完全同相位（x 方向由同一 keyframes 动画同步） */
+  background-position: 0 8px;
+  animation: banner-gradient 4s linear infinite;
+  filter: blur(18px);
+  opacity: 0.8;
+  z-index: -1;
+}
+
+/* 横幅专属：斜向色带的对角滚动（party-gradient 的反方向）。只动 background-position-x，
+   位移取瓦片边长整数倍（960px = 2×480px），循环回跳时图案逐点重合 → 无缝；
+   y 保持各自静态值（::before 的 8px 相位补偿不被动画覆盖） */
+@keyframes banner-gradient {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    background-position-x: 960px;
+  }
+}
+
+@keyframes party-gradient {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 300% 50%;
+  }
+}
+
+/* ========== 展示模块 · 礼物横条 badge：毛玻璃磨砂 + 横幅同款横向颜色滚动 ========== */
+.gift-bar {
+  position: relative;
+  overflow: hidden;
+  /* 中等圆角（略方一些，不做成全圆胶囊） */
+  border-radius: 44px;
+  /* 毛玻璃：半透明底 + 磨砂模糊 + 细白边（透出直播背景）；色彩适度增强避免过于平淡 */
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+/* 背景颜色滚动层：与横幅按钮同源（90° 横向 party-gradient），低透明度薄铺，
+   与礼物图标滚动同向（从右向左）配合 */
+.gift-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    #ff006e,
+    #ffbe0b,
+    #00f5d4,
+    #8338ec,
+    #ff006e
+  );
+  background-size: 300% 100%;
+  animation: party-gradient 4s linear infinite;
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+/* 礼物 ≥3 个时从右到左无缝循环滚动（列表复制两份，位移正好一半） */
+@keyframes gift-bar-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}

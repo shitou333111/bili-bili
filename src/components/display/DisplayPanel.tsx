@@ -16,6 +16,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   type DisplayConfig,
   type EntryAnimeConfig,
+  type EntryCooldownOption,
   type ScreenOrientation,
 } from "@/lib/display/types";
 import {
@@ -128,6 +129,9 @@ const btnGhost =
 /** 输入/下拉基础样式（填充底色、无边框） */
 const inputBase =
   "rounded-lg bg-white/70 px-2.5 py-1.5 text-sm text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#1f1c17]/15";
+/** 扁平输入框（纵向更矮，用于与其他控件同行的数值输入） */
+const inputFlat =
+  "rounded-lg bg-white/70 px-2.5 py-0.5 text-sm text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#1f1c17]/15";
 
 /** 隐藏 number 输入框的上下箭头（WebKit/Blink 的 spin button） */
 const noSpin =
@@ -447,6 +451,24 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     },
     [mid],
   );
+
+  // 横幅 · 输入框"编辑态"文本：输入过程中不实时同步到画布，光标脱离输入框（失焦）才保存并广播，限 30 字
+  const [bannerEditText, setBannerEditText] = useState(DEFAULT_DISPLAY_CONFIG.banner.text);
+  // 中文输入法（IME）合成态：以输入法 composition 事件为准（主流做法，不按按键猜测）。
+  // 合成中的拼音只是临时文本——不截断、不计入字数；确认（空格/Enter 上屏）后才计数并限长。
+  const imeComposingRef = useRef(false);
+  const imeConfirmedLenRef = useRef(0); // 合成开始瞬间"已确认文本"的长度
+  useEffect(() => {
+    setBannerEditText(config.banner.text);
+  }, [config.banner.text]);
+  const commitBannerText = useCallback(() => {
+    const text = bannerEditText.slice(0, 30);
+    setBannerEditText(text);
+    if (text === config.banner.text) return;
+    void update({ banner: { ...config.banner, text } }).then(() =>
+      displayDanmaku.broadcastBannerText(text),
+    );
+  }, [bannerEditText, config.banner, update]);
 
   // 布局编辑模态框开关（声明在监听服务同步之前：停止监听时需一并关闭）
   const [editOpen, setEditOpen] = useState(false);
@@ -1108,7 +1130,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             />
           </div>
           <p className="mt-2 text-xs text-black/35 leading-relaxed">
-            开启后，弹幕内容精确匹配某个礼物名称时，也会在礼物特效的相同位置播放该礼物特效
+            开启后，弹幕内容如果是某个礼物名称，就会在播放该礼物特效
           </p>
         </Card>
       </section>
@@ -1123,7 +1145,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         />
         <Card bg="bg-blue-200" border="border-blue-400">
           <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
             <Check
               label="舰长"
               checked={config.entryFilter.jianzhang}
@@ -1145,8 +1167,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 update({ entryFilter: { ...config.entryFilter, zongdu: v } })
               }
             />
-          </div>
-          <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
+            {/* 加号：居中于航海筛选与灯牌筛选两组之间，表示两者叠加（AND）关系 */}
+            <span className="mx-auto shrink-0 text-black/40" aria-hidden>
+              <svg width="22" height="22" viewBox="0 0 12 12" fill="none">
+                <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </span>
             <span className="shrink-0">粉丝灯牌等级 ≥</span>
             <input
               type="number"
@@ -1160,9 +1186,40 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                   },
                 })
               }
-              className={`${inputBase} w-16`}
+              className={`${inputFlat} noSpin w-16`}
             />
-            <span className="shrink-0 text-black/35">（0=不限制；未勾选大航海条件时仅按灯牌筛选）</span>
+          </div>
+          {/* 入场冷却：同一用户距上次触发不足间隔则不再触发（防止频繁进出反复播放） */}
+          <div className="mt-3">
+            <p className="text-xs text-black/45">触发间隔（同一用户间隔内进入不重复触发）</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
+              {(
+                [
+                  ["bilibili", "B站默认（约几分钟）"],
+                  ["30min", "半小时"],
+                  ["1h", "1小时"],
+                  ["10h", "10小时"],
+                ] as Array<[EntryCooldownOption, string]>
+              ).map(([key, label]) => {
+                const active = config.entryCooldown === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => update({ entryCooldown: key })}
+                    className={`rounded-full px-3 py-1 text-xs transition cursor-pointer ${
+                      active
+                        ? "bg-blue-600 text-white shadow"
+                        : "bg-white/70 text-black/55 hover:bg-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </Card>
       </section>
@@ -1350,6 +1407,106 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               暂无名单。可从上方舰长列表选择，或按 UID 添加用户，再为其选择视频动画。
             </div>
           )}
+          {/* 动画冷却：与入场提示同款选项，但独立判定、独立记录（完全对照入场提示逻辑） */}
+          <div className="mt-3">
+            <p className="text-xs text-black/45">触发间隔（同一用户间隔内再次进入不重复触发）</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
+              {(
+                [
+                  ["bilibili", "B站默认（约几分钟）"],
+                  ["30min", "半小时"],
+                  ["1h", "1小时"],
+                  ["10h", "10小时"],
+                ] as Array<[EntryCooldownOption, string]>
+              ).map(([key, label]) => {
+                const active = config.animeCooldown === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => update({ animeCooldown: key })}
+                    className={`rounded-full px-3 py-1 text-xs transition cursor-pointer ${
+                      active
+                        ? "bg-violet-600 text-white shadow"
+                        : "bg-white/70 text-black/55 hover:bg-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+      </section>
+
+      {/* 横幅：画布正上方的彩虹横幅（点右侧撒花触发庆祝），输入框失焦后同步文字到画布 */}
+      <section className="mt-4">
+        <ModuleTitle
+          title="横幅"
+          onColor="bg-fuchsia-500"
+          checked={config.banner.enabled}
+          onToggle={(v) => void toggleModule({ banner: { ...config.banner, enabled: v } })}
+        />
+        <Card bg="bg-fuchsia-200" border="border-fuchsia-400">
+          <p className="text-xs text-black/50 leading-relaxed">
+            显示一个彩虹横幅（可移动/缩放），横幅内容在下方输入，通常用于重要通知/庆祝粉丝升级、收到大礼物等。点击右侧
+            <b className="text-black/70"> 撒花 </b>按钮，会释放纸屑与飘带庆祝特效。
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="text"
+              value={bannerEditText}
+              placeholder="横幅文字，最多 30 字"
+              onChange={(e) => {
+                // 合成中（拼音未上屏）原样保留不截断；确认后的输入才限长 30
+                //（React 声明 nativeEvent 为 Event，运行时实为 InputEvent，带 isComposing）
+                const native = e.nativeEvent as Event & { isComposing?: boolean };
+                const composing = !!native.isComposing || imeComposingRef.current;
+                setBannerEditText(
+                  composing ? e.target.value : e.target.value.slice(0, 30),
+                );
+              }}
+              onCompositionStart={() => {
+                imeComposingRef.current = true;
+                imeConfirmedLenRef.current = bannerEditText.length;
+              }}
+              onCompositionEnd={(e) => {
+                imeComposingRef.current = false;
+                setBannerEditText(e.currentTarget.value.slice(0, 30));
+              }}
+              onBlur={commitBannerText}
+              onKeyDown={(e) => {
+                // 合成中的 Enter 是确认拼音，不提交失焦
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              className={`${inputBase} flex-1`}
+            />
+            <span className="shrink-0 text-[11px] text-black/35">
+              {imeComposingRef.current
+                ? imeConfirmedLenRef.current
+                : bannerEditText.length}
+              /30
+            </span>
+            <button
+              type="button"
+              disabled={!config.banner.enabled}
+              onClick={() => void displayDanmaku.celebrate()}
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold text-white transition ${
+                config.banner.enabled
+                  ? "bg-gradient-to-r from-fuchsia-500 via-amber-400 to-teal-400 shadow-md hover:brightness-110 active:scale-95"
+                  : "cursor-not-allowed bg-black/15"
+              }`}
+            >
+              撒花
+            </button>
+          </div>
+          {/* <p className="mt-1.5 text-[11px] text-black/40">
+            输入完成后才会把文字更新到画布，输入过程中画布保持原内容。
+          </p> */}
         </Card>
       </section>
 

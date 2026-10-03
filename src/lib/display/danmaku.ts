@@ -10,6 +10,7 @@
  */
 import { getPlatform, type Platform } from "@/lib/platform";
 import {
+  ENTRY_COOLDOWN_MS,
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
@@ -804,17 +805,19 @@ class DisplayDanmakuService {
       layouts: cfg.layout,
       gifts,
       animeSample,
+      bannerText: cfg.banner?.text ?? "",
       flags: {
         master: displayMaster(cfg),
         entry: cfg.entry,
         gift: cfg.gift,
         anime: cfg.anime,
         giftEffect: !!cfg.giftEffect?.enabled,
+        banner: !!cfg.banner?.enabled,
       },
     });
   }
 
-  /** 广播当前各模块开关状态（master/entry/gift/anime/giftEffect）到浏览器源，画布据此即时
+  /** 广播当前各模块开关状态（master/entry/gift/anime/giftEffect/banner）到浏览器源，画布据此即时
    *  显隐元素。在面板切换各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。
    *  master 为派生值：任一画布显示子模块开启即为 true。 */
   async broadcastFlags(): Promise<void> {
@@ -827,8 +830,19 @@ class DisplayDanmakuService {
         gift: cfg.gift,
         anime: cfg.anime,
         giftEffect: !!cfg.giftEffect?.enabled,
+        banner: !!cfg.banner?.enabled,
       },
     });
+  }
+
+  /** 广播横幅按钮最新文字到画布（面板输入框失焦后调用，配置已落盘）。 */
+  async broadcastBannerText(text: string): Promise<void> {
+    await this.broadcast({ type: "bannerText", text });
+  }
+
+  /** 触发一次撒花庆祝（纸屑 + 飘带，一次性效果；面板"撒花"按钮调用）。 */
+  async celebrate(): Promise<void> {
+    await this.broadcast({ type: "celebrate" });
   }
 
   /** 包装 broadcast_display：无服务/非 Tauri 时静默（Rust 端未启动同样是 no-op）。 */
@@ -1176,35 +1190,17 @@ class DisplayDanmakuService {
     const config = await loadDisplayConfig(mid);
     const guardType = Number(user.guardType) || 0;
     const medalLevel = Number(user.fansMedal?.level) || 0;
+    const uid = Number(user.uid);
 
-    // 高级用户自定义入场动画：命中名单且启用 → 额外播放视频动画
+    // 先判定两个模块本次是否"本应触发"（都不触发则不记冷却时间）
     const animeCfg = Object.values(config.animeList).find(
       (a) => a.enabled && (a.videoLandscape || a.videoPortrait) && a.uid === user.uid,
     );
-    if (config.anime && animeCfg && this.isNative()) {
-      const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
-      const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
-      this.pushDebug("entry", "anime", {
-        uid: Number(user.uid),
-        uname: user.uname || "",
-        video,
-        startSec: seg.startSec,
-        endSec: seg.endSec,
-      });
-      this.emitTo({
-        type: "anime",
-        user: { uid: Number(user.uid), uname: user.uname || "", face: user.face || "" },
-        videoSrc: toDisplayVideoSrc(video),
-        startSec: seg.startSec,
-        endSec: seg.endSec,
-      });
-      // 不 return：高级用户同样走普通入场提示
-    }
-
-    // 入场提示模块：应用筛选（skipFilter=true 时跳过——事件未携带勋章/大航海信息，无法评估）
-    if (!config.entry || (!skipFilter && !this.matchesEntryFilter(config, guardType, medalLevel))) {
+    const animeOn = !!(config.anime && animeCfg && this.isNative());
+    const entryOn = !!(config.entry && (skipFilter || this.matchesEntryFilter(config, guardType, medalLevel)));
+    if (!animeOn && !entryOn) {
       this.pushDebug("entry", "filtered", {
-        uid: Number(user.uid),
+        uid,
         uname: user.uname || "",
         guardType,
         medalLevel,
@@ -1214,17 +1210,78 @@ class DisplayDanmakuService {
       });
       return;
     }
-    this.pushDebug("entry", "emit", { uid: Number(user.uid), uname: user.uname || "", guardType, medalLevel });
-    this.emitTo({
-      type: "entry",
-      user: {
-        uid: Number(user.uid),
-        uname: user.uname || "",
-        face: user.face || "",
-        guardType: guardType as any,
-        medalLevel,
-      },
-    });
+
+    // 入场提示 / 入场动画 各有独立冷却（同款选项、独立记录，互不影响）；
+    // 记录随 display-config.json 本地持久化
+    const now = Date.now();
+    let needSave = false;
+
+    // 高级用户自定义入场动画：命中名单且启用 → 播放视频动画（自查入场动画冷却）
+    if (animeOn && animeCfg) {
+      const animeCooldownMs =
+        ENTRY_COOLDOWN_MS[config.animeCooldown] ?? ENTRY_COOLDOWN_MS.bilibili;
+      const animeLast = Number(config.animeLastSeen[uid]) || 0;
+      if (animeLast && now - animeLast < animeCooldownMs) {
+        // 冷却中：不播动画、不更新时间（完全对照入场提示的冷却逻辑）
+        this.pushDebug("entry", "anime-cooldown", {
+          uid,
+          uname: user.uname || "",
+          waitSec: Math.ceil((animeCooldownMs - (now - animeLast)) / 1000),
+        });
+      } else {
+        const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
+        const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
+        this.pushDebug("entry", "anime", {
+          uid,
+          uname: user.uname || "",
+          video,
+          startSec: seg.startSec,
+          endSec: seg.endSec,
+        });
+        this.emitTo({
+          type: "anime",
+          user: { uid, uname: user.uname || "", face: user.face || "" },
+          videoSrc: toDisplayVideoSrc(video),
+          startSec: seg.startSec,
+          endSec: seg.endSec,
+        });
+        // 记录动画触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
+        config.animeLastSeen[uid] = now;
+        needSave = true;
+      }
+      // 不 return：高级用户同样走普通入场提示（各自独立冷却）
+    }
+
+    if (entryOn) {
+      // 入场冷却：同一用户距上次触发不足设定间隔 → 不触发、不更新时间
+      //（频繁进出直播间反复触发体验不好）
+      const cooldownMs = ENTRY_COOLDOWN_MS[config.entryCooldown] ?? ENTRY_COOLDOWN_MS.bilibili;
+      const last = Number(config.entryLastSeen[uid]) || 0;
+      if (last && now - last < cooldownMs) {
+        this.pushDebug("entry", "cooldown", {
+          uid,
+          uname: user.uname || "",
+          waitSec: Math.ceil((cooldownMs - (now - last)) / 1000),
+        });
+      } else {
+        // 记录触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
+        config.entryLastSeen[uid] = now;
+        needSave = true;
+        this.pushDebug("entry", "emit", { uid, uname: user.uname || "", guardType, medalLevel });
+        this.emitTo({
+          type: "entry",
+          user: {
+            uid,
+            uname: user.uname || "",
+            face: user.face || "",
+            guardType: guardType as any,
+            medalLevel,
+          },
+        });
+      }
+    }
+
+    if (needSave) void saveDisplayConfig(mid, config).catch(() => {});
   }
 
   /** 拉取礼物特效配套 JSON 配置（主窗口用 invoke fetch_json 绕过 CORS），带内存缓存。 */

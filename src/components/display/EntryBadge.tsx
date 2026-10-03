@@ -33,13 +33,38 @@ const HOLD_MS = 3000;
 export const ENTRY_TOTAL_MS = 12000;
 /** 粒子颜色：仅作 fallback（库内已按时间点映射到红橙黄暖色相区间 0°~60°） */
 const PARTICLE_COLOR = "#003ff1";
+/** badge 核心渐变（红→橙→黄，与粒子色相对应）；光晕层复用同一渐变保证融合一致 */
+const BADGE_GRADIENT =
+  "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))";
+/** 粒子聚合/滑入滑出时长（= 库 duration）；光晕 clip-path 擦除与之同步 */
+const ANIM_MS = 1300;
+/** 约 easeInExpo（库 easing）：与 badge 滑入/滑出同缓动，供光晕 clip-path 擦除同步显现 */
+const ENTRY_EASE = "cubic-bezier(0.7, 0, 0.84, 0)";
+/** 光晕最大向外扩散量（px）≈ HALO_PAD + 远端 blur 泄出：clip-path 用负 inset 保留完整辉光不被裁掉 */
+const HALO_EXTENT = 40;
+/**
+ * 光晕向外扩展量（px，1920 设计坐标）。
+ * 光晕层以绝对定位负 inset 外挂在 ParticleButton **之外**，不参与任何布局/测量：
+ * - 库按其 wrapper 的 getBoundingClientRect 决定粒子 canvas 大小（wrapper 尺寸=子元素尺寸），
+ *   且 wrapper 带 overflow:hidden（放进子树会被裁掉外扩光晕）；
+ * - 因此粒子特效与画布虚线选择框都只匹配"排除光晕的核心 badge"尺寸，光晕纯绘制在外围。
+ */
+const HALO_PAD = 14;
+
+/** 头像边长（px，1920 设计坐标）；与昵称字号同比放大，数值走内联 style（同 padding，不依赖 Tailwind 类） */
+const AVATAR_SIZE = 72;
+/** 昵称字号（px，1920 设计坐标） */
+const NAME_FONT_SIZE = 36;
 
 /** 头像：face 缺失/加载失败时回退为昵称首字渐变圆。无白色圆环，头像占满整个圆形区域。 */
 function Avatar({ face, uname }: { face: string; uname: string }) {
   const [failed, setFailed] = useState(!face);
   if (failed) {
     return (
-      <div className="w-14 h-14 rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] flex items-center justify-center text-white text-[28px]">
+      <div
+        className="rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] flex items-center justify-center text-white"
+        style={{ width: AVATAR_SIZE, height: AVATAR_SIZE, fontSize: NAME_FONT_SIZE }}
+      >
         {(uname || "?")[0]}
       </div>
     );
@@ -49,7 +74,8 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
       src={face}
       alt=""
       onError={() => setFailed(true)}
-      className="w-14 h-14 rounded-full object-cover"
+      className="rounded-full object-cover"
+      style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
     />
   );
 }
@@ -106,43 +132,94 @@ export default function EntryBadge({
   }, []);
 
   return (
-    <ParticleButton
-      hidden={hidden}
-      onComplete={handleComplete}
-      color={PARTICLE_COLOR}
-      duration={1300}
-      // 以下参数除 size/speed 外与库官方 demo 第 5 个 "Refresh" 按钮完全一致
-      // （example/src/demos.js）：duration:1300 / easing:'easeInExpo' / size:3 / speed:1 /
-      // particlesAmountCoefficient:10 / oscillationCoefficient:1 / direction 默认 'left'。
-      //
-      // size 与 speed 有意改回"原库默认随机函数"（defaultProps 中 size=1~3 随机、
-      // speed=rand(4)≈±2 随机）：demo #5 的固定 speed=1 会让同一帧生成的所有粒子
-      // x 位移完全同步（初始位移 -speed×frames 与逐帧增量 +speed 都相同），整帧上千
-      // 粒子堆在同一 x 坐标、铺满 badge 高度 → 视觉上呈"竖直对齐成一条竖线"水平扫过，
-      // 没有原库 demo 的分散飘逸感（已用 _probe_js/line-check.cjs 复刻粒子运动模拟证实：
-      // 固定 speed 首帧仅 1 个不同 x 坐标，随机 speed 有上千个）。恢复随机后粒子速度
-      // 各异、大小参差，水平散开成片，还原原库 demo 的粒子聚散效果。
-      easing="easeInExpo"
-      size={() => Math.floor(Math.random() * 4 + 3)}
-      speed={() => Math.random() * 4 - 2}
-      particlesAmountCoefficient={15}
-      oscillationCoefficient={1}
-      className="pointer-events-none"
-    >
-      {/* 胶囊 badge：头像（左）+ 昵称（右）；背景为红橙黄暖色渐变（0°→30°→60°），
-          与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢，消散时反向退色。
-          inline-flex：宽度严格按"头像+昵称+内边距"收缩自适应，不被父级 block 拉伸成固定宽 */}
+    // 最外层只做定位容器：尺寸 = ParticleButton（= 核心 badge，不含光晕）。
+    // 光晕以绝对定位负 inset 外挂，不参与布局 → 库 wrapper 的 getBoundingClientRect
+    // （决定粒子 canvas 大小）与父级 MovableBox 虚线选择框都只匹配核心 badge 尺寸；
+    // 本容器及祖先（除画布整体 overflow）无裁剪，光晕纯绘制在外围。
+    <div className="relative inline-flex">
+      {/* 光晕组：三层渐进模糊的暖色辉光，外挂在 ParticleButton 之外（不参与布局/测量，
+          也不被库 wrapper 的 overflow:hidden 裁剪）。整组用 clip-path 做"从右到左"的擦除显现，
+          与库对 badge 内容（昵称/头像）的 translateX+裁剪滑入同向、同时长、同缓动 → 同步逐渐形成，
+          而不是一次性淡入成型。hidden 时擦到最右外侧 → 完全不可见。 */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          clipPath: hidden
+            ? `inset(-${HALO_EXTENT}px -${HALO_EXTENT}px -${HALO_EXTENT}px calc(100% + ${HALO_EXTENT}px))`
+            : `inset(-${HALO_EXTENT}px)`,
+          transition: `clip-path ${ANIM_MS}ms ${ENTRY_EASE}`,
+        }}
+      >
+        {/* 远端大光晕：大模糊、向外大范围扩散 */}
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            inset: -HALO_PAD,
+            borderRadius: 999,
+            background: BADGE_GRADIENT,
+            filter: "blur(18px)",
+            opacity: 0.5,
+          }}
+        />
+        {/* 中层光晕：衔接远端与贴边，形成"逐渐模糊逐渐透明"的连续梯度 */}
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            inset: -HALO_PAD / 2,
+            borderRadius: 999,
+            background: BADGE_GRADIENT,
+            filter: "blur(10px)",
+            opacity: 0.75,
+          }}
+        />
+        {/* 贴边光晕：从 badge 轮廓起 blur 向外渗，把生硬的边缘线糊开 */}
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            inset: -3,
+            borderRadius: 999,
+            background: BADGE_GRADIENT,
+            filter: "blur(6px)",
+            opacity: 1,
+          }}
+        />
+      </div>
+      <ParticleButton
+        hidden={hidden}
+        onComplete={handleComplete}
+        color={PARTICLE_COLOR}
+        duration={ANIM_MS}
+        // 以下参数除 size/speed 外与库官方 demo 第 5 个 "Refresh" 按钮完全一致
+        // （example/src/demos.js）：duration:1300 / easing:'easeInExpo' / size:3 / speed:1 /
+        // particlesAmountCoefficient:10 / oscillationCoefficient:1 / direction 默认 'left'。
+        //
+        // size 与 speed 有意改回"原库默认随机函数"（defaultProps 中 size=1~3 随机、
+        // speed=rand(4)≈±2 随机）：demo #5 的固定 speed=1 会让同一帧生成的所有粒子
+        // x 位移完全同步（初始位移 -speed×frames 与逐帧增量 +speed 都相同），整帧上千
+        // 粒子堆在同一 x 坐标、铺满 badge 高度 → 视觉上呈"竖直对齐成一条竖线"水平扫过，
+        // 没有原库 demo 的分散飘逸感（已用 _probe_js/line-check.cjs 复刻粒子运动模拟证实：
+        // 固定 speed 首帧仅 1 个不同 x 坐标，随机 speed 有上千个）。恢复随机后粒子速度
+        // 各异、大小参差，水平散开成片，还原原库 demo 的粒子聚散效果。
+        easing="easeInExpo"
+        size={() => Math.floor(Math.random() * 4 + 3)}
+        speed={() => Math.random() * 4 - 2}
+        particlesAmountCoefficient={15}
+        oscillationCoefficient={1}
+        className="pointer-events-none"
+      >
+        {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）；背景为红橙黄暖色
+            渐变（0°→30°→60°），与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢。
+            inline-flex 宽度严格按"头像+昵称+内边距"收缩自适应。
+            不加 inset box-shadow：白色内发光会在 badge 边缘叠一层"白色背景"，
+            与外侧三层光晕之间形成明显分界。去掉后 badge 渐变直接与同色光晕相接、无缝融合。
+            不加 border：半透明白边框会在 badge 边缘形成一圈白环，同样割裂渐变与光晕。 */}
       <div
         ref={badgeRef}
-        className="inline-flex items-center gap-6 rounded-full py-[2px] border border-white/30"
+        className="relative inline-flex items-center gap-6 rounded-full py-[2px]"
         style={{
-          background:
-            "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))",
-          // 渐变铺满整个 border-box（默认 background-origin 为 padding-box，只铺到 padding 区，
-          // 导致两端 1px 半透明白 border 环落在渐变之外、被浏览器填充成"对侧端色"——
-          // 左端(红侧)环显示黄色、右端(黄侧)环显示红色。改为 border-box 后 0% 红 / 100% 黄
-          // 正好落在两端边框环下方，两端尖角颜色恢复正常。
-          backgroundOrigin: "border-box",
+          position: "relative",
+          background: BADGE_GRADIENT,
           // padding 用内联 style（不依赖 Tailwind 类）：pr-6 等新增类未被打包进
           // Tailwind v4 JIT 产物，实测 paddingRight 为 0 导致昵称紧贴右边界；
           // 48px = 昵称末字到 badge 右边界间距（1920 设计坐标）
@@ -151,10 +228,14 @@ export default function EntryBadge({
         }}
       >
         <Avatar face={user.face} uname={user.uname} />
-        <span className="text-[28px] font-bold text-white whitespace-nowrap tracking-wider">
+        <span
+          className="font-bold text-white whitespace-nowrap tracking-wider"
+          style={{ fontSize: NAME_FONT_SIZE }}
+        >
           {user.uname}
         </span>
       </div>
-    </ParticleButton>
+      </ParticleButton>
+    </div>
   );
 }

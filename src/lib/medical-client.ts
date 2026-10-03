@@ -93,21 +93,29 @@ export type MedicalUnameResult = {
 export async function fetchMedicalRoomId(mid: number): Promise<MedicalRoomIdResult> {
   const platform: Platform = await getPlatform();
   if (platform.isNative) {
-    try {
-      const buvid = await getBuvid();
-      const data = await platform.fetchBilibiliJson<MedicalRoomIdResult>({
-        url: `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${mid}`,
-        cookie: buvid,
-        live: true,
-      });
-      if (data?.code !== 0 || !data?.data) {
-        return { code: data?.code ?? -1, message: data?.message ?? "未获取到房间号", data: null };
+    const buvid = await getBuvid();
+    // 直连偶发网络错误（error sending request），加少量重试
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const data = await platform.fetchBilibiliJson<MedicalRoomIdResult>({
+          url: `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${mid}`,
+          cookie: buvid,
+          live: true,
+        });
+        if (data?.code !== 0 || !data?.data) {
+          return { code: data?.code ?? -1, message: data?.message ?? "未获取到房间号", data: null };
+        }
+        return { code: 0, data: { roomid: data.data.roomid, roomStatus: data.data.roomStatus } };
+      } catch (err) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 400 * Math.pow(2, attempt)));
+          continue;
+        }
+        console.error("[MedicalClient] 直连获取房间号失败:", err);
+        return { code: -1, message: "直连获取房间号失败", data: null };
       }
-      return { code: 0, data: { roomid: data.data.roomid, roomStatus: data.data.roomStatus } };
-    } catch (err) {
-      console.error("[MedicalClient] 直连获取房间号失败:", err);
-      return { code: -1, message: "直连获取房间号失败", data: null };
     }
+    return { code: -1, message: "直连获取房间号失败", data: null };
   }
   // Web：走服务器代理
   try {
@@ -122,11 +130,12 @@ export async function fetchMedicalRoomId(mid: number): Promise<MedicalRoomIdResu
  * 判断账号是否有直播间（是否为主播）。
  * getRoomInfoOld 为公开接口，无房时 roomStatus=0、roomid=0，无需登录凭证即可查询。
  * roomStatus 优先（0=无房，1=有房），roomid>0 作为兜底（部分直连路径仅返回 roomid）。
- * 出错（网络/接口异常等）时返回 false，由调用方决定幂等兜底。
+ * 三态返回：true=有房，false=无房，null=查询失败（不确定）。
+ * 查询失败绝不返回 false：调用方应将 null 按"有房"处理（与服务端 checkAnchorHasRoom 一致），避免误判真实主播。
  */
-export async function hasLiveRoom(mid: number): Promise<boolean> {
+export async function hasLiveRoom(mid: number): Promise<boolean | null> {
   const r = await fetchMedicalRoomId(mid).catch(() => null);
-  if (!r || r.code !== 0 || !r.data) return false;
+  if (!r || r.code !== 0 || !r.data) return null;
   // roomStatus 明确给出时以其为准
   if (typeof r.data.roomStatus === "number") return r.data.roomStatus === 1;
   return (r.data.roomid ?? 0) > 0;
