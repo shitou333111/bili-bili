@@ -664,12 +664,12 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     }
   };
 
-  /** 盲盒盈亏弹幕文本：[吃瓜]<时间段><盲盒名称>：<n>个 <爆出价值>-<花费>=<盈亏>电池 */
+  /** 盲盒盈亏弹幕文本：[吃瓜]<时间段><盲盒名称>：<n>个 <爆出价值>-<花费> = <盈亏>电池 */
   const buildBlindBoxDanmakuText = (
     stat: BlindBoxProfitResult,
     dateRange: string,
   ): string =>
-    `[吃瓜]${blindBoxPeriodText(dateRange)}${stat.blindBoxName}：${stat.drawCount}个 ${stat.totalEarned}-${stat.totalSpent}=${stat.profit}电池`;
+    `[吃瓜]${blindBoxPeriodText(dateRange)}${stat.blindBoxName}：${stat.drawCount}个 ${stat.totalEarned}-${stat.totalSpent} = ${stat.profit}电池`;
 
   /** 发送盲盒盈亏弹幕到主播直播间 */
   const handleSendBlindBoxDanmaku = async (stat: BlindBoxProfitResult, ruid: string) => {
@@ -1411,7 +1411,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                         {currentFilter.ruid !== "" && (
                           <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-black/15 bg-gray-200 px-3 py-1.5 text-xs">
                             <span className="flex-1 min-w-0 text-black/80 font-medium">
-                              [吃瓜]{blindBoxPeriodText(currentFilter.dateRange)}{stat.blindBoxName}：<b>{stat.drawCount}</b>个 <b>{stat.totalEarned}</b>-<b>{stat.totalSpent}</b>=<b className={stat.profit >= 0 ? "text-green-600" : "text-red-500"}>{stat.profit}</b>电池
+                              [吃瓜]{blindBoxPeriodText(currentFilter.dateRange)}{stat.blindBoxName}：<b>{stat.drawCount}</b>个 <b>{stat.totalEarned}</b>-<b>{stat.totalSpent}</b> = <b className={stat.profit >= 0 ? "text-green-600" : "text-red-500"}>{stat.profit}</b>电池
                             </span>
                             <button
                               onClick={() => handleSendBlindBoxDanmaku(stat, currentFilter.ruid)}

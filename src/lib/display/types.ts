@@ -170,8 +170,14 @@ export interface DisplayConfig {
   animeCooldown: EntryCooldownOption;
   /** 各用户上次触发动画的时间戳（uid → ms，本地记录，随本配置文件持久化） */
   animeLastSeen: Record<string, number>;
+  /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+  animeFeatherH: number;
+  /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+  animeFeatherV: number;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
   giftPriceThreshold: number;
+  /** 礼物展示条方向：横条（礼物从右到左滚动）/ 竖条（礼物从下到上滚动） */
+  giftBarOrientation: "horizontal" | "vertical";
   /** 高级用户入场动画名单 */
   animeList: EntryAnimeConfig[];
   /** 弹幕互动 */
@@ -223,7 +229,10 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entryLastSeen: {},
   animeCooldown: "bilibili",
   animeLastSeen: {},
+  animeFeatherH: 0, // 左右边缘羽化默认关闭
+  animeFeatherV: 5, // 上下边缘羽化默认强度（0=关闭）
   giftPriceThreshold: 100, // 电池（默认 100 电池）
+  giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）
   animeList: [],
   layout: DEFAULT_DISPLAY_LAYOUT,
   danmaku: {

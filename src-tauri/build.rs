@@ -12,6 +12,8 @@ fn main() {
                 "wsa_setup_status",
                 "wsa_setup_install",
                 "wsa_setup_abort",
+                // 检测直播姬是否运行（一键添加浏览器源前调用）
+                "is_bililive_running",
             ]),
         ),
     )

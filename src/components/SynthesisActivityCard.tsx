@@ -101,10 +101,10 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
 
   const totalGiftCount = filteredStats.giftList.reduce((sum, g) => sum + g.count, 0);
 
-  // 发送合成活动盈亏弹幕到主播直播间：[吃瓜]<活动名称>活动：合成<n>个 <爆出价值>-<花费>=<盈亏>电池
+  // 发送合成活动盈亏弹幕到主播直播间：[吃瓜]<活动名称>活动：合成<n>个 <爆出价值>-<花费> = <盈亏>电池
   const handleSendDanmaku = async () => {
     if (!selectedAnchor) return;
-    const text = `[吃瓜]${activity.name}活动：合成${totalGiftCount}个 ${filteredStats.totalEarned}-${filteredStats.totalSpent}=${filteredStats.profit}电池`;
+    const text = `[吃瓜]${activity.name}活动：合成${totalGiftCount}个 ${filteredStats.totalEarned}-${filteredStats.totalSpent} = ${filteredStats.profit}电池`;
     const roomRes = await fetchMedicalRoomId(Number(selectedAnchor));
     if (roomRes.code !== 0 || !roomRes.data?.roomid) {
       showToast(roomRes.message || "获取直播间号失败", "error");
@@ -287,7 +287,7 @@ export default function SynthesisActivityCard({ activity, index = 0 }: Synthesis
       {selectedAnchor !== "" && (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-black/15 bg-gray-200 px-3 py-1.5 text-xs">
           <span className="flex-1 min-w-0 text-black/80 font-medium">
-            [吃瓜]{activity.name}活动：合成<b>{totalGiftCount}</b>个 <b>{filteredStats.totalEarned}</b>-<b>{filteredStats.totalSpent}</b>=<b className={filteredStats.profit >= 0 ? "text-green-600" : "text-red-500"}>{filteredStats.profit}</b>电池
+            [吃瓜]{activity.name}活动：合成<b>{totalGiftCount}</b>个 <b>{filteredStats.totalEarned}</b>-<b>{filteredStats.totalSpent}</b> = <b className={filteredStats.profit >= 0 ? "text-green-600" : "text-red-500"}>{filteredStats.profit}</b>电池
           </span>
           <button
             onClick={handleSendDanmaku}

@@ -536,6 +536,30 @@ body {
   pointer-events: none;
 }
 
+/* 竖条变体：颜色滚动层改 180° 纵向、沿纵向滚动，与礼物图标从下到上滚动同向配合 */
+/* 礼物条-竖条：竖向纵向色带，从下向上流 */
+.gift-bar-v::before {
+  background: linear-gradient(
+    180deg,
+    #ff006e,
+    #ffbe0b,
+    #00f5d4,
+    #8338ec,
+    #ff006e
+  );
+  background-size: 100% 300%;
+  animation: party-gradient-v 4s linear infinite;
+}
+
+@keyframes party-gradient-v {
+  from {
+    background-position: 50% 0%;
+  }
+  to {
+    background-position: 50% 300%;
+  }
+}
+
 /* 礼物 ≥3 个时从右到左无缝循环滚动（列表复制两份，位移正好一半） */
 @keyframes gift-bar-marquee {
   from {
@@ -543,5 +567,15 @@ body {
   }
   to {
     transform: translateX(-50%);
+  }
+}
+
+/* 竖条：礼物 ≥3 个时从下到上无缝循环滚动（列表复制两份，位移正好一半） */
+@keyframes gift-bar-marquee-v {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
   }
 }

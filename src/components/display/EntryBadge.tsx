@@ -52,9 +52,9 @@ const HALO_EXTENT = 40;
 const HALO_PAD = 14;
 
 /** 头像边长（px，1920 设计坐标）；与昵称字号同比放大，数值走内联 style（同 padding，不依赖 Tailwind 类） */
-const AVATAR_SIZE = 72;
-/** 昵称字号（px，1920 设计坐标） */
-const NAME_FONT_SIZE = 36;
+const AVATAR_SIZE = 84;
+/** 昵称字号（px，1920 设计坐标）；比头像放大幅度更大，昵称在 badge 中占比更高 */
+const NAME_FONT_SIZE = 52;
 
 /** 头像：face 缺失/加载失败时回退为昵称首字渐变圆。无白色圆环，头像占满整个圆形区域。 */
 function Avatar({ face, uname }: { face: string; uname: string }) {
@@ -62,8 +62,18 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
   if (failed) {
     return (
       <div
-        className="rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] flex items-center justify-center text-white"
-        style={{ width: AVATAR_SIZE, height: AVATAR_SIZE, fontSize: NAME_FONT_SIZE }}
+        className="rounded-full bg-gradient-to-br from-[#ff6699] to-[#7b5cff] text-white"
+        style={{
+          width: AVATAR_SIZE,
+          height: AVATAR_SIZE,
+          fontSize: NAME_FONT_SIZE,
+          // 居中与行高走内联 style（同 badge padding，不依赖 Tailwind 类）；
+          // lineHeight:1 消除 line-height normal 的字体行盒不对称，首字在圆内完全居中
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          lineHeight: 1,
+        }}
       >
         {(uname || "?")[0]}
       </div>
@@ -216,21 +226,33 @@ export default function EntryBadge({
             不加 border：半透明白边框会在 badge 边缘形成一圈白环，同样割裂渐变与光晕。 */}
       <div
         ref={badgeRef}
-        className="relative inline-flex items-center gap-6 rounded-full py-[2px]"
+        className="rounded-full"
         style={{
           position: "relative",
           background: BADGE_GRADIENT,
-          // padding 用内联 style（不依赖 Tailwind 类）：pr-6 等新增类未被打包进
+          // 布局关键样式全部走内联 style（不依赖 Tailwind 类）：pr-6 等新增类未被打包进
           // Tailwind v4 JIT 产物，实测 paddingRight 为 0 导致昵称紧贴右边界；
           // 48px = 昵称末字到 badge 右边界间距（1920 设计坐标）
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "24px",
           paddingLeft: "16px",
           paddingRight: "48px",
+          paddingTop: "2px",
+          paddingBottom: "2px",
+          // 竖直居中修复：badge 是原子行内盒，位于库 content div 的行盒中按基线对齐时，
+          // 行盒 strut（继承 16px 字体的 descent）伸出 badge 基线以下，多余空间全部落在
+          // badge 下方 → badge 整体在 wrapper/光晕中偏上。verticalAlign:top 让 badge
+          // 顶对齐行盒顶、占满行盒，消除该基线间隙；lineHeight:1 消除昵称 line-height
+          // normal 的字体行盒不对称，badge 内部（头像+昵称）也完全竖直居中
+          verticalAlign: "top",
+          lineHeight: 1,
         }}
       >
         <Avatar face={user.face} uname={user.uname} />
         <span
           className="font-bold text-white whitespace-nowrap tracking-wider"
-          style={{ fontSize: NAME_FONT_SIZE }}
+          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1 }}
         >
           {user.uname}
         </span>

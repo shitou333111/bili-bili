@@ -28,6 +28,7 @@ import {
   type MovableRect,
   type ScreenOrientation,
   DEFAULT_DISPLAY_LAYOUT,
+  DEFAULT_DISPLAY_CONFIG,
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import GiftFlower from "./GiftFlower";
@@ -128,6 +129,12 @@ type ServerMsg =
       animeSample: AnimeSample | null;
       /** 横幅按钮最新文字（失焦提交后的完整内容） */
       bannerText: string;
+      /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+      animeFeatherH: number;
+      /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+      animeFeatherV: number;
+      /** 礼物展示条方向（横条/竖条） */
+      giftBarOrientation: "horizontal" | "vertical";
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
@@ -135,6 +142,8 @@ type ServerMsg =
   | { type: "orientation"; v: ScreenOrientation }
   | { type: "flags"; flags: DisplayFlags }
   | { type: "bannerText"; text: string }
+  | { type: "animeFeather"; h: number; v: number }
+  | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "celebrate" };
 
 /**
@@ -184,6 +193,13 @@ export default function DisplayCanvas() {
   const [bannerMeasuredW, setBannerMeasuredW] = useState(0);
   // 进门动画样本（编辑模式常驻预览；未封装进 init 时为 null）
   const [animeSample, setAnimeSample] = useState<AnimeSample | null>(null);
+  // 入场动画视频边缘羽化强度（init/animeFeather 消息下发，左右/上下独立，0=关闭）
+  const [animeFeatherH, setAnimeFeatherH] = useState(DEFAULT_DISPLAY_CONFIG.animeFeatherH);
+  const [animeFeatherV, setAnimeFeatherV] = useState(DEFAULT_DISPLAY_CONFIG.animeFeatherV);
+  // 礼物展示条方向（init/giftBarOrientation 消息下发）
+  const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
+    DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
+  );
   // 朝向：由 init/orientation 消息驱动
   const [orientation, setOrientation] = useState<ScreenOrientation>("landscape");
   // 编辑模式（?mode=edit）：三个元素常驻，可拖/可缩放
@@ -260,6 +276,19 @@ export default function DisplayCanvas() {
         setGifts(msg.gifts);
         setAnimeSample(msg.animeSample);
         setBannerText(typeof msg.bannerText === "string" ? msg.bannerText : "");
+        setAnimeFeatherH(
+          typeof msg.animeFeatherH === "number"
+            ? msg.animeFeatherH
+            : DEFAULT_DISPLAY_CONFIG.animeFeatherH,
+        );
+        setAnimeFeatherV(
+          typeof msg.animeFeatherV === "number"
+            ? msg.animeFeatherV
+            : DEFAULT_DISPLAY_CONFIG.animeFeatherV,
+        );
+        setGiftBarOrientation(
+          msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
+        );
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -274,6 +303,11 @@ export default function DisplayCanvas() {
         setFlags(msg.flags);
       } else if (msg.type === "bannerText") {
         setBannerText(msg.text ?? "");
+      } else if (msg.type === "animeFeather") {
+        setAnimeFeatherH(msg.h);
+        setAnimeFeatherV(msg.v);
+      } else if (msg.type === "giftBarOrientation") {
+        setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
       } else if (msg.type === "celebrate") {
         // 面板"撒花"按钮：模块开关关闭时不播放
         if (flagsRef.current.banner) startPartyRef.current();
@@ -725,12 +759,25 @@ export default function DisplayCanvas() {
         >
           <div className="relative" style={{ width: animeDisp.w, height: animeDisp.h }}>
             {!isEdit && anime && (
-              <VideoOverlay anime={anime} onEnd={onAnimeEnd} onVideoSize={onAnimeVideoSize} />
+              <VideoOverlay
+                anime={anime}
+                onEnd={onAnimeEnd}
+                onVideoSize={onAnimeVideoSize}
+                featherH={animeFeatherH}
+                featherV={animeFeatherV}
+              />
             )}
             {isEdit && (
               <div className="absolute inset-0">
                 {editAnime ? (
-                  <VideoOverlay anime={editAnime} onEnd={() => {}} loop onVideoSize={onAnimeVideoSize} />
+                  <VideoOverlay
+                    anime={editAnime}
+                    onEnd={() => {}}
+                    loop
+                    onVideoSize={onAnimeVideoSize}
+                    featherH={animeFeatherH}
+                    featherV={animeFeatherV}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center">
                     <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-base font-semibold leading-relaxed shadow-sm">
@@ -787,7 +834,7 @@ export default function DisplayCanvas() {
           onCommit={commitLayout("gift")}
           editable={isEdit}
         >
-          <GiftFlower gifts={gifts} emptyPlaceholder={isEdit} />
+          <GiftFlower gifts={gifts} emptyPlaceholder={isEdit} orientation={giftBarOrientation} />
         </MovableBox>
       )}
 

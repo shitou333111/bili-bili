@@ -806,6 +806,9 @@ class DisplayDanmakuService {
       gifts,
       animeSample,
       bannerText: cfg.banner?.text ?? "",
+      animeFeatherH: cfg.animeFeatherH,
+      animeFeatherV: cfg.animeFeatherV,
+      giftBarOrientation: cfg.giftBarOrientation,
       flags: {
         master: displayMaster(cfg),
         entry: cfg.entry,
@@ -838,6 +841,16 @@ class DisplayDanmakuService {
   /** 广播横幅按钮最新文字到画布（面板输入框失焦后调用，配置已落盘）。 */
   async broadcastBannerText(text: string): Promise<void> {
     await this.broadcast({ type: "bannerText", text });
+  }
+
+  /** 广播入场动画视频边缘羽化强度（左右/上下）到画布（面板调整后调用，配置已落盘）。 */
+  async broadcastAnimeFeather(h: number, v: number): Promise<void> {
+    await this.broadcast({ type: "animeFeather", h, v });
+  }
+
+  /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastGiftBarOrientation(v: "horizontal" | "vertical"): Promise<void> {
+    await this.broadcast({ type: "giftBarOrientation", v });
   }
 
   /** 触发一次撒花庆祝（纸屑 + 飘带，一次性效果；面板"撒花"按钮调用）。 */

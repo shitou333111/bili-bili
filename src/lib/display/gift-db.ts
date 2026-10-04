@@ -551,7 +551,7 @@ export async function tryHandleBlindBoxQuery(
   const round = (n: number) => Math.round(n);
   const reply =
     `[吃瓜]${PERIOD_TEXT[period]}${result.blindBoxName}：${result.drawCount}个 ` +
-    `${round(result.totalEarned)}-${round(result.totalSpent)}=${round(result.profit)}电池`;
+    `${round(result.totalEarned)}-${round(result.totalSpent)} = ${round(result.profit)}电池`;
 
   // 发送频率保护：避免短时间内连续回复触发 B站"发送弹幕的频率过快"
   const now = Date.now();

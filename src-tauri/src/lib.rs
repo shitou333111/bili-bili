@@ -987,6 +987,24 @@ fn pick_video_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+/// 检测哔哩哔哩直播姬是否正在运行。
+/// 按进程映像名精确匹配（`livehime.exe` / `哔哩哔哩直播姬.exe`），不模糊匹配，
+/// 避免误中本应用（bili-live）或直播姬的浏览器源子进程（bililive_browser）。
+/// 直播姬运行中会在退出时把内存里的场景配置写回文件、覆盖我们刚写入的浏览器源，
+/// 因此一键添加前必须先确认它没在运行。
+#[tauri::command]
+fn is_bililive_running() -> bool {
+    #[cfg(windows)]
+    {
+        wsa::process_ids("livehime.exe").len() > 0
+            || wsa::process_ids("哔哩哔哩直播姬.exe").len() > 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 // ==================== 更新系统 ====================
 
 /// 检查原生包更新（三平台通用）
@@ -2044,6 +2062,7 @@ pub fn run() {
             open_real_activity_panel,
             close_real_activity_panel,
             pick_video_file,
+            is_bililive_running,
             check_native_update,
             // 本地展示（浏览器源）服务器：启动/停止/广播（server.rs）
             server::start_display_server,

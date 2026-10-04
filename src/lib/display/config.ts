@@ -158,6 +158,15 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
         ? r.animeCooldown
         : d.animeCooldown,
     animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
+    // 视频边缘羽化强度：左右/上下独立设置，0=关闭，上限 40（非法/缺失回退默认）
+    animeFeatherH:
+      typeof r.animeFeatherH === "number" && Number.isFinite(r.animeFeatherH) && r.animeFeatherH >= 0
+        ? Math.min(40, Math.round(r.animeFeatherH))
+        : d.animeFeatherH,
+    animeFeatherV:
+      typeof r.animeFeatherV === "number" && Number.isFinite(r.animeFeatherV) && r.animeFeatherV >= 0
+        ? Math.min(40, Math.round(r.animeFeatherV))
+        : d.animeFeatherV,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&
@@ -165,6 +174,8 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       r.giftPriceThreshold >= 0
         ? r.giftPriceThreshold
         : d.giftPriceThreshold,
+    // 礼物展示条方向：仅接受 "vertical"，其余（含旧配置缺失）回退横条
+    giftBarOrientation: r.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
     animeList: Array.isArray(r.animeList)
       ? r.animeList.map((a) => {
           // 兼容旧配置字段 videoPath：作为横屏视频迁移

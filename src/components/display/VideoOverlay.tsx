@@ -14,7 +14,7 @@
  * 因此叠加 timeupdate 兜底：currentTime 接近片段结束点（显式结束秒 / 未设片段时为
  * 视频时长）时同样触发淡出，保证画布必然释放。handleEnd 幂等，重复触发只执行一次。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DisplayEvent } from "@/lib/display/types";
 import { srcWithFragment } from "@/lib/display/video";
 import VolumeIcon from "@/components/VolumeIcon";
@@ -27,6 +27,8 @@ export default function VideoOverlay({
   onEnd,
   loop = false,
   onVideoSize,
+  featherH = 0,
+  featherV = 0,
 }: {
   anime: Extract<DisplayEvent, { type: "anime" }>;
   onEnd: () => void;
@@ -34,6 +36,10 @@ export default function VideoOverlay({
   loop?: boolean;
   /** 视频画面实际尺寸（natural 像素，loadedmetadata 后回调）——父级据此让元素贴合视频画面 */
   onVideoSize?: (w: number, h: number) => void;
+  /** 视频左右边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
+  featherH?: number;
+  /** 视频上下边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
+  featherV?: number;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -130,6 +136,24 @@ export default function VideoOverlay({
     else handleEnd();
   };
 
+  // 边缘羽化：两层线性渐变 mask 取交集 = 四边透明过渡（左右/上下独立强度，0=关闭）。
+  // 纯静态 CSS，由 GPU 合成器光栅化时做 alpha 混合，无逐帧计算；mask 作用于 alpha，
+  // 透明背景不会被染灰。注意不能加在 MovableBox/wrapper 上，否则编辑虚线框、缩放把手、
+  // 声音按钮也会跟着透明——只加在 video 元素上（wrapper 已贴合视频画面，边界即画面边界）。
+  const fh = Math.min(40, Math.max(0, Math.round(featherH)));
+  const fv = Math.min(40, Math.max(0, Math.round(featherV)));
+  const maskLayers = `linear-gradient(to right, transparent 0%, #000 ${fh}%, #000 ${100 - fh}%, transparent 100%), linear-gradient(to bottom, transparent 0%, #000 ${fv}%, #000 ${100 - fv}%, transparent 100%)`;
+  const maskStyle: CSSProperties | undefined =
+    fh > 0 || fv > 0
+      ? {
+          maskImage: maskLayers,
+          WebkitMaskImage: maskLayers,
+          // 多层 mask 默认取并集，必须显式取交集才能四边同时羽化（WebKit 旧前缀值为 source-in）
+          maskComposite: "intersect",
+          WebkitMaskComposite: "source-in",
+        }
+      : undefined;
+
   return (
     // 画布本身有指定背景色（#B7EBA4），不叠加黑底遮罩；等比缩放后视频四周留出的
     // 空白直接透出画布背景，避免出现黑边。
@@ -148,6 +172,7 @@ export default function VideoOverlay({
           loop={loop}
           playsInline
           className="w-full h-full object-contain"
+          style={maskStyle}
           onLoadStart={() => logVideoEvent("loadstart")}
           onLoadedMetadata={() => {
             // 视频已成功加载：取消 6s 兜底释放，避免截断正常的长视频

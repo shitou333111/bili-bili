@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-is-bililive-running"
+description = "Enables the is_bililive_running command without any pre-configured scope."
+commands.allow = ["is_bililive_running"]
+
+[[permission]]
+identifier = "deny-is-bililive-running"
+description = "Denies the is_bililive_running command without any pre-configured scope."
+commands.deny = ["is_bililive_running"]

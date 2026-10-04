@@ -26,6 +26,7 @@ import {
   saveDisplayConfig,
   resolveAnimeVideo,
 } from "@/lib/display/config";
+import { addBililiveSource, detectBililiveSource } from "@/lib/display/bililive-source";
 import {
   probeVideoDuration,
   secToTime,
@@ -320,6 +321,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   const [guardsLoading, setGuardsLoading] = useState(false);
   const [selectedGuardMid, setSelectedGuardMid] = useState<string>("");
   const [qualityGifts, setQualityGifts] = useState<{ icon: string; name: string; count: number }[]>([]);
+  const [showAllQualityGifts, setShowAllQualityGifts] = useState(false);
   // 弹幕调试事件（页面实时展示）
   const [debugEvents, setDebugEvents] = useState<DanmuDebugEvent[]>(() =>
     displayDanmaku.getDebugEvents(),
@@ -558,6 +560,49 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
       toast("复制失败，请手动选择复制", "error");
     }
   }, [browserSourceUrl, toast]);
+
+  // 一键添加直播姬浏览器源：按 URL 检测添加状态（红=未添加，绿=已添加），手动步骤默认折叠
+  const [sourceAdded, setSourceAdded] = useState(false);
+  const [sourceAdding, setSourceAdding] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+
+  // 检测直播姬是否已添加本浏览器源（按 URL 判断，不看名称）；检测失败按未添加处理（红色按钮可点）
+  useEffect(() => {
+    if (!isNative) return;
+    let alive = true;
+    detectBililiveSource(mid)
+      .then((added) => {
+        if (alive) setSourceAdded(added);
+      })
+      .catch(() => {
+        if (alive) setSourceAdded(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isNative, mid]);
+
+  // 一键添加浏览器源：先检测直播姬是否在运行（运行中退出时会把内存配置写回、覆盖新写入的
+  // 浏览器源，故必须先关闭直播姬再操作）；未运行则横屏、竖屏场景分别添加（都已有则跳过），
+  // 写直播姬场景配置（置于目标场景所有元素最上层），下次启动直播姬生效
+  const handleAddSource = useCallback(async () => {
+    if (sourceAdding || sourceAdded) return;
+    setSourceAdding(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      if (await invoke<boolean>("is_bililive_running")) {
+        toast("直播姬软件正在运行，需要关闭直播姬再操作");
+        return;
+      }
+      await addBililiveSource(mid, browserSourceUrl);
+      setSourceAdded(true);
+      toast("浏览器源已添加");
+    } catch (e: any) {
+      toast(`一键添加失败：${e?.message || e}，可展开下方手动步骤添加`, "error");
+    } finally {
+      setSourceAdding(false);
+    }
+  }, [sourceAdding, sourceAdded, browserSourceUrl, toast, mid]);
 
   const handleOrientation = useCallback(
     async (v: boolean) => {
@@ -1001,40 +1046,68 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           </div>
         </div>
         <Card bg="bg-slate-300" border="border-slate-400">
-          <p className="text-xs text-black/45 leading-relaxed">
-            {isNative
-              ? "在直播姬添加浏览器源即可（地址与步骤见下）"
-              : "仅 Windows 客户端支持"}
-          </p>
-          {isNative && (
-            <div className="mt-2.5 rounded-xl bg-white/60 px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-[11px] font-medium text-black/60">浏览器源地址</span>
-                <code className="min-w-0 flex-1 select-all truncate text-[11px] text-black/80">
-                  {browserSourceUrl}
-                </code>
-                <button
-                  onClick={() => void copySourceUrl()}
-                  className="shrink-0 rounded-md bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-sm transition hover:bg-white/80 active:scale-[0.97]"
-                >
-                  复制
-                </button>
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-black/45">
-                使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️上面链接粘贴到URL输入框➡️高级设置➡️宽度1920 高度1080➡️确认
-              </p>
-              <p className="mt-1 text-[11px] leading-relaxed text-black/45">
-                竖屏：步骤一致，仅改变 宽度1080 高度1920。
-                <br />
-                想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
-              </p>
-            </div>
-          )}
+          {/* 状态行在卡片最上方：连接状态 → 安装浏览器源 → 朝向/布局，逻辑递进 */}
           {statusText && (
-            <div className="mt-2.5 flex items-center gap-2.5 rounded-xl bg-white/60 px-3 py-2 text-xs text-black/70">
+            <div className="flex items-center gap-2.5 rounded-xl bg-white/60 px-3 py-2 text-xs text-black/70">
               <span className={`inline-block w-3 h-3 rounded-full ${dotClass}`} />
               <span className="truncate">{statusText}</span>
             </div>
+          )}
+          {isNative ? (
+            <div className="mt-2.5 rounded-xl bg-white/60 px-3 py-2.5">
+              {/* 一键添加行与下方手动添加引导同属浏览器源添加功能，共用一张卡 */}
+              <div className="flex items-center gap-3">
+                <p className="min-w-0 flex-1 text-xs text-black/45 leading-relaxed">
+                  使用前提是在直播姬中添加本浏览器源
+                </p>
+                <button
+                  onClick={() => void handleAddSource()}
+                  disabled={sourceAdding || sourceAdded}
+                  className="shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-white shadow-sm transition active:scale-[0.97]"
+                  style={{
+                    background: sourceAdded ? "#22c55e" : "#ef4444",
+                    cursor: sourceAdding || sourceAdded ? "default" : "pointer",
+                  }}
+                >
+                  {sourceAdding ? "添加中…" : sourceAdded ? "浏览器源已经添加" : "一键添加浏览器源"}
+                </button>
+              </div>
+              {/* 手动添加引导：默认折叠（含浏览器源地址与手动步骤） */}
+              <button
+                onClick={() => setManualOpen((v) => !v)}
+                className="mt-2 flex w-full items-center gap-1.5 text-left text-[11px] font-medium text-black/60"
+                style={{ cursor: "pointer" }}
+              >
+                <span>{manualOpen ? "▼" : "▶"}</span>
+                <span>如果一键添加失败，请按照下方指示手动添加</span>
+              </button>
+              {manualOpen && (
+                <>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="shrink-0 text-[11px] font-medium text-black/60">浏览器源地址</span>
+                    <code className="min-w-0 flex-1 select-all truncate text-[11px] text-black/80">
+                      {browserSourceUrl}
+                    </code>
+                    <button
+                      onClick={() => void copySourceUrl()}
+                      className="shrink-0 rounded-md bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-sm transition hover:bg-white/80 active:scale-[0.97]"
+                    >
+                      复制
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-black/45">
+                    使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️上面链接粘贴到URL输入框➡️高级设置➡️宽度1920 高度1080➡️确认
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-black/45">
+                    竖屏：步骤一致，仅改变 宽度1080 高度1920。
+                    <br />
+                    想同时保留横竖屏，按两种尺寸各添加一次即可，之后可方便切换。
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="mt-2.5 text-xs text-black/45 leading-relaxed">仅 Windows 客户端支持</p>
           )}
           <div className="mt-2.5 flex items-center justify-center gap-10">
             {/* 左：画面朝向（横屏/竖屏）分段选择，位置固定 */}
@@ -1075,7 +1148,44 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           onToggle={(v) => void toggleModule({ gift: v })}
         />
         <Card bg="bg-amber-200" border="border-amber-400">
-          <p className="text-xs text-black/45 leading-relaxed">今日收到的礼物，轮换显示，不区分谁送的</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-black/45 leading-relaxed">今日收到的礼物，滚动显示，不区分谁送的</p>
+            {/* 展示条方向：横条（礼物从右到左滚）/ 竖条（礼物从下到上滚） */}
+            <div
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
+              role="radiogroup"
+              aria-label="礼物展示条方向"
+            >
+              {(
+                [
+                  ["horizontal", "横条"],
+                  ["vertical", "竖条"],
+                ] as Array<["horizontal" | "vertical", string]>
+              ).map(([key, label]) => {
+                const active = config.giftBarOrientation === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      void update({ giftBarOrientation: key }).then((next) =>
+                        displayDanmaku.broadcastGiftBarOrientation(next.giftBarOrientation),
+                      )
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
+                      active
+                        ? "bg-amber-600 text-white shadow"
+                        : "text-black/55 hover:bg-white/80"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
             <span className="shrink-0">礼物单价大于</span>
             <input
@@ -1085,22 +1195,46 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               onChange={(e) =>
                 updateThreshold(Math.max(0, Number(e.target.value) || 0))
               }
-              className={`${inputBase} w-16`}
+              className={`${inputFlat} w-16`}
             />
             <span className="shrink-0 text-black/35">电池的礼物才显示（0=全部）</span>
           </div>
           {qualityGifts.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {qualityGifts.map((g) => (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {(showAllQualityGifts ? qualityGifts : qualityGifts.slice(0, 10)).map((g) => (
                 <div
                   key={g.name}
-                  className="flex items-center gap-1.5 rounded-lg bg-white/60 px-2 py-1 text-xs text-black/70"
+                  className="flex items-center gap-1 rounded-md bg-white/60 px-1.5 py-0.5 text-[11px] leading-none text-black/70"
                 >
-                  <img src={g.icon} alt="" className="w-5 h-5 object-cover" />
+                  <img src={g.icon} alt="" className="h-4 w-4 rounded-sm object-cover" />
                   <span>{g.name}</span>
                   <span className="font-bold">×{g.count}</span>
                 </div>
               ))}
+              {qualityGifts.length > 10 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllQualityGifts((v) => !v)}
+                  aria-label={showAllQualityGifts ? "收起礼物列表" : "展开更多礼物"}
+                  className="flex cursor-pointer items-center gap-0.5 rounded-md bg-white/60 px-1.5 py-0.5 text-[11px] leading-none text-black/50 hover:bg-white/90"
+                >
+                  {/* 折叠图标：默认朝下表示还有更多，展开后朝上表示可收起 */}
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ transform: showAllQualityGifts ? "rotate(180deg)" : undefined }}
+                  >
+                    <polyline points="3 6 8 11 13 6" />
+                  </svg>
+                  <span>{showAllQualityGifts ? "收起" : `+${qualityGifts.length - 10}`}</span>
+                </button>
+              )}
             </div>
           )}
         </Card>
@@ -1284,7 +1418,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 if (e.key === "Enter") void addUidByInput();
               }}
               placeholder="输入用户 UID"
-              className={`${inputBase} ${noSpin} w-36`}
+              className={`${inputBase} ${noSpin} w-52`}
             />
             <button className={btnPrimary} onClick={() => void addUidByInput()} disabled={uidQuerying}>
               {uidQuerying ? "添加中…" : "添加"}
@@ -1438,6 +1572,42 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                 );
               })}
             </div>
+          </div>
+          {/* 视频边缘羽化：静态 mask-image 渐变遮罩让视频画面边缘透明过渡（左右/上下独立设置，0=关闭） */}
+          <div className="mt-3 flex items-center gap-3">
+            <span className="shrink-0 text-xs text-black/50">视频边缘羽化（0 = 关闭）</span>
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs text-black/50">左右</span>
+              <input
+                type="number"
+                min={0}
+                max={40}
+                value={config.animeFeatherH}
+                onChange={(e) => {
+                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                  void update({ animeFeatherH: v }).then((next) =>
+                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                  );
+                }}
+                className={`${inputFlat} ${noSpin} w-16`}
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs text-black/50">上下</span>
+              <input
+                type="number"
+                min={0}
+                max={40}
+                value={config.animeFeatherV}
+                onChange={(e) => {
+                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                  void update({ animeFeatherV: v }).then((next) =>
+                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                  );
+                }}
+                className={`${inputFlat} ${noSpin} w-16`}
+              />
+            </label>
           </div>
         </Card>
       </section>

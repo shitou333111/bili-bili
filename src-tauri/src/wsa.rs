@@ -2528,7 +2528,7 @@ fn process_running(name: &str) -> bool {
 ///
 /// 用进程快照（`CreateToolhelp32Snapshot`）而不是 `tasklist`：快照是本机 API、一次约 1ms，
 /// 可以放进 50ms 的静音守护循环里每拍都做；`tasklist` 每拍起一个子进程，太贵。
-fn process_ids(name: &str) -> Vec<u32> {
+pub(crate) fn process_ids(name: &str) -> Vec<u32> {
     let mut out = Vec::new();
     unsafe {
         let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {

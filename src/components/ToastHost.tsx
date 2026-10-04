@@ -93,7 +93,7 @@ export default function ToastHost() {
       ) : null}
 
       {toast && !isError ? (
-        <div className="rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
+        <div className="w-[min(480px,85vw)] whitespace-pre-wrap break-words rounded-full bg-black/80 px-4 py-2 text-center text-sm text-white shadow-lg backdrop-blur">
           {toast.message}
         </div>
       ) : null}
