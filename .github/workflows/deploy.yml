@@ -285,6 +285,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 
+      # 移除本地专用的 Rust 工具链固定配置（src-tauri/.cargo/config.toml）：
+      # 该文件把 linker / RC / LIB / CC / CXX / AR / INCLUDE 硬编码到本机
+      # VS2022 Community + C:\Users\song\.winsdk-tools 的绝对路径，是本地机器
+      # VS/SDK 注册表发现键丢失时的补丁，只在开发机有效。CI 的 windows-latest
+      # 自带 MSVC + Windows SDK、可自动发现工具，硬编码路径在 runner 上不存在
+      # 会导致 link.exe not found，故构建前删除，回落到默认工具链发现。
+      - name: Remove local-only Rust toolchain override
+        shell: bash
+        run: rm -f src-tauri/.cargo/config.toml .cargo/config.toml
+
       # 前端由 beforeBuildCommand（npm run build:tauri）在 tauri 构建时构建，服务器地址在步骤级提供
       - name: Build Windows EXE
         env:

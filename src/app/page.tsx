@@ -3221,9 +3221,10 @@ export default function HomePage() {
                 />
                 <h2 className="mt-4 text-xl font-semibold text-[#1f1c17]">主播功能</h2>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-black/60">
-                  这些功能需要在客户端中使用，下载安装软件后即可解锁。
+                  这些功能要在客户端使用，下载安装软件后即可解锁。
                   <br />
-                  主播账号才会有内容，如果你是粉丝，可以推荐爱播安装。
+                  如果你现在用的就是客户端，那么当前账号没有被识别为主播，点击[帮助]中的[重建数据]。
+                  如果你是粉丝，可以推荐爱播安装。
                 </p>
               </div>
               {/* 功能亮点：卡片网格 */}
