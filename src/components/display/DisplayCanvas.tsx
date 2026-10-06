@@ -40,6 +40,15 @@ import BannerButton from "./BannerButton";
 type AnimeEvent = Extract<DisplayEvent, { type: "anime" }>;
 type GiftEffectEvent = Extract<DisplayEvent, { type: "giftEffect" }>;
 
+/** 进场特效开始播放时通知页面侧（/display?diag=1 环境探针据此开启采样窗口） */
+function notifyEffectPlay(kind: "entry" | "anime"): void {
+  try {
+    window.dispatchEvent(new CustomEvent("display-effect-play", { detail: { kind } }));
+  } catch {
+    /* 非浏览器环境忽略 */
+  }
+}
+
 /** 编辑模式的入场用户（循环播放示例） */
 const TEST_ENTRY_USER: DisplayEntryPayload = {
   uid: 1,
@@ -180,6 +189,10 @@ function TestEntryLoop({
 
 export default function DisplayCanvas() {
   const [currentEntry, setCurrentEntry] = useState<DisplayEntryPayload | null>(null);
+  // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
+  // 仅用 uid 做 key 时，onEntryDone 里 setCurrentEntry(null)+setCurrentEntry(next) 被 React
+  // 批量合并成一次渲染，同 uid 不重挂载 → EntryBadge 的 hidden 无法复位、粒子动画永不启动。
+  const [entrySeq, setEntrySeq] = useState(0);
   const [, setEntryQueue] = useState<DisplayEntryPayload[]>([]);
   const [gifts, setGifts] = useState<DisplayGiftItem[]>([]);
   const [anime, setAnime] = useState<AnimeEvent | null>(null);
@@ -434,6 +447,7 @@ export default function DisplayCanvas() {
       const [next, ...rest] = q;
       animeQueueRef.current = rest;
       setAnime(next);
+      notifyEffectPlay("anime");
     } else {
       setAnime(null);
     }
@@ -467,12 +481,17 @@ export default function DisplayCanvas() {
 
   const onEntryDone = useCallback(() => {
     showingRef.current = false;
-    setCurrentEntry(null);
     if (queueRef.current.length) {
       const next = queueRef.current.shift()!;
       queueRef.current = [...queueRef.current];
+      // 自增 seq 保证 next 与当前展示（即使同 uid）使用不同 key → EntryBadge 重挂载、hidden 复位
+      setEntrySeq((s) => s + 1);
       setCurrentEntry(next);
       showingRef.current = true;
+      notifyEffectPlay("entry");
+    } else {
+      setEntrySeq((s) => s + 1);
+      setCurrentEntry(null);
     }
   }, []);
 
@@ -492,7 +511,9 @@ export default function DisplayCanvas() {
       if (!showingRef.current && !currentEntryRef.current && queueRef.current.length === 0) {
         queueRef.current = [];
         showingRef.current = true;
+        setEntrySeq((s) => s + 1);
         setCurrentEntry(p.user);
+        notifyEffectPlay("entry");
       } else {
         queueRef.current.push(p.user);
         setEntryQueue([...queueRef.current]);
@@ -503,6 +524,7 @@ export default function DisplayCanvas() {
       const ev = p as AnimeEvent;
       if (!animeRef.current) {
         setAnime(ev);
+        notifyEffectPlay("anime");
       } else {
         animeQueueRef.current = [...animeQueueRef.current, ev];
       }
@@ -867,7 +889,7 @@ export default function DisplayCanvas() {
             <TestEntryLoop scale={entryRect.scale} onMeasure={setEntryMeasuredW} />
           ) : currentEntry ? (
             <EntryBadge
-              key={currentEntry.uid}
+              key={`${currentEntry.uid}-${entrySeq}`}
               user={currentEntry}
               onDone={onEntryDone}
               onMeasure={setEntryMeasuredW}

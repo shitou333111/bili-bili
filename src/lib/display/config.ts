@@ -146,7 +146,7 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
           ? Math.floor(r.entryFilter.medalLevelThreshold)
           : d.entryFilter.medalLevelThreshold,
     },
-    // 入场冷却：非法值回退默认（约几分钟）
+    // 入场冷却：非法值回退默认（bilibili = 不额外冷却）
     entryCooldown:
       r.entryCooldown === "30min" || r.entryCooldown === "1h" || r.entryCooldown === "10h"
         ? r.entryCooldown

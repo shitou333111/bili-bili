@@ -479,6 +479,53 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+/** 获取弹幕服务器的 token（须携带登录 Cookie + buvid3，否则可能触发风控 -352）。
+ *  模块级共享：展示监听与「礼物完整录屏」旁路监听都要用它建 WS。 */
+async function fetchDanmuToken(platform: Platform, roomId: number): Promise<string> {
+  const state = await platform.getSessionState();
+  const session = (state.sessions || []).find((s: any) => s.sid === state.currentSid);
+  const cookie: string[] = [];
+  if (session) {
+    if (session.biliCookies?.length) cookie.push(...session.biliCookies);
+    if (session.biliSessdata && !cookie.some((c) => c.startsWith("SESSDATA="))) {
+      cookie.push(`SESSDATA=${session.biliSessdata}`);
+    }
+  }
+  // 弹幕服务器配置/token 用旧版 Danmu/getConf 接口：
+  // getDanmuInfo 虽自 2025-05 起要求 WBI 签名（见 blivechat issue #264），但经实测：
+  //   - 走 Tauri reqwest/rustls 客户端仍被 getDanmuInfo 的浏览器指纹风控拦截（-352）
+  //   - getConf 在应用客户端可正常获取 token，且其 token 对弹幕 WS 认证有效（auth code=0）
+  // 故保留 getConf；WBI 不适用于当前客户端的 token 获取路径。
+  if (!cookie.some((c) => c.toLowerCase().startsWith("buvid3="))) {
+    const buvid = await platform.getBuvidCookie();
+    if (buvid) cookie.push(buvid);
+  }
+  const flat = cookie.flatMap((c) => c.split(";").map((s) => s.trim().split("=")[0]));
+  console.log(
+    "[弹幕]getConf 请求",
+    JSON.stringify({ roomId, cookieKeys: flat, hasSess: flat.some((k) => k.toLowerCase() === "sessdata") }),
+  );
+  const data = await withTimeout(
+    platform.fetchBilibiliJson<any>({
+      url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
+      cookie: cookie.join("; "),
+      live: true, // 必须用 live 域 Referer/Origin
+    }),
+    10000,
+    "获取弹幕服务器",
+  );
+  console.log(
+    "[弹幕]getConf 返回",
+    JSON.stringify({ code: data?.code, message: data?.message, msg: data?.msg, hasToken: !!data?.data?.token }),
+  );
+  if (data?.code !== 0 || !data?.data?.token) {
+    const errMsg = data?.message || data?.msg;
+    console.log("[弹幕]getConf 失败: code=", data?.code, "message=", data?.message, "msg=", data?.msg);
+    throw new Error(String(errMsg ?? "获取弹幕服务器失败"));
+  }
+  return data.data.token;
+}
+
 // ==================== 礼物关键字（弹幕精确匹配礼物名称 → 播放特效） ====================
 
 /** 礼物名称 → gift_id 映射（仅包含"有特效"的礼物）。连接房间时重建，随礼物目录刷新。 */
@@ -567,6 +614,11 @@ class DisplayDanmakuService {
   private effectJsonCache = new Map<string, GiftEffectFrameConfig | null>();
   /** 大航海特效去重（uid:guardLevel → 最近触发时刻）：GUARD_BUY 与 USER_TOAST_MSG 可能同时下发 */
   private guardEffectAt = new Map<string, number>();
+  /** 入场触发去重（uid → 各类最近 emit 时刻）：同一次进场 B 站会对特殊用户同时下发
+   *  INTERACT_WORD(_V2) 与 ENTRY_EFFECT，handleEntry 会被调用多次；冷却为 0（B站默认）
+   *  时没有冷却兜底，若不去重会一次进场播两次特效。窗口 2s 只合并"同一次进场的重复
+   *  下发包"，不改变冷却语义（用户快速再次进场仍可触发）。 */
+  private entryEmitAt = new Map<number, { anime: number; entry: number }>();
   /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
   private wsConnectedAt = 0;
   // ---- 调试日志 ----
@@ -762,6 +814,9 @@ class DisplayDanmakuService {
       } else if (msg.type === "log") {
         const fn = msg.level === "error" ? console.error : console.log;
         fn(`[画布]${msg.text}`);
+        // 同步进调试日志（面板卡片展示 + 落盘 display-danmu-debug.json）：
+        // 主窗口 console 只有 DevTools 能看，/display?diag=1 探针结果需经此可查
+        if (msg.text) this.pushDebug("画布", "log", msg.text);
       }
     } catch (e) {
       console.warn("[展示]处理画布消息失败", (e as Error)?.message || e);
@@ -892,7 +947,7 @@ class DisplayDanmakuService {
       // 复用缓存的 token；仅首次进该房间或 token 缺失时才请求 getDanmuInfo
       let token = this.cachedToken;
       if (!token || this.cachedRoomId !== roomId) {
-        token = await this.fetchDanmuToken(platform, roomId);
+        token = await fetchDanmuToken(platform, roomId);
         this.cachedToken = token;
         this.cachedRoomId = roomId;
       }
@@ -982,52 +1037,6 @@ class DisplayDanmakuService {
       this.reconnectTimer = null;
       if (this.active) this.connect(roomId, mid);
     }, delay);
-  }
-
-  /** 获取弹幕服务器的 token（须携带登录 Cookie + buvid3，否则可能触发风控 -352）。 */
-  private async fetchDanmuToken(platform: Platform, roomId: number): Promise<string> {
-    const state = await platform.getSessionState();
-    const session = (state.sessions || []).find((s: any) => s.sid === state.currentSid);
-    const cookie: string[] = [];
-    if (session) {
-      if (session.biliCookies?.length) cookie.push(...session.biliCookies);
-      if (session.biliSessdata && !cookie.some((c) => c.startsWith("SESSDATA="))) {
-        cookie.push(`SESSDATA=${session.biliSessdata}`);
-      }
-    }
-    // 弹幕服务器配置/token 用旧版 Danmu/getConf 接口：
-    // getDanmuInfo 虽自 2025-05 起要求 WBI 签名（见 blivechat issue #264），但经实测：
-    //   - 走 Tauri reqwest/rustls 客户端仍被 getDanmuInfo 的浏览器指纹风控拦截（-352）
-    //   - getConf 在应用客户端可正常获取 token，且其 token 对弹幕 WS 认证有效（auth code=0）
-    // 故保留 getConf；WBI 不适用于当前客户端的 token 获取路径。
-    if (!cookie.some((c) => c.toLowerCase().startsWith("buvid3="))) {
-      const buvid = await platform.getBuvidCookie();
-      if (buvid) cookie.push(buvid);
-    }
-    const flat = cookie.flatMap((c) => c.split(";").map((s) => s.trim().split("=")[0]));
-    console.log(
-      "[展示]getConf 请求",
-      JSON.stringify({ roomId, cookieKeys: flat, hasSess: flat.some((k) => k.toLowerCase() === "sessdata") }),
-    );
-    const data = await withTimeout(
-      platform.fetchBilibiliJson<any>({
-        url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
-        cookie: cookie.join("; "),
-        live: true, // 必须用 live 域 Referer/Origin
-      }),
-      10000,
-      "获取弹幕服务器",
-    );
-    console.log(
-      "[展示]getConf 返回",
-      JSON.stringify({ code: data?.code, message: data?.message, msg: data?.msg, hasToken: !!data?.data?.token }),
-    );
-    if (data?.code !== 0 || !data?.data?.token) {
-      const errMsg = data?.message || data?.msg;
-      console.log("[展示]getConf 失败: code=", data?.code, "message=", data?.message, "msg=", data?.msg);
-      throw new Error(String(errMsg ?? "获取弹幕服务器失败"));
-    }
-    return data.data.token;
   }
 
   private bindHandlers(mid: number) {
@@ -1133,6 +1142,7 @@ class DisplayDanmakuService {
             giftName: name,
             priceBattery: (Number(d.price) || 0) / 100,
             ts: Math.floor(Date.now() / 1000),
+            roomId: this.roomId,
           });
           const config = await loadDisplayConfig(mid);
           if (!config.giftEffect?.enabled) return;
@@ -1194,6 +1204,25 @@ class DisplayDanmakuService {
     );
   }
 
+  /** 入场触发去重：同一 uid 同一类（anime/entry）在 2s 窗口内只允许 emit 一次。
+   *  同步 check-and-set，与 emit 在同一同步段内完成，无 await 间隔、无竞态；
+   *  被去重的调用不写冷却记录，不影响后续真正的再次进场。 */
+  private shouldEmitEntry(uid: number, kind: "anime" | "entry"): boolean {
+    const now = Date.now();
+    const rec = this.entryEmitAt.get(uid);
+    const last = rec ? rec[kind] : 0;
+    if (last && now - last < 2000) return false;
+    if (rec) rec[kind] = now;
+    else this.entryEmitAt.set(uid, { anime: kind === "anime" ? now : 0, entry: kind === "entry" ? now : 0 });
+    // 过期清理：map 过大时删掉窗口外的旧项，避免长期运行无限增长
+    if (this.entryEmitAt.size > 300) {
+      for (const [k, v] of this.entryEmitAt) {
+        if (now - Math.max(v.anime, v.entry) > 2000) this.entryEmitAt.delete(k);
+      }
+    }
+    return true;
+  }
+
   /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。
    *  @param skipFilter — 该入场事件不携带大航海/粉丝勋章信息（如 INTERACT_WORD_V2 的
    *  protobuf），无法评估入场筛选条件。此时跳过筛选直接提示：V2 只会下发给高权重特殊
@@ -1234,7 +1263,8 @@ class DisplayDanmakuService {
       const animeCooldownMs =
         ENTRY_COOLDOWN_MS[config.animeCooldown] ?? ENTRY_COOLDOWN_MS.bilibili;
       const animeLast = Number(config.animeLastSeen[uid]) || 0;
-      if (animeLast && now - animeLast < animeCooldownMs) {
+      // 0 = 不设本地冷却（B站默认）：B 站自身对重复入场有去重/冷却，本地每次都触发
+      if (animeCooldownMs > 0 && animeLast && now - animeLast < animeCooldownMs) {
         // 冷却中：不播动画、不更新时间（完全对照入场提示的冷却逻辑）
         this.pushDebug("entry", "anime-cooldown", {
           uid,
@@ -1242,55 +1272,73 @@ class DisplayDanmakuService {
           waitSec: Math.ceil((animeCooldownMs - (now - animeLast)) / 1000),
         });
       } else {
-        const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
-        const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
-        this.pushDebug("entry", "anime", {
-          uid,
-          uname: user.uname || "",
-          video,
-          startSec: seg.startSec,
-          endSec: seg.endSec,
-        });
-        this.emitTo({
-          type: "anime",
-          user: { uid, uname: user.uname || "", face: user.face || "" },
-          videoSrc: toDisplayVideoSrc(video),
-          startSec: seg.startSec,
-          endSec: seg.endSec,
-        });
-        // 记录动画触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
-        config.animeLastSeen[uid] = now;
-        needSave = true;
+        // 同一次进场 B 站会同时下发 INTERACT_WORD(_V2) + ENTRY_EFFECT，handleEntry 跑多遍；
+        // emit 前同步去重（2s 窗口），防止一次进场播两次动画
+        if (!this.shouldEmitEntry(uid, "anime")) {
+          this.pushDebug("entry", "anime-dedup", { uid, uname: user.uname || "" });
+        } else {
+          const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
+          const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
+          this.pushDebug("entry", "anime", {
+            uid,
+            uname: user.uname || "",
+            video,
+            startSec: seg.startSec,
+            endSec: seg.endSec,
+          });
+          this.emitTo({
+            type: "anime",
+            user: { uid, uname: user.uname || "", face: user.face || "" },
+            videoSrc: toDisplayVideoSrc(video),
+            startSec: seg.startSec,
+            endSec: seg.endSec,
+          });
+          // 记录动画触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
+          // 冷却为 0 时不记录：记录只服务于冷却判定，写了反而让每次入场都落盘一次配置
+          if (animeCooldownMs > 0) {
+            config.animeLastSeen[uid] = now;
+            needSave = true;
+          }
+        }
       }
       // 不 return：高级用户同样走普通入场提示（各自独立冷却）
     }
 
     if (entryOn) {
       // 入场冷却：同一用户距上次触发不足设定间隔 → 不触发、不更新时间
-      //（频繁进出直播间反复触发体验不好）
+      //（频繁进出直播间反复触发体验不好；0 = 不设本地冷却，跟随 B 站自身去重）
       const cooldownMs = ENTRY_COOLDOWN_MS[config.entryCooldown] ?? ENTRY_COOLDOWN_MS.bilibili;
       const last = Number(config.entryLastSeen[uid]) || 0;
-      if (last && now - last < cooldownMs) {
+      if (cooldownMs > 0 && last && now - last < cooldownMs) {
         this.pushDebug("entry", "cooldown", {
           uid,
           uname: user.uname || "",
           waitSec: Math.ceil((cooldownMs - (now - last)) / 1000),
         });
       } else {
-        // 记录触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
-        config.entryLastSeen[uid] = now;
-        needSave = true;
-        this.pushDebug("entry", "emit", { uid, uname: user.uname || "", guardType, medalLevel });
-        this.emitTo({
-          type: "entry",
-          user: {
-            uid,
-            uname: user.uname || "",
-            face: user.face || "",
-            guardType: guardType as any,
-            medalLevel,
-          },
-        });
+        // 同一次进场 B 站会同时下发 INTERACT_WORD(_V2) + ENTRY_EFFECT，handleEntry 跑多遍；
+        // emit 前同步去重（2s 窗口），防止一次进场播两次入场特效
+        if (!this.shouldEmitEntry(uid, "entry")) {
+          this.pushDebug("entry", "dedup", { uid, uname: user.uname || "" });
+        } else {
+          // 记录触发时间（先同步写入共享配置对象，再落盘；并发 handleEntry 也能看到）
+          // 冷却为 0 时不记录：记录只服务于冷却判定，写了反而让每次入场都落盘一次配置
+          if (cooldownMs > 0) {
+            config.entryLastSeen[uid] = now;
+            needSave = true;
+          }
+          this.pushDebug("entry", "emit", { uid, uname: user.uname || "", guardType, medalLevel });
+          this.emitTo({
+            type: "entry",
+            user: {
+              uid,
+              uname: user.uname || "",
+              face: user.face || "",
+              guardType: guardType as any,
+              medalLevel,
+            },
+          });
+        }
       }
     }
 
@@ -1376,7 +1424,7 @@ class DisplayDanmakuService {
     this.pushDebug("gift", "记录", { uid, uname, giftId, giftName: d.giftName, num: Number(d.num) || 1, hasImg: !!giftImg });
 
     // 「原始录屏」只读订阅点：与展示开关无关（录制不吃展示配置），放在 native 判定之前
-    notifyQualifyingGift({ giftName: String(d.giftName || ""), priceBattery, ts });
+    notifyQualifyingGift({ giftName: String(d.giftName || ""), priceBattery, ts, roomId: this.roomId });
 
     if (!this.isNative()) return;
 
@@ -1470,6 +1518,8 @@ export type QualifyingGiftEvent = {
   priceBattery: number;
   /** 送礼时刻（秒） */
   ts: number;
+  /** 礼物来源房间号（订阅方按房间过滤，避免把别的直播间的礼物当成自己的）。 */
+  roomId: number;
 };
 
 const qualifyingGiftListeners = new Set<(e: QualifyingGiftEvent) => void>();
@@ -1497,3 +1547,171 @@ function notifyQualifyingGift(e: QualifyingGiftEvent) {
 
 /** 全局单例服务 */
 export const displayDanmaku = new DisplayDanmakuService();
+
+/**
+ * 旁路礼物监听服务（「礼物完整录屏」专用）。
+ *
+ * 与展示监听 displayDanmaku 彻底解耦：录屏可指定任意直播间做触发源，若复用展示单例会把
+ * 展示监听劫持到指定房间（把别的直播间的礼物写进自己的展示列表/统计/画布）。这里用独立 WS
+ * 只收礼物、只发 QualifyingGiftEvent 通知供录屏触发判定，不写礼物记录、不发画布、不回盲盒
+ * 查询，从而保证录屏的「指定房间号」不影响展示/礼物统计。
+ */
+class GiftWatchService {
+  private roomId = 0;
+  private mid = 0;
+  private live: any = null;
+  private removeHandlers: Array<() => void> = [];
+  private active = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private retry = 0;
+  private cachedToken: string | null = null;
+  private cachedRoomId = 0;
+
+  /** 启动监听指定房间的礼物（幂等：已在监听同一房间则直接返回；换房间则切换）。 */
+  async start(roomId: number, mid: number): Promise<void> {
+    if (this.active && this.roomId === roomId) return;
+    this.retry = 0;
+    await this.connect(roomId, mid);
+  }
+
+  /** 停止：断开 WS、取消重连、释放事件。 */
+  stop(): void {
+    this.active = false;
+    this.roomId = 0;
+    this.mid = 0;
+    this.cachedToken = null;
+    this.cachedRoomId = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.closeListeners();
+  }
+
+  private closeListeners(): void {
+    this.removeHandlers.forEach((rm) => {
+      try {
+        rm();
+      } catch {}
+    });
+    this.removeHandlers = [];
+    try {
+      this.live?.close();
+    } catch {}
+    this.live = null;
+  }
+
+  private async connect(roomId: number, mid: number): Promise<void> {
+    this.closeListeners();
+    this.active = true;
+    this.roomId = roomId;
+    this.mid = mid;
+    try {
+      const platform = await getPlatform();
+      // 复用缓存 token，避免高频重连触发风控
+      let token = this.cachedToken;
+      if (!token || this.cachedRoomId !== roomId) {
+        token = await fetchDanmuToken(platform, roomId);
+        this.cachedToken = token;
+        this.cachedRoomId = roomId;
+      }
+      const { BiliLive } = (await import("bili-live-listener")) as {
+        BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
+      };
+      this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
+      this.bindGiftHandlers();
+      this.live.onOpen(() => {
+        this.retry = 0;
+        console.log("[旁路礼物]WS open", { roomId });
+      });
+      this.live.onClose(() => {
+        console.log("[旁路礼物]WS close", { roomId });
+        this.scheduleReconnect(roomId, mid);
+      });
+      this.live.onError((err: any) => {
+        const msg = err?.message || String(err);
+        console.log("[旁路礼物]WS error", msg);
+        this.scheduleReconnect(roomId, mid, msg);
+      });
+      console.log("[旁路礼物]WS 建立", { roomId });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      console.log("[旁路礼物]start 异常", msg);
+      this.scheduleReconnect(roomId, mid, msg);
+    }
+  }
+
+  /** 只绑礼物相关命令：旧协议 onGift、新协议 pb/json、大航海开通/续费。 */
+  private bindGiftHandlers(): void {
+    // 旧协议礼物
+    this.removeHandlers.push(
+      this.live.onGift((message: any) => {
+        const d = message?.data;
+        if (!d || d.coinType !== "gold") return; // 仅金瓜子（有价）礼物
+        this.notifyGift(d);
+      }),
+    );
+    // 新协议礼物（pb / json 变体），逐条复用解析
+    for (const cmd of ["SEND_GIFT_V2", "UNIVERSAL_EVENT_GIFT_V2"]) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, (raw: any) => {
+          const pbList = parseGiftV2Pb(raw?.data);
+          const jsonList = parseNewGift(raw);
+          const list = pbList ?? jsonList;
+          if (!list.length) return;
+          for (const g of list) {
+            if (g.coinType !== "gold") continue;
+            this.notifyGift(g);
+          }
+        }),
+      );
+    }
+    // 大航海开通/续费（GUARD_BUY / USER_TOAST_MSG）
+    for (const cmd of ["GUARD_BUY", "USER_TOAST_MSG"]) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, (raw: any) => {
+          const d = raw?.data ?? {};
+          const guardLevel = Number(d.guard_level) || 0;
+          const name = String(d.gift_name || d.role_name || "").trim() || GUARD_LEVEL_GIFT_NAME[guardLevel] || "";
+          if (!name) return;
+          notifyQualifyingGift({
+            giftName: name,
+            priceBattery: (Number(d.price) || 0) / 100,
+            ts: Math.floor(Date.now() / 1000),
+            roomId: this.roomId,
+          });
+        }),
+      );
+    }
+  }
+
+  /** 把一条礼物（GiftData 形状）转成只读通知；不落盘、不发画布、不回盲盒。 */
+  private notifyGift(d: any): void {
+    const ts = Number(d.timestamp) || Math.floor(Date.now() / 1000);
+    notifyQualifyingGift({
+      giftName: String(d.giftName || ""),
+      priceBattery: (Number(d.price) || 0) / 100,
+      ts,
+      roomId: this.roomId,
+    });
+  }
+
+  private scheduleReconnect(roomId: number, mid: number, errMsg?: string): void {
+    if (!this.active) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    // -352 是风控/限流：大幅退避；普通断线较快重连。指数退避，封顶 5 分钟。
+    const isRisk = /-352|风控|限流/.test(errMsg ?? "");
+    const base = isRisk ? 60_000 : 5_000;
+    const max = isRisk ? 300_000 : 120_000;
+    const delay = Math.min(max, base * 2 ** Math.min(this.retry, 4));
+    this.retry = Math.min(this.retry + 1, 6);
+    console.log(`[旁路礼物]${isRisk ? "风控" : "断线"}退避重连 ${delay}ms 后（第 ${this.retry} 次）`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.active) this.connect(roomId, mid);
+    }, delay);
+  }
+}
+
+/** 「礼物完整录屏」旁路礼物监听单例（与展示监听 displayDanmaku 相互独立）。 */
+export const giftWatch = new GiftWatchService();

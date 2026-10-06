@@ -10,7 +10,7 @@
 
 import { getPlatform } from "./platform";
 import {
-  displayDanmaku,
+  giftWatch,
   subscribeQualifyingGift,
   type QualifyingGiftEvent,
 } from "./display/danmaku";
@@ -172,7 +172,7 @@ class RawRecorder {
 
   // ---------- 对外动作 ----------
 
-  /** 启动监听：复用展示模块的弹幕监听 → 拉起 WSA + B 站 APP（两阶段进房，约 30 秒）并挂 overlay。 */
+  /** 启动监听：用「旁路礼物监听」监听目标房间（不影响展示模块的直播间）→ 拉起 WSA + B 站 APP（两阶段进房，约 30 秒）并挂 overlay。 */
   async start(roomId: number, mid: number): Promise<void> {
     if (this.state.state !== "idle" && this.state.state !== "error") return;
     const platform = await getPlatform();
@@ -187,7 +187,9 @@ class RawRecorder {
     // 先接上收礼通知（WSA 冷启动这 30 秒里的礼物不能漏），再拉 WSA
     this.subscribeGifts();
     try {
-      await displayDanmaku.start(roomId, mid); // 幂等：已在监听同一房间则直接返回
+      // 用独立旁路监听收目标房间的礼物做触发，绝不触碰展示单例 displayDanmaku，
+      // 否则会把展示监听劫持到目标房间（把别的直播间的礼物写进自己的展示列表/统计）。
+      await giftWatch.start(roomId, mid); // 幂等：已在监听同一房间则直接返回
       const st = await invokeCmd<RawRecordState>("start_wsa_recording", { roomId });
       this.setState({ state: st?.state ?? "listening", roomId, error: null });
     } catch (err) {
@@ -209,6 +211,7 @@ class RawRecorder {
     if (this.recording) await this.finishRecording();
     this.unsubGift?.();
     this.unsubGift = null;
+    giftWatch.stop(); // 关闭旁路礼物监听（不影响展示单例）
     try {
       await invokeCmd("stop_wsa_recording");
       this.setState({ state: "idle", roomId: null, error: null });
@@ -224,9 +227,27 @@ class RawRecorder {
     try {
       const st = await invokeCmd<RawRecordState>("wsa_recording_status");
       this.setState({ state: st?.state ?? "idle", roomId: st?.roomId ?? null, error: st?.error ?? null });
-      if (this.state.state === "listening") this.subscribeGifts();
+      if (this.state.state === "listening") {
+        this.subscribeGifts();
+        // 热更新后 giftWatch 单例随 JS 重置，按 Rust 里的房间重建旁路监听
+        await this.rebuildGiftWatch();
+      }
     } catch {
       /* 非 Windows / 非 Tauri：保持 idle */
+    }
+  }
+
+  /** 按当前 state.roomId 重建旁路礼物监听（热更新/重载后 giftWatch 单例会随 JS 重置）。 */
+  private async rebuildGiftWatch(): Promise<void> {
+    const roomId = this.state.roomId;
+    if (!roomId) return;
+    try {
+      const platform = await getPlatform();
+      const { currentSid, sessions } = await platform.getSessionState();
+      const acc = sessions.find((s) => s.sid === currentSid);
+      await giftWatch.start(roomId, acc?.mid || 0);
+    } catch {
+      /* 取不到账号/网络失败：忽略，不影响界面恢复 */
     }
   }
 
@@ -310,6 +331,8 @@ class RawRecorder {
 
   /** 达标礼物：未在录则开录，已在录则只重置尾窗（15 秒内再来礼物不结束）。 */
   private async onGift(g: QualifyingGiftEvent): Promise<void> {
+    // 只认目标房间的礼物：展示/旁路双源同房会各发一次（去重兜底），跨房间事件在此过滤
+    if (this.state.roomId && g.roomId !== this.state.roomId) return;
     // 还没进入 listening（WSA 仍在启动）时不触发，避免开录命令打空
     if (!this.recording && this.state.state !== "listening") return;
     if (!(g.priceBattery >= this.threshold)) return;

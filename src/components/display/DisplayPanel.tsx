@@ -26,7 +26,11 @@ import {
   saveDisplayConfig,
   resolveAnimeVideo,
 } from "@/lib/display/config";
-import { addBililiveSource, detectBililiveSource } from "@/lib/display/bililive-source";
+import {
+  addBililiveSource,
+  detectBililiveSource,
+  ensureBililiveSourceFps,
+} from "@/lib/display/bililive-source";
 import {
   probeVideoDuration,
   secToTime,
@@ -573,6 +577,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     detectBililiveSource(mid)
       .then((added) => {
         if (alive) setSourceAdded(added);
+        // 静默回填旧源缺失的帧率键（fps:60/fps_custom，缺键=直播姬默认 30fps 驱动
+        // rAF → 粒子帧基动画变慢脱钩）：函数内部自查直播姬运行中/无需写入则跳过
+        if (added) ensureBililiveSourceFps(mid).catch(() => {});
       })
       .catch(() => {
         if (alive) setSourceAdded(false);
@@ -1329,7 +1336,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
               {(
                 [
-                  ["bilibili", "B站默认（约几分钟）"],
+                  ["bilibili", "B站默认（不额外冷却）"],
                   ["30min", "半小时"],
                   ["1h", "1小时"],
                   ["10h", "10小时"],
@@ -1547,7 +1554,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
               {(
                 [
-                  ["bilibili", "B站默认（约几分钟）"],
+                  ["bilibili", "B站默认（不额外冷却）"],
                   ["30min", "半小时"],
                   ["1h", "1小时"],
                   ["10h", "10小时"],

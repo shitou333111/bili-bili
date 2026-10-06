@@ -135,12 +135,12 @@ export interface BannerConfig {
   text: string;
 }
 
-/** 入场冷却时长选项（频繁进出直播间会反复触发入场特效，参考 B 站默认约几分钟的冷却） */
+/** 入场冷却时长选项（B 站对同一用户的重复入场本身有去重/冷却，"bilibili" = 本地不额外冷却） */
 export type EntryCooldownOption = "bilibili" | "30min" | "1h" | "10h";
 
-/** 各冷却选项对应的毫秒数（bilibili = 约几分钟，取 5 分钟） */
+/** 各冷却选项对应的毫秒数（bilibili = 0：不设本地冷却，完全跟随 B 站自身的入场去重） */
 export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
-  bilibili: 5 * 60_000,
+  bilibili: 0,
   "30min": 30 * 60_000,
   "1h": 60 * 60_000,
   "10h": 10 * 60 * 60_000,

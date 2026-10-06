@@ -70,6 +70,8 @@ export type RoomGiftListData = {
 // 内存解析缓存（避免每次读取都重新解析几 MB JSON）
 let memList: GiftConfigItem[] | null = null;
 let memImgMap: Map<number, string> | null = null;
+// 动态图解析缓存（gif 优先）：供礼物展示条用动态图标
+let memAnimImgMap: Map<number, string> | null = null;
 let memEffects: Record<number, GiftEffectBinding> | null = null;
 let memRoomGiftList: RoomGiftListData | null = null;
 // 守护礼物（舰长/提督/总督）名 -> 图标，不在普通 list 中，来自 guard_resources
@@ -90,8 +92,13 @@ async function readJson<T>(platform: Platform, file: string): Promise<T | null> 
 function setMemList(list: GiftConfigItem[]): void {
   memList = list;
   memImgMap = new Map();
+  memAnimImgMap = new Map();
   for (const g of list) {
-    if (g.id) memImgMap.set(g.id, g.img_basic || g.webp || g.gif || "");
+    if (g.id) {
+      memImgMap.set(g.id, g.img_basic || g.webp || g.gif || "");
+      // 动态图：优先 gif，礼物没有 gif 再退 img_basic（静态）
+      memAnimImgMap.set(g.id, g.gif || g.img_basic || "");
+    }
   }
 }
 
@@ -248,6 +255,11 @@ export function getGiftList(): GiftConfigItem[] {
 /** 根据 gift_id 获取礼物图标，没找到返回空字符串 */
 export function getGiftImg(giftId: number): string {
   return memImgMap?.get(giftId) ?? "";
+}
+
+/** 根据 gift_id 获取礼物动态图（优先 gif，没有 gif 退 img_basic），没找到返回空字符串。供礼物展示条使用 */
+export function getGiftImgAnimated(giftId: number): string {
+  return memAnimImgMap?.get(giftId) ?? "";
 }
 
 /**

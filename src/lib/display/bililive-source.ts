@@ -103,6 +103,39 @@ export async function detectBililiveSource(uid: number): Promise<boolean> {
   return orientationAdded(config, false) && orientationAdded(config, true);
 }
 
+/**
+ * 回填帧率键：旧版一键添加的 B瓜 浏览器源 settings 里没有 fps / fps_custom，
+ * 直播姬（OBS browser_source）按默认 30fps 驱动页面 rAF → 粒子库帧基动画在
+ * 30fps 下寿命/速度翻倍、与按毫秒驱动的 badge 动画脱钩（卡顿/闪现）。这里给
+ * 缺键的源补 `fps: 60 + fps_custom: true`（键名同 OBS browser_source）。
+ * 仅补「完全没写过 fps_custom」的源：显式设过的（含 false=用户主动选默认）不覆盖。
+ * 直播姬运行中跳过（退出时会把内存配置写回覆盖）；无需写入时静默返回。
+ */
+export async function ensureBililiveSourceFps(uid: number): Promise<void> {
+  // 直播姬运行中不写（与一键添加同一约束）
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    if (await invoke<boolean>("is_bililive_running")) return;
+  } catch {
+    return; // 检测失败按运行中处理，保守跳过
+  }
+  const { file, config } = await loadSceneConfig(uid);
+  const targets = displaySources(config).filter(
+    (s: any) => typeof s?.settings?.fps_custom === "undefined",
+  );
+  if (!targets.length) return;
+  for (const s of targets) {
+    s.settings.fps = 60;
+    s.settings.fps_custom = true;
+  }
+  try {
+    await copyFile(file, `${file}${BACKUP_SUFFIX}`);
+  } catch (e: any) {
+    throw new Error(`备份直播姬配置失败：${e?.message || e}`);
+  }
+  await writeTextFile(file, JSON.stringify(config));
+}
+
 /** 选目标场景：该朝向的场景里优先直播姬当前场景（current_scene），否则取第一个 */
 function pickTargetScene(config: any, portrait: boolean): any {
   const pool = orientationScenes(config, portrait);
@@ -228,6 +261,10 @@ function createDisplaySource(
       height,
       shutdown: false,
       restart_when_active: false,
+      // 帧率：OBS browser_source 默认 30fps（fps_custom 缺省=Off）→ 页面 rAF 按 30fps
+      // 驱动，粒子库帧基动画寿命/速度翻倍且与 badge 毫秒动画脱钩。显式开自定义 60fps。
+      fps: 60,
+      fps_custom: true,
       css: "body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: visible; }",
     },
     mixers: 255,

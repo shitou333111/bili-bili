@@ -30,7 +30,7 @@ import {
   type EffectiveBlindBoxConfig,
 } from "@/lib/stats-client";
 
-import { getGiftImg } from "@/lib/gift-catalog-client";
+import { getGiftImgAnimated } from "@/lib/gift-catalog-client";
 import type { DisplayGiftItem } from "./types";
 
 // ==================== 礼物逐条记录文件 ====================
@@ -163,10 +163,11 @@ export async function loadTodayQualifyingGifts(
   const map = new Map<number, { giftName: string; price: number; count: number; img: string }>();
   for (const r of rows) {
     const cur = map.get(r.giftId);
-    const img = r.img || getGiftImg(r.giftId); // 优先用弹幕直链图标，缺省回退礼物目录
+    // 图标：优先礼物列表的动态图（gif，无 gif 退 img_basic），目录查不到再回退弹幕直链图标
+    const img = getGiftImgAnimated(r.giftId) || r.img || "";
     if (cur) {
       cur.count += r.num;
-      if (!r.img && !cur.img) cur.img = img;
+      if (!cur.img && img) cur.img = img;
     } else {
       map.set(r.giftId, { giftName: r.giftName, price: r.price, count: r.num, img });
     }

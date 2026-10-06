@@ -415,6 +415,9 @@ export default function RawRecordPanel({ mid }: { mid: number }) {
               placeholder={defaultRoomId ? `默认 ${defaultRoomId}` : "留空用当前账号直播间"}
               className="w-[150px] rounded-lg border border-black/10 bg-white/90 px-2 py-1 text-xs text-black/75 outline-none transition placeholder:text-black/30 focus:bg-white disabled:opacity-50"
             />
+            <span className="shrink-0 whitespace-nowrap text-black/35" title="仅决定录屏监听哪个房间的礼物，不影响展示、礼物统计等模块的直播间">
+              仅用于录屏
+            </span>
           </span>
         </div>
 
