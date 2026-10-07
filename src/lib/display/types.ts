@@ -146,12 +146,17 @@ export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
   "10h": 10 * 60 * 60_000,
 };
 
+/** 入场提示 · 粒子聚散方式："center" = 自研「四面八方（中心）聚散」；"lr" = 原库实现（左右聚散） */
+export type EntryParticleMode = "center" | "lr";
+
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
   /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
   screenOrientation: ScreenOrientation;
   /** 模块1 · 入场提示 开关 */
   entry: boolean;
+  /** 模块1 · 入场提示粒子聚散方式（面板开关，默认"center"=中心聚散） */
+  entryParticleMode: EntryParticleMode;
   /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
@@ -209,6 +214,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   // 各模块开关默认状态：入场提示 / 收到的礼物展示 / 入场动画 / 礼物特效 默认关闭，
   // 盲盒盈亏弹幕查询默认开启，弹幕互动默认关闭
   entry: false,
+  entryParticleMode: "center", // 默认「中心聚散」（自研四面八方聚散）
   gift: false,
   anime: false,
   giftEffect: {

@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>badge 墨迹成字 · 第三种方式（试验）</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(120% 90% at 50% 45%, #10141d 0%, #07080b 70%);
+    color: #c9d3e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    user-select: none;
+  }
+  #top {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; background: #0b0e13; border-bottom: 1px solid #1c2230;
+  }
+  #top .title { font-size: 12px; color: #7d8ea8; margin-right: 6px; }
+  #top .sp { flex: 1; }
+  #hud { font-size: 11px; color: #5b6a82; font-variant-numeric: tabular-nums; }
+  #hud b { color: #86efac; font-weight: 600; }
+  #hud i { color: #f87171; font-style: normal; }
+  button {
+    font: inherit; font-size: 12px; padding: 5px 14px; border-radius: 999px;
+    border: 1px solid #2a3446; background: #141a24; color: #c9d3e0; cursor: pointer;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  button:hover { background: #1b2331; border-color: #3b4962; }
+  button.on { background: #1d3a2b; border-color: #2f6b4c; color: #a7f3cf; }
+
+  #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; }
+  .scene { transform-origin: 50% 50%; }
+
+  /* ---------- badge：结构/尺寸与项目一致，背景改为白色 ---------- */
+  .holder { position: relative; display: inline-flex; font-size: 0; }
+  .badge-box { display: inline-flex; position: relative; opacity: 0; will-change: opacity; }
+  .badge {
+    position: relative; display: inline-flex; align-items: center; gap: 24px;
+    padding: 2px 48px 2px 16px; border-radius: 999px;
+    background: #fff; vertical-align: top; line-height: 1;
+    box-shadow: 0 12px 38px rgba(0,0,0,.55);
+  }
+  .badge .avatar {
+    width: 96px; height: 96px; flex: none; position: relative; border-radius: 50%;
+    background: linear-gradient(135deg,#ff6699,#7b5cff);
+    color: #fff; font-size: 72px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .badge .avatar img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; border-radius: 50%; display: block;
+  }
+  /* DOM 昵称只用于取形与占位，真正显示的是墨迹粒子 */
+  .badge .name {
+    color: #000; font-size: 72px; font-weight: 700; letter-spacing: .05em;
+    line-height: 1; white-space: nowrap; opacity: 0;
+  }
+  #ink-cv { position: absolute; pointer-events: none; }
+
+  /* ---------- 底部参数 ---------- */
+  #panel {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px;
+    padding: 9px 14px; background: #0b0e13; border-top: 1px solid #1c2230;
+  }
+  .ctl { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #7d8ea8; }
+  .ctl input[type=range] { width: 128px; accent-color: #4b7bd1; }
+  .ctl .val { color: #a9bdd8; font-variant-numeric: tabular-nums; min-width: 44px; }
+  #notes {
+    flex: none; padding: 6px 14px; background: #0b0e13; border-top: 1px solid #1c2230;
+    color: #5b6a82; font-size: 11px; display: flex; flex-wrap: wrap; gap: 4px 18px;
+  }
+  #notes b { color: #86efac; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div id="top">
+    <span class="title">badge 墨迹成字 · 第三种方式</span>
+    <button id="btn-show">显示</button>
+    <button id="btn-hide">消失</button>
+    <button id="btn-loop">循环播放</button>
+    <button id="btn-reset">重置</button>
+    <span class="sp"></span>
+    <span id="hud"></span>
+  </div>
+
+  <div id="stage">
+    <div class="scene" id="scene">
+      <div class="holder" id="holder">
+        <div class="badge-box" id="badge-box">
+          <div class="badge" id="badge">
+            <div class="avatar" id="avatar">夜<img src="avatar-test.jpg" alt="" onerror="this.remove()"></div>
+            <span class="name" id="name">夜雨声烦</span>
+          </div>
+        </div>
+        <canvas id="ink-cv"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <label class="ctl">时长<input id="p-dur" type="range" min="900" max="3200" step="50" value="1800"><span class="val" id="v-dur"></span></label>
+    <label class="ctl">粒子数<input id="p-count" type="range" min="600" max="7000" step="100" value="3200"><span class="val" id="v-count"></span></label>
+    <label class="ctl">墨迹拖尾<input id="p-fade" type="range" min="0.015" max="0.30" step="0.005" value="0.075"><span class="val" id="v-fade"></span></label>
+    <label class="ctl">收束力度<input id="p-seek" type="range" min="0.2" max="1.4" step="0.02" value="0.80"><span class="val" id="v-seek"></span></label>
+    <label class="ctl">脉络收束<input id="p-grad" type="range" min="0" max="0.8" step="0.02" value="0.42"><span class="val" id="v-grad"></span></label>
+  </div>
+
+  <div id="notes">
+    <span><b>显示</b>：先丝状黑雾 → 被牵引收束 → 沿笔画切向流动成"墨迹脉络"文字（非印刷体）</span>
+    <span><b>消失</b>：脉络松解复归黑雾 → 随 badge 一起渐隐</span>
+    <span><b>badge</b>：白底胶囊，头像位置固定，只做渐隐渐显</span>
+    <span>参考《降临》黑色雾气驱动成字</span>
+  </div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   badge 墨迹成字（第三种方式）· 自研试验台，无外部依赖
+   思路：
+     1) 用离屏 canvas 把昵称栅格化成"目标掩码"，模糊后求梯度场（= 笔画脉络方向场）；
+     2) 粒子在卷曲噪声里游走形成"丝状黑雾"，随汇聚度提高被目标点 + 梯度场收束，
+        并沿笔画切向缓慢流动 → 由黑色丝线组成的文字（不是印刷字体）；
+     3) 渲染用"逐帧低比例擦除（destination-out）+ 短线段"制造拖尾，形成墨迹丝缕感。
+   ========================================================================== */
+
+window.__err = 0;
+window.addEventListener("error", function () { window.__err++; });
+
+/* ---------------- 常量 ---------------- */
+const VS  = 0.55;                                  // 场景缩放（与 particle-radial-test 一致）
+const DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+const TAU = Math.PI * 2;
+const CELL = 3;                                    // 密度场网格步长（设计 px）
+const MINSEG = 3.4;                                // 静止粒子沿笔画切向补足的最短丝长（≈1.1·CELL，保证连成丝线）
+const NBW = 3, NBA = 3;
+const W_LV = [0.9, 1.3, 1.8];                      // 丝线宽度（设计 px）：细，才读得出"丝"
+const A_LV = [0.16, 0.30, 0.50];                   // 单根丝线不透明度（叠加成墨色）
+
+const PAR = {
+  dur: 1800,      // 时长 ms
+  count: 3200,    // 粒子数：过多会糊成实心墨块，过少笔画会断
+  fade: 0.075,    // 云雾期每帧擦除比例：越小，拖尾越长
+  seek: 0.80,     // 汇聚期对目标点的拉力
+  grad: 0.42,     // 向笔画脉络中心收束的力度
+  noiseHi: 0.55,  // 云雾期噪声强度
+  noiseLo: 0.06,  // 成字后残余抖动（保证丝线持续重绘）
+  slide: 0.26,    // 沿笔画切向流动的幅度（墨迹流动感）
+  aniso: 0.16,    // 噪声各向异性：垂直笔画方向只保留 16%，避免糊边
+  ridge: 0.56     // 脉络阈值（×模糊场峰值）：笔画芯的取舍
+};
+
+/* ---------------- DOM ---------------- */
+const scene    = document.getElementById("scene");
+const holder   = document.getElementById("holder");
+const badgeBox = document.getElementById("badge-box");
+const badgeEl  = document.getElementById("badge");
+const avatarEl = document.getElementById("avatar");
+const nameEl   = document.getElementById("name");
+const cv       = document.getElementById("ink-cv");
+const ctx      = cv.getContext("2d");
+const hudEl    = document.getElementById("hud");
+const BADGE_NAME = (nameEl.textContent || "").trim() || "名";
+scene.style.transform = "scale(" + VS + ")";
+
+/* ---------------- 小工具 ---------------- */
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smooth01(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
+function hash2(x, y) { const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123; return n - Math.floor(n); }
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+}
+
+/* ==========================================================================
+   1. 几何：墨迹画布只覆盖昵称所在的白底区域
+   ========================================================================== */
+let geo = { W: 1, H: 1, left: 0, top: 0 };
+function layout() {
+  const hr = holder.getBoundingClientRect();
+  const nr = nameEl.getBoundingClientRect();
+  const ar = avatarEl.getBoundingClientRect();
+  const br = badgeEl.getBoundingClientRect();
+  const nLeft = (nr.left - hr.left) / VS, nTop = (nr.top - hr.top) / VS;
+  const nW = nr.width / VS, nH = nr.height / VS;
+  const aRight = (ar.right - hr.left) / VS;
+  const bTop = (br.top - hr.top) / VS, bBot = (br.bottom - hr.top) / VS;
+  const bRight = (br.right - hr.left) / VS;
+
+  const padH = 10, padV = 6;
+  const left  = Math.max(aRight + 3, nLeft - padH);
+  const right = Math.min(bRight - 3, nLeft + nW + padH);
+  const top   = Math.max(bTop + 2, nTop - padV);
+  const bot   = Math.min(bBot - 2, nTop + nH + padV);
+
+  geo.W = Math.max(48, right - left);
+  geo.H = Math.max(24, bot - top);
+  geo.left = left;
+  geo.top = top;
+
+  cv.style.left = left + "px";
+  cv.style.top = top + "px";
+  cv.style.width = geo.W + "px";
+  cv.style.height = geo.H + "px";
+  cv.width  = Math.round(geo.W * DPR);
+  cv.height = Math.round(geo.H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 之后全部用"设计 px"作图
+}
+
+/* ==========================================================================
+   2. 目标掩码 → 密度场 / 梯度场 / 目标点
+   ========================================================================== */
+let GW = 0, GH = 0, GX = null, GY = null, OX = null, OY = null, TGT = [];
+let _gx = 0, _gy = 0;                                    // sampleGrad 的返回暂存（避免逐帧分配）
+let _ox = 1, _oy = 0;                                    // sampleOri 的返回暂存
+
+function buildField() {
+  const mw = Math.max(2, Math.round(geo.W));
+  const mh = Math.max(2, Math.round(geo.H));
+  const mc = document.createElement("canvas");
+  mc.width = mw; mc.height = mh;
+  const mctx = mc.getContext("2d");
+
+  // 用与 DOM 一致的字体把昵称栅格化；DOM 文字本身不可见，墨迹才是文字
+  const cs = getComputedStyle(nameEl);
+  const ff = cs.fontFamily || "sans-serif";
+  mctx.font = (cs.font && cs.font.indexOf("px") > 0) ? cs.font
+             : ((cs.fontWeight || "700") + " " + (cs.fontSize || "72px") + " " + ff);
+  try { if ("letterSpacing" in mctx) mctx.letterSpacing = cs.letterSpacing || "0px"; } catch (e) {}
+  mctx.textAlign = "center";
+  mctx.textBaseline = "middle";
+  mctx.fillStyle = "#000";
+  // 以 (cx,cy) 为文字中心、sc 为缩放绘制
+  function paintText(cx, cy, sc) {
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    mctx.clearRect(0, 0, mw, mh);
+    mctx.setTransform(sc, 0, 0, sc, cx, cy);
+    mctx.fillText(BADGE_NAME, 0, 0);
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  paintText(mw / 2, mh / 2, 1);
+
+  // 量出文字墨迹的真实包围盒：中文字形常会超出 em 框而被裁掉/偏移，这里自动居中并缩放贴合
+  let px = mctx.getImageData(0, 0, mw, mh).data;
+  let x0 = mw, x1 = -1, y0 = mh, y1 = -1;
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      if (px[(y * mw + x) * 4 + 3] > 12) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 >= x0 && y1 >= y0) {
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    const sc = Math.min(1, (mw - 3) / bw, (mh - 3) / bh);
+    const bcx = (x0 + x1) / 2, bcy = (y0 + y1) / 2;
+    paintText(mw / 2 - (bcx - mw / 2) * sc, mh / 2 - (bcy - mh / 2) * sc, sc);
+    px = mctx.getImageData(0, 0, mw, mh).data;
+  }
+
+  // 细网格上的覆盖率
+  GW = Math.max(2, Math.ceil(mw / CELL));
+  GH = Math.max(2, Math.ceil(mh / CELL));
+  const raw = new Float32Array(GW * GH);
+  const cnt = new Float32Array(GW * GH);
+  for (let y = 0; y < mh; y++) {
+    const gy = (y / CELL) | 0;
+    for (let x = 0; x < mw; x++) {
+      const a = px[(y * mw + x) * 4 + 3];
+      if (a > 24) { const i = gy * GW + ((x / CELL) | 0); raw[i] += a / 255; cnt[i]++; }
+    }
+  }
+  for (let i = 0; i < raw.length; i++) raw[i] = cnt[i] ? raw[i] / cnt[i] : 0;
+
+  // 目标点：取笔画"脉络"（模糊场里较核心的格子），让丝线聚成线条而不是糊成一团
+  TGT = [];
+  const fProbe = boxBlur(Float32Array.from(raw), GW, GH, 2);
+  let fMax = 0;
+  for (let i = 0; i < fProbe.length; i++) if (fProbe[i] > fMax) fMax = fProbe[i];
+  const ridge = fMax * PAR.ridge;
+
+  // 模糊后的密度场：用于"向笔画芯收束"的梯度场（GX/GY）
+  const f = fProbe;
+
+  GX = new Float32Array(GW * GH);
+  GY = new Float32Array(GW * GH);
+  for (let gy = 0; gy < GH; gy++) {
+    for (let gx = 0; gx < GW; gx++) {
+      const i = gy * GW + gx;
+      const xm = gx > 0 ? i - 1 : i, xp = gx < GW - 1 ? i + 1 : i;
+      const ym = gy > 0 ? i - GW : i, yp = gy < GH - 1 ? i + GW : i;
+      GX[i] = (f[xp] - f[xm]) * 0.5;
+      GY[i] = (f[yp] - f[ym]) * 0.5;
+    }
+  }
+
+  // 笔画方向场 OX/OY（单位切向）——用"结构张量"而不是灰度梯度：
+  // 灰度梯度在粗笔画内部几乎为 0（方向不可信），而结构张量把覆盖率的梯度外积
+  // 在一个窗口内平滑，窗口能同时看到笔画两侧边缘 → 即使笔画芯部也有稳定的方向。
+  const Ix = new Float32Array(GW * GH), Iy = new Float32Array(GW * GH);
+  for (let gy = 0; gy < GH; gy++) {
+    for (let gx = 0; gx < GW; gx++) {
+      const i = gy * GW + gx;
+      const xm = gx > 0 ? i - 1 : i, xp = gx < GW - 1 ? i + 1 : i;
+      const ym = gy > 0 ? i - GW : i, yp = gy < GH - 1 ? i + GW : i;
+      Ix[i] = (raw[xp] - raw[xm]) * 0.5;
+      Iy[i] = (raw[yp] - raw[ym]) * 0.5;
+    }
+  }
+  const Jxx = new Float32Array(GW * GH), Jyy = new Float32Array(GW * GH), Jxy = new Float32Array(GW * GH);
+  for (let i = 0; i < Jxx.length; i++) { Jxx[i] = Ix[i] * Ix[i]; Jyy[i] = Iy[i] * Iy[i]; Jxy[i] = Ix[i] * Iy[i]; }
+  boxBlur(Jxx, GW, GH, 3); boxBlur(Jyy, GW, GH, 3); boxBlur(Jxy, GW, GH, 3);
+  OX = new Float32Array(GW * GH);
+  OY = new Float32Array(GW * GH);
+  for (let i = 0; i < OX.length; i++) {
+    const th = 0.5 * Math.atan2(2 * Jxy[i], Jxx[i] - Jyy[i]);   // 最大变化方向（穿过笔画）
+    OX[i] = -Math.sin(th); OY[i] = Math.cos(th);                // 转 90° → 顺着笔画
+  }
+
+  // 目标点带上"该点的笔画切向"：同一条笔画上的丝缕方向一致，
+  // 描出来才是"顺着笔画走的丝缕"（干笔飞白），而不是乱草。
+  TGT = [];
+  for (let gy = 0; gy < GH; gy++) {
+    for (let gx = 0; gx < GW; gx++) {
+      const i = gy * GW + gx;
+      if (raw[i] > 0.40 && fProbe[i] >= ridge) {
+        TGT.push([(gx + 0.5) * CELL, (gy + 0.5) * CELL, OX[i], OY[i]]);
+      }
+    }
+  }
+  if (!TGT.length) {
+    for (let gy = 0; gy < GH; gy++) {
+      for (let gx = 0; gx < GW; gx++) {
+        if (raw[gy * GW + gx] > 0.40) TGT.push([(gx + 0.5) * CELL, (gy + 0.5) * CELL, 1, 0]);
+      }
+    }
+  }
+  if (!TGT.length) TGT.push([geo.W / 2, geo.H / 2, 1, 0]);
+}
+
+function boxBlur(src, gw, gh, r) {
+  const tmp = new Float32Array(src.length);
+  for (let it = 0; it < 2; it++) {
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        let s = 0, n = 0;
+        for (let k = -r; k <= r; k++) { const xx = x + k; if (xx < 0 || xx >= gw) continue; s += src[y * gw + xx]; n++; }
+        tmp[y * gw + x] = s / n;
+      }
+    }
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        let s = 0, n = 0;
+        for (let k = -r; k <= r; k++) { const yy = y + k; if (yy < 0 || yy >= gh) continue; s += tmp[yy * gw + x]; n++; }
+        src[y * gw + x] = s / n;
+      }
+    }
+  }
+  return src;
+}
+
+/* sampleGrad：双线性采样梯度场，结果写入 _gx/_gy */
+function sampleGrad(x, y) {
+  const px = clamp(x / CELL - 0.5, 0, GW - 1), py = clamp(y / CELL - 0.5, 0, GH - 1);
+  const x0 = Math.floor(px), y0 = Math.floor(py);
+  const x1 = x0 + 1 < GW ? x0 + 1 : x0, y1 = y0 + 1 < GH ? y0 + 1 : y0;
+  const fx = px - x0, fy = py - y0;
+  const i00 = y0 * GW + x0, i10 = y0 * GW + x1, i01 = y1 * GW + x0, i11 = y1 * GW + x1;
+  const a = GX[i00] * (1 - fx) + GX[i10] * fx, b = GX[i01] * (1 - fx) + GX[i11] * fx;
+  const c = GY[i00] * (1 - fx) + GY[i10] * fx, d = GY[i01] * (1 - fx) + GY[i11] * fx;
+  _gx = a * (1 - fy) + b * fy;
+  _gy = c * (1 - fy) + d * fy;
+}
+
+/* sampleOri：双线性采样"笔画方向场"，结果写入 _ox/_oy（单位切向） */
+function sampleOri(x, y) {
+  const px = clamp(x / CELL - 0.5, 0, GW - 1), py = clamp(y / CELL - 0.5, 0, GH - 1);
+  const x0 = Math.floor(px), y0 = Math.floor(py);
+  const x1 = x0 + 1 < GW ? x0 + 1 : x0, y1 = y0 + 1 < GH ? y0 + 1 : y0;
+  const fx = px - x0, fy = py - y0;
+  const i00 = y0 * GW + x0, i10 = y0 * GW + x1, i01 = y1 * GW + x0, i11 = y1 * GW + x1;
+  // 方向场是"有符号"的二倍角场，直接插值单位向量会相互抵消，这里先插值再归一化
+  const a = OX[i00] * (1 - fx) + OX[i10] * fx, b = OX[i01] * (1 - fx) + OX[i11] * fx;
+  const c = OY[i00] * (1 - fx) + OY[i10] * fx, d = OY[i01] * (1 - fx) + OY[i11] * fx;
+  const ux = a * (1 - fy) + b * fy, uy = c * (1 - fy) + d * fy;
+  const m = Math.sqrt(ux * ux + uy * uy);
+  if (m > 1e-4) { _ox = ux / m; _oy = uy / m; }
+}
+
+/* ==========================================================================
+   3. 粒子
+   ========================================================================== */
+const P = [];
+let pIdx = 0;
+
+function pickTarget(q) {
+  const t = TGT[(Math.random() * TGT.length) | 0];
+  // 抖动：沿笔画切向给得多（丝缕可长短错落），垂直笔画方向给得少（不越出笔画变成毛边）
+  const ta = (Math.random() - 0.5) * CELL * 1.15;
+  const tp = (Math.random() - 0.5) * CELL * 0.42;
+  q.tx = t[0] + t[2] * ta - t[3] * tp;
+  q.ty = t[1] + t[3] * ta + t[2] * tp;
+  q.tanx = t[2]; q.tany = t[3];
+}
+function makeParticle() {
+  const q = {
+    x: Math.random() * geo.W, y: Math.random() * geo.H,
+    vx: 0, vy: 0, px: 0, py: 0,
+    wb: (Math.random() * NBW) | 0,
+    ab: (Math.random() * NBA) | 0,
+    sl: MINSEG * (0.7 + Math.random() * 0.9),      // 每根丝线长度略有差异 → 墨迹长短参差
+    ph: Math.random() * TAU,
+    sp: 0.6 + Math.random() * 1.9,
+    tx: geo.W / 2, ty: geo.H / 2
+  };
+  q.px = q.x; q.py = q.y;
+  q.tanx = Math.cos(q.ph); q.tany = Math.sin(q.ph);
+  pickTarget(q);
+  return q;
+}
+function initParticles() {
+  const n = PAR.count | 0;
+  P.length = 0;
+  for (let i = 0; i < n; i++) P.push(makeParticle());
+  pIdx = 0;
+}
+
+/* ==========================================================================
+   4. 状态机
+   ========================================================================== */
+const state = { mode: "idle", running: false, p: 0, t0: 0, last: 0, formed: false, loop: false };
+let time = 0;
+
+function play(mode) {
+  state.mode = mode;
+  state.p = 0;
+  state.running = true;
+  state.t0 = 0;               // 首帧再取时间戳
+  state.last = 0;
+  if (mode === "showing") {
+    clearInk();
+    initParticles();
+    state.formed = false;
+  }
+}
+
+function clearInk() {
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, geo.W, geo.H);
+  ctx.globalCompositeOperation = "source-over";
+}
+
+/* ==========================================================================
+   5. 每帧：物理 + 绘制
+   ========================================================================== */
+let layerAlpha = 0;
+let fadeEff = PAR.fade;                 // 实际擦除比例：汇聚越充分，擦得越快 → 云雾被清掉、只留丝线
+
+function step(dt, p) {
+  time += dt * 0.016;
+
+  // 汇聚度 c：显示时 0→1 收束；消失时 1→0 松解
+  // 前半段先让粒子在噪声里游走成"丝状黑雾"（这一段不拉向目标，否则会拉出放射状长毛），
+  // 之后才收束；p≈0.76 完全收束，剩下时间用于"落定"，把晚到的丝缕擦净。
+  const c = state.mode === "showing"
+    ? smooth01(clamp((p - 0.26) / 0.50, 0, 1))
+    : 1 - smooth01(clamp(p / 0.50, 0, 1));
+
+  const noiseAmp = lerp(PAR.noiseHi, PAR.noiseLo, c);
+  const seekAmp  = lerp(0, PAR.seek, c);
+  const gradAmp  = lerp(0, PAR.grad, c);
+  const slideAmp = lerp(0, PAR.slide, c);
+  const damp     = lerp(0.90, 0.80, c);
+  const snapK    = c * c * 0.075;       // 位置级吸附：保证一定能收束到笔画上
+  // 末段"落定"：把残余晚到的粒子拽回目标点，使最终定格帧干净无浮拖尾
+  const settle   = state.mode === "showing" ? smooth01(clamp((p - 0.84) / 0.12, 0, 1)) : 0;
+  fadeEff = PAR.fade * (1 + 2.5 * c);   // 成字后拖尾大幅收短 → 丝线紧贴脉络、不糊成一团
+
+  const nf = 0.045;                       // 噪声频率
+
+  for (let i = 0; i < P.length; i++) {
+    const q = P[i];
+    q.px = q.x; q.py = q.y;
+
+    // 1) 卷曲噪声方向（稍后按笔画方向重新分配）
+    const ang = vnoise(q.x * nf + time * 0.35, q.y * nf - time * 0.22) * TAU * 2;
+    let nfx = Math.cos(ang), nfy = Math.sin(ang);
+
+    // 2) 目标吸引 → 把雾气牵引到笔画上
+    const tdx = q.tx - q.x, tdy = q.ty - q.y;
+    const td = Math.sqrt(tdx * tdx + tdy * tdy) || 1e-4;
+    const w = seekAmp * (2.2 * td / (td + 18));   // 越靠近目标拉力越小，避免在目标附近来回过冲
+    let fx = (tdx / td) * w;
+    let fy = (tdy / td) * w;
+
+    // 3) 梯度收束：把丝缕压进笔画"脉络"
+    sampleGrad(q.x, q.y);
+    const mag = Math.sqrt(_gx * _gx + _gy * _gy);
+    if (mag > 1e-6 && gradAmp > 0) {
+      const gk = gradAmp * Math.min(1, mag * 7);
+      fx += (_gx / mag) * gk; fy += (_gy / mag) * gk;
+    }
+
+    // 4) 笔画方向场：丝缕只"顺着笔画"走
+    //    —— 沿切向保留噪声与流动，垂直笔画方向大幅压制（否则笔画会糊成毛球）
+    sampleOri(q.x, q.y);
+    const tx0 = _ox, ty0 = _oy;            // 切向
+    const ux = -_oy, uy = _ox;             // 法向
+    q.tanx = tx0; q.tany = ty0;
+    if (slideAmp > 0.001) {
+      const s = Math.sin(q.ph + time * q.sp) * slideAmp;
+      fx += tx0 * s; fy += ty0 * s;
+    }
+    const nt = nfx * tx0 + nfy * ty0;                     // 噪声的切向分量
+    const nn = nfx * ux + nfy * uy;                       // 噪声的法向分量
+    nfx = tx0 * nt + ux * nn * PAR.aniso;
+    nfy = ty0 * nt + uy * nn * PAR.aniso;
+    fx += nfx * noiseAmp;
+    fy += nfy * noiseAmp;
+
+    // 5) 消散：不加任何"向外吹"的外力。c 归零后收束力自然松开，
+    //    噪声重新占主导 → 文字自己"化开"成黑雾，再随整层渐隐
+
+    q.vx = (q.vx + fx) * damp;
+    q.vy = (q.vy + fy) * damp;
+    const pull = snapK + settle * 0.5;
+    q.x += q.vx * dt + (q.tx - q.x) * pull * dt;
+    q.y += q.vy * dt + (q.ty - q.y) * pull * dt;
+
+    // 边界反弹（不用回卷：回卷会把粒子瞬移，既画出假长拖尾，又让粒子永远收敛不下来）
+    if (q.x < 0) { q.x = 0; q.vx = Math.abs(q.vx); }
+    else if (q.x > geo.W) { q.x = geo.W; q.vx = -Math.abs(q.vx); }
+    if (q.y < 0) { q.y = 0; q.vy = Math.abs(q.vy); }
+    else if (q.y > geo.H) { q.y = geo.H; q.vy = -Math.abs(q.vy); }
+  }
+}
+
+const SEG = [];
+for (let i = 0; i < NBW * NBA; i++) SEG.push([]);
+
+function draw() {
+  // 逐帧低比例擦除 → 拖尾（保持画布透明，露出白色胶囊底）
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.fillStyle = "rgba(0,0,0," + fadeEff + ")";
+  ctx.fillRect(0, 0, geo.W, geo.H);
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = layerAlpha;
+
+  for (let i = 0; i < SEG.length; i++) SEG[i].length = 0;
+  for (let i = 0; i < P.length; i++) {
+    const q = P[i];
+    let ax = q.px, ay = q.py, bx = q.x, by = q.y;
+    let dx = bx - ax, dy = by - ay;
+    const minSeg = q.sl;
+    if (dx * dx + dy * dy < minSeg * minSeg) {
+      // 收束后粒子几乎静止：若只按位移画，就只有孤立小点（格点间距 3px 连不起来）。
+      // 这里沿"笔画切向"补足到 minSeg 长 → 相邻格上的丝线首尾相接，形成连续脉络。
+      const a = (dx * dx + dy * dy > 1e-8) ? Math.atan2(dy, dx) : Math.atan2(q.tany, q.tanx);
+      dx = Math.cos(a) * minSeg; dy = Math.sin(a) * minSeg;
+      ax = q.x - dx * 0.5; ay = q.y - dy * 0.5;
+      bx = ax + dx; by = ay + dy;
+    }
+    SEG[q.wb * NBA + q.ab].push(ax, ay, bx, by);
+  }
+  ctx.lineCap = "round";
+  for (let wi = 0; wi < NBW; wi++) {
+    for (let ai = 0; ai < NBA; ai++) {
+      const a = SEG[wi * NBA + ai];
+      if (!a.length) continue;
+      ctx.strokeStyle = "rgba(0,0,0," + A_LV[ai] + ")";
+      ctx.lineWidth = W_LV[wi];
+      ctx.beginPath();
+      for (let k = 0; k < a.length; k += 4) { ctx.moveTo(a[k], a[k + 1]); ctx.lineTo(a[k + 2], a[k + 3]); }
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------------- 时间轴 ---------------- */
+function frame(ts) {
+  requestAnimationFrame(frame);
+  if (!state.running) { hud(); return; }
+  if (!state.t0) { state.t0 = ts; state.last = ts; }
+
+  const dt = clamp((ts - state.last) / 16.667, 0.25, 2.5);
+  state.last = ts;
+  const p = clamp((ts - state.t0) / PAR.dur, 0, 1);
+  state.p = p;
+
+  if (state.mode === "showing") {
+    layerAlpha = smooth01(clamp(p / 0.12, 0, 1));
+    badgeBox.style.opacity = smooth01(clamp(p / 0.24, 0, 1)).toFixed(3);
+  } else {
+    layerAlpha = 1 - smooth01(clamp((p - 0.45) / 0.40, 0, 1));
+    badgeBox.style.opacity = (1 - smooth01(clamp((p - 0.55) / 0.40, 0, 1))).toFixed(3);
+  }
+
+  step(dt, p);
+  draw();
+  hud();
+
+  if (p >= 1) {
+    state.running = false;
+    if (state.mode === "showing") {
+      badgeBox.style.opacity = "1";
+      state.formed = true;
+    } else {
+      badgeBox.style.opacity = "0";
+      
+      clearInk();
+      state.formed = false;
+    }
+    if (state.loop) {
+      const next = state.mode === "showing" ? "hiding" : "showing";
+      setTimeout(function () { if (state.loop) play(next); }, 420);
+    }
+  }
+}
+
+/* ---------------- HUD ---------------- */
+let hudTick = 0;
+function hud() {
+  if (++hudTick % 6) return;
+  hudEl.innerHTML =
+    "相位 <b>" + state.mode + "</b>" +
+    " · p " + state.p.toFixed(2) +
+    " · 粒子 <b>" + P.length + "</b>" +
+    " · 目标点 " + TGT.length +
+    " · err <i>" + window.__err + "</i>";
+}
+
+/* ==========================================================================
+   6. UI
+   ========================================================================== */
+function bindSlider(id, vid, key, fmt) {
+  const el = document.getElementById(id), v = document.getElementById(vid);
+  function sync() { v.textContent = fmt(PAR[key]); }
+  el.addEventListener("input", function () {
+    PAR[key] = parseFloat(el.value);
+    sync();
+    if (key === "count") initParticles();
+  });
+  sync();
+}
+bindSlider("p-dur",   "v-dur",   "dur",   function (x) { return x + "ms"; });
+bindSlider("p-count", "v-count", "count", function (x) { return "" + x; });
+bindSlider("p-fade",  "v-fade",  "fade",  function (x) { return x.toFixed(3); });
+bindSlider("p-seek",  "v-seek",  "seek",  function (x) { return x.toFixed(2); });
+bindSlider("p-grad",  "v-grad",  "grad",  function (x) { return x.toFixed(2); });
+
+document.getElementById("btn-show").addEventListener("click", function () { play("showing"); });
+document.getElementById("btn-hide").addEventListener("click", function () { play("hiding"); });
+document.getElementById("btn-reset").addEventListener("click", function () {
+  state.running = false; state.loop = false; state.formed = false;
+  document.getElementById("btn-loop").classList.remove("on");
+  badgeBox.style.opacity = "0";
+  clearInk();
+});
+document.getElementById("btn-loop").addEventListener("click", function () {
+  state.loop = !state.loop;
+  this.classList.toggle("on", state.loop);
+  if (state.loop && !state.running) play(state.formed ? "hiding" : "showing");
+});
+
+/* ---------------- 启动 ---------------- */
+let rzTimer = 0;
+window.addEventListener("resize", function () {
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(function () {
+    const was = state.mode;
+    layout();
+    buildField();
+    initParticles();
+    clearInk();
+    play(was === "hiding" && !state.formed ? "hiding" : "showing");
+  }, 180);
+});
+
+function boot() {
+  layout();
+  buildField();
+  initParticles();
+  play("showing");
+}
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(boot);
+else window.addEventListener("load", boot);
+requestAnimationFrame(frame);
+
+window.__ink = { PAR: PAR, state: state, P: P, play: play, geo: geo, TGT: function () { return TGT; } };
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@ import {
   type DisplayConfig,
   type EntryAnimeConfig,
   type EntryCooldownOption,
+  type EntryParticleMode,
   type ScreenOrientation,
 } from "@/lib/display/types";
 import {
@@ -1285,7 +1286,45 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           onToggle={(v) => void toggleModule({ entry: v })}
         />
         <Card bg="bg-blue-200" border="border-blue-400">
-          <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
+            {/* 粒子聚散方式（样式对齐「收到的礼物展示」卡片的方向切换）：
+                中心聚散 = 自研四面八方聚散；左右聚散 = 原有的库实现。默认中心聚散。 */}
+            <div
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
+              role="radiogroup"
+              aria-label="粒子聚散方式"
+            >
+              {(
+                [
+                  ["center", "中心聚散"],
+                  ["lr", "左右聚散"],
+                ] as Array<[EntryParticleMode, string]>
+              ).map(([key, label]) => {
+                const active = config.entryParticleMode === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      void update({ entryParticleMode: key }).then((next) =>
+                        displayDanmaku.broadcastEntryParticleMode(next.entryParticleMode),
+                      )
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
+                      active
+                        ? "bg-blue-600 text-white shadow"
+                        : "text-black/55 hover:bg-white/80"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
             <Check
               label="舰长"
@@ -1336,7 +1375,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
               {(
                 [
-                  ["bilibili", "B站默认（不额外冷却）"],
+                  ["bilibili", "B站默认"],
                   ["30min", "半小时"],
                   ["1h", "1小时"],
                   ["10h", "10小时"],
@@ -1554,7 +1593,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
               {(
                 [
-                  ["bilibili", "B站默认（不额外冷却）"],
+                  ["bilibili", "B站默认"],
                   ["30min", "半小时"],
                   ["1h", "1小时"],
                   ["10h", "10小时"],

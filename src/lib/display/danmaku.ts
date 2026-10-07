@@ -14,6 +14,7 @@ import {
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
+  type EntryParticleMode,
   type GiftEffectFrameConfig,
   type LayoutElementId,
   type MovableRect,
@@ -864,6 +865,7 @@ class DisplayDanmakuService {
       animeFeatherH: cfg.animeFeatherH,
       animeFeatherV: cfg.animeFeatherV,
       giftBarOrientation: cfg.giftBarOrientation,
+      entryParticleMode: cfg.entryParticleMode,
       flags: {
         master: displayMaster(cfg),
         entry: cfg.entry,
@@ -906,6 +908,11 @@ class DisplayDanmakuService {
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */
   async broadcastGiftBarOrientation(v: "horizontal" | "vertical"): Promise<void> {
     await this.broadcast({ type: "giftBarOrientation", v });
+  }
+
+  /** 广播入场提示粒子聚散方式（中心聚散/左右聚散）到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastEntryParticleMode(mode: EntryParticleMode): Promise<void> {
+    await this.broadcast({ type: "entryParticleMode", v: mode });
   }
 
   /** 触发一次撒花庆祝（纸屑 + 飘带，一次性效果；面板"撒花"按钮调用）。 */

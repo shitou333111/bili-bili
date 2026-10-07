@@ -123,6 +123,8 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
   return {
     screenOrientation: r.screenOrientation === "portrait" ? "portrait" : "landscape",
     entry: r.entry ?? d.entry,
+    // 粒子聚散方式：仅接受 "lr"（左右聚散/原库），其余（含旧配置缺失）回退 "center"（中心聚散/自研）
+    entryParticleMode: r.entryParticleMode === "lr" ? "lr" : "center",
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
     giftEffect: {

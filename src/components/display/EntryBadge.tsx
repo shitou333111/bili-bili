@@ -16,7 +16,52 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ParticleButton from "react-particle-effect-button";
-import type { DisplayEntryPayload } from "@/lib/display/types";
+import type { DisplayEntryPayload, EntryParticleMode } from "@/lib/display/types";
+import { RadialBadge } from "./radial-particles";
+
+/* ============================================================================
+ * ★ 粒子聚散方式（由面板「入场提示」卡片内的开关驱动，见 DisplayConfig.entryParticleMode）
+ * ----------------------------------------------------------------------------
+ * - "center"（默认）：使用自研"四面八方（中心）聚散"粒子特效（RadialBadge 引擎）。
+ * - "lr"            ：回退到本文件下方的现有（库）粒子特效 —— 即 react-particle-effect-button
+ *                     承载 badge，配合"滑动窗口逐渐显示/擦除"的光晕，效果为"左右聚散"。
+ *
+ * 说明：现有粒子特效代码（EntryBadgeLegacy + react-particle-effect-button + 相关常量）
+ * 完整保留在下方，仅供切换到"左右聚散"时使用，并未删除。两者共用同一套 badge 外观
+ * （Avatar / 昵称字号 / 内边距 / 光晕层 / 停留时长 HOLD_MS / SHOW_DELAY_MS 等），
+ * 即"入场特效其他参数保持不变"，仅粒子聚散实现被替换。
+ * ========================================================================== */
+/** 未传入 particleMode 时的兜底默认（当前 = 中心聚散）；正常由面板开关下发的值驱动。 */
+const DEFAULT_PARTICLE_MODE: EntryParticleMode = "center";
+
+/**
+ * 自研特效的固定参数（一套固定值，不提供 UI 调节）。
+ * 参数含义详见 ./radial-particles.ts 的 RadialBadgeOptions 注释。
+ */
+const RADIAL_PARAMS = {
+  duration: 2000, // 时长
+  coefficient: 60, // 粒子密度
+  inDist: 0.8, // 聚合距离（×badge 宽）
+  outDist: 0.6, // 消散距离（×badge 宽）
+  spin: 0.1, // 流
+  reveal: "scale" as const, // 揭示方式：缩放淡入
+  speedFactor: 1,
+  size: () => 10, // 粒子大小
+  oscillation: 1,
+  shapePow: 5.0, // 形状
+  vStretch: 2.5, // 纵向拉伸
+  vTaper: 1.0, // 纵向收口
+};
+
+/** EntryBadge 对外 props（两个分支共用） */
+type EntryBadgeProps = {
+  user: DisplayEntryPayload;
+  onDone: () => void;
+  /** 测量 badge 实际宽度（挂载后同步回调，供父级按昵称长度动态水平居中；无延迟） */
+  onMeasure?: (width: number) => void;
+  /** 粒子聚散方式（面板开关）："center"=中心聚散（自研）/"lr"=左右聚散（原库）；缺省=中心聚散 */
+  particleMode?: EntryParticleMode;
+};
 
 /** 首次出现前的延迟（让粒子动画在挂载后启动） */
 const SHOW_DELAY_MS = 60;
@@ -37,10 +82,11 @@ const PARTICLE_COLOR = "#003ff1";
 const BADGE_GRADIENT =
   "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))";
 /**
- * badge 背景专用：同一渐变但颜色整体带 50% alpha —— badge 底与三层光晕整体半透明，
- * 更易与底层直播画面融合；头像/昵称元素不使用它，保持完全不透明。
+ * 【仅旧版 Legacy 分支使用】badge 背景专用：同一渐变但颜色整体带 50% alpha —— badge 底与
+ * 三层光晕整体半透明，更易与底层直播画面融合；头像/昵称元素不使用它，保持完全不透明。
  * （用带 alpha 的渐变而非对整个 badge 设 opacity：opacity 会作用于子元素，
  *   头像/昵称也会跟着变透明。）
+ * 注意：新的径向分支（EntryBadgeRadial）已改用不透明的 BADGE_GRADIENT，见该处注释。
  */
 const BADGE_GRADIENT_50 =
   "linear-gradient(90deg,hsla(0,90%,60%,0.5),hsla(30,90%,60%,0.5),hsla(60,90%,60%,0.5))";
@@ -106,16 +152,18 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
   );
 }
 
-export default function EntryBadge({
-  user,
-  onDone,
-  onMeasure,
-}: {
-  user: DisplayEntryPayload;
-  onDone: () => void;
-  /** 测量 badge 实际宽度（挂载后同步回调，供父级按昵称长度动态水平居中；无延迟） */
-  onMeasure?: (width: number) => void;
-}) {
+/* ============================================================================
+ * 【保留代码 · 旧版（库）粒子特效 —— 请勿删除】
+ * ----------------------------------------------------------------------------
+ * 这是项目原有的入场粒子特效：react-particle-effect-button 承载 badge，
+ * 配合"滑动窗口裁剪"的光晕，揭示方式为"逐渐显示/擦除"（沿水平方向依次显形）。
+ *
+ * 现已默认被上方开关 USE_RADIAL_ENTRY_EFFECT 切到自研特效（EntryBadgeRadial）；
+ * 把该开关改为 false 即可原样切回本组件。本组件函数体自改造以来保持零改动，
+ * 与其配套的常量（SHOW_DELAY_MS / HOLD_MS / ANIM_MS / ENTRY_EASE /
+ * ENTRY_EASE_MIRROR / HALO_* / BADGE_GRADIENT* 等）也全部保留在文件上方。
+ * ========================================================================== */
+function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
   const [hidden, setHidden] = useState(true);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
@@ -331,5 +379,240 @@ export default function EntryBadge({
       </div>
       </ParticleButton>
     </div>
+  );
+}
+
+/* ============================================================================
+ * 【新版 · 自研粒子特效】EntryBadgeRadial
+ * ----------------------------------------------------------------------------
+ * 与旧版（EntryBadgeLegacy）完全共用同一套 badge 外观与时长常量，仅把"粒子聚散 +
+ * 揭示"的实现从 react-particle-effect-button / 滑动窗口，替换为自研引擎 RadialBadge
+ * （见 ./radial-particles.ts，参数取 RADIAL_PARAMS 一套固定值）。
+ *
+ * 结构（自内向外 / 自下而上）：
+ *   holder（定位容器，无变换 → 供引擎测算祖先视觉缩放 VS）
+ *     ├─ 光晕组（绝对定位外挂、负 inset，不参与布局）：内含 haloIn（揭示作用对象之一）
+ *     │     └─ 三层渐进模糊辉光（与旧版同款数值）
+ *     ├─ badge（揭示作用对象之二：缩放淡入；也是取色 LUT 的取样元素）
+ *     │     ├─ 头像（children[0]，引擎按子元素顺序取色）
+ *     │     └─ 昵称 span（children[1]）
+ *     └─ canvas（绝对定位、居中于 holder；粒子绘制层，位于 badge 之上）
+ *
+ * 时序（与旧版一致）：
+ *   挂载 → 延迟 SHOW_DELAY_MS → 聚合(setHidden(false)) → 聚合真正结束(onComplete "showing")
+ *   → 停留 HOLD_MS → 消散(setHidden(true)) → 消散真正结束(onComplete "hiding") → onDone()
+ *   每轮由父组件用新 key 重新挂载本组件（与旧版同策略），故组件内只跑一轮。
+ * ========================================================================== */
+function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
+  const holderRef = useRef<HTMLDivElement | null>(null);
+  const badgeRef = useRef<HTMLDivElement | null>(null);
+  const haloInRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  // onDone 只允许触发一次（与旧版同口径：防止重复播报/重复排队）
+  const doneFiredRef = useRef(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 挂载后同步测量 badge 宽度并上报（useLayoutEffect 在浏览器绘制前执行，粒子动画 SHOW_DELAY_MS 后才开始，
+  // 父级据此重算居中 x 不会产生闪烁/延迟）——与旧版完全同口径。
+  useLayoutEffect(() => {
+    if (onMeasure && badgeRef.current) {
+      onMeasure(badgeRef.current.offsetWidth);
+    }
+  }, [onMeasure]);
+
+  // 生命周期驱动：每次挂载都是全新一轮（聚合 → 停留 → 消散 → onDone）
+  useLayoutEffect(() => {
+    const holder = holderRef.current;
+    const badge = badgeRef.current;
+    const haloIn = haloInRef.current;
+    const canvas = canvasRef.current;
+    if (!holder || !badge || !haloIn || !canvas) return;
+
+    doneFiredRef.current = false;
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+
+    // 引擎在此刻测量布局（此时 badge 已具备最终宽度/字号），并进入"未显现"初态
+    const engine = new RadialBadge(
+      { holder, badge, haloIn, canvas },
+      {
+        ...RADIAL_PARAMS,
+        // 每次动画"真正"结束（粒子全部离场）后回调；参数 = 刚结束的模式
+        onComplete: (finished) => {
+          if (finished === "showing") {
+            // 聚合完成 → badge 已完全成型 → 停留 HOLD_MS 后触发消散（只计一次）
+            if (holdTimerRef.current) return;
+            holdTimerRef.current = setTimeout(() => {
+              holdTimerRef.current = null;
+              engine.setHidden(true);
+            }, HOLD_MS);
+          } else {
+            // 消散完成 → 通知父组件决定下一轮（父级用新 key 重新挂载本组件）
+            if (doneFiredRef.current) return;
+            doneFiredRef.current = true;
+            onDoneRef.current();
+          }
+        },
+      }
+    );
+
+    // 延迟 SHOW_DELAY_MS 后启动"聚合"（与旧版一致：挂载后短暂延迟再开始）
+    const showTimer = setTimeout(() => {
+      engine.setHidden(false);
+    }, SHOW_DELAY_MS);
+
+    // 头像照片后续才加载完成时刷新取色网格（提升头像区域粒子的取色保真度）。
+    // 若首帧即已加载完成，构造器里 _measure() 已取过色，无需再刷新。
+    const img = badge.querySelector("img");
+    let onImgLoad: (() => void) | null = null;
+    if (img && !img.complete) {
+      onImgLoad = () => engine.refreshLut();
+      img.addEventListener("load", onImgLoad);
+    }
+
+    return () => {
+      clearTimeout(showTimer);
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      if (img && onImgLoad) img.removeEventListener("load", onImgLoad);
+      engine.destroy();
+    };
+  }, [user.uid, user.uname]);
+
+  return (
+    // 最外层定位容器：与旧版同为 inline-flex + fontSize:0（去掉行盒 strut 带来的额外高度，
+    // 使容器高度严格等于 badge 高度）。holder 自身无任何变换 → 引擎据此测算祖先视觉缩放 VS。
+    <div ref={holderRef} className="relative inline-flex" style={{ fontSize: 0 }}>
+      {/* 光晕组：三层渐进模糊的暖色辉光，绝对定位外挂在 badge 之外（不参与布局/测量）。
+          本分支不采用滑动窗口擦除：光晕与 badge 一同由引擎的 _applyReveal 做"缩放淡入"，
+          故这里只保留定位 + 半透明（对比旧版：旧版靠 transform 平移裁剪实现逐渐显示）。 */}
+      <div
+        aria-hidden
+        className="absolute pointer-events-none"
+        style={{
+          inset: -HALO_EXTENT,
+          // 光晕组整体 50% 半透明（含三层光晕）：与 badge 背景的 50% alpha 对齐
+          opacity: GLOW_OPACITY,
+        }}
+      >
+        {/* haloIn：引擎的揭示作用对象之一，其 opacity/transform 与 badge 严格同步
+            （scale 揭示）；transform-origin 取中心，保证与 badge 同轴缩放。
+            inset:HALO_EXTENT = badge 矩形，三层光晕以它为定位上下文。 */}
+        <div
+          ref={haloInRef}
+          className="absolute pointer-events-none"
+          style={{
+            inset: HALO_EXTENT,
+            transformOrigin: "50% 50%",
+            willChange: "transform, opacity",
+          }}
+        >
+          {/* 远端大光晕：大模糊、向外大范围扩散 */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              inset: -HALO_PAD,
+              borderRadius: 999,
+              background: BADGE_GRADIENT,
+              filter: "blur(18px)",
+              opacity: 0.5,
+            }}
+          />
+          {/* 中层光晕：衔接远端与贴边，形成"逐渐模糊逐渐透明"的连续梯度 */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              inset: -HALO_PAD / 2,
+              borderRadius: 999,
+              background: BADGE_GRADIENT,
+              filter: "blur(10px)",
+              opacity: 0.75,
+            }}
+          />
+          {/* 贴边光晕：从 badge 轮廓起 blur 向外渗，把生硬的边缘线糊开 */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              inset: -3,
+              borderRadius: 999,
+              background: BADGE_GRADIENT,
+              filter: "blur(6px)",
+              opacity: 1,
+            }}
+          />
+        </div>
+      </div>
+      {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）；背景为红橙黄暖色
+          渐变，与粒子时间点色相对应。样式数值与旧版逐项一致（"其他参数保持不变"）。
+          本分支额外承载：引擎的缩放淡入（transformOrigin/willChange），同时作为取色 LUT 的
+          取样元素（其子元素顺序：children[0]=头像、children[1]=昵称）。 */}
+      <div
+        ref={badgeRef}
+        className="rounded-full"
+        style={{
+          position: "relative",
+          // badge 背景：使用「不透明」的红橙黄渐变（BADGE_GRADIENT），不再用 50% alpha 版。
+          // 原因：badge 底的 alpha 与白字叠在同一个 reveal opacity 上，底只有 0.5 alpha
+          // 而白字/头像不带 alpha → 消散时白字的视觉强度是底的 2 倍，暖色底已淡没后仍残留
+          // 一圈白字轮廓。改成不透明后底与字同强度、同步淡出。
+          background: BADGE_GRADIENT,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "24px",
+          paddingLeft: "16px",
+          paddingRight: "48px",
+          paddingTop: "2px",
+          paddingBottom: "2px",
+          verticalAlign: "top",
+          lineHeight: 1,
+          transformOrigin: "50% 50%",
+          willChange: "transform, opacity",
+        }}
+      >
+        <Avatar face={user.face} uname={user.uname} />
+        <span
+          className="font-bold text-white whitespace-nowrap tracking-wider"
+          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1 }}
+        >
+          {user.uname}
+        </span>
+      </div>
+      {/* 粒子画布：绝对定位于 holder 中心（holder 尺寸=badge 尺寸 → 即 badge 中心），
+          尺寸/分辨率由引擎在 _measure() 中按 badge 尺寸 + 场半径设置。
+          置于 badge 之后 → 绘制在 badge 之上，粒子从雾场凝成 badge / badge 化开成雾。 */}
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none"
+        style={{
+          position: "absolute",
+          top: "50%",
+          left: "50%",
+          transform: "translate3d(-50%,-50%,0)",
+        }}
+      />
+    </div>
+  );
+}
+
+/* ============================================================================
+ * 对外默认导出：按粒子聚散方式选择实现（值由面板开关经 DisplayCanvas 传入）
+ *   particleMode = "center"（默认）→ EntryBadgeRadial（自研中心聚散）
+ *   particleMode = "lr"            → EntryBadgeLegacy（原库特效，左右聚散）
+ * 两者 props 完全一致，父组件调用方无需关心分支差异。
+ * ========================================================================== */
+export default function EntryBadge({
+  particleMode = DEFAULT_PARTICLE_MODE,
+  ...props
+}: EntryBadgeProps) {
+  return particleMode === "lr" ? (
+    <EntryBadgeLegacy {...props} />
+  ) : (
+    <EntryBadgeRadial {...props} />
   );
 }

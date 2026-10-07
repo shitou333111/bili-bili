@@ -24,6 +24,7 @@ import {
   type DisplayGiftItem,
   type DisplayEntryPayload,
   type DisplayLayout,
+  type EntryParticleMode,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
@@ -144,6 +145,8 @@ type ServerMsg =
       animeFeatherV: number;
       /** 礼物展示条方向（横条/竖条） */
       giftBarOrientation: "horizontal" | "vertical";
+      /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
+      entryParticleMode: EntryParticleMode;
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
@@ -153,6 +156,7 @@ type ServerMsg =
   | { type: "bannerText"; text: string }
   | { type: "animeFeather"; h: number; v: number }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
+  | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "celebrate" };
 
 /**
@@ -164,9 +168,11 @@ type ServerMsg =
  */
 function TestEntryLoop({
   scale,
+  particleMode,
   onMeasure,
 }: {
   scale: number;
+  particleMode: EntryParticleMode;
   onMeasure: (w: number) => void;
 }) {
   const [cycle, setCycle] = useState(0);
@@ -181,6 +187,7 @@ function TestEntryLoop({
     <EntryBadge
       key={`${cycle}-${scale}`}
       user={TEST_ENTRY_USER}
+      particleMode={particleMode}
       onDone={() => {}}
       onMeasure={onMeasure}
     />
@@ -212,6 +219,10 @@ export default function DisplayCanvas() {
   // 礼物展示条方向（init/giftBarOrientation 消息下发）
   const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
     DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
+  );
+  // 入场提示粒子聚散方式（init/entryParticleMode 消息下发）：center=中心聚散(自研) / lr=左右聚散(原库)
+  const [entryParticleMode, setEntryParticleMode] = useState<EntryParticleMode>(
+    DEFAULT_DISPLAY_CONFIG.entryParticleMode,
   );
   // 朝向：由 init/orientation 消息驱动
   const [orientation, setOrientation] = useState<ScreenOrientation>("landscape");
@@ -302,6 +313,7 @@ export default function DisplayCanvas() {
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
         );
+        setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -321,6 +333,8 @@ export default function DisplayCanvas() {
         setAnimeFeatherV(msg.v);
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
+      } else if (msg.type === "entryParticleMode") {
+        setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
       } else if (msg.type === "celebrate") {
         // 面板"撒花"按钮：模块开关关闭时不播放
         if (flagsRef.current.banner) startPartyRef.current();
@@ -886,11 +900,16 @@ export default function DisplayCanvas() {
           editable={isEdit}
         >
           {isEdit ? (
-            <TestEntryLoop scale={entryRect.scale} onMeasure={setEntryMeasuredW} />
+            <TestEntryLoop
+              scale={entryRect.scale}
+              particleMode={entryParticleMode}
+              onMeasure={setEntryMeasuredW}
+            />
           ) : currentEntry ? (
             <EntryBadge
               key={`${currentEntry.uid}-${entrySeq}`}
               user={currentEntry}
+              particleMode={entryParticleMode}
               onDone={onEntryDone}
               onMeasure={setEntryMeasuredW}
             />
