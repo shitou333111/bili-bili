@@ -17,7 +17,7 @@
  *   - 粒子颜色 = badge 对应像素的真实颜色（离屏重绘 + getImageData 取色网格 LUT）：
  *     胶囊红→黄渐变 / 头像 / 昵称白字都能被粒子忠实还原；LUT 不可用时回退到按 x 映射的红→黄色相。
  *
- * 【调用方职责】提供 {holder, badge, haloIn, canvas} 四个 DOM 引用，并在合适时机调用
+ * 【调用方职责】提供 {holder, badge, canvas} 三个 DOM 引用（haloIn 可选，见下），并在合适时机调用
  *   setHidden(false)（聚合）/ setHidden(true)（消散）。onComplete 会在每次动画"真正"结束
  *   （粒子全部离场）后回调，参数为刚结束的模式，调用方据此串联"停留 → 消散 → onDone"时序。
  */
@@ -31,8 +31,9 @@ export interface RadialBadgeDom {
   holder: HTMLElement;
   /** 承载 badge 外观（渐变/头像/昵称）的元素，同时也是"揭示"（缩放淡入）的作用对象 */
   badge: HTMLElement;
-  /** 光晕内层元素（与 badge 同步做揭示）；若无需光晕，可传 badge 自身 */
-  haloIn: HTMLElement;
+  /** 光晕内层元素（与 badge 同步做揭示，可选）：旧版三层辉光分支才需要；
+   *  羽化后底色并入 badge 自身伪元素，无独立光晕元素，故可省略。 */
+  haloIn?: HTMLElement;
   /** 粒子画布（绝对定位、居中于 holder） */
   canvas: HTMLCanvasElement;
 }
@@ -377,7 +378,16 @@ function buildBadgeLut(badgeEl: HTMLElement, vs: number): BadgeLutData | null {
     if (!c) return null;
 
     // 1) 胶囊底：直接用渐变色停本身（已在解析时剥掉 alpha）着色
-    const bg = parseLinearGradient(cs.backgroundImage);
+    //    优先读 badge 本体背景；羽化方案把底色移到了 ::before 伪元素（本体 background:none），
+    //    此时本体 backgroundImage 解析为 null，回退读伪元素的渐变。
+    let bg = parseLinearGradient(cs.backgroundImage);
+    if (!bg) {
+      try {
+        bg = parseLinearGradient(getComputedStyle(badgeEl, "::before").backgroundImage);
+      } catch {
+        bg = null;
+      }
+    }
     if (!bg) return null;
     c.save();
     roundRectPath(c, 0, 0, bw, bh, bh / 2);

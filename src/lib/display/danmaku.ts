@@ -354,7 +354,9 @@ function parseGiftV2Pb(data: any): any[] | null {
  *  bili-live-listener 只订阅 INTERACT_WORD/ENTRY_EFFECT，未订阅 V2 → 这类用户的
  *  进场被整条丢弃（表现为"某个特殊用户永远无法触发入场提示与入场动画"）。
  *  字段号取自 blivedm（xfgryujk/blivedm，models/pb.py）：uid=1 uname=2 msg_type=5
- *  timestamp=7 uinfo=22（uinfo.base=2，base.face=2）；msg_type 1=进入 2=关注 3=分享。
+ *  timestamp=7 uinfo=22；uinfo 子消息字段号：base=2（base.face=2）、medal=3（medal.level=2）、
+ *  wealth=4（wealth.level=1）、title=5、guard=6（guard.level=1）；msg_type 1=进入 2=关注 3=分享。
+ *  以上字段号经真实抓包样本解码逐一验证（medal.level/wealth.level 与 JSON 明文一致）。
  *  当 data 无 pb（JSON 变体）时回退读取明文字段。 */
 function parseInteractWordV2(
   data: any,
@@ -372,13 +374,15 @@ function parseInteractWordV2(
     if (!uid) return null;
     const uinfo = pbMsg(fields, 22);
     const base = uinfo ? pbMsg(uinfo, 2) : null;
+    const medal = uinfo ? pbMsg(uinfo, 3) : null;
+    const guard = uinfo ? pbMsg(uinfo, 6) : null;
     return {
       uid,
       uname: pbStr(fields, 2),
       face: base ? pbStr(base, 2) : "",
       msgType: pbInt(fields, 5),
-      guardType: 0,
-      medalLevel: 0,
+      guardType: guard ? pbInt(guard, 1) : 0,
+      medalLevel: medal ? pbInt(medal, 2) : 0,
     };
   }
   // 无 pb → JSON 变体，字段与 INTERACT_WORD 同构，复用统一解析
@@ -588,6 +592,10 @@ function looksLikeGiftName(content: string): boolean {
   }
   return units >= 2;
 }
+
+/** 「同一次进场的重复下发包」合并窗口（ms）：B 站对同一次进场会同时下发
+ *  INTERACT_WORD(_V2) 与 ENTRY_EFFECT，handleEntry 因此被调用多遍，这些都算同一次入场。 */
+const ENTRY_DEDUP_MS = 2000;
 
 class DisplayDanmakuService {
   private roomId = 0;
@@ -1084,9 +1092,8 @@ class DisplayDanmakuService {
               guardType: src.guardType,
               fansMedal: src.medalLevel ? { level: src.medalLevel } : undefined,
             },
-            // INTERACT_WORD_V2 的 pb 变体不含勋章/大航海信息（恒为 0），无法评估筛选 →
-            // 直接放行；否则会被当作 0 级用户按筛选条件误过滤，导致入场提示也不触发。
-            cmd === "INTERACT_WORD_V2" && !src.guardType && !src.medalLevel,
+            // INTERACT_WORD_V2 的 pb 变体已能解析出勋章等级/大航海等级（见
+            // parseInteractWordV2），与明文路径同样参与入场筛选，不再绕过。
           );
         }),
       );
@@ -1218,23 +1225,21 @@ class DisplayDanmakuService {
     const now = Date.now();
     const rec = this.entryEmitAt.get(uid);
     const last = rec ? rec[kind] : 0;
-    if (last && now - last < 2000) return false;
+    if (last && now - last < ENTRY_DEDUP_MS) return false;
     if (rec) rec[kind] = now;
     else this.entryEmitAt.set(uid, { anime: kind === "anime" ? now : 0, entry: kind === "entry" ? now : 0 });
     // 过期清理：map 过大时删掉窗口外的旧项，避免长期运行无限增长
     if (this.entryEmitAt.size > 300) {
       for (const [k, v] of this.entryEmitAt) {
-        if (now - Math.max(v.anime, v.entry) > 2000) this.entryEmitAt.delete(k);
+        if (now - Math.max(v.anime, v.entry) > ENTRY_DEDUP_MS) this.entryEmitAt.delete(k);
       }
     }
     return true;
   }
 
   /** 处理一条入场信息：高级用户动画 + 普通入场提示（动画是额外的，不替代入场提示）。
-   *  @param skipFilter — 该入场事件不携带大航海/粉丝勋章信息（如 INTERACT_WORD_V2 的
-   *  protobuf），无法评估入场筛选条件。此时跳过筛选直接提示：V2 只会下发给高权重特殊
-   *  用户，正是入场提示模块要展示的对象；若不跳过会因等级按 0 处理而被误过滤。 */
-  private async handleEntry(mid: number, user: any, skipFilter = false) {
+   *  入场提示是否展示由 matchesEntryFilter（大航海/粉丝勋章等级筛选）决定。 */
+  private async handleEntry(mid: number, user: any) {
     if (!this.active || !user || !user.uid) return;
     const config = await loadDisplayConfig(mid);
     const guardType = Number(user.guardType) || 0;
@@ -1246,7 +1251,7 @@ class DisplayDanmakuService {
       (a) => a.enabled && (a.videoLandscape || a.videoPortrait) && a.uid === user.uid,
     );
     const animeOn = !!(config.anime && animeCfg && this.isNative());
-    const entryOn = !!(config.entry && (skipFilter || this.matchesEntryFilter(config, guardType, medalLevel)));
+    const entryOn = !!(config.entry && this.matchesEntryFilter(config, guardType, medalLevel));
     if (!animeOn && !entryOn) {
       this.pushDebug("entry", "filtered", {
         uid,
@@ -1254,7 +1259,6 @@ class DisplayDanmakuService {
         guardType,
         medalLevel,
         entryOn: !!config.entry,
-        skipFilter,
         matched: this.matchesEntryFilter(config, guardType, medalLevel),
       });
       return;
@@ -1308,10 +1312,18 @@ class DisplayDanmakuService {
           }
         }
       }
-      // 不 return：高级用户同样走普通入场提示（各自独立冷却）
+      // 本次未播动画才继续走入场提示（播放了就不再重复展示，见下方 gate）
     }
 
-    if (entryOn) {
+    // 入场提示：本次已播入场动画则跳过（同一用户同一次入场只留一种特效，避免重复）。
+    // 关键：不能只用「本遍调用」的局部标志判断——B 站对同一次进场会同时下发
+    // INTERACT_WORD(_V2) + ENTRY_EFFECT，handleEntry 会跑多遍；第二遍动画往往被冷却/2s
+    // 去重拦下，若用本遍标志会误判「没播动画」而照常 emit entry，导致特效同时出现。
+    // 改为读共享时间戳 entryEmitAt[uid].anime（动画实际 emit 时由 shouldEmitEntry 写入）：
+    // 无论哪一遍播的动画，后续同 uid 的调用都能看到「刚刚播过」，从而正确跳过入场提示。
+    const animeAt = this.entryEmitAt.get(uid)?.anime || 0;
+    const animeJustPlayed = animeAt > 0 && now - animeAt < ENTRY_DEDUP_MS;
+    if (entryOn && !animeJustPlayed) {
       // 入场冷却：同一用户距上次触发不足设定间隔 → 不触发、不更新时间
       //（频繁进出直播间反复触发体验不好；0 = 不设本地冷却，跟随 B 站自身去重）
       const cooldownMs = ENTRY_COOLDOWN_MS[config.entryCooldown] ?? ENTRY_COOLDOWN_MS.bilibili;
@@ -1347,6 +1359,8 @@ class DisplayDanmakuService {
           });
         }
       }
+    } else if (entryOn && animeJustPlayed) {
+      this.pushDebug("entry", "skip-entry-after-anime", { uid, uname: user.uname || "" });
     }
 
     if (needSave) void saveDisplayConfig(mid, config).catch(() => {});

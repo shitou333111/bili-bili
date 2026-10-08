@@ -579,3 +579,165 @@ body {
     transform: translateY(-50%);
   }
 }
+
+/* ===== 入场特效 · badge 边界柔化（配合 EntryBadgeRadial 使用）=====
+   问题：不透明胶囊底与外侧辉光在边界处强度跳变，形成一圈可辨认的硬轮廓线；
+         单纯加大辉光无法消除（辉光都画在硬边背后，边界跳变仍在）。
+   手段：① 把胶囊底色从 badge 本体移到 ::before，只对 ::before 做 filter:blur ——
+           底色边缘由实色平滑羽化到透明；头像/昵称留在本体，保持完全清晰
+           （若直接对 .badge 做 mask/blur 会把内容一起淡掉）。
+         ② ::after 再叠一层更淡、更大模糊的长尾，与近场衔接成连续的向外淡出。
+   层数：柔化后底色自身已是一条羽化渐变，原本三层硬边辉光失去意义（贴边层的
+         blur 比 ::before 还小会被完全盖住、外两层与 ::after 重叠），故已从组件中
+         移除，由这两个伪元素替代（比三层辉光更省，且无硬边）。
+   性能：blur 只在首次光栅化时算一次，揭示动画期间只动 transform/opacity，不逐帧重绘。
+   注意：此处红橙黄渐变须与 EntryBadge.tsx 的 BADGE_GRADIENT 保持一致。 */
+.entry-badge-feather {
+  background: none;
+}
+.entry-badge-feather::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: 999px;
+  background: linear-gradient(90deg, hsl(0, 90%, 60%), hsl(30, 90%, 60%), hsl(60, 90%, 60%));
+  filter: blur(14px);
+}
+.entry-badge-feather::after {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  z-index: -1;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    hsla(0, 90%, 60%, 0.55),
+    hsla(30, 90%, 60%, 0.55),
+    hsla(60, 90%, 60%, 0.55)
+  );
+  filter: blur(30px);
+}
+
+/* ===== 入场动画（anime 模块 VideoOverlay）：开场椭圆渐显 + 结尾闭合显示头像昵称 =====
+   移植自测试页 ghost 变体。生产画布拉满视频画面（容器盒即视频盒，几何全部按盒尺寸缩放，
+   --u = 视频显示宽 / 328：测试页基准宽 328px 下 1u=1px），因此与视频宽高比/分辨率无关。
+   阶段：① 实心大椭圆由中心向外扩散覆盖（--anime-ripple 0%→80%）：椭圆两轴都用百分比
+   →横向按盒宽、纵向按盒高（比例恰为 Δ=√2/2 时四角正好落在椭圆上）；取 80% 而非 70.71%
+   是为了给内边缘 6u 羽化留出余量，保证收起前椭圆完全盖住四角、画面无残缺；
+   ② 视频从自身上下边缘向中间擦除成透明（--anime-curtain 0%→50%，50%=上下前沿在中线相接，
+   完全闭合的瞬间视频正好播完）；③ 黑幕只出现在中间固定区域（头像顶再上 20u ～ 昵称底再下
+   20u），前沿未进入区域时只是透明擦除、不露黑；④ 头像+昵称只在被擦除的区域内随前沿显现，
+   黑底白字（展示画布全透明、拿不到直播像素，无法做测试页的视频镂空文字）；
+   ⑤ 保持 1s 后黑幕+头像+昵称一起淡出 1s。
+   @property 注册让两个百分比自定义属性可被 keyframes 平滑插值（Chromium/WebView2 支持），
+   动画全部跑在合成线程、无逐帧 JS 重绘。 */
+@property --anime-ripple {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+@property --anime-curtain {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+@keyframes anime-ripple-open {
+  from {
+    --anime-ripple: 0%;
+  }
+  to {
+    --anime-ripple: 80%;
+  }
+}
+@keyframes anime-curtain-close {
+  from {
+    --anime-curtain: 0%;
+  }
+  to {
+    --anime-curtain: 50%;
+  }
+}
+
+/* 舞台 = 视频盒本身；--u 由组件按实际盒宽内联提供。 */
+.anime-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+/* 椭圆扩散包裹层：只包视频，mask 把可见区裁成中心实心大椭圆（开场渐显）。 */
+.anime-ripple-wrap {
+  position: absolute;
+  inset: 0;
+}
+/* 黑色帷幕：上下各一条，固定边在黑幕区域边界；擦除前沿（--anime-curtain）进入区域后
+   高度才 >0（max(0px,…) 兜底），故动画视频很高时黑幕也不会变成两条高黑带。 */
+.anime-curtain {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #000;
+}
+.anime-curtain-top {
+  top: calc(50% - 85 * var(--u));
+  height: max(0px, calc(var(--anime-curtain) - 50% + 85 * var(--u)));
+}
+.anime-curtain-bottom {
+  bottom: calc(50% - 58 * var(--u));
+  height: max(0px, calc(var(--anime-curtain) - 50% + 58 * var(--u)));
+}
+/* 头像+昵称容器：可见区由内联 mask 裁成「黑幕区域内、已被擦除前沿扫过的部分」。 */
+.anime-content {
+  position: absolute;
+  inset: 0;
+}
+/* 头像：60u 圆，中心 = 中线 − 35u（头像底距中线 5u）。 */
+.anime-avatar {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 35 * var(--u));
+  transform: translate(-50%, -50%);
+  width: calc(60 * var(--u));
+  height: calc(60 * var(--u));
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(135deg, #ff6699, #7b5cff);
+  color: #fff;
+  font-size: calc(45 * var(--u));
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.anime-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+/* 昵称：33u 粗白字，文字顶边 = 中线 + 5u（与头像底间距 10u，空隙中点对齐视频中线）。 */
+.anime-name {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.anime-name span {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 5 * var(--u));
+  transform: translateX(-50%);
+  font-size: calc(33 * var(--u));
+  font-weight: 900;
+  letter-spacing: calc(1 * var(--u));
+  line-height: 1;
+  white-space: nowrap;
+  color: #fff;
+  font-family:
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui,
+    sans-serif;
+}

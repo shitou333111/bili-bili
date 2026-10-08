@@ -1,0 +1,2004 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>浏览器源渲染测试 · 直播姬 OSR 探针</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #07080b;
+    color: #e2e8f0;
+    font: 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  /* ---------- HUD 探针条 ---------- */
+  #hud {
+    flex: none;
+    padding: 4px 12px;
+    background: #0a0d12;
+    border-bottom: 1px solid #1c2230;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #94a3b8;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #hud .err { color: #f87171; }
+  #hud .ok { color: #4ade80; }
+  #hud .warn { color: #fbbf24; }
+
+  /* ---------- 控制条 ---------- */
+  #bar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 6px 12px;
+    background: #0d1016;
+    border-bottom: 1px solid #1c2230;
+  }
+  #bar .grp { display: flex; align-items: center; gap: 4px; }
+  #bar label { color: #64748b; white-space: nowrap; font-size: 11px; }
+  button {
+    font: inherit; font-size: 11px;
+    color: #cbd5e1; background: #161b25;
+    border: 1px solid #263041; border-radius: 6px;
+    padding: 3px 9px; cursor: pointer;
+  }
+  button:hover { background: #1c2230; }
+  button.on { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+  select {
+    font: inherit; font-size: 11px;
+    color: #cbd5e1; background: #161b25;
+    border: 1px solid #263041; border-radius: 6px;
+    padding: 3px 6px;
+  }
+
+  /* ---------- 帧间隔时间线 ---------- */
+  #timeline-wrap {
+    flex: none;
+    background: #0a0d12;
+    border-bottom: 1px solid #1c2230;
+    padding: 4px 12px;
+  }
+  #timeline-wrap .label { font-size: 10px; color: #475569; margin-bottom: 2px; }
+  #timeline { display: block; width: 100%; height: 64px; }
+
+  /* ---------- 三列对照 lane ---------- */
+  #lanes {
+    flex: none;
+    display: flex;
+    gap: 1px;
+    background: #1c2230;
+    border-bottom: 1px solid #1c2230;
+  }
+  .lane {
+    flex: 1 1 0;
+    min-width: 0;
+    background: #0b0e13;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+  .lane .title {
+    font-size: 10px; color: #8b9bb4; margin-bottom: 6px;
+    display: flex; justify-content: space-between;
+  }
+  .lane .info { font-size: 10px; color: #475569; font-variant-numeric: tabular-nums; }
+
+  /* CSS 动画 lane */
+  .css-ball {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    animation: css-slide 2s linear infinite;
+  }
+  @keyframes css-slide {
+    0% { transform: translateX(0); } 100% { transform: translateX(200px); }
+  }
+  .css-spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid #334155; border-top-color: #3b82f6;
+    animation: css-spin 1s linear infinite;
+    display: inline-block; vertical-align: middle;
+  }
+  @keyframes css-spin { to { transform: rotate(360deg); } }
+  .css-countdown {
+    font-size: 40px; font-weight: 700; color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+    animation: css-count 10s steps(10, end) infinite;
+  }
+  @keyframes css-count {
+    0% { content: "10"; } 10% { content: "9"; } 20% { content: "8"; }
+    30% { content: "7"; } 40% { content: "6"; } 50% { content: "5"; }
+    60% { content: "4"; } 70% { content: "3"; } 80% { content: "2"; } 90% { content: "1"; }
+  }
+  .css-countdown::after { content: "10"; animation: inherit; }
+
+  /* JS 动画 lane */
+  .js-ball {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b, #ef4444);
+    will-change: transform;
+  }
+  .js-countdown {
+    font-size: 40px; font-weight: 700; color: #fbbf24;
+    font-variant-numeric: tabular-nums;
+  }
+  .js-frame { font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums; }
+  .js-clock { font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums; }
+
+  /* 视频 lane */
+  #test-video {
+    width: 100%; max-height: 160px;
+    background: #000; border-radius: 4px;
+    display: block;
+  }
+  .video-info { font-size: 10px; color: #475569; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .video-fail { font-size: 11px; color: #f87171; padding: 8px 0; }
+
+  /* ---------- 粒子舞台 ---------- */
+  #particle-stage {
+    flex: none;
+    position: relative;
+    overflow: hidden;
+    min-height: 340px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 40px 64px;
+    padding: 20px;
+    background: radial-gradient(120% 90% at 50% 45%, #10141d 0%, #07080b 70%);
+    border-bottom: 1px solid #1c2230;
+  }
+  #particle-stage .stage-label {
+    position: absolute; top: 6px; left: 12px;
+    font-size: 10px; color: #475569;
+  }
+  .particle-scene { transform-origin: 50% 50%; }
+
+  /* badge 及光晕（与 EntryBadge.tsx 数值 1:1） */
+  .holder { position: relative; display: inline-flex; font-size: 0; }
+  .halo-box { position: absolute; pointer-events: none; inset: -40px; opacity: 0.5; }
+  .halo-in { position: absolute; pointer-events: none; inset: 40px; transform-origin: 50% 50%; will-change: transform, opacity; }
+  .glow { position: absolute; border-radius: 999px; pointer-events: none;
+    background: linear-gradient(90deg, hsl(0,90%,60%), hsl(30,90%,60%), hsl(60,90%,60%)); }
+  .glow.g1 { inset: -14px; filter: blur(18px); opacity: 0.5; }
+  .glow.g2 { inset: -7px;  filter: blur(10px); opacity: 0.75; }
+  .glow.g3 { inset: -3px;  filter: blur(6px);  opacity: 1; }
+
+  /* ---------- 边界柔化 v2（原型 · 默认开启，可用顶部按钮切换对比）----------
+     为什么 v1（加大辉光）无效：
+       badge 是「不透明硬边胶囊」，g1/g2/g3 辉光全画在它背后。无论辉光堆多厚，
+       在胶囊边缘处都存在「不透明填充 → 半透明辉光」的强度跳变，这圈跳变就是
+       肉眼看到的硬轮廓线——辉光只能把线外的亮度抬起来，消不掉这条线。
+     有效手段：让「胶囊底色自身」的 alpha 在边界处平滑衰减（羽化）。
+       CSS 中能降低元素自身 alpha 的只有 mask 或 filter:blur，而 mask 作用于整个
+       .badge 会把头像/昵称一起淡出（头像 96px 紧贴上下边）。因此把底色从 .badge
+       本体搬到 ::before 伪元素，只对伪元素做 filter:blur——底色边缘被羽化，
+       内容（头像/昵称）留在本体保持完全清晰。
+     效果：边界处由实色平滑过渡到透明，外围再叠一层更淡的长尾，
+           不再有可辨认的轮廓线；圆角胶囊的两端也被 blur 天然处理。
+     层数：柔化后「胶囊底色本身」已是一条羽化渐变，g1/g2/g3 三层硬边辉光
+           在它下面已无意义（g3 的 blur 比 ::before 还小，完全被盖住；
+           g1/g2 与 ::after 重叠）。故柔化模式下直接隐藏全部 .glow，
+           只用 ::before（近场主羽化）+ ::after（外围长尾）两层，
+           既消掉硬边又比生产的三层辉光更省。
+     性能：blur 只在首次光栅化时算一次，动画期间只动 transform/opacity，
+           不产生逐帧重绘（与生产现有的三层 blur 同性质）。 */
+  /* 柔化模式：隐藏生产的三层硬边辉光，全部改用 badge 自身伪元素羽化 */
+  .glow.g0 { display: none; }
+  .particle-scene.soft .glow { display: none; }
+  /* 近场主羽化：把胶囊底色移到伪元素，blur 让边缘由实色平滑衰减到透明 */
+  .particle-scene.soft .badge { background: none; }
+  .particle-scene.soft .badge::before {
+    content: ""; position: absolute; inset: -2px; z-index: -1;
+    border-radius: 999px;
+    background: linear-gradient(90deg, hsl(0,90%,60%), hsl(30,90%,60%), hsl(60,90%,60%));
+    filter: blur(14px);
+  }
+  /* 外围长尾：更淡、更大模糊，与近场衔接成连续的向外淡出 */
+  .particle-scene.soft .badge::after {
+    content: ""; position: absolute; inset: -12px; z-index: -1;
+    border-radius: 999px;
+    background: linear-gradient(90deg, hsla(0,90%,60%,0.55), hsla(30,90%,60%,0.55), hsla(60,90%,60%,0.55));
+    filter: blur(30px);
+  }
+  .badge {
+    position: relative; display: inline-flex; align-items: center;
+    gap: 24px; padding: 2px 48px 2px 16px; border-radius: 999px;
+    background: linear-gradient(90deg, hsl(0,90%,60%), hsl(30,90%,60%), hsl(60,90%,60%));
+    vertical-align: top; line-height: 1;
+    transform-origin: 50% 50%; will-change: transform, opacity;
+  }
+  .badge .avatar {
+    width: 96px; height: 96px; flex: none; position: relative;
+    border-radius: 50%; overflow: hidden;
+    background: linear-gradient(135deg, #ff6699, #7b5cff);
+    color: #fff; font-size: 72px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .badge .avatar img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; border-radius: 50%; display: block;
+  }
+  .badge .name {
+    color: #fff; font-size: 72px; font-weight: 700;
+    letter-spacing: .05em; line-height: 1; white-space: nowrap;
+  }
+  .fx-canvas {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate3d(-50%,-50%,0); pointer-events: none;
+  }
+
+  /* ---------- 新版入场效果（原型 · 粒子特效右侧）----------
+     入场区域 .ghost-entry 本身就是「竖屏直播画面」：宽 330 × 高 720（= 220:480 原生比例，
+     为了便于观察把竖向显示区域做得较大）。所有元素都被约束在这块竖屏画面以内，不超过它的宽度。
+     层次（由下到上）：
+       ① .ghost-video 直播画面——最底层，真实竖屏视频常驻循环播放、完整显示（不裁剪）；
+          其上叠放进场动画视频 .ghost-anim（横屏 568×320，包在 .ghost-anim-wrap 里）：宽度与直播画面一致
+          （= 区域宽），高度只占其中的一部分、竖直居中。
+       ② .ghost-curtain 黑色帷幕——在画面之上，从**进场动画视频的上/下边缘**（而不是整个
+          直播画面的顶/底）同时向中间合拢，正好对这个视频完成闭合；
+       ③ .ghost-content 头像 + 昵称——最上层，落在进场动画视频的范围内；始终存在、
+          无透明度动画，但其可见范围被 mask 裁剪成「与黑色帷幕完全相同的区域」，
+          所以黑幕扫到哪、头像昵称就露到哪：黑幕那条水平前沿线经过它们之后才逐渐显示。
+          昵称是"镂空"的：用内联 SVG <mask> 把一层与底层同源、同位置的直播视频裁成文字形状，
+          于是文字笔画内透出的是真实的直播画面（不是伪造的条纹渐变），文字外透出其下的进场动画。
+          开场还有 .ghost-wave 水纹波前——用 SVG 位移滤镜把内圆边界那一圈画面折射/模糊成"玻璃波镜"。
+     时序（总周期 9s，无逆过程）：0%→33.333% 开场——像水滴滴在中心，一个实心大圆由中心向外扩散，
+          大圆之内就是进场动画视频（圆的边缘之外露底层直播画面）。同时开场有一个水滴 .ghost-drop
+          自上落下、入水瞬间 .ghost-splash 爆开一圈高光；大圆内部还有一道 .ghost-wave 水纹波前
+          （半径 --ripple-inner），波前所在的一圈画面被真实的位移滤镜扭曲，随圆一圈圈向外漾开，
+          像水滴滴入水面后扩散的水纹。半径用自定义属性 --ripple / --ripple-inner 表示，单段平滑推进、无中间停点；
+          33.333%→66.667% 拉上黑幕（3s，上下帷幕在视频竖向中线相接）；66.667%→100% 保持闭合 3s；
+          100%→0% 为循环回跳，瞬间回到完全张开，再重新拉一次——不播放"收起黑幕"的逆过程。
+          闭合度用自定义属性 --curtain 表示：0% = 完全张开，12.868% = 上下帷幕在视频中线相接（全黑）；
+          扩散半径（0px = 只有中心一点，≥240px = 覆盖整个进场视频）。 */
+  /* 注册 --curtain 使其可被平滑插值（Chromium 支持）。子元素继承同一数值：帷幕高度与内容 mask 天然同步。 */
+  @property --curtain {
+    syntax: "<percentage>";
+    inherits: true;
+    initial-value: 0%;
+  }
+  /* 注册 --ripple / --ripple-inner（两道同心水纹椭圆的横向半径）使其可被平滑插值。mask 半径与元素尺寸都无法直接
+     动画自定义属性，故必须用 @property 让它们可继承：动画挂在父级 .ghost-entry/.ds-entry，
+     子级 .ghost-anim-wrap/.ds-anim-wrap（大椭圆 mask）与 .ghost-wave/.ds-wave（水纹波前环带）继承同一组半径。
+     --ripple       = 大椭圆横向半径：中心被进场动画视频填满的区域，最终扩到 240px 全屏覆盖
+                      （纵向半径 = 横向半径 × --anim-ar，故与进场视频同比例，扩到边界时四角同时被覆盖）。
+     --ripple-inner = 大椭圆内部"水纹波前"的横向半径：波前是一圈跟随它向外推进的环带，带内的画面被
+                      SVG 位移滤镜（feTurbulence + feDisplacementMap）折射扭曲，像隔着玻璃波纹透镜看，
+                      从而形成"水滴滴入水面、水纹一圈圈漾开"的观感。恒 < --ripple，故永远落在大椭圆内部。 */
+  @property --ripple {
+    syntax: "<length>";
+    inherits: true;
+    initial-value: 0px;
+  }
+  @property --ripple-inner {
+    syntax: "<length>";
+    inherits: true;
+    initial-value: 0px;
+  }
+  /* 入场区域 = 竖屏直播画面本身（宽 330 × 高 720 = 220:480 原生比例）。刻意做得较高，方便观察。
+     圆角/边框加在本层，配合 overflow:hidden 把视频、帷幕、头像昵称一并裁在竖屏画面以内。
+     --anim-top：进场动画视频的上边缘位置（相对本层 padding box 高 718px 的百分比）。
+     进场视频宽 = 内容宽 328px、比例 568:320 → 高 ≈ 184.79px；竖直居中，
+     故上边缘 = (718 − 184.79) / 2 ≈ 266.61px ≈ 37.131%，下边缘 ≈ 62.868%（= 100% − 37.131%）。
+     黑幕从视频的上/下边缘开始合拢，--curtain 增至半高 12.868% 时两条帷幕正好在视频中线相接。 */
+  .ghost-entry {
+    position: relative; flex: none;
+    width: 330px; height: 720px;
+    overflow: hidden;
+    border-radius: 14px;
+    border: 1px solid #263041;
+    isolation: isolate; /* 独立层叠上下文：把水滴飞溅高光的 screen 混色限制在画面以内 */
+    --anim-top: 37.131%;
+    --curtain: 0%;
+    --ripple: 0px;
+    --ripple-inner: 0px;
+    /* 水纹椭圆的长短轴比 = 进场动画视频的长宽比 320/568 ≈ 0.56338（纵向半径 = 横向半径 × 本值）。
+       水纹由此从圆变成与视频同比例的椭圆，扩散到边界时与视频矩形同比例贴合、四角同时被覆盖。 */
+    --anim-ar: 0.56338;
+    animation: ghost-curtain 9s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  /* 时序：0%→33.333%（3s）开场"水滴落水、水纹椭圆扩散"——实心大椭圆 --ripple 从中心一点平滑长到 240px 的
+     横向半径（纵向 = ×--anim-ar，与进场视频同比例），把进场动画视频整块盖住；大椭圆内部的"水纹波前"横向半径
+     --ripple-inner 同步长到 120px，波前环带的可见性由单独的动画（见 water-wave-vis）控制。整段是**单段平滑插值**，不设中间停点：
+     一旦插入中间停点，写在 animation 上的 cubic-bezier 会逐段作用于相邻每对停点，每段末尾速度都降到 ~0，
+     视觉上就会出现一顿一顿的顿挫感。
+       0%      落水瞬间：一切都还只是中心一点（两道半径均为 0）。
+       33.333% 大椭圆横向半径达到 240px = 进场视频全覆盖（≥164×√2≈231.9px 才能盖住视频四角）；波前达到 120px。
+     33.333%→66.667% 用 3s 把上下黑幕从进场视频的上/下边缘拉合到视频中线；
+     66.667%→100% 保持闭合 3s；100%→0% 是循环回跳（瞬时回到完全张开+中心一点），没有逆过程。
+     终点 12.868% = 视频半高，此时上帷幕底边与下帷幕顶边正好在视频竖向中线相接。 */
+  @keyframes ghost-curtain {
+    0%      { --ripple: 0px;   --ripple-inner: 0px;   --curtain: 0%; }
+    33.333% { --ripple: 240px; --ripple-inner: 120px; --curtain: 0%; }
+    66.667% { --ripple: 240px; --ripple-inner: 120px; --curtain: 12.868%; }
+    100%    { --ripple: 240px; --ripple-inner: 120px; --curtain: 12.868%; }
+  }
+  /* 底层直播画面：真实竖屏视频（220×480），与入场区域同比例，因此完整显示、不被裁剪，
+     常驻循环播放、始终不变。 */
+  .ghost-video {
+    position: absolute; inset: 0; z-index: 0;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+  }
+  /* 黑色帷幕：上/下各一条。起点在进场动画视频的上/下边缘（而非整个直播画面的顶/底），
+     高度 = --curtain；增至视频半高时两条帷幕正好在视频竖向中线相接，对视频完成闭合。 */
+  .ghost-curtain {
+    position: absolute; left: 0; right: 0; z-index: 1;
+    height: var(--curtain);
+    background: #000;
+  }
+  .ghost-curtain-top { top: var(--anim-top); }
+  .ghost-curtain-bottom { bottom: var(--anim-top); }
+  /* 进场动画视频的"水纹"包裹层：只负责用 mask 把可见区裁成一个**实心大椭圆**（这就是真正的椭圆扩散）。
+     为什么单开一层：.ds-anim 已经用了 mask 做上下擦除（一个 mask 属性不能同时管两件事）；把大椭圆 mask 放在
+     包裹层、擦除 mask 留在视频上，两层各自的 mask 自然相交，互不干扰。包裹层 inset:0 铺满整个入场区域，
+     椭圆中心 (50%,50%) 即视频中心。mask 就一层：中心实心椭圆，横向半径 --ripple、纵向半径 --ripple × --anim-ar
+     （即与进场视频同比例，568:320），内边缘略收几像素做羽化，避免生硬；椭圆内显示的都是进场动画视频，椭圆外透出底层直播画面。
+     max(0px,…) 让半径很小时椭圆退化为无，不会出现负半径。 */
+  .ghost-anim-wrap {
+    position: absolute; inset: 0; z-index: 1;
+    -webkit-mask: radial-gradient(ellipse var(--ripple) calc(var(--ripple) * var(--anim-ar)) at 50% 50%, #000 0, #000 max(0px, calc(var(--ripple) - 6px)), transparent var(--ripple));
+    mask: radial-gradient(ellipse var(--ripple) calc(var(--ripple) * var(--anim-ar)) at 50% 50%, #000 0, #000 max(0px, calc(var(--ripple) - 6px)), transparent var(--ripple));
+  }
+  /* 水纹波前（真正的"水波透镜"）：与进场动画视频**同源、同位置、同尺寸**的一层副本
+     （.ghost-wave-vid），施 SVG 位移滤镜 filter:url(#water-ripple) —— feTurbulence 生成水面噪声、
+     feDisplacementMap 按噪声把像素沿 x/y 推开，再叠一点 feGaussianBlur，画面被"揉"出真实的折射与模糊，
+     像隔着一层波纹玻璃看。整层再用**环带 mask**（横向半径跟随可继承的 --ripple-inner、纵向 ×--anim-ar，故与视频同比例的椭圆环）只露出内椭圆边界处的
+     一圈：环内透明 → 只透出下面未扭曲的进场视频；环本身就是被扭曲的那道波前，随半径增大一圈圈向外漾开。
+     z-index:1 且排在 .ghost-anim-wrap 之后 → 画在进场视频之上、低于 .ghost-content（z-index:2）。
+     只在开场扩散阶段（0%→33.333%）可见，之后 opacity:0 + visibility:hidden，连滤镜一起停止渲染以省开销。 */
+  .ghost-wave {
+    position: absolute; inset: 0; z-index: 1;
+    pointer-events: none;
+    -webkit-mask: radial-gradient(ellipse var(--ripple-inner) calc(var(--ripple-inner) * var(--anim-ar)) at 50% 50%,
+      rgba(0,0,0,0) 0,
+      rgba(0,0,0,0) max(0px, calc(var(--ripple-inner) - 26px)),
+      #000 max(0px, calc(var(--ripple-inner) - 10px)),
+      #000 calc(var(--ripple-inner) + 8px),
+      rgba(0,0,0,0) calc(var(--ripple-inner) + 24px));
+    mask: radial-gradient(ellipse var(--ripple-inner) calc(var(--ripple-inner) * var(--anim-ar)) at 50% 50%,
+      rgba(0,0,0,0) 0,
+      rgba(0,0,0,0) max(0px, calc(var(--ripple-inner) - 26px)),
+      #000 max(0px, calc(var(--ripple-inner) - 10px)),
+      #000 calc(var(--ripple-inner) + 8px),
+      rgba(0,0,0,0) calc(var(--ripple-inner) + 24px));
+    animation: water-wave-vis 9s linear infinite;
+  }
+  /* 水纹波峰的"高光脊"：叠在波前环带上的细亮环（screen 混色），随 --ripple-inner 一起向外推进。
+     真实水面波峰会把光聚集起来形成一圈亮边，这一层就是那道亮边——它让"水纹"在视觉上被一眼认出，
+     与下面那圈被折射/模糊的画面（真实畸变）叠加，才是完整的"水滴落水、水波漾开"。 */
+  .ghost-wave::after, .ds-wave::after {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse var(--ripple-inner) calc(var(--ripple-inner) * var(--anim-ar)) at 50% 50%,
+      rgba(255,255,255,0)   max(0px, calc(var(--ripple-inner) - 17px)),
+      rgba(214,242,255,.30) max(0px, calc(var(--ripple-inner) - 6px)),
+      rgba(255,255,255,.85) var(--ripple-inner),
+      rgba(198,234,255,.30) calc(var(--ripple-inner) + 9px),
+      rgba(255,255,255,0)   calc(var(--ripple-inner) + 21px));
+    mix-blend-mode: screen;
+  }
+  /* 波前层里的画面：与 .ghost-anim / .ds-anim 逐像素对齐（同 object-fit:contain），再交给 #water-ripple 扭曲。 */
+  .ghost-wave-vid, .ds-wave-vid {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+    filter: url(#water-ripple);
+    -webkit-filter: url(#water-ripple);
+  }
+  /* 波前可见性：只有 0%→33.333% 的扩散阶段显示；随后彻底隐藏（visibility:hidden 让滤镜停止计算）。 */
+  @keyframes water-wave-vis {
+    0%      { opacity: 1; visibility: visible; }
+    33.333% { opacity: 1; visibility: visible; }
+    38%     { opacity: 0; visibility: hidden; }
+    100%    { opacity: 0; visibility: hidden; }
+  }
+  /* 水滴：开场从画面上方落到圆心，"滴入"的瞬间缩小消失，紧接着由下方的飞溅高光接棒。 */
+  .ghost-drop, .ds-drop {
+    position: absolute; left: 50%; top: 50%; z-index: 4;
+    width: 9px; height: 11px;
+    border-radius: 50% 50% 50% 50% / 62% 62% 42% 42%;
+    background: radial-gradient(circle at 35% 30%, #fff, rgba(190,225,255,.85) 62%, rgba(150,200,255,.5));
+    box-shadow: 0 0 6px rgba(190,225,255,.85);
+    pointer-events: none;
+    animation: water-drop-fall 9s cubic-bezier(.45,.05,.85,.55) infinite;
+  }
+  @keyframes water-drop-fall {
+    0%    { transform: translate(-50%, calc(-50% - 130px)) scale(.7); opacity: 0; }
+    0.8%  { opacity: 1; }
+    4.5%  { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    5.2%  { transform: translate(-50%, -50%) scale(.15); opacity: 0; }
+    100%  { transform: translate(-50%, -50%) scale(.15); opacity: 0; }
+  }
+  /* 落水飞溅高光：水滴入水瞬间在椭圆中心爆开的一圈青白色光环（同样按 --anim-ar 压成椭圆，与扩散水纹同比例），
+     迅速扩张并淡出，营造"滴入"的冲击感。 */
+  .ghost-splash, .ds-splash {
+    position: absolute; left: 50%; top: 50%; z-index: 4;
+    width: 190px; height: 190px;
+    border-radius: 50%;
+    background: radial-gradient(ellipse 95px calc(95px * var(--anim-ar)) at 50% 50%,
+      rgba(255,255,255,0) 0 38%,
+      rgba(210,240,255,.9) 50%,
+      rgba(160,210,255,.3) 63%,
+      rgba(255,255,255,0) 74%);
+    mix-blend-mode: screen;
+    pointer-events: none;
+    animation: water-splash-pop 9s cubic-bezier(.15,.7,.35,1) infinite;
+  }
+  @keyframes water-splash-pop {
+    0%    { transform: translate(-50%, -50%) scale(.12); opacity: 0; }
+    5%    { transform: translate(-50%, -50%) scale(.12); opacity: 0; }
+    6.5%  { transform: translate(-50%, -50%) scale(.5); opacity: 1; }
+    12%   { transform: translate(-50%, -50%) scale(1.2); opacity: .35; }
+    18%   { transform: translate(-50%, -50%) scale(1.55); opacity: 0; }
+    100%  { transform: translate(-50%, -50%) scale(1.55); opacity: 0; }
+  }
+  /* 进场动画视频：叠在直播画面之上。object-fit:contain 使宽度撑满、竖直居中，画面落在入场区域中央
+     那条 ≈185px 高的横带上（上边缘正好落在 --anim-top，与之前 left/top/height:auto 的渲染结果一致），
+     于是"视频中心"与包裹层的水纹圆心 (50%,50%) 严格重合。开场的水滴/水纹扩散由外层 .ghost-anim-wrap 负责。 */
+  .ghost-anim {
+    position: absolute; inset: 0; z-index: 1;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+  }
+  /* 头像 + 昵称的容器：始终存在、无透明度动画。用 mask 把可见区裁剪成与黑幕一致的
+     「视频范围内的上带 + 下带」（其余位置透明），于是只在黑幕覆盖处透出，随帷幕开合而逐渐显示/隐去。
+     绘制在黑幕之上（z-index:2），故覆盖处是"黑底上的头像昵称"而非被盖住。
+     关键：这里必须 position:absolute; inset:0 铺满整个 .ghost-entry，使容器盒 = 入场区域盒。
+     这样 mask 的百分比坐标才与帷幕位置/高度（同样相对入场区域计算）严格同源，
+     露出边缘就会精确落在帷幕那条水平前沿线上 —— 线经过后才显示，而不是提前露出。
+     可见带的两端即 --anim-top 与 100% − --anim-top（进场视频的上/下边缘），与帷幕起点一致；
+     --curtain 增至视频半高时两带在视频中线相接，内容完整显示。
+     容器本身不再参与布局（非 flex），子元素各自绝对定位，尺寸经控制后落在进场动画视频的范围内。 */
+  .ghost-content {
+    position: absolute; inset: 0; z-index: 2;
+    -webkit-mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+    mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+  }
+  /* 头像：绝对定位。中心在视频中心上方 40px = 空隙半高 10 + 头像半高 30（空隙取 20px，保持不变），
+     与昵称中心（视频中心下方 26.5px = 空隙半高 10 + 文字半高 16.5）配合，
+     使「头像底 ↔ 昵称顶」之间空隙的中点恰好落在进场视频的竖向中线上。
+     头像已缩小到 60px：其**底点**仍固定在 视频中心 − 10px（与昵称顶相隔 20px），所以头像整体相对
+     之前（80px 时中心在视频中心 − 50px）**向下移动了 10px**，而底点与昵称的距离不变。 */
+  .ghost-avatar {
+    position: absolute; left: 50%; top: calc(50% - 40px); z-index: 1;
+    transform: translate(-50%, -50%);
+    width: 60px; height: 60px;
+    border-radius: 50%; overflow: hidden;
+    background: linear-gradient(135deg, #ff6699, #7b5cff);
+    color: #fff; font-size: 45px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ghost-avatar img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; border-radius: 50%; display: block;
+  }
+  /* 镂空昵称：用真实的直播视频填充文字。做法是在 .ghost-content 内再叠一层与底层
+     .ghost-video **同源、同位置、同尺寸**的 <video>（object-fit:contain，因此画面逐像素对齐），
+     再用内联 SVG mask（见 HTML 中 #ghost-name-mask 定义，内含白色文字字形 + 黑色底）把它裁剪成昵称的文字形状：
+     文字笔画之内显示的就是该位置上的真实直播画面，文字之外该层完全透明，透出其下的进场动画/直播画面。
+     该层随 .ghost-content 一起被黑幕 mask 裁剪，所以同样"黑幕扫到哪、露到哪"。
+     SVG 蒙版内文字的位置须与下方 HTML 里 #ghost-name-mask 的定义保持一致（元素盒 328×718，文字居中于 164, 389）。 */
+  .ghost-name-vid {
+    position: absolute; inset: 0; z-index: 0;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+    -webkit-mask: url(#ghost-name-mask);
+    mask: url(#ghost-name-mask);
+  }
+  /* 仅用于承载 SVG <mask> / <filter> 定义，本身不显示、不占布局。 */
+  .ghost-mask-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---------- 新版入场效果 · 变体2（透明度溶解）----------
+     与左侧"黑幕拉起"几何完全一致（同样 330×720 竖屏画面、同样 --anim-top / --curtain 时序），
+     区别在于闭合方式：不用黑幕遮挡，而是把进场动画视频从**自身上下边缘**向中间"擦除成透明"，
+     擦到哪里、哪里的底层直播画面就露出来，头像 + 昵称随之显现。
+     实现：给 .ds-anim 一个透明度 mask —— 上下两条随 --curtain 增长的"透明带"（其余不透明），
+     视频像被从上下两端抹掉；.ds-content 用**互补**的 mask（仅在透明带内可见），
+     故头像昵称只在视频消失处显示，与擦除前沿严格同步。
+     未采用"整体 opacity 淡出"：那样做不到"从上下两个方向"消失。
+     开场同样有"水滴落水、水纹椭圆扩散"：进场视频由中心一个实心大椭圆向外扩散覆盖，大椭圆内部的
+     .ds-wave 水纹波前把内椭圆边界那一圈画面折射/模糊成"玻璃波镜"，并有水滴 .ds-drop 与飞溅 .ds-splash。
+     昵称是普通纯色文字，但用 mix-blend-mode:difference 取"下层直播画面同位置的反相色"以最大化对比度，
+     故它被移出 .ds-content、直接挂在 .ds-entry 下（见 .ds-name）。 */
+  .ds-entry {
+    position: relative; flex: none;
+    width: 330px; height: 720px;
+    overflow: hidden;
+    border-radius: 14px;
+    border: 1px solid #263041;
+    --anim-top: 37.131%;
+    --curtain: 0%;
+    --ripple: 0px;
+    --ripple-inner: 0px;
+    --anim-ar: 0.56338; /* 水纹椭圆的长短轴比 = 进场动画视频 320/568（与左侧 .ghost-entry 一致） */
+    isolation: isolate; /* 建立独立层叠上下文，把昵称的 difference 混色限制在本区域内（只与底层视频混合） */
+    animation: ds-dissolve 9s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  /* 与左侧"黑幕"变体同一套开场时序：实心大椭圆 --ripple 单段平滑扩到 240px（横向半径）覆盖整个进场视频（不设中间停点，
+     避免逐段缓动导致的顿挫感），大椭圆内的"水纹波前"横向半径 --ripple-inner 同步扩到 120px（详见 @keyframes ghost-curtain）。
+     33.333%→66.667% 用 3s 把上下两条透明带从视频上/下边缘扩到中线（视频完全消失）；
+     66.667%→100% 保持；100%→0% 循环瞬时回跳，无逆过程。终点 12.868% = 视频半高。 */
+  @keyframes ds-dissolve {
+    0%      { --ripple: 0px;   --ripple-inner: 0px;   --curtain: 0%; }
+    33.333% { --ripple: 240px; --ripple-inner: 120px; --curtain: 0%; }
+    66.667% { --ripple: 240px; --ripple-inner: 120px; --curtain: 12.868%; }
+    100%    { --ripple: 240px; --ripple-inner: 120px; --curtain: 12.868%; }
+  }
+  /* 底层直播画面（与左侧同源同尺寸，完整显示）。 */
+  .ds-video {
+    position: absolute; inset: 0; z-index: 0;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+  }
+  /* 进场动画视频的"水纹"包裹层：与左侧 .ghost-anim-wrap 完全相同（单层实心大椭圆 mask，横向半径 --ripple、纵向 ×--anim-ar）；
+     椭圆中心 (50%,50%) = 视频中心。之所以单开一层：本变体的视频还要额外做"上下擦除"的 mask（见 .ds-anim），
+     一个 mask 属性无法同时管两件事；把大椭圆 mask 放包裹层、擦除 mask 留在视频上，两层 mask 自然相交、互不干扰。 */
+  .ds-anim-wrap {
+    position: absolute; inset: 0; z-index: 1;
+    -webkit-mask: radial-gradient(ellipse var(--ripple) calc(var(--ripple) * var(--anim-ar)) at 50% 50%, #000 0, #000 max(0px, calc(var(--ripple) - 6px)), transparent var(--ripple));
+    mask: radial-gradient(ellipse var(--ripple) calc(var(--ripple) * var(--anim-ar)) at 50% 50%, #000 0, #000 max(0px, calc(var(--ripple) - 6px)), transparent var(--ripple));
+  }
+  /* 水纹波前（与左侧 .ghost-wave 同一套机制）：进场动画视频副本 + #water-ripple 位移滤镜 + 跟随
+     --ripple-inner（纵向 ×--anim-ar）的椭圆环带 mask，只在内椭圆边界露出一圈被折射/模糊的画面，形成向外扩散的水纹波前。 */
+  .ds-wave {
+    position: absolute; inset: 0; z-index: 1;
+    pointer-events: none;
+    -webkit-mask: radial-gradient(ellipse var(--ripple-inner) calc(var(--ripple-inner) * var(--anim-ar)) at 50% 50%,
+      rgba(0,0,0,0) 0,
+      rgba(0,0,0,0) max(0px, calc(var(--ripple-inner) - 26px)),
+      #000 max(0px, calc(var(--ripple-inner) - 10px)),
+      #000 calc(var(--ripple-inner) + 8px),
+      rgba(0,0,0,0) calc(var(--ripple-inner) + 24px));
+    mask: radial-gradient(ellipse var(--ripple-inner) calc(var(--ripple-inner) * var(--anim-ar)) at 50% 50%,
+      rgba(0,0,0,0) 0,
+      rgba(0,0,0,0) max(0px, calc(var(--ripple-inner) - 26px)),
+      #000 max(0px, calc(var(--ripple-inner) - 10px)),
+      #000 calc(var(--ripple-inner) + 8px),
+      rgba(0,0,0,0) calc(var(--ripple-inner) + 24px));
+    animation: water-wave-vis 9s linear infinite;
+  }
+  /* 进场动画视频：object-fit:contain 使宽度撑满、竖直居中（上边缘正好落在 --anim-top），
+     于是它的 mask 百分比与内容层同源（相对 328×718 的元素盒）。
+     上下两条随 --curtain 增长的透明带把视频逐渐擦除；增至视频半高时视频全部消失。
+     开场"水滴落水、水纹扩散"由外层 .ds-anim-wrap（大圆）与 .ds-wave（水纹波前）负责（见其说明）。 */
+  .ds-anim {
+    position: absolute; inset: 0; z-index: 1;
+    width: 100%; height: 100%; display: block;
+    object-fit: contain;
+    -webkit-mask: linear-gradient(to bottom,
+      #000 0 var(--anim-top),
+      transparent var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      #000 calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      transparent calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      #000 calc(100% - var(--anim-top)) 100%);
+    mask: linear-gradient(to bottom,
+      #000 0 var(--anim-top),
+      transparent var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      #000 calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      transparent calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      #000 calc(100% - var(--anim-top)) 100%);
+  }
+  /* 头像 + 昵称：只在视频被擦除的"透明带"内可见（与 .ds-anim 完全互补），随擦除前沿显现。
+     绘制在最上层（z-index:2）。必须 inset:0 铺满，使 mask 百分比与 .ds-anim 同源。 */
+  .ds-content {
+    position: absolute; inset: 0; z-index: 2;
+    -webkit-mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+    mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+  }
+  /* 头像：与左侧同尺寸/同位置（60px，中心 = 视频中心上方 40px = 空隙半高 10 + 头像半高 30，
+     底点仍固定在视频中心 − 10px，与昵称顶相距 20px 不变）。 */
+  .ds-avatar {
+    position: absolute; left: 50%; top: calc(50% - 40px); z-index: 1;
+    transform: translate(-50%, -50%);
+    width: 60px; height: 60px;
+    border-radius: 50%; overflow: hidden;
+    background: linear-gradient(135deg, #ff6699, #7b5cff);
+    color: #fff; font-size: 45px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ds-avatar img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; border-radius: 50%; display: block;
+  }
+  /* 昵称：反相色文字。把文字层从 .ds-content 中移出、作为 .ds-entry 的直接子元素（与底层视频同处一个
+     隔离组），这样 mix-blend-mode:difference 才能与下层视频混色，取"同位置直播画面的相反颜色"：
+     白色文字做 difference 混合 = |背景 − 白| = 背景的反相色，对比度最强。
+     （不用 canvas 逐像素取样：file:// 视频会使 canvas 被标记为 tainted 而抛 SecurityError。）
+     该层 inset:0 铺满，并挂上与 .ds-content 完全相同的 5 段 reveal mask，故同样"擦到哪、露到哪"；
+     文字本身用内部 span 定位在 视频中心下方 26.5px，使文字**顶边**固定在 视频中心 + 10px
+     （与头像底相距 20px、空隙中点仍落在视频竖向中线上）。
+     字号 33px：昵称「夜雨声烦_2024」按 Microsoft YaHei 度量约 6.7em，33×6.7 + 9px(字距) ≈ 230px，
+     约占直播画面宽度 328px 的 70%。 */
+  .ds-name {
+    position: absolute; inset: 0; z-index: 2;
+    color: #fff;
+    mix-blend-mode: difference;
+    font-size: 33px; font-weight: 900; letter-spacing: 1px;
+    line-height: 1; white-space: nowrap;
+    font-family: 'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+    pointer-events: none;
+    -webkit-mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+    mask: linear-gradient(to bottom,
+      transparent 0 var(--anim-top),
+      #000 var(--anim-top) calc(var(--anim-top) + var(--curtain)),
+      transparent calc(var(--anim-top) + var(--curtain)) calc(100% - var(--anim-top) - var(--curtain)),
+      #000 calc(100% - var(--anim-top) - var(--curtain)) calc(100% - var(--anim-top)),
+      transparent calc(100% - var(--anim-top)) 100%);
+  }
+  .ds-name span {
+    position: absolute; left: 50%; top: calc(50% + 26.5px);
+    transform: translate(-50%, -50%);
+    display: block;
+  }
+
+  /* ---------- 清晰度参照 ---------- */
+  #clarity {
+    flex: none;
+    padding: 8px 12px;
+    background: #0a0d12;
+    border-bottom: 1px solid #1c2230;
+  }
+  #clarity .title { font-size: 10px; color: #475569; margin-bottom: 4px; }
+  .checker {
+    display: inline-block; width: 120px; height: 40px;
+    background-image:
+      linear-gradient(45deg, #888 25%, transparent 25%),
+      linear-gradient(-45deg, #888 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #888 75%),
+      linear-gradient(-45deg, transparent 75%, #888 75%);
+    background-size: 4px 4px;
+    background-position: 0 0, 0 2px, 2px -2px, -2px 0px;
+    vertical-align: middle;
+  }
+  .line-ladder { display: inline-block; vertical-align: middle; margin-left: 12px; }
+  .line-ladder .row { display: flex; align-items: center; gap: 4px; }
+  .line-ladder .bar { background: #cbd5e1; height: 1px; }
+  .tiny-text { display: inline-block; vertical-align: middle; margin-left: 12px; color: #94a3b8; }
+  .tiny-text .t1 { font-size: 12px; }
+  .tiny-text .t2 { font-size: 10px; }
+  .tiny-text .t3 { font-size: 8px; }
+  .tiny-text .t4 { font-size: 6px; }
+
+  /* ---------- 底部读法说明 ---------- */
+  #notes {
+    flex: none;
+    padding: 6px 12px;
+    background: #0b0e13;
+    color: #5b6a82;
+    font-size: 11px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+  }
+  #notes b { color: #86efac; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div id="hud">初始化中…</div>
+
+<div id="bar">
+  <div class="grp"><button id="m-css" class="on">CSS 动画</button></div>
+  <div class="grp"><button id="m-js" class="on">JS 动画</button></div>
+  <div class="grp"><button id="m-video" class="on">本地视频</button></div>
+  <div class="grp"><button id="m-particles" class="on">粒子特效</button></div>
+  <div class="grp"><button id="m-soft" class="on">边界柔化</button></div>
+  <div class="grp"><button id="m-ghost" class="on">新版入场(黑幕)</button></div>
+  <div class="grp"><button id="m-dissolve" class="on">入场(淡化)</button></div>
+  <div class="grp"><button id="m-clarity" class="on">清晰度参照</button></div>
+  <div class="grp"><button id="m-tick" class="on">节拍归因(5ms)</button></div>
+  <div class="grp"><button id="btn-reset">重置统计</button></div>
+  <div class="grp"><label>视觉缩放 VS</label>
+    <select id="sel-vs">
+      <option value="2">2.0（生产 VS≈1.8）</option>
+      <option value="1" selected>1.0（原生）</option>
+      <option value="0.75">0.75</option>
+      <option value="0.55">0.55（低估负载）</option>
+    </select>
+  </div>
+</div>
+
+<div id="timeline-wrap">
+  <div class="label">帧间隔时间线（绿&lt;20ms · 黄20-34 · 橙34-50 · 红&gt;50ms · 虚线=16.7/33.3/50ms）</div>
+  <canvas id="timeline"></canvas>
+</div>
+
+<div id="lanes">
+  <div class="lane" id="lane-css">
+    <div class="title"><span>CSS 合成器动画</span><span class="info" id="info-css"></span></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <div class="css-ball"></div>
+      <div class="css-spinner"></div>
+    </div>
+    <div class="css-countdown"><span class="css-countdown-inner">10</span></div>
+  </div>
+  <div class="lane" id="lane-js">
+    <div class="title"><span>JS rAF 主线程动画</span><span class="info" id="info-js"></span></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <div class="js-ball" id="js-ball"></div>
+    </div>
+    <div class="js-countdown" id="js-countdown">10.000</div>
+    <div class="js-frame" id="js-frame">帧 #0</div>
+    <div class="js-clock" id="js-clock">--:--:--.---</div>
+  </div>
+  <div class="lane" id="lane-video">
+    <div class="title"><span>本地视频解码</span><span class="info" id="info-video"></span></div>
+    <video id="test-video" muted loop playsinline>
+      <source src="file:///C:/Users/song/Downloads/dancer1.webm" type="video/webm">
+    </video>
+    <div class="video-fail" id="video-fail" style="display:none">视频加载失败：file:///C:/Users/song/Downloads/dancer1.webm</div>
+    <div class="video-info" id="video-info"></div>
+  </div>
+</div>
+
+<div id="particle-stage">
+  <div class="stage-label">粒子特效（生产参数 RadialBadge · 聚合2000→停留3000→消散2000→间隔420 循环）</div>
+  <div class="particle-scene soft" id="particle-scene">
+    <div class="holder" id="particle-holder">
+      <div class="halo-box">
+        <div class="halo-in" id="halo-in">
+          <div class="glow g0"></div><div class="glow g1"></div><div class="glow g2"></div><div class="glow g3"></div>
+        </div>
+      </div>
+      <div class="badge" id="particle-badge">
+        <div class="avatar">夜<img src="avatar-test.jpg" alt="" onerror="this.remove()"></div>
+        <span class="name">夜雨声烦</span>
+      </div>
+      <canvas class="fx-canvas" id="particle-canvas"></canvas>
+    </div>
+  </div>
+
+  <!-- 新版入场效果（镂空透视背景）：入场区域本身就是竖屏直播画面（330×720）。最底层是真实
+       直播视频 .ghost-video（完整显示、常驻播放），其上叠放进场动画视频 .ghost-anim（宽度与直播
+       画面一致、竖直居中）；黑色帷幕 .ghost-curtain 在画面之上自上/下向中间合拢；最上层
+       .ghost-content 是头像 + 昵称，落在进场动画视频范围内，被 mask 裁剪成与帷幕相同的区域，
+       故随黑幕移动而逐渐显示（黑幕那条水平前沿线经过后才显示）。
+       昵称镂空：.ghost-name-vid 是同一路直播视频的副本，用下方 SVG <mask> 裁成文字形状，
+       笔画内透出真实直播画面。 -->
+  <div class="ghost-entry" id="ghost-entry">
+    <!-- SVG 定义（纯定义，不参与布局/显示）：① #ghost-name-mask 昵称镂空蒙版；
+         ② #water-ripple 水面位移滤镜（feTurbulence + feDisplacementMap + feGaussianBlur），
+            供 .ghost-wave-vid / .ds-wave-vid 引用，做出"隔着波纹玻璃看"的折射模糊。 -->
+    <svg class="ghost-mask-defs" aria-hidden="true" focusable="false">
+      <defs>
+        <!-- 昵称文字形状蒙版：白色文字字形 + 黑色底，以 luminance 语义裁剪 .ghost-name-vid（白=透出，黑/透明=隐藏）。
+             userSpaceOnUse 坐标 = .ghost-name-vid 的元素盒（328×718，即 .ghost-entry 的 padding box），
+             文字水平居中于 x=164、水平基线中心 y=385.5，字号 33（≈占画面宽 70%）；
+             竖向上文字顶边落在 视频中心 + 10px（359+10），与头像底构成 20px 空隙、中点对齐视频中线。 -->
+        <mask id="ghost-name-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="328" height="718">
+          <rect x="0" y="0" width="328" height="718" fill="#000"/>
+          <text x="164" y="385.5" text-anchor="middle" dominant-baseline="central"
+                font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif"
+                font-size="33" font-weight="900" letter-spacing="1" fill="#fff">夜雨声烦_2024</text>
+        </mask>
+        <!-- 水面扭曲滤镜：feTurbulence 生成程序化水面噪声，feDisplacementMap 用噪声的 R/G 通道把画面像素
+             沿 x/y 推开，再叠一点高斯模糊 → 得到"隔着波纹玻璃看"的折射 + 模糊。
+             baseFrequency 取近各向同性的低频（x≈y，波长约 90px）：噪声尺度比波前环带更宽，
+             于是环带内看到的是平滑起伏的"透镜"而非细碎噪点，这正是"水滴滴入静水"（池塘）的观感
+             （x≠y 会变成横/竖拉丝的海浪感）。
+             scale 用 SMIL 在 9s 周期内从冲击时最大（46px）衰减到 0，与"水滴入水→水纹扩散→水面平静"同步。
+             噪声频率固定不动画（Chrome 可跨帧缓存该噪声纹理），只有 scale(位移量)在变，开销较小。 -->
+        <filter id="water-ripple" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.011 0.013" numOctaves="2" seed="7" result="noise"/>
+          <feDisplacementMap in="SourceGraphic" in2="noise" xChannelSelector="R" yChannelSelector="G" scale="0" result="disp">
+            <animate attributeName="scale" dur="9s" repeatCount="indefinite" calcMode="spline"
+                     keyTimes="0;0.03;0.1;0.2;0.34;1"
+                     keySplines="0.2 0 0.4 1;0.2 0 0.4 1;0.2 0 0.4 1;0.2 0 0.4 1;0.2 0 0.4 1"
+                     values="0;46;32;19;7;0"/>
+          </feDisplacementMap>
+          <feGaussianBlur in="disp" stdDeviation="1.6"/>
+        </filter>
+      </defs>
+    </svg>
+    <video class="ghost-video" id="ghost-live" muted autoplay loop playsinline aria-hidden="true"
+           src="file:///C:/Users/song/Videos/5ea053b0f4942125ffe8454f52c971a3.mp4"></video>
+    <!-- 进场动画的"水纹"包裹层：mask 把可见区裁成一个"实心大圆"，大圆之内显示的都是进场动画视频。 -->
+    <div class="ghost-anim-wrap" aria-hidden="true">
+      <video class="ghost-anim" id="ghost-anim" muted autoplay loop playsinline
+             src="file:///C:/Users/song/Videos/152e36c2e56929e2c1e02ad2f85a22f2.mp4"></video>
+    </div>
+    <!-- 水纹波前：进场动画视频的副本 + #water-ripple 位移滤镜，再用跟随 --ripple-inner 的环带 mask
+         只露出内圆边界处的一圈 → 那一圈画面被折射/模糊成"玻璃波镜"，随圆向外漾开。 -->
+    <div class="ghost-wave" aria-hidden="true">
+      <video class="ghost-wave-vid" id="ghost-wave" muted autoplay loop playsinline
+             src="file:///C:/Users/song/Videos/152e36c2e56929e2c1e02ad2f85a22f2.mp4"></video>
+    </div>
+    <!-- 水滴 + 落水飞溅高光：开场水滴自上落下，入水瞬间在圆心爆开一圈光环（仅开场极短时间可见）。 -->
+    <div class="ghost-drop" aria-hidden="true"></div>
+    <div class="ghost-splash" aria-hidden="true"></div>
+    <div class="ghost-curtain ghost-curtain-top" aria-hidden="true"></div>
+    <div class="ghost-curtain ghost-curtain-bottom" aria-hidden="true"></div>
+    <div class="ghost-content">
+      <video class="ghost-name-vid" id="ghost-namevid" muted autoplay loop playsinline aria-hidden="true"
+             src="file:///C:/Users/song/Videos/5ea053b0f4942125ffe8454f52c971a3.mp4"></video>
+      <div class="ghost-avatar">夜<img src="avatar-test.jpg" alt="" onerror="this.remove()"></div>
+    </div>
+  </div>
+
+  <!-- 新版入场效果 · 变体2（透明度溶解）：与左侧"黑幕拉起"同一几何（330×720 竖屏画面），
+       但闭合时不用黑幕——进场动画视频 .ds-anim 从自身上下边缘向中间被"擦除成透明"，
+       露出底层直播画面；头像 + 昵称随之显现（昵称是普通纯色文字，黑色，非镂空）。 -->
+  <div class="ds-entry" id="ds-entry">
+    <video class="ds-video" id="ds-live" muted autoplay loop playsinline aria-hidden="true"
+           src="file:///C:/Users/song/Videos/5ea053b0f4942125ffe8454f52c971a3.mp4"></video>
+    <!-- 进场动画的"水纹"包裹层：与左侧 .ghost-anim-wrap 同一套"实心大圆"圆形扩散 mask。 -->
+    <div class="ds-anim-wrap" aria-hidden="true">
+      <video class="ds-anim" id="ds-anim" muted autoplay loop playsinline
+             src="file:///C:/Users/song/Videos/152e36c2e56929e2c1e02ad2f85a22f2.mp4"></video>
+    </div>
+    <!-- 水纹波前 + 水滴飞溅：与左侧 .ghost-wave/.ghost-drop/.ghost-splash 同一套
+         （共用 #water-ripple 滤镜与 water-wave-vis / water-drop-fall / water-splash-pop 动画）。 -->
+    <div class="ds-wave" aria-hidden="true">
+      <video class="ds-wave-vid" id="ds-wave" muted autoplay loop playsinline
+             src="file:///C:/Users/song/Videos/152e36c2e56929e2c1e02ad2f85a22f2.mp4"></video>
+    </div>
+    <div class="ds-drop" aria-hidden="true"></div>
+    <div class="ds-splash" aria-hidden="true"></div>
+    <div class="ds-content">
+      <div class="ds-avatar">夜<img src="avatar-test.jpg" alt="" onerror="this.remove()"></div>
+    </div>
+    <!-- 昵称放在 .ds-content 之外、作为 .ds-entry 的直接子元素：只有与底层视频同处一个隔离组，
+         mix-blend-mode:difference 才能取到"下层直播画面同位置的反相色"（白字混色 = 背景取反）。 -->
+    <div class="ds-name"><span>夜雨声烦_2024</span></div>
+  </div>
+</div>
+
+<div id="clarity">
+  <div class="title">清晰度参照（1px 棋盘格 / 1-4px 线梯 / 12-6px 小字）<span id="clarity-dpr" style="margin-left:12px;color:#475569"></span></div>
+  <div class="checker"></div>
+  <div class="line-ladder">
+    <div class="row"><div class="bar" style="width:40px;height:1px"></div><span style="font-size:9px;color:#64748b">1px</span></div>
+    <div class="row"><div class="bar" style="width:40px;height:2px"></div><span style="font-size:9px;color:#64748b">2px</span></div>
+    <div class="row"><div class="bar" style="width:40px;height:3px"></div><span style="font-size:9px;color:#64748b">3px</span></div>
+    <div class="row"><div class="bar" style="width:40px;height:4px"></div><span style="font-size:9px;color:#64748b">4px</span></div>
+  </div>
+  <div class="tiny-text">
+    <div class="t1">12px 文字</div>
+    <div class="t2">10px 文字</div>
+    <div class="t3">8px 文字</div>
+    <div class="t4">6px 文字</div>
+  </div>
+</div>
+
+<div id="notes">
+  <span><b>隔离测试矩阵</b>：</span>
+  <span>全关=空载基线 → 只+CSS=合成器 → 只+JS=主线程 → 只+粒子=canvas 栅格 → 只+视频=解码</span>
+  <span><b>判断</b>：FPS 高但画面卡=采集/编码层；CSS 卡 JS 不卡=合成器问题；粒子卡 CSS 不卡=canvas 栅格瓶颈；清晰度糊=缩放/DPR</span>
+  <span>本页同时在 Chrome 和直播姬浏览器源中打开，对照 HUD 数值与视觉表现。</span>
+</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   0. 错误捕获
+   ========================================================================== */
+window.__errs = [];
+window.addEventListener("error", function (e) {
+  window.__errs.push((e.message || "error") + " @" + e.lineno + ":" + e.colno);
+});
+window.addEventListener("unhandledrejection", function (e) {
+  window.__errs.push("rejection: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
+});
+
+/* ============================================================================
+   1. 常量与工具函数
+   ========================================================================== */
+var RADIAL_PARAMS = {
+  duration: 2000, coefficient: 60, inDist: 0.8, outDist: 0.6,
+  spin: 0.1, reveal: "scale", speedFactor: 1, size: function () { return 10; },
+  oscillation: 1, shapePow: 5.0, vStretch: 2.5, vTaper: 1.0
+};
+var HOLD_MS = 3000, SHOW_DELAY_MS = 60, GAP_MS = 420;
+var HIDE_REVEAL_SPAN = 0.7, NEW_CAP = 40000, CENTER_BIAS = 2.0, LUT_CELL = 2;
+var BADGE_NAME = "夜雨声烦";
+var VIDEO_SRC = "file:///C:/Users/song/Downloads/dancer1.webm";
+
+var clamp = function (v, a, b) { return v < a ? a : v > b ? b : v; };
+var lerp = function (a, b, t) { return a + (b - a) * t; };
+var easeOutCubic = function (t) { return 1 - Math.pow(1 - t, 3); };
+var easeInOutCubic = function (t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3) / 2; };
+var HSL = [];
+for (var i = 0; i <= 60; i++) HSL[i] = "hsl(" + i + ",90%,60%)";
+
+/* ============================================================================
+   2. 形状约束（超椭圆）与采样
+   ========================================================================== */
+function shapeRho(w, h, dx, dy, n) {
+  var a = Math.max(1e-6, w / 2), b = Math.max(1e-6, h / 2);
+  var ux = Math.abs(dx) / a, uy = Math.abs(dy) / b;
+  return Math.pow(Math.pow(ux, n) + Math.pow(uy, n), 1 / n);
+}
+function sampleBadgePoint(w, h, n) {
+  for (var i = 0; i < 48; i++) {
+    var x = Math.random() * w, y = Math.random() * h;
+    var rho = shapeRho(w, h, x - w/2, y - h/2, n);
+    if (rho > 1) continue;
+    var d = clamp(1 - rho, 0, 1);
+    if (Math.random() < (1 + CENTER_BIAS * d) / (1 + CENTER_BIAS)) return [x, y];
+  }
+  return [w / 2, h / 2];
+}
+
+/* ============================================================================
+   3. badge 像素取色（离屏重绘 → getImageData → 颜色网格 LUT）
+   ========================================================================== */
+var _colorProbe = document.createElement("canvas").getContext("2d");
+function toOpaque(color) {
+  try {
+    _colorProbe.fillStyle = "#000";
+    _colorProbe.fillStyle = color;
+    _colorProbe.clearRect(0, 0, 1, 1);
+    _colorProbe.fillStyle = _colorProbe.fillStyle;
+    _colorProbe.fillRect(0, 0, 1, 1);
+    var d = _colorProbe.getImageData(0, 0, 1, 1).data;
+    return "rgb(" + d[0] + "," + d[1] + "," + d[2] + ")";
+  } catch (e) { return color; }
+}
+function px(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
+function dirToDeg(s) {
+  var t = s.toLowerCase().replace(/\s+/g, " ").trim();
+  var map = {
+    "to top":0, "to top right":45, "to right top":45, "to right":90,
+    "to bottom right":135, "to right bottom":135, "to bottom":180,
+    "to bottom left":225, "to left bottom":225, "to left":270,
+    "to top left":315, "to left top":315
+  };
+  return map[t] != null ? map[t] : 180;
+}
+function parseLinearGradient(str) {
+  if (!str || String(str).indexOf("linear-gradient") < 0) return null;
+  var s0 = String(str);
+  var inner = s0.slice(s0.indexOf("(") + 1, s0.lastIndexOf(")"));
+  var parts = [], depth = 0, cur = "";
+  for (var i = 0; i < inner.length; i++) {
+    var ch = inner[i];
+    if (ch === "(") depth++; else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { parts.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  parts.push(cur);
+  var angle = 180, stops = [];
+  for (var i2 = 0; i2 < parts.length; i2++) {
+    var s = parts[i2].trim();
+    if (!s) continue;
+    if (i2 === 0 && /^[-+]?[\d.]+deg$/.test(s)) { angle = parseFloat(s); continue; }
+    if (i2 === 0 && /^to\s+/i.test(s)) { angle = dirToDeg(s); continue; }
+    var m = /^(.*?)(?:\s+([\d.]+)%)?$/.exec(s);
+    if (!m) continue;
+    stops.push({ color: toOpaque(m[1].trim()), off: m[2] != null ? parseFloat(m[2]) / 100 : null });
+  }
+  if (!stops.length) return null;
+  var n = stops.length;
+  for (var i3 = 0; i3 < n; i3++) if (stops[i3].off == null) stops[i3].off = n > 1 ? i3 / (n-1) : 0;
+  if (n === 1) stops.push({ color: stops[0].color, off: 1 });
+  return { angle: angle, stops: stops };
+}
+function makeGradient(ctx, w, h, angleDeg, stops) {
+  var a = (angleDeg * Math.PI) / 180;
+  var dx = Math.sin(a), dy = -Math.cos(a);
+  var L = Math.abs(w * Math.sin(a)) + Math.abs(h * Math.cos(a));
+  var g = ctx.createLinearGradient(w/2 - dx*L/2, h/2 - dy*L/2, w/2 + dx*L/2, h/2 + dy*L/2);
+  for (var i = 0; i < stops.length; i++) g.addColorStop(clamp(stops[i].off, 0, 1), stops[i].color);
+  return g;
+}
+function roundRectPath(ctx, x, y, w, h, r) {
+  var rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+function setFont(ctx, cs, sizePx) {
+  var size = sizePx.toFixed(1) + "px";
+  var weight = cs.fontWeight || "700";
+  ctx.font = weight + " " + size + " " + (cs.fontFamily || "sans-serif");
+  if (ctx.font.indexOf(size) < 0) ctx.font = weight + " " + size + " sans-serif";
+}
+function isSampleSafe(src) {
+  if (!src) return false;
+  if (src.startsWith("data:") || src.startsWith("blob:")) return true;
+  try { return new URL(src, window.location.href).origin === window.location.origin; }
+  catch (e) { return false; }
+}
+
+/* buildBadgeLut：按 badge 计算样式离屏重绘 + 采样成颜色网格 */
+function buildBadgeLut(badgeEl, vs) {
+  if (!badgeEl) return null;
+  try {
+    var cs = getComputedStyle(badgeEl);
+    var bw = Math.max(2, Math.round(badgeEl.offsetWidth * vs));
+    var bh = Math.max(2, Math.round(badgeEl.offsetHeight * vs));
+    var off = document.createElement("canvas");
+    off.width = bw; off.height = bh;
+    var c = off.getContext("2d");
+    if (!c) return null;
+
+    var bg = parseLinearGradient(cs.backgroundImage);
+    if (!bg) {
+      // 边界柔化开启时，胶囊底色被移到 .badge::before 上，本体 background 为 none。
+      // 回退读取伪元素的 backgroundImage，保证粒子取色 LUT 不失效。
+      try {
+        var beforeBg = getComputedStyle(badgeEl, "::before").backgroundImage;
+        bg = parseLinearGradient(beforeBg);
+      } catch (e) { bg = null; }
+    }
+    if (!bg) return null;
+    c.save();
+    roundRectPath(c, 0, 0, bw, bh, bh / 2);
+    c.clip();
+    c.fillStyle = makeGradient(c, bw, bh, bg.angle, bg.stops);
+    c.fillRect(0, 0, bw, bh);
+    c.restore();
+
+    var cursor = px(cs.paddingLeft) * vs;
+    var gap = px(cs.columnGap || cs.gap) * vs;
+
+    // 头像（children[0]）
+    var avEl = badgeEl.children[0];
+    var acs = avEl ? getComputedStyle(avEl) : null;
+    if (avEl && acs) {
+      var aw = px(acs.width) * vs, ah = px(acs.height) * vs;
+      var acx = cursor + aw / 2, acy = bh / 2;
+      var img = avEl.tagName === "IMG" ? avEl : avEl.querySelector("img");
+      var photoReady = !!(img && img.complete && img.naturalWidth > 0) && isSampleSafe(img ? img.currentSrc || img.src : "");
+      c.save();
+      c.beginPath();
+      c.arc(acx, acy, Math.min(aw, ah) / 2, 0, Math.PI * 2);
+      c.clip();
+      c.translate(cursor, acy - ah / 2);
+      if (photoReady && img) {
+        var k = Math.max(aw / img.naturalWidth, ah / img.naturalHeight);
+        var dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+        c.drawImage(img, (aw - dw) / 2, (ah - dh) / 2, dw, dh);
+      } else {
+        var ag = parseLinearGradient(acs.backgroundImage);
+        c.fillStyle = ag ? makeGradient(c, aw, ah, ag.angle, ag.stops) : (acs.backgroundColor || "#f69");
+        c.fillRect(0, 0, aw, ah);
+      }
+      c.restore();
+      if (!photoReady) {
+        var ch2 = (avEl.textContent || "").trim();
+        if (ch2) {
+          c.save();
+          c.fillStyle = acs.color || "#fff";
+          c.textAlign = "center"; c.textBaseline = "middle";
+          setFont(c, acs, px(acs.fontSize) * vs);
+          c.fillText(ch2, acx, acy);
+          c.restore();
+        }
+      }
+      cursor += aw + gap;
+    }
+
+    // 昵称（children[1]）
+    var nameEl = badgeEl.children[1];
+    if (nameEl) {
+      var ncs = getComputedStyle(nameEl);
+      c.save();
+      c.fillStyle = ncs.color || "#fff";
+      c.textAlign = "left"; c.textBaseline = "alphabetic";
+      if ("letterSpacing" in c) c.letterSpacing = ncs.letterSpacing || "0px";
+      setFont(c, ncs, px(ncs.fontSize) * vs);
+      var nameStr = (nameEl.textContent || "").trim();
+      var mt = c.measureText(nameStr);
+      var asc = mt.fontBoundingBoxAscent, desc = mt.fontBoundingBoxDescent;
+      var baseline = isFinite(asc) && isFinite(desc) && (asc || desc)
+        ? bh / 2 + (asc - desc) / 2
+        : bh / 2 + (mt.actualBoundingBoxAscent - mt.actualBoundingBoxDescent) / 2;
+      c.fillText(nameStr, cursor, baseline);
+      c.restore();
+    }
+
+    // 采样成颜色网格
+    var cell = LUT_CELL;
+    var gw = Math.ceil(bw / cell), gh = Math.ceil(bh / cell);
+    var data = c.getImageData(0, 0, bw, bh).data;
+    var cols = new Array(gw * gh);
+    for (var gy = 0; gy < gh; gy++) {
+      for (var gx = 0; gx < gw; gx++) {
+        var sx = Math.min(bw - 1, gx * cell + (cell >> 1));
+        var sy = Math.min(bh - 1, gy * cell + (cell >> 1));
+        var o = (sy * bw + sx) * 4;
+        var a = data[o + 3];
+        cols[gy * gw + gx] = a < 8 ? "" : "rgb(" + data[o] + "," + data[o+1] + "," + data[o+2] + ")";
+      }
+    }
+    return { gw: gw, gh: gh, cell: cell, cols: cols, w: bw, h: bh };
+  } catch (e) { return null; }
+}
+function lutColor(lut, lx, ly) {
+  if (!lut) return null;
+  var gx = clamp(Math.floor(lx / lut.cell), 0, lut.gw - 1);
+  var gy = clamp(Math.floor(ly / lut.cell), 0, lut.gh - 1);
+  return lut.cols[gy * lut.gw + gx] || null;
+}
+
+/* ============================================================================
+   4. RadialBadge 引擎（移植自 radial-particles.ts，改为外部驱动 tick）
+   - 删除自调度 rAF（_start 不再 requestAnimationFrame）
+   - _frame 改名 tick，入口加 if(mode===null) return
+   - 去掉末尾 reschedule
+   ========================================================================== */
+function RadialBadge(dom, opts) {
+  this.dom = dom;
+  this.duration = opts.duration;
+  this.coefficient = opts.coefficient;
+  this.inDist = opts.inDist;
+  this.outDist = opts.outDist;
+  this.spin = opts.spin;
+  this.reveal = opts.reveal;
+  this.speedFactor = opts.speedFactor;
+  this.size = opts.size;
+  this.oscillation = opts.oscillation;
+  this.shapePow = opts.shapePow;
+  this.vStretch = opts.vStretch;
+  this.vTaper = opts.vTaper;
+  this.onComplete = opts.onComplete || function () {};
+  this.mode = null;
+  this.particles = [];
+  this._spawnAcc = 0;
+  this._t0 = 0;
+  this._last = 0;
+  this._ctx = null;
+  this._rect = { width: 0, height: 0 };
+  this._badgeRect = { x: 0, y: 0, w: 0, h: 0 };
+  this._lut = null;
+  this.visualScale = 1;
+  this._measure();
+  this._applyReveal(0);
+}
+RadialBadge.prototype._computeVisualScale = function () {
+  var ref = this.dom.holder || this.dom.badge;
+  var w = ref ? ref.offsetWidth : 0;
+  if (w > 0) {
+    var r = ref.getBoundingClientRect().width / w;
+    if (isFinite(r) && r > 0) return r;
+  }
+  return 1;
+};
+RadialBadge.prototype._measure = function () {
+  var badge = this.dom.badge, cvs = this.dom.canvas;
+  var vs = this._computeVisualScale();
+  this.visualScale = vs;
+  this._rect = { width: badge.offsetWidth * vs, height: badge.offsetHeight * vs };
+  var maxTravelX = Math.max(this.inDist, this.outDist * 1.25) * this._rect.width;
+  var maxTravelY = Math.max(this.inDist, this.outDist * 1.25) * (this._rect.height / 2) * this.vStretch;
+  var padX = maxTravelX + 40 * vs;
+  var padY = Math.max(maxTravelY, this._rect.height / 2) + 40 * vs;
+  cvs.width = Math.round(this._rect.width + padX * 2);
+  cvs.height = Math.round(this._rect.height + padY * 2);
+  cvs.style.width = cvs.width / vs + "px";
+  cvs.style.height = cvs.height / vs + "px";
+  this._ctx = cvs.getContext("2d");
+  this._badgeRect = {
+    x: (cvs.width - this._rect.width) / 2,
+    y: (cvs.height - this._rect.height) / 2,
+    w: this._rect.width, h: this._rect.height
+  };
+  this._lut = buildBadgeLut(badge, vs);
+};
+RadialBadge.prototype.refreshLut = function () {
+  this._lut = this.dom.badge ? buildBadgeLut(this.dom.badge, this.visualScale || 1) : null;
+};
+RadialBadge.prototype.setHidden = function (hidden) {
+  var mode = hidden ? "hiding" : "showing";
+  if (this.mode === mode) return;
+  this._start(mode);
+};
+RadialBadge.prototype._start = function (mode) {
+  this._measure();
+  this.mode = mode;
+  this.particles = [];
+  this._spawnAcc = 0;
+  this._t0 = performance.now();
+  this._last = this._t0;
+  this._applyReveal(mode === "showing" ? 0 : 1);
+  if (mode === "showing") {
+    var n = Math.round(this.coefficient * 14);
+    for (var i = 0; i < n; i++) {
+      var p = this._spawn();
+      if (p) p.born = this._t0 - p.life * Math.random() * 0.35;
+    }
+  }
+  // 不再自调度 rAF —— 由外部 tick 驱动
+};
+RadialBadge.prototype._applyReveal = function (rev) {
+  var r = clamp(rev, 0, 1);
+  var opacity = r, scale = 1, clip = "";
+  if (this.reveal === "scale") { opacity = r; scale = 0.88 + 0.12 * r; }
+  else if (this.reveal === "radial") {
+    opacity = clamp(r * 2, 0, 1);
+    var w = this._rect.width, h = this._rect.height;
+    var R = 0.5 * Math.sqrt(w * w + h * h) * r;
+    clip = "circle(" + R.toFixed(1) + "px at " + (w/2).toFixed(1) + "px " + (h/2).toFixed(1) + "px)";
+  }
+  var els = [this.dom.badge, this.dom.haloIn];
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el) continue;
+    el.style.opacity = opacity.toFixed(3);
+    el.style.transform = scale === 1 ? "" : "scale(" + scale.toFixed(4) + ")";
+    el.style.clipPath = clip;
+  }
+};
+RadialBadge.prototype._spawn = function () {
+  var br = this._badgeRect;
+  if (!br) return null;
+  var vs = this.visualScale || 1;
+  var sz = this.size() * (0.6 + Math.random() * 0.8) * vs;
+  var now = this._t0 || performance.now();
+  var p;
+  if (this.mode === "showing") {
+    var sp = sampleBadgePoint(br.w, br.h, this.shapePow);
+    var tx = sp[0], ty = sp[1];
+    var scx = br.w / 2, scy = br.h / 2;
+    var rx = tx - scx, ry = ty - scy;
+    var dist = Math.hypot(rx, ry) || 1e-6;
+    var ux = rx / dist, uy = ry / dist;
+    var Dref = Math.hypot(scx, scy) || 1;
+    var growMax = Math.max(0.05, this.inDist);
+    var f = Math.random() < 0.5 ? 0.5 * Math.pow(Math.random(), 1.7) : 0.18 + 0.82 * Math.random();
+    var d0 = dist * growMax * f;
+    var uw = rx / scx;
+    var hw = Math.pow(Math.max(0, 1 - uw * uw), 0.5 * this.vTaper);
+    var jt = (Math.random() * 2 - 1) * 0.24;
+    var csn = Math.cos(jt), sn = Math.sin(jt);
+    var ax = ux * csn - uy * sn, ay = ux * sn + uy * csn;
+    p = {
+      kind: "in", born: now, life: this.duration * (0.85 + Math.random() * 0.5),
+      offN: clamp((dist / Dref) * f, 0, 1),
+      x0: br.x + tx + ax * d0, y0: br.y + ty + ay * d0 * this.vStretch * hw,
+      x1: br.x + tx, y1: br.y + ty,
+      swirl: (Math.random()*2-1) * this.spin * d0, size: sz,
+      phase: Math.random() * Math.PI * 2, aMul: 0.45 + 0.55 * Math.random(),
+      fadePow: 0.55 + Math.random() * 0.75,
+      col: lutColor(this._lut, tx, ty) || this._fallbackColor(tx, br.w)
+    };
+  } else {
+    var sp2 = sampleBadgePoint(br.w, br.h, this.shapePow);
+    var sx = sp2[0], sy = sp2[1];
+    var px0 = br.x + sx, py0 = br.y + sy;
+    var ocx = br.w / 2, ocy = br.h / 2;
+    var rx2 = sx - ocx, ry2 = sy - ocy;
+    var dist2 = Math.hypot(rx2, ry2) || 1e-6;
+    var ux2 = rx2 / dist2, uy2 = ry2 / dist2;
+    var Dref2 = Math.hypot(ocx, ocy) || 1;
+    var growMax2 = Math.max(0.05, this.outDist);
+    var u = Math.random();
+    var f2 = u < 0.34 ? 0.12 + 0.26 * Math.random() : u < 0.72 ? 0.38 + 0.34 * Math.random() : 0.72 + 0.40 * Math.random();
+    var d1 = dist2 * growMax2 * f2;
+    var uw2 = rx2 / ocx;
+    var hw2 = Math.pow(Math.max(0, 1 - uw2 * uw2), 0.5 * this.vTaper);
+    var jt2 = (Math.random() * 2 - 1) * 0.24;
+    var cs2 = Math.cos(jt2), sn2 = Math.sin(jt2);
+    var ax2 = ux2 * cs2 - uy2 * sn2, ay2 = ux2 * sn2 + uy2 * cs2;
+    var offN2 = clamp((dist2 / Dref2) * f2, 0, 1);
+    p = {
+      kind: "out", born: now,
+      life: this.duration * (0.8 + 0.2 * (1 - offN2)) * (0.72 + Math.random() * 0.68),
+      x0: px0, y0: py0,
+      x1: px0 + ax2 * d1, y1: py0 + ay2 * d1 * this.vStretch * hw2,
+      offN: offN2,
+      swirl: (Math.random()*2-1) * this.spin * d1 * 0.4, size: sz,
+      phase: Math.random() * Math.PI * 2, aMul: 0.45 + 0.55 * Math.random(),
+      fadePow: 0.55 + Math.random() * 0.75,
+      col: lutColor(this._lut, sx, sy) || this._fallbackColor(sx, br.w)
+    };
+  }
+  this.particles.push(p);
+  return p;
+};
+RadialBadge.prototype._fallbackColor = function (lx, w) {
+  return HSL[Math.round(60 * clamp(lx / (w || 1), 0, 1))];
+};
+/* tick：由外部统一 rAF 循环每帧调用。mode===null 时直接返回（空闲/hold 阶段不执行） */
+RadialBadge.prototype.tick = function (now) {
+  if (this.mode === null) return;
+  var dt = Math.min(64, now - this._last);
+  this._last = now;
+  var el = now - this._t0;
+  var t = el / this.duration;
+  var osc = this.oscillation * (this.visualScale || 1) * 0.55;
+
+  if (t < 1) {
+    var rate = this.coefficient * 133 * this.speedFactor;
+    this._spawnAcc += (rate * dt) / 1000;
+    var n = Math.floor(this._spawnAcc);
+    this._spawnAcc -= n;
+    if (this.particles.length + n > NEW_CAP) n = Math.max(0, NEW_CAP - this.particles.length);
+    while (n-- > 0) this._spawn();
+    var rev;
+    if (this.mode === "showing") rev = easeInOutCubic(clamp(t / 0.92, 0, 1));
+    else rev = Math.pow(clamp(1 - t / HIDE_REVEAL_SPAN, 0, 1), 1.35);
+    this._applyReveal(rev);
+  } else {
+    this._applyReveal(this.mode === "showing" ? 1 : 0);
+  }
+
+  this._updateDraw(now, osc);
+
+  if (t >= 1 && this.particles.length === 0) {
+    var finished = this.mode;
+    this.mode = null;
+    this.onComplete(finished);
+  }
+};
+RadialBadge.prototype._updateDraw = function (now, osc) {
+  var ctx = this._ctx;
+  var cvs = this.dom.canvas;
+  if (!ctx) return;
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  var tAll = this._t0 == null ? 1 : (now - this._t0) / this.duration;
+  var gA = this.mode === "showing" ? 0.12 + 0.88 * clamp(tAll / 0.6, 0, 1) : 1;
+  var out = [];
+  for (var i = 0; i < this.particles.length; i++) {
+    var p = this.particles[i];
+    var u = (now - p.born) / p.life;
+    if (u >= 1) continue;
+    var uc = clamp(u, 0, 1);
+    var e, alpha, r;
+    if (p.kind === "in") {
+      e = easeOutCubic(uc);
+      alpha = Math.pow(uc, p.fadePow);
+      alpha *= 1 - 0.85 * p.offN * (1 - e);
+      alpha *= gA;
+      if (uc > 0.72) alpha *= Math.pow((1 - uc) / 0.28, p.fadePow);
+      r = p.size;
+    } else {
+      e = easeInOutCubic(uc) * 0.85 + uc * 0.15;
+      alpha = Math.min(1, uc * 6) * Math.pow(1 - uc, p.fadePow) * (1 - 0.72 * p.offN * e);
+      r = p.size * (1 - 0.3 * e);
+    }
+    var dx = p.x1 - p.x0, dy = p.y1 - p.y0;
+    var len = Math.hypot(dx, dy) || 1;
+    var off = p.swirl * Math.sin(Math.PI * e) * Math.sin(p.phase + now * 0.0025);
+    var nx = -dy / len, ny = dx / len;
+    p.dx = lerp(p.x0, p.x1, e) + nx * off;
+    p.dy = lerp(p.y0, p.y1, e) + ny * off + Math.sin(p.phase + now * 0.006) * osc;
+    p.r = r;
+    p.alpha = clamp(alpha * p.aMul, 0, 1);
+    out.push(p);
+  }
+  this.particles = out;
+  for (var i2 = 0; i2 < out.length; i2++) {
+    var p2 = out[i2];
+    if (p2.alpha <= 0.004) continue;
+    ctx.fillStyle = p2.col;
+    ctx.globalAlpha = p2.alpha;
+    ctx.beginPath();
+    ctx.arc(p2.dx, p2.dy, p2.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+};
+RadialBadge.prototype.destroy = function () {
+  this.mode = null;
+  this.particles = [];
+};
+
+/* ============================================================================
+   5. 探针系统（与 page.tsx ?diag=1 同口径）
+   ========================================================================== */
+var probe = {
+  // rAF 间隔
+  intervals: [],
+  longFrames: [],
+  // 累计
+  totalFrames: 0,
+  totalMax: 0,
+  // arc 计数（前帧粒子量代理）
+  arcThisFrame: 0,
+  arcPeak: 0,
+  // 5ms 节拍
+  tickGaps: [],
+  tickMax: 0,
+  tickLong: 0,
+  // longtask
+  longtaskCount: 0,
+  // visibility
+  visChanges: [],
+  // 窗口
+  winStart: 0,
+  lastFrame: 0,
+  // HUD 刷新
+  hudLast: 0,
+  hudFrames: 0,
+  // FPS
+  fps: 0
+};
+
+// 包装 arc 计数
+var _origArc = CanvasRenderingContext2D.prototype.arc;
+CanvasRenderingContext2D.prototype.arc = function () {
+  probe.arcThisFrame++;
+  return _origArc.apply(this, arguments);
+};
+
+// 5ms 节拍定时器（归因长帧期间主线程是否被堵）
+var _tickLast = 0;
+var _tickInterval = null;
+function startTick() {
+  if (_tickInterval) return;
+  _tickLast = performance.now();
+  _tickInterval = setInterval(function () {
+    var now = performance.now();
+    var gap = now - _tickLast;
+    _tickLast = now;
+    probe.tickGaps.push(gap);
+    if (gap > probe.tickMax) probe.tickMax = gap;
+    if (gap > 50) probe.tickLong++;
+  }, 5);
+}
+function stopTick() {
+  if (_tickInterval) { clearInterval(_tickInterval); _tickInterval = null; }
+}
+
+// longtask 观察者
+var _longtaskObs = null;
+try {
+  _longtaskObs = new PerformanceObserver(function (list) {
+    for (var i = 0; i < list.getEntries().length; i++) probe.longtaskCount++;
+  });
+  _longtaskObs.observe({ type: "longtask", buffered: true });
+} catch (e) {}
+
+// visibility 变化
+window.addEventListener("visibilitychange", function () {
+  var now = performance.now();
+  probe.visChanges.push(Math.round(now - probe.winStart) + "ms:" + document.visibilityState);
+});
+
+/* ============================================================================
+   6. 帧间隔时间线 canvas
+   ========================================================================== */
+var tlCanvas = document.getElementById("timeline");
+var tlCtx = tlCanvas.getContext("2d");
+var tlBuf = []; // ring buffer of frame gaps
+var TL_MAX = 720;
+var tlLastDraw = 0;
+
+function drawTimeline(now) {
+  if (now - tlLastDraw < 250) return; // 4Hz 重绘
+  tlLastDraw = now;
+
+  var w = tlCanvas.width = tlCanvas.offsetWidth;
+  var h = tlCanvas.height = 64;
+  tlCtx.clearRect(0, 0, w, h);
+
+  // 背景刻度线
+  tlCtx.strokeStyle = "#1c2230";
+  tlCtx.lineWidth = 1;
+  for (var y = 0; y < h; y += 16) {
+    tlCtx.beginPath(); tlCtx.moveTo(0, y); tlCtx.lineTo(w, y); tlCtx.stroke();
+  }
+
+  // 参考线 16.7 / 33.3 / 50ms
+  var lines = [{ ms: 16.7, color: "#334155" }, { ms: 33.3, color: "#334155" }, { ms: 50, color: "#475569" }];
+  tlCtx.setLineDash([3, 3]);
+  for (var i = 0; i < lines.length; i++) {
+    var y2 = Math.min(h - 1, lines[i].ms);
+    tlCtx.strokeStyle = lines[i].color;
+    tlCtx.beginPath(); tlCtx.moveTo(0, y2); tlCtx.lineTo(w, y2); tlCtx.stroke();
+  }
+  tlCtx.setLineDash([]);
+
+  // 帧间隔柱
+  var n = tlBuf.length;
+  var step = w / TL_MAX;
+  for (var i2 = 0; i2 < n; i2++) {
+    var gap = tlBuf[i2];
+    var barH = Math.min(h - 1, gap);
+    if (gap < 20) tlCtx.fillStyle = "#22c55e";
+    else if (gap < 34) tlCtx.fillStyle = "#eab523";
+    else if (gap < 50) tlCtx.fillStyle = "#f97316";
+    else tlCtx.fillStyle = "#ef4444";
+    tlCtx.fillRect(i2 * step, h - barH, Math.max(1, step - 0.5), barH);
+  }
+}
+
+/* ============================================================================
+   7. 统一 rAF 循环（探针 + 驱动粒子 + 驱动 JS lane + 时间线）
+   ========================================================================== */
+var radial = null; // RadialBadge 实例
+var modules = { css: true, js: true, video: true, particles: true, clarity: true, tick: true };
+var jsBall = document.getElementById("js-ball");
+var jsCountdown = document.getElementById("js-countdown");
+var jsFrame = document.getElementById("js-frame");
+var jsClock = document.getElementById("js-clock");
+var jsFrameCount = 0;
+
+function probeLoop(now) {
+  // ---- 探针：帧间隔 ----
+  if (probe.lastFrame) {
+    var gap = now - probe.lastFrame;
+    probe.intervals.push(gap);
+    probe.totalFrames++;
+    if (gap > probe.totalMax) probe.totalMax = gap;
+    if (gap > 50) probe.longFrames.push({ t: Math.round(now - probe.winStart), gap: Math.round(gap), arc: probe.arcPeak });
+    // 时间线 ring buffer
+    tlBuf.push(gap);
+    if (tlBuf.length > TL_MAX) tlBuf.shift();
+  }
+  probe.arcPeak = probe.arcThisFrame;
+  probe.arcThisFrame = 0;
+  probe.lastFrame = now;
+  probe.hudFrames++;
+
+  // ---- 驱动粒子 ----
+  if (modules.particles && radial) radial.tick(now);
+
+  // ---- 驱动 JS lane ----
+  if (modules.js) {
+    jsFrameCount++;
+    // 三角波平移（0→200→0 循环 2s）
+    var phase = (now % 2000) / 2000;
+    var xPos = phase < 0.5 ? phase * 2 * 200 : (1 - phase) * 2 * 200;
+    jsBall.style.transform = "translateX(" + xPos.toFixed(1) + "px)";
+    // 毫秒倒计时 10→0 循环 10s
+    var cdRem = 10 - (now % 10000) / 1000;
+    jsCountdown.textContent = cdRem.toFixed(3);
+    // 帧号
+    jsFrame.textContent = "帧 #" + jsFrameCount;
+    // 时钟
+    var d = new Date();
+    jsClock.textContent =
+      String(d.getHours()).padStart(2, "0") + ":" +
+      String(d.getMinutes()).padStart(2, "0") + ":" +
+      String(d.getSeconds()).padStart(2, "0") + "." +
+      String(d.getMilliseconds()).padStart(3, "0");
+  }
+
+  // ---- 时间线 ----
+  drawTimeline(now);
+
+  // ---- HUD 刷新（1Hz） ----
+  if (now - probe.hudLast >= 1000) {
+    updateHud(now);
+    probe.hudLast = now;
+    probe.hudFrames = 0;
+  }
+
+  requestAnimationFrame(probeLoop);
+}
+
+function updateHud(now) {
+  var hud = document.getElementById("hud");
+  var ivs = probe.intervals;
+  var fps = Math.round((probe.hudFrames * 1000) / (now - (probe.hudLast || now - 1000)));
+
+  // 分位数
+  var sorted = ivs.slice().sort(function (a, b) { return a - b; });
+  var len = sorted.length;
+  var mean = len ? sorted.reduce(function (s, v) { return s + v; }, 0) / len : 0;
+  var p50 = len ? sorted[Math.min(len - 1, Math.floor(50 / 100 * len))] : 0;
+  var p95 = len ? sorted[Math.min(len - 1, Math.floor(95 / 100 * len))] : 0;
+  var maxV = len ? sorted[len - 1] : 0;
+  var longN = 0;
+  for (var i = 0; i < ivs.length; i++) if (ivs[i] > 50) longN++;
+
+  // 5ms 节拍
+  var tSorted = probe.tickGaps.slice().sort(function (a, b) { return a - b; });
+  var tLen = tSorted.length;
+  var tMean = tLen ? tSorted.reduce(function (s, v) { return s + v; }, 0) / tLen : 0;
+  var tMax = tLen ? tSorted[tLen - 1] : 0;
+  var tLong = probe.tickLong;
+
+  var verdict = tLong === 0 ? "" :
+    longN === 0 ? " → 长帧期间主线程空闲 = 帧没产出来（合成/GPU/OSR 帧投递层，非 JS）" :
+    " → 长帧期间主线程也被堵（非 JS 工作：样式/布局/绘制/图片解码/GC）";
+
+  // 最近长帧（最多 5 条）
+  var longStr = probe.longFrames.slice(-5).map(function (lf) {
+    return "t=" + lf.t + "/gap=" + lf.gap + "/aArc=" + lf.arc;
+  }).join(" | ");
+
+  // vis 变化
+  var visStr = probe.visChanges.join(" → ") || "（无）";
+
+  // dpr / 视口
+  var dpr = window.devicePixelRatio || 1;
+  var vw = window.innerWidth, vh = window.innerHeight;
+  var ua = navigator.userAgent;
+
+  // 粒子 HUD
+  var pHUD = "";
+  if (radial) {
+    var stage = radial.mode || "空闲";
+    if (stage === "showing") stage = "聚合中";
+    else if (stage === "hiding") stage = "消散中";
+    pHUD = " | 粒子 " + radial.particles.length + " · " + stage + " · arc峰值 " + probe.arcPeak;
+  }
+
+  var errs = window.__errs.length;
+  var errCls = errs ? ' class="err"' : '';
+
+  hud.innerHTML =
+    "FPS: " + fps +
+    " | rAF 间隔 ms：均值 " + mean.toFixed(1) +
+    " | P50 " + p50.toFixed(1) +
+    " | P95 " + p95.toFixed(1) +
+    " | max " + maxV.toFixed(1) +
+    " | >50ms 长帧 " + longN +
+    " | 累计 max " + probe.totalMax.toFixed(1) +
+    " | longtask " + probe.longtaskCount +
+    " | 节拍(5ms) 均值 " + tMean.toFixed(1) + "ms | max " + tMax.toFixed(1) + "ms | >50ms " + tLong + "次" + verdict +
+    pHUD +
+    "\n长帧明细（t=窗口内ms / gap / arc≈前帧粒子量）：" + (longStr || "（无）") +
+    "\nvis: " + visStr +
+    " | dpr=" + dpr + " | 视口=" + vw + "×" + vh +
+    " | UA=" + ua.substring(0, 80) +
+    ' | <span' + errCls + '>err ' + errs + "</span>";
+
+  // 暴露数据
+  window.__diag = {
+    fps: fps, mean: mean, p50: p50, p95: p95, max: maxV, longN: longN,
+    totalMax: probe.totalMax, longtask: probe.longtaskCount,
+    tickMean: tMean, tickMax: tMax, tickLong: tLong, verdict: verdict,
+    longFrames: probe.longFrames, visChanges: probe.visChanges,
+    arcPeak: probe.arcPeak, particles: radial ? radial.particles.length : 0,
+    errs: window.__errs
+  };
+
+  // 清空窗口统计（累计的不清）
+  probe.intervals = [];
+  probe.longFrames = [];
+  probe.tickGaps = [];
+  probe.tickLong = 0;
+  probe.visChanges = [];
+}
+
+function resetStats() {
+  probe.intervals = [];
+  probe.longFrames = [];
+  probe.totalFrames = 0;
+  probe.totalMax = 0;
+  probe.tickGaps = [];
+  probe.tickMax = 0;
+  probe.tickLong = 0;
+  probe.longtaskCount = 0;
+  probe.visChanges = [];
+  probe.winStart = performance.now();
+  probe.lastFrame = 0;
+  tlBuf = [];
+  jsFrameCount = 0;
+}
+
+/* ============================================================================
+   8. 粒子舞台与 driver
+   ========================================================================== */
+var particleHolder = document.getElementById("particle-holder");
+var particleBadge = document.getElementById("particle-badge");
+var haloIn = document.getElementById("halo-in");
+var particleCanvas = document.getElementById("particle-canvas");
+var particleScene = document.getElementById("particle-scene");
+
+var driver = {
+  running: true,
+  wantHidden: false,
+  holdTimer: null,
+  gapTimer: null,
+  showTimer: null,
+
+  start: function (hidden) {
+    this._clear();
+    this.wantHidden = hidden;
+    if (radial) radial.destroy();
+    // 重新创建引擎（确保全新状态）
+    radial = new RadialBadge(
+      { holder: particleHolder, badge: particleBadge, haloIn: haloIn, canvas: particleCanvas },
+      {
+        duration: RADIAL_PARAMS.duration,
+        coefficient: RADIAL_PARAMS.coefficient,
+        inDist: RADIAL_PARAMS.inDist,
+        outDist: RADIAL_PARAMS.outDist,
+        spin: RADIAL_PARAMS.spin,
+        reveal: RADIAL_PARAMS.reveal,
+        speedFactor: RADIAL_PARAMS.speedFactor,
+        size: RADIAL_PARAMS.size,
+        oscillation: RADIAL_PARAMS.oscillation,
+        shapePow: RADIAL_PARAMS.shapePow,
+        vStretch: RADIAL_PARAMS.vStretch,
+        vTaper: RADIAL_PARAMS.vTaper,
+        onComplete: function (finished) { driver.onComplete(finished); }
+      }
+    );
+    // 摆到反面（与 _start 对齐）
+    radial.mode = null;
+    radial._applyReveal(hidden ? 1 : 0);
+    // 延迟启动
+    this.showTimer = setTimeout(function () {
+      if (radial) radial.setHidden(hidden);
+    }, SHOW_DELAY_MS);
+  },
+
+  play: function () {
+    this.wantHidden = false;
+    this.start(false);
+  },
+
+  onComplete: function (finished) {
+    if (!this.running) return;
+    if (finished === "showing") {
+      if (this.holdTimer) return;
+      this.holdTimer = setTimeout(function () {
+        driver.holdTimer = null;
+        driver.wantHidden = true;
+        if (radial) radial.setHidden(true);
+      }, HOLD_MS);
+    } else {
+      if (this.gapTimer) return;
+      this.gapTimer = setTimeout(function () {
+        driver.gapTimer = null;
+        driver.play();
+      }, GAP_MS);
+    }
+  },
+
+  _clear: function () {
+    clearTimeout(this.holdTimer); this.holdTimer = null;
+    clearTimeout(this.gapTimer); this.gapTimer = null;
+    clearTimeout(this.showTimer); this.showTimer = null;
+  },
+
+  stop: function () {
+    this.running = false;
+    this._clear();
+    if (radial) {
+      radial.destroy();
+      radial._applyReveal(1);
+    }
+  }
+};
+
+/* ============================================================================
+   9. 视频处理
+   ========================================================================== */
+var testVideo = document.getElementById("test-video");
+var videoFail = document.getElementById("video-fail");
+var videoInfo = document.getElementById("info-video");
+
+testVideo.addEventListener("error", function () {
+  videoFail.style.display = "block";
+  testVideo.style.display = "none";
+});
+testVideo.addEventListener("loadeddata", function () {
+  videoFail.style.display = "none";
+});
+// 尝试自动播放（muted + playsinline 已设）
+testVideo.play().catch(function () {
+  // 直播姬可能拦自动播放，点击页面兜底
+  document.body.addEventListener("click", function () {
+    testVideo.play().catch(function () {});
+  }, { once: true });
+});
+
+function updateVideoInfo() {
+  if (testVideo.readyState > 0) {
+    var rs = ["HAVE_NOTHING","HAVE_METADATA","HAVE_CURRENT_DATA","HAVE_FUTURE_DATA","HAVE_ENOUGH_DATA"][testVideo.readyState];
+    var info = testVideo.currentTime.toFixed(2) + "s · " + rs;
+    if (testVideo.getVideoPlaybackQuality) {
+      var q = testVideo.getVideoPlaybackQuality();
+      info += " · " + q.totalVideoFrames + "帧 · 丢 " + q.droppedVideoFrames;
+    }
+    videoInfo.textContent = info;
+  }
+}
+
+/* ============================================================================
+   10. 控制绑定
+   ========================================================================== */
+function bindToggle(id, key, onOn, onOff) {
+  var btn = document.getElementById(id);
+  btn.addEventListener("click", function () {
+    modules[key] = !modules[key];
+    btn.classList.toggle("on", modules[key]);
+    if (modules[key] && onOn) onOn();
+    if (!modules[key] && onOff) onOff();
+  });
+}
+
+bindToggle("m-css", "css", function () {
+  document.getElementById("lane-css").style.opacity = "1";
+}, function () {
+  document.getElementById("lane-css").style.opacity = "0.15";
+});
+
+bindToggle("m-js", "js", function () {
+  document.getElementById("lane-js").style.opacity = "1";
+}, function () {
+  document.getElementById("lane-js").style.opacity = "0.15";
+});
+
+bindToggle("m-video", "video", function () {
+  testVideo.play().catch(function () {});
+  document.getElementById("lane-video").style.opacity = "1";
+}, function () {
+  testVideo.pause();
+  document.getElementById("lane-video").style.opacity = "0.15";
+});
+
+bindToggle("m-particles", "particles", function () {
+  driver.running = true;
+  driver.play();
+  document.getElementById("particle-stage").style.opacity = "1";
+}, function () {
+  driver.stop();
+  document.getElementById("particle-stage").style.opacity = "0.15";
+});
+
+bindToggle("m-clarity", "clarity", function () {
+  document.getElementById("clarity").style.display = "";
+}, function () {
+  document.getElementById("clarity").style.display = "none";
+});
+
+/* 边界柔化：切换 .particle-scene 上的 soft 类（默认开启）。
+   纯换样式，不影响粒子引擎；用于对比"硬边 / 柔化"两种观感。 */
+(function () {
+  var btn = document.getElementById("m-soft");
+  btn.addEventListener("click", function () {
+    var on = particleScene.classList.toggle("soft");
+    btn.classList.toggle("on", on);
+  });
+})();
+
+/* 新版入场效果（黑幕拉起）：两个视频（底层直播画面 + 上层进场动画）自动循环播放；
+   切换按钮只做显隐，便于隔离观察它对帧率的影响。 */
+(function () {
+  var btn = document.getElementById("m-ghost");
+  var el = document.getElementById("ghost-entry");
+  btn.addEventListener("click", function () {
+    var on = btn.classList.toggle("on");
+    el.style.display = on ? "" : "none";
+  });
+  // 尝试自动播放（muted + playsinline 已设）；直播姬可能拦自动播放，点击页面兜底。
+  [document.getElementById("ghost-live"), document.getElementById("ghost-anim"),
+   document.getElementById("ghost-namevid"), document.getElementById("ghost-wave")].forEach(function (v) {
+    if (!v) return;
+    v.play().catch(function () {
+      document.body.addEventListener("click", function () { v.play().catch(function () {}); }, { once: true });
+    });
+  });
+})();
+
+/* 波前视频（.ghost-wave-vid / .ds-wave-vid）必须与对应的进场动画视频**逐帧对齐**，
+   否则被扭曲的那一圈会露出"另一帧"而穿帮。两者同源同长、页面加载时几乎同时起播，
+   正常只会长时间播放后缓慢漂移，故每隔一帧做一次带阈值的微校正即可（阈值内不动，避免抖动）。 */
+(function syncWave() {
+  var pairs = [
+    [document.getElementById("ghost-anim"), document.getElementById("ghost-wave")],
+    [document.getElementById("ds-anim"), document.getElementById("ds-wave")]
+  ];
+  (function tick() {
+    pairs.forEach(function (p) {
+      var a = p[0], w = p[1];
+      if (a && w && !w.paused && !a.paused && Math.abs(w.currentTime - a.currentTime) > 0.08) {
+        w.currentTime = a.currentTime;
+      }
+    });
+    requestAnimationFrame(tick);
+  })();
+})();
+
+/* 新版入场效果 · 变体2（透明度溶解）：进场动画视频从上下向中间擦除为透明，露出头像昵称。
+   切换按钮只做显隐，便于隔离观察。 */
+(function () {
+  var btn = document.getElementById("m-dissolve");
+  var el = document.getElementById("ds-entry");
+  btn.addEventListener("click", function () {
+    var on = btn.classList.toggle("on");
+    el.style.display = on ? "" : "none";
+  });
+  [document.getElementById("ds-live"), document.getElementById("ds-anim"),
+   document.getElementById("ds-wave")].forEach(function (v) {
+    if (!v) return;
+    v.play().catch(function () {
+      document.body.addEventListener("click", function () { v.play().catch(function () {}); }, { once: true });
+    });
+  });
+})();
+
+bindToggle("m-tick", "tick", function () {
+  startTick();
+}, function () {
+  stopTick();
+});
+
+document.getElementById("btn-reset").addEventListener("click", resetStats);
+
+document.getElementById("sel-vs").addEventListener("change", function (e) {
+  var vs = parseFloat(e.target.value);
+  particleScene.style.transform = "scale(" + vs + ")";
+  if (radial) radial._measure();
+});
+
+// 清晰度 dpr 显示
+document.getElementById("clarity-dpr").textContent =
+  "dpr=" + (window.devicePixelRatio || 1) + " · 物理像素=" + (window.innerWidth * (window.devicePixelRatio||1)) + "×" + (window.innerHeight * (window.devicePixelRatio||1));
+
+// 窗口尺寸变化
+window.addEventListener("resize", function () {
+  if (radial && !radial.mode) radial._measure();
+});
+
+/* ============================================================================
+   11. 启动
+   ========================================================================== */
+function whenReady() {
+  var tasks = [];
+  if (document.fonts && document.fonts.ready) tasks.push(document.fonts.ready);
+  var imgs = document.querySelectorAll("#particle-badge .avatar img");
+  for (var i = 0; i < imgs.length; i++) {
+    var im = imgs[i];
+    if (im.complete) continue;
+    tasks.push(new Promise(function (res) {
+      im.addEventListener("load", res, { once: true });
+      im.addEventListener("error", res, { once: true });
+    }));
+  }
+  return Promise.all(tasks);
+}
+
+whenReady().then(function () {
+  // 初始化 VS
+  var selVs = document.getElementById("sel-vs");
+  var vs = parseFloat(selVs.value);
+  particleScene.style.transform = "scale(" + vs + ")";
+
+  // 启动粒子 driver
+  driver.play();
+
+  // 启动 5ms 节拍
+  startTick();
+
+  // 启动探针
+  probe.winStart = performance.now();
+  probe.hudLast = performance.now();
+  requestAnimationFrame(probeLoop);
+
+  // 视频信息定时刷新
+  setInterval(updateVideoInfo, 500);
+});
+</script>
+</body>
+</html>

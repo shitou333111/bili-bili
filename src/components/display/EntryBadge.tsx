@@ -391,12 +391,17 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
  *
  * 结构（自内向外 / 自下而上）：
  *   holder（定位容器，无变换 → 供引擎测算祖先视觉缩放 VS）
- *     ├─ 光晕组（绝对定位外挂、负 inset，不参与布局）：内含 haloIn（揭示作用对象之一）
- *     │     └─ 三层渐进模糊辉光（与旧版同款数值）
- *     ├─ badge（揭示作用对象之二：缩放淡入；也是取色 LUT 的取样元素）
+ *     ├─ badge（揭示作用对象：缩放淡入；也是取色 LUT 的取样元素）
+ *     │     ├─ 圆角底：由全局类 .entry-badge-feather 的 ::before / ::after 两个模糊伪元素
+ *     │     │   羽化而成（见 globals.css），不再使用内联不透明渐变 + 外挂三层辉光
  *     │     ├─ 头像（children[0]，引擎按子元素顺序取色）
  *     │     └─ 昵称 span（children[1]）
  *     └─ canvas（绝对定位、居中于 holder；粒子绘制层，位于 badge 之上）
+ *
+ * 边界柔化（羽化）：旧实现的三层硬边辉光画在"不透明硬边胶囊"背后，边界处存在
+ * "不透明填充 → 半透明辉光"的强度跳变，无论把辉光加多大都无法消除分明感。现改为把
+ * 底色本身上移到伪元素并做 filter:blur()——由内向外形成连续的深浅渐变，且 blur 只在
+ * 首次光栅化计一次，动画期间只动 transform/opacity，不产生逐帧重算开销。
  *
  * 时序（与旧版一致）：
  *   挂载 → 延迟 SHOW_DELAY_MS → 聚合(setHidden(false)) → 聚合真正结束(onComplete "showing")
@@ -406,7 +411,6 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
 function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const badgeRef = useRef<HTMLDivElement | null>(null);
-  const haloInRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
@@ -426,9 +430,8 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
   useLayoutEffect(() => {
     const holder = holderRef.current;
     const badge = badgeRef.current;
-    const haloIn = haloInRef.current;
     const canvas = canvasRef.current;
-    if (!holder || !badge || !haloIn || !canvas) return;
+    if (!holder || !badge || !canvas) return;
 
     doneFiredRef.current = false;
     if (holdTimerRef.current) {
@@ -438,7 +441,7 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
 
     // 引擎在此刻测量布局（此时 badge 已具备最终宽度/字号），并进入"未显现"初态
     const engine = new RadialBadge(
-      { holder, badge, haloIn, canvas },
+      { holder, badge, canvas },
       {
         ...RADIAL_PARAMS,
         // 每次动画"真正"结束（粒子全部离场）后回调；参数 = 刚结束的模式
@@ -489,79 +492,16 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
     // 最外层定位容器：与旧版同为 inline-flex + fontSize:0（去掉行盒 strut 带来的额外高度，
     // 使容器高度严格等于 badge 高度）。holder 自身无任何变换 → 引擎据此测算祖先视觉缩放 VS。
     <div ref={holderRef} className="relative inline-flex" style={{ fontSize: 0 }}>
-      {/* 光晕组：三层渐进模糊的暖色辉光，绝对定位外挂在 badge 之外（不参与布局/测量）。
-          本分支不采用滑动窗口擦除：光晕与 badge 一同由引擎的 _applyReveal 做"缩放淡入"，
-          故这里只保留定位 + 半透明（对比旧版：旧版靠 transform 平移裁剪实现逐渐显示）。 */}
-      <div
-        aria-hidden
-        className="absolute pointer-events-none"
-        style={{
-          inset: -HALO_EXTENT,
-          // 光晕组整体 50% 半透明（含三层光晕）：与 badge 背景的 50% alpha 对齐
-          opacity: GLOW_OPACITY,
-        }}
-      >
-        {/* haloIn：引擎的揭示作用对象之一，其 opacity/transform 与 badge 严格同步
-            （scale 揭示）；transform-origin 取中心，保证与 badge 同轴缩放。
-            inset:HALO_EXTENT = badge 矩形，三层光晕以它为定位上下文。 */}
-        <div
-          ref={haloInRef}
-          className="absolute pointer-events-none"
-          style={{
-            inset: HALO_EXTENT,
-            transformOrigin: "50% 50%",
-            willChange: "transform, opacity",
-          }}
-        >
-          {/* 远端大光晕：大模糊、向外大范围扩散 */}
-          <div
-            className="absolute pointer-events-none"
-            style={{
-              inset: -HALO_PAD,
-              borderRadius: 999,
-              background: BADGE_GRADIENT,
-              filter: "blur(18px)",
-              opacity: 0.5,
-            }}
-          />
-          {/* 中层光晕：衔接远端与贴边，形成"逐渐模糊逐渐透明"的连续梯度 */}
-          <div
-            className="absolute pointer-events-none"
-            style={{
-              inset: -HALO_PAD / 2,
-              borderRadius: 999,
-              background: BADGE_GRADIENT,
-              filter: "blur(10px)",
-              opacity: 0.75,
-            }}
-          />
-          {/* 贴边光晕：从 badge 轮廓起 blur 向外渗，把生硬的边缘线糊开 */}
-          <div
-            className="absolute pointer-events-none"
-            style={{
-              inset: -3,
-              borderRadius: 999,
-              background: BADGE_GRADIENT,
-              filter: "blur(6px)",
-              opacity: 1,
-            }}
-          />
-        </div>
-      </div>
-      {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）；背景为红橙黄暖色
-          渐变，与粒子时间点色相对应。样式数值与旧版逐项一致（"其他参数保持不变"）。
-          本分支额外承载：引擎的缩放淡入（transformOrigin/willChange），同时作为取色 LUT 的
+      {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）。
+          底色不再用内联不透明渐变，而由 .entry-badge-feather 的模糊伪元素羽化而成：
+          边界处不再有"不透明填充 → 半透明辉光"的强度跳变，改为连续深浅渐变向外淡出。
+          该分支额外承载：引擎的缩放淡入（transformOrigin/willChange），同时作为取色 LUT 的
           取样元素（其子元素顺序：children[0]=头像、children[1]=昵称）。 */}
       <div
         ref={badgeRef}
-        className="rounded-full"
+        className="rounded-full entry-badge-feather"
         style={{
           position: "relative",
-          // badge 背景：使用「不透明」的红橙黄渐变（BADGE_GRADIENT），不再用 50% alpha 版。
-          // 原因：badge 底的 alpha 与白字叠在同一个 reveal opacity 上，底只有 0.5 alpha
-          // 而白字/头像不带 alpha → 消散时白字的视觉强度是底的 2 倍，暖色底已淡没后仍残留
-          // 一圈白字轮廓。改成不透明后底与字同强度、同步淡出。
-          background: BADGE_GRADIENT,
           display: "inline-flex",
           alignItems: "center",
           gap: "24px",

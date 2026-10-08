@@ -94,6 +94,49 @@ function orientationAdded(config: any, portrait: boolean): boolean {
   return orientationScenes(config, portrait).some((s: any) => sceneHasDisplayItem(config, s));
 }
 
+/** 场景朝向：竖屏场景名含 vertical/竖，其余按横屏处理 */
+function sceneIsPortrait(name: unknown): boolean {
+  return /vertical|竖/i.test(String(name || ""));
+}
+
+/** 某场景 items 数量（无 items 记 0） */
+function sceneItemCount(scene: any): number {
+  return Array.isArray(scene?.settings?.items) ? scene.settings.items.length : 0;
+}
+
+/**
+ * 某朝向「最常用」的场景 = items 最多的场景（items 越多 = 使用越多）。
+ * 场景名匹配不到该朝向时（用户改过场景名）退回全部场景。
+ */
+function busiestScene(config: any, portrait: boolean): any | null {
+  const scenes: any[] = (Array.isArray(config?.sources) ? config.sources : []).filter(
+    (s: any) => s?.id === "scene",
+  );
+  const re = portrait ? /vertical|竖/i : /^scene\s*\d+$|horizontal|横/i;
+  const matched = scenes.filter((s: any) => re.test(String(s?.name || "")));
+  const pool = matched.length ? matched : scenes;
+  let best: any = null;
+  let bestCount = -1;
+  for (const s of pool) {
+    const n = sceneItemCount(s);
+    if (n > bestCount) {
+      bestCount = n;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** 当前场景（config.current_scene 对应的场景源） */
+function currentScene(config: any): any | null {
+  const name = config?.current_scene;
+  if (!name) return null;
+  const scenes: any[] = (Array.isArray(config?.sources) ? config.sources : []).filter(
+    (s: any) => s?.id === "scene",
+  );
+  return scenes.find((s: any) => String(s?.name || "") === String(name)) || null;
+}
+
 /**
  * 检测直播姬是否已添加 B瓜 浏览器源：横屏、竖屏场景都已有才算已添加。
  * 失败抛错（含未安装直播姬等）
@@ -136,37 +179,47 @@ export async function ensureBililiveSourceFps(uid: number): Promise<void> {
   await writeTextFile(file, JSON.stringify(config));
 }
 
-/** 选目标场景：该朝向的场景里优先直播姬当前场景（current_scene），否则取第一个 */
-function pickTargetScene(config: any, portrait: boolean): any {
-  const pool = orientationScenes(config, portrait);
-  const cur = String(config?.current_scene || "");
-  return pool.find((s: any) => s?.name === cur) || pool[0];
-}
-
 /**
- * 一键添加：分别向横屏、竖屏场景添加 B瓜 浏览器源（横屏 1920x1080、竖屏 1080x1920），
- * 挂到各朝向目标场景所有元素最上层（items 末尾）。某朝向场景已有的跳过，
- * 只补缺失的朝向；源建过但元素缺失时复用同尺寸源。需在直播姬未运行时调用
- * （直播姬退出时会把内存配置写回、覆盖新写入的浏览器源），下次启动即生效。
+ * 一键添加：只向 **三个** 场景添加 B瓜 浏览器源——
+ *   ① 当前场景（config.current_scene）；
+ *   ② 横屏 items 最多的场景（items 最多 = 最常用）；
+ *   ③ 竖屏 items 最多的场景。
+ * 当前场景可能与 ②/③ 重合，按场景去重，不重复添加。每个场景按其朝向选尺寸
+ * （横屏 1920x1080、竖屏 1080x1920），并在同尺寸既有 B瓜 源缺失时新建。
+ * 源挂在场景所有元素最上层（items 末尾）。
+ * 需在直播姬未运行时调用（直播姬退出时会把内存配置写回、覆盖新写入的浏览器源），下次启动生效。
  */
 export async function addBililiveSource(uid: number, url: string): Promise<void> {
   const { file, config } = await loadSceneConfig(uid);
-  const sources: any[] = config.sources;
-  let changed = false;
 
-  for (const portrait of [false, true]) {
-    if (orientationAdded(config, portrait)) continue; // 该朝向已有，跳过
+  // 目标场景：current_scene + 横屏最常用 + 竖屏最常用；按场景去重（current 可能与其重合）
+  const targets: any[] = [];
+  const seen = new Set<string>();
+  const push = (scene: any) => {
+    if (!scene) return;
+    const key = String(scene?.uuid || scene?.name || "");
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    targets.push(scene);
+  };
+  push(currentScene(config));
+  push(busiestScene(config, false));
+  push(busiestScene(config, true));
+  if (!targets.length) throw new Error("直播姬配置中没有可用的场景信息");
+
+  let changed = false;
+  for (const scene of targets) {
+    if (sceneHasDisplayItem(config, scene)) continue; // 该场景已挂展示源，跳过
+    const portrait = sceneIsPortrait(scene?.name);
     const width = portrait ? 1080 : 1920;
     const height = portrait ? 1920 : 1080;
-
     // 复用同尺寸的既有 B瓜 源（源在、元素被删的情况），否则新建
-    let src = displaySources(config).find(
-      (s: any) => Number(s?.settings?.width) === width && Number(s?.settings?.height) === height,
-    );
-    if (!src) src = createDisplaySource(config, url, portrait, width, height);
+    const src =
+      displaySources(config).find(
+        (s: any) => Number(s?.settings?.width) === width && Number(s?.settings?.height) === height,
+      ) || createDisplaySource(config, url, portrait, width, height);
 
-    // 场景元素：挂到目标场景 items 末尾（最上层）
-    const scene = pickTargetScene(config, portrait);
+    // 场景元素：挂到该场景 items 末尾（最上层）
     const st = scene.settings || (scene.settings = {});
     const items: any[] = Array.isArray(st.items) ? st.items : (st.items = []);
     // id_counter 单调自增，元素 id = 自增后的值
@@ -259,7 +312,8 @@ function createDisplaySource(
       url,
       width,
       height,
-      shutdown: false,
+      // 源不可见时关闭：避免后台持续渲染网页（省资源）。切换场景后再显示会重载页面
+      shutdown: true,
       restart_when_active: false,
       // 帧率：OBS browser_source 默认 30fps（fps_custom 缺省=Off）→ 页面 rAF 按 30fps
       // 驱动，粒子库帧基动画寿命/速度翻倍且与 badge 毫秒动画脱钩。显式开自定义 60fps。
