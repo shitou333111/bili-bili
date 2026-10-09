@@ -11,6 +11,7 @@
 import { getPlatform, type Platform } from "@/lib/platform";
 import {
   ENTRY_COOLDOWN_MS,
+  type AnimeOpacity,
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
@@ -870,8 +871,7 @@ class DisplayDanmakuService {
       gifts,
       animeSample,
       bannerText: cfg.banner?.text ?? "",
-      animeFeatherH: cfg.animeFeatherH,
-      animeFeatherV: cfg.animeFeatherV,
+      animeOpacity: cfg.animeOpacity,
       giftBarOrientation: cfg.giftBarOrientation,
       entryParticleMode: cfg.entryParticleMode,
       flags: {
@@ -908,9 +908,9 @@ class DisplayDanmakuService {
     await this.broadcast({ type: "bannerText", text });
   }
 
-  /** 广播入场动画视频边缘羽化强度（左右/上下）到画布（面板调整后调用，配置已落盘）。 */
-  async broadcastAnimeFeather(h: number, v: number): Promise<void> {
-    await this.broadcast({ type: "animeFeather", h, v });
+  /** 广播入场动画整体透明度档位到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastAnimeOpacity(opacity: AnimeOpacity): Promise<void> {
+    await this.broadcast({ type: "animeOpacity", v: opacity });
   }
 
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */

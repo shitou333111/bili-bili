@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  type AnimeOpacity,
   type DisplayConfig,
   type EntryAnimeConfig,
   type EntryCooldownOption,
@@ -1370,9 +1371,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             />
           </div>
           {/* 入场冷却：同一用户距上次触发不足间隔则不再触发（防止频繁进出反复播放） */}
-          <div className="mt-3">
-            <p className="text-xs text-black/45">触发间隔（同一用户间隔内进入不重复触发）</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-black/45 shrink-0">触发间隔</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
               {(
                 [
                   ["bilibili", "B站默认"],
@@ -1389,7 +1390,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                     role="radio"
                     aria-checked={active}
                     onClick={() => update({ entryCooldown: key })}
-                    className={`rounded-full px-3 py-1 text-xs transition cursor-pointer ${
+                    className={`rounded-full px-2.5 py-0.5 text-xs transition cursor-pointer ${
                       active
                         ? "bg-blue-600 text-white shadow"
                         : "bg-white/70 text-black/55 hover:bg-white"
@@ -1413,7 +1414,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           onToggle={(v) => void toggleModule({ anime: v })}
         />
         <Card bg="bg-violet-200" border="border-violet-400">
-          <p className="text-xs text-black/45 leading-relaxed">为指定舰长或用户配置本地视频，入场时播放该视频动画</p>
+          <p className="text-xs text-black/45 leading-relaxed">为用户配置本地视频作为入场动画（播放入场动画时没有入场提示）</p>
           {/* 从舰长列表选择 */}
           <div className="mt-3 flex items-center gap-2">
             <div className="relative flex-1 min-w-0">
@@ -1588,9 +1589,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             </div>
           )}
           {/* 动画冷却：与入场提示同款选项，但独立判定、独立记录（完全对照入场提示逻辑） */}
-          <div className="mt-3">
-            <p className="text-xs text-black/45">触发间隔（同一用户间隔内再次进入不重复触发）</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-black/45 shrink-0">触发间隔</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
               {(
                 [
                   ["bilibili", "B站默认"],
@@ -1607,7 +1608,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                     role="radio"
                     aria-checked={active}
                     onClick={() => update({ animeCooldown: key })}
-                    className={`rounded-full px-3 py-1 text-xs transition cursor-pointer ${
+                    className={`rounded-full px-2.5 py-0.5 text-xs transition cursor-pointer ${
                       active
                         ? "bg-violet-600 text-white shadow"
                         : "bg-white/70 text-black/55 hover:bg-white"
@@ -1619,41 +1620,41 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               })}
             </div>
           </div>
-          {/* 视频边缘羽化：静态 mask-image 渐变遮罩让视频画面边缘透明过渡（左右/上下独立设置，0=关闭） */}
-          <div className="mt-3 flex items-center gap-3">
-            <span className="shrink-0 text-xs text-black/50">视频边缘羽化（0 = 关闭）</span>
-            <label className="flex items-center gap-1.5">
-              <span className="text-xs text-black/50">左右</span>
-              <input
-                type="number"
-                min={0}
-                max={40}
-                value={config.animeFeatherH}
-                onChange={(e) => {
-                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
-                  void update({ animeFeatherH: v }).then((next) =>
-                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
-                  );
-                }}
-                className={`${inputFlat} ${noSpin} w-16`}
-              />
-            </label>
-            <label className="flex items-center gap-1.5">
-              <span className="text-xs text-black/50">上下</span>
-              <input
-                type="number"
-                min={0}
-                max={40}
-                value={config.animeFeatherV}
-                onChange={(e) => {
-                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
-                  void update({ animeFeatherV: v }).then((next) =>
-                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
-                  );
-                }}
-                className={`${inputFlat} ${noSpin} w-16`}
-              />
-            </label>
+          {/* 视频整体透明度：按椭圆区域径向分布（中心最实、越往周边越透明），透出下层直播画面。
+              同一档位同时作用于闭幕黑幕；画布与布局编辑页共用该配置。 */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-black/45 shrink-0">视频透明度</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画透明度">
+              {(
+                [
+                  ["light", "轻"],
+                  ["medium", "中"],
+                  ["heavy", "重"],
+                ] as Array<[AnimeOpacity, string]>
+              ).map(([key, label]) => {
+                const active = config.animeOpacity === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      void update({ animeOpacity: key }).then((next) =>
+                        displayDanmaku.broadcastAnimeOpacity(next.animeOpacity),
+                      )
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs transition cursor-pointer ${
+                      active
+                        ? "bg-violet-600 text-white shadow"
+                        : "bg-white/70 text-black/55 hover:bg-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </Card>
       </section>

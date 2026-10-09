@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type AnimeOpacity,
   type DisplayEvent,
   type DisplayFlags,
   type DisplayGiftItem,
@@ -139,10 +140,8 @@ type ServerMsg =
       animeSample: AnimeSample | null;
       /** 横幅按钮最新文字（失焦提交后的完整内容） */
       bannerText: string;
-      /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
-      animeFeatherH: number;
-      /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
-      animeFeatherV: number;
+      /** 入场动画整体透明度档位（轻 / 中 / 重，按椭圆区域径向分布） */
+      animeOpacity: AnimeOpacity;
       /** 礼物展示条方向（横条/竖条） */
       giftBarOrientation: "horizontal" | "vertical";
       /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
@@ -154,7 +153,7 @@ type ServerMsg =
   | { type: "orientation"; v: ScreenOrientation }
   | { type: "flags"; flags: DisplayFlags }
   | { type: "bannerText"; text: string }
-  | { type: "animeFeather"; h: number; v: number }
+  | { type: "animeOpacity"; v: AnimeOpacity }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "celebrate" };
@@ -213,9 +212,10 @@ export default function DisplayCanvas() {
   const [bannerMeasuredW, setBannerMeasuredW] = useState(0);
   // 进门动画样本（编辑模式常驻预览；未封装进 init 时为 null）
   const [animeSample, setAnimeSample] = useState<AnimeSample | null>(null);
-  // 入场动画视频边缘羽化强度（init/animeFeather 消息下发，左右/上下独立，0=关闭）
-  const [animeFeatherH, setAnimeFeatherH] = useState(DEFAULT_DISPLAY_CONFIG.animeFeatherH);
-  const [animeFeatherV, setAnimeFeatherV] = useState(DEFAULT_DISPLAY_CONFIG.animeFeatherV);
+  // 入场动画整体透明度档位（init/animeOpacity 消息下发，按椭圆区域径向分布）
+  const [animeOpacity, setAnimeOpacity] = useState<AnimeOpacity>(
+    DEFAULT_DISPLAY_CONFIG.animeOpacity,
+  );
   // 礼物展示条方向（init/giftBarOrientation 消息下发）
   const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
     DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
@@ -300,15 +300,10 @@ export default function DisplayCanvas() {
         setGifts(msg.gifts);
         setAnimeSample(msg.animeSample);
         setBannerText(typeof msg.bannerText === "string" ? msg.bannerText : "");
-        setAnimeFeatherH(
-          typeof msg.animeFeatherH === "number"
-            ? msg.animeFeatherH
-            : DEFAULT_DISPLAY_CONFIG.animeFeatherH,
-        );
-        setAnimeFeatherV(
-          typeof msg.animeFeatherV === "number"
-            ? msg.animeFeatherV
-            : DEFAULT_DISPLAY_CONFIG.animeFeatherV,
+        setAnimeOpacity(
+          msg.animeOpacity === "medium" || msg.animeOpacity === "heavy"
+            ? msg.animeOpacity
+            : DEFAULT_DISPLAY_CONFIG.animeOpacity,
         );
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
@@ -328,9 +323,10 @@ export default function DisplayCanvas() {
         setFlags(msg.flags);
       } else if (msg.type === "bannerText") {
         setBannerText(msg.text ?? "");
-      } else if (msg.type === "animeFeather") {
-        setAnimeFeatherH(msg.h);
-        setAnimeFeatherV(msg.v);
+      } else if (msg.type === "animeOpacity") {
+        setAnimeOpacity(
+          msg.v === "medium" || msg.v === "heavy" ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity,
+        );
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
       } else if (msg.type === "entryParticleMode") {
@@ -799,8 +795,7 @@ export default function DisplayCanvas() {
                 anime={anime}
                 onEnd={onAnimeEnd}
                 onVideoSize={onAnimeVideoSize}
-                featherH={animeFeatherH}
-                featherV={animeFeatherV}
+                opacity={animeOpacity}
               />
             )}
             {isEdit && (
@@ -811,8 +806,7 @@ export default function DisplayCanvas() {
                     onEnd={() => {}}
                     loop
                     onVideoSize={onAnimeVideoSize}
-                    featherH={animeFeatherH}
-                    featherV={animeFeatherV}
+                    opacity={animeOpacity}
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center">

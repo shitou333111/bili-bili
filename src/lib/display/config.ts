@@ -160,15 +160,9 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
         ? r.animeCooldown
         : d.animeCooldown,
     animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
-    // 视频边缘羽化强度：左右/上下独立设置，0=关闭，上限 40（非法/缺失回退默认）
-    animeFeatherH:
-      typeof r.animeFeatherH === "number" && Number.isFinite(r.animeFeatherH) && r.animeFeatherH >= 0
-        ? Math.min(40, Math.round(r.animeFeatherH))
-        : d.animeFeatherH,
-    animeFeatherV:
-      typeof r.animeFeatherV === "number" && Number.isFinite(r.animeFeatherV) && r.animeFeatherV >= 0
-        ? Math.min(40, Math.round(r.animeFeatherV))
-        : d.animeFeatherV,
+    // 入场动画整体透明度档位：仅接受 light/medium/heavy，其余（含旧配置的边缘羽化字段）回退默认
+    animeOpacity:
+      r.animeOpacity === "medium" || r.animeOpacity === "heavy" ? r.animeOpacity : d.animeOpacity,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&

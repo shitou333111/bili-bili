@@ -149,6 +149,18 @@ export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
 /** 入场提示 · 粒子聚散方式："center" = 自研「四面八方（中心）聚散」；"lr" = 原库实现（左右聚散） */
 export type EntryParticleMode = "center" | "lr";
 
+/** 入场动画 · 整体透明度档位：轻 / 中 / 重（重 = 最透明，透出下层直播画面最多）。
+ *  透明度按椭圆区域径向分布：中心最实、越往周边越透明，替代旧的「视频边缘羽化」。 */
+export type AnimeOpacity = "light" | "medium" | "heavy";
+
+/** 各透明度档位对应的 alpha：center = 中心（椭圆圆心）不透明度，edge = 周边（四角）不透明度。
+ *  中间按椭圆径向线性插值，故越往周边 alpha 越小、越透明。 */
+export const ANIME_OPACITY_ALPHA: Record<AnimeOpacity, { center: number; edge: number }> = {
+  light: { center: 1, edge: 0.8 },
+  medium: { center: 0.8, edge: 0.6 },
+  heavy: { center: 0.7, edge: 0.5 },
+};
+
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
   /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
@@ -175,10 +187,9 @@ export interface DisplayConfig {
   animeCooldown: EntryCooldownOption;
   /** 各用户上次触发动画的时间戳（uid → ms，本地记录，随本配置文件持久化） */
   animeLastSeen: Record<string, number>;
-  /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
-  animeFeatherH: number;
-  /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
-  animeFeatherV: number;
+  /** 入场动画整体透明度档位（按椭圆区域径向分布，中心最实、越往周边越透明，
+   *  可透出下层直播画面；闭幕黑幕形状不变、整体均匀套用该档位的中心不透明度） */
+  animeOpacity: AnimeOpacity;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
   giftPriceThreshold: number;
   /** 礼物展示条方向：横条（礼物从右到左滚动）/ 竖条（礼物从下到上滚动） */
@@ -235,8 +246,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entryLastSeen: {},
   animeCooldown: "bilibili",
   animeLastSeen: {},
-  animeFeatherH: 0, // 左右边缘羽化默认关闭
-  animeFeatherV: 5, // 上下边缘羽化默认强度（0=关闭）
+  animeOpacity: "medium", // 整体透明度默认「中」
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）
   animeList: [],

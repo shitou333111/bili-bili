@@ -15,6 +15,11 @@
  *  3. 收尾：黑幕+头像+昵称保持 1s，再整体淡出 1s，随后释放画布；loop 预览模式则在
  *     淡出后复位并整段重播（编辑布局页可反复观察完整开合效果）。
  *
+ * 整体透明度（取代旧的「视频边缘羽化」）：视频套一层按椭圆区域径向分布的 alpha 遮罩——
+ * 圆心最实、越往周边 alpha 越小（越透明），下层直播画面可从四周透出；闭幕黑幕形状不变，
+ * 整体均匀套用该档位的中心不透明度。档位由面板下发的 opacity prop（轻/中/重）决定，
+ * 画布与布局编辑页共用同一份配置。
+ *
  * 时长按视频实际有效时长 D 动态计算：开场 E = min(2.602s, 0.464D)，
  * 闭合 C = min(3s, D−E)，故闭合完成时刻恒为视频结束时刻；开场/闭合动画时长通过
  * 内联 animation-duration 传给 globals.css 里固定的关键帧。闭合起点由 timeupdate
@@ -30,7 +35,7 @@
  * handleEnd 幂等，重复触发只执行一次。
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { DisplayEvent } from "@/lib/display/types";
+import { ANIME_OPACITY_ALPHA, type AnimeOpacity, type DisplayEvent } from "@/lib/display/types";
 import { srcWithFragment } from "@/lib/display/video";
 import VolumeIcon from "@/components/VolumeIcon";
 
@@ -69,8 +74,7 @@ export default function VideoOverlay({
   onEnd,
   loop = false,
   onVideoSize,
-  featherH = 0,
-  featherV = 0,
+  opacity = "medium",
 }: {
   anime: Extract<DisplayEvent, { type: "anime" }>;
   onEnd: () => void;
@@ -78,10 +82,8 @@ export default function VideoOverlay({
   loop?: boolean;
   /** 视频画面实际尺寸（natural 像素，loadedmetadata 后回调）——父级据此让元素贴合视频画面 */
   onVideoSize?: (w: number, h: number) => void;
-  /** 视频左右边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
-  featherH?: number;
-  /** 视频上下边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
-  featherV?: number;
+  /** 整体透明度档位：按椭圆区域径向分布（圆心最实、越往周边越透明），可透出下层直播画面 */
+  opacity?: AnimeOpacity;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -237,35 +239,22 @@ export default function VideoOverlay({
   // 是否启用入场开合效果（有视频且未加载失败；编辑预览同样启用，完整展示开合过程）
   const fx = Boolean(anime.videoSrc) && !loadError;
 
-  // 边缘羽化：两层线性渐变 mask 取交集 = 四边透明过渡（左右/上下独立强度，0=关闭）。
-  // 纯静态 CSS，由 GPU 合成器光栅化时做 alpha 混合，无逐帧计算；mask 作用于 alpha，
-  // 透明背景不会被染灰。注意不能加在 MovableBox/wrapper 上，否则编辑虚线框、缩放把手、
-  // 声音按钮也会跟着透明——只加在 video 元素上。
-  const fh = Math.min(40, Math.max(0, Math.round(featherH)));
-  const fv = Math.min(40, Math.max(0, Math.round(featherV)));
   // 结尾闭合擦除 mask：上下各一条随 --anime-curtain 增长的透明带（50% 时在中线相接、全擦净）
   const wipeMask =
     "linear-gradient(to bottom, transparent 0 var(--anime-curtain), #000 var(--anime-curtain) calc(100% - var(--anime-curtain)), transparent calc(100% - var(--anime-curtain)) 100%)";
-  const maskLayers = [
-    ...(fx ? [wipeMask] : []),
-    fh > 0
-      ? `linear-gradient(to right, transparent 0%, #000 ${fh}%, #000 ${100 - fh}%, transparent 100%)`
-      : null,
-    fv > 0
-      ? `linear-gradient(to bottom, transparent 0%, #000 ${fv}%, #000 ${100 - fv}%, transparent 100%)`
-      : null,
-  ].filter((s): s is string => Boolean(s));
-  const videoMaskStyle: CSSProperties | undefined =
-    maskLayers.length > 0
-      ? {
-          maskImage: maskLayers.join(", "),
-          WebkitMaskImage: maskLayers.join(", "),
-          // 多层 mask 默认取并集，必须显式取交集才能擦除/羽化同时生效（WebKit 旧前缀值为 source-in）
-          ...(maskLayers.length > 1
-            ? { maskComposite: "intersect", WebkitMaskComposite: "source-in" }
-            : {}),
-        }
-      : undefined;
+  const videoMaskStyle: CSSProperties = { maskImage: wipeMask, WebkitMaskImage: wipeMask };
+
+  // 整体透明度（取代旧的「视频边缘羽化」featherH/featherV）：一条按椭圆区域径向分布的 alpha
+  // 遮罩——圆心最实、越往周边 alpha 越小 = 越透明，下层直播画面从视频四周透出。纯静态 CSS，
+  // 由 GPU 合成器光栅化时做 alpha 混合，无逐帧计算；mask 只作用于 alpha，透明背景不会被染灰。
+  // 渐变椭圆取 71%（≈ √2/2）：mask 渐变 stop 的百分比相对「该方向上椭圆边界到圆心的射线长度」
+  // （不是相对盒子尺寸），因此 71% 时盒内四角恰落在 100% 处 → 四角 = edge alpha、圆心 = center
+  // alpha；且椭圆两轴各按盒宽/盒高解析，该结论与画幅宽高比无关（横竖屏都是四角最透）。
+  const oa = ANIME_OPACITY_ALPHA[opacity] ?? ANIME_OPACITY_ALPHA.medium;
+  const alphaMask = `radial-gradient(ellipse 71% 71% at 50% 50%, rgba(0,0,0,${oa.center}) 0%, rgba(0,0,0,${oa.edge}) 100%)`;
+  // 黑幕形状与之前完全一致（上下两条实心黑带铺满整宽），只是整体套当前档位的中心不透明度
+  // → 黑幕按选中档位均匀半透明、透出下层画面；不挂径向渐变（否则两端被淡掉，看起来像“黑幕没了”）。
+  const curtainStyle: CSSProperties = { opacity: oa.center };
 
   // 开场椭圆扩散 mask：中心实心大椭圆，横/纵半径都用 --anime-ripple（百分比分别按盒宽/盒高
   // 解析，故与视频同形）；内边缘收 6u 做轻微羽化。注意：渐变 stop 的百分比是相对「渐变射线」
@@ -273,11 +262,17 @@ export default function VideoOverlay({
   // --anime-ripple 会把实心区缩到 ripple²，椭圆偏小、四角被遮）。椭圆外透明 → 开场渐显。
   const rippleMask =
     "radial-gradient(ellipse var(--anime-ripple) var(--anime-ripple) at 50% 50%, #000 0, #000 max(0%, calc(100% - 6 * var(--u))), transparent 100%)";
+  // 开场扩散 ∩ 整体透明度：两层 mask 显式取交集（alpha 乘性叠加）。遮罩只挂在包视频的
+  // 包裹层上，不加在 MovableBox/wrapper 上，否则编辑虚线框、缩放把手、声音按钮
+  // 也会跟着透明（黑幕容器单独用 opacity 挂同一档位）。
+  const rippleLayers = [rippleMask, alphaMask].join(", ");
   const wrapStyle: CSSProperties | undefined = fx
     ? {
         animation: `anime-ripple-open ${timing.eMs}ms cubic-bezier(.4,0,.2,1) both`,
-        maskImage: rippleMask,
-        WebkitMaskImage: rippleMask,
+        maskImage: rippleLayers,
+        WebkitMaskImage: rippleLayers,
+        maskComposite: "intersect",
+        WebkitMaskComposite: "source-in",
       }
     : undefined;
 
@@ -385,9 +380,12 @@ export default function VideoOverlay({
           </div>
           {fx && (
             <>
-              {/* 黑幕：上下各一条，只在中间固定区域内随擦除前沿长起 */}
-              <div className="anime-curtain anime-curtain-top" aria-hidden="true" />
-              <div className="anime-curtain anime-curtain-bottom" aria-hidden="true" />
+              {/* 黑幕：上下各一条，只在中间固定区域内随擦除前沿长起（形状与之前一致）。
+                  整体套当前档位的中心不透明度 → 黑幕均匀半透明、透出下层画面。 */}
+              <div className="anime-curtain-group" style={curtainStyle}>
+                <div className="anime-curtain anime-curtain-top" aria-hidden="true" />
+                <div className="anime-curtain anime-curtain-bottom" aria-hidden="true" />
+              </div>
               {/* 头像+昵称：前沿扫过黑幕区域后才显示，收尾随根容器一起淡出 */}
               <div
                 className="anime-content"

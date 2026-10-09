@@ -673,6 +673,12 @@ body {
 }
 /* 黑色帷幕：上下各一条，固定边在黑幕区域边界；擦除前沿（--anime-curtain）进入区域后
    高度才 >0（max(0px,…) 兜底），故动画视频很高时黑幕也不会变成两条高黑带。 */
+/* 黑幕容器：与舞台盒同坐标系（inset:0），内联 opacity 套当前透明度档位 → 黑幕形状不变、
+   整体均匀半透明（视频的径向透明度不套在黑幕上，避免两端被淡掉）。 */
+.anime-curtain-group {
+  position: absolute;
+  inset: 0;
+}
 .anime-curtain {
   position: absolute;
   left: 0;
