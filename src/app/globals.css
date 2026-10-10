@@ -627,9 +627,10 @@ body {
    是为了给内边缘 6u 羽化留出余量，保证收起前椭圆完全盖住四角、画面无残缺；
    ② 视频从自身上下边缘向中间擦除成透明（--anime-curtain 0%→50%，50%=上下前沿在中线相接，
    完全闭合的瞬间视频正好播完）；③ 黑幕只出现在中间固定区域（头像顶再上 20u ～ 昵称底再下
-   20u），前沿未进入区域时只是透明擦除、不露黑；④ 头像+昵称只在被擦除的区域内随前沿显现，
-   黑底白字（展示画布全透明、拿不到直播像素，无法做测试页的视频镂空文字）；
-   ⑤ 保持 1s 后黑幕+头像+昵称一起淡出 1s。
+   20u），前沿未进入区域时只是透明擦除、不露黑；④ 头像只在被擦除的区域内随前沿显现；
+   昵称做镂空——由组件把一张「白底挖出黑色昵称」的 SVG 作为黑幕容器的 mask-image，黑幕在
+   文字形状处被抠空（alpha=0），画布本身透明，故该处直接透出下层直播画面（并非画白字盖黑幕）；
+   ⑤ 保持 1s 后黑幕+头像+镂空昵称一起淡出 1s。
    @property 注册让两个百分比自定义属性可被 keyframes 平滑插值（Chromium/WebView2 支持），
    动画全部跑在合成线程、无逐帧 JS 重绘。 */
 @property --anime-ripple {
@@ -726,24 +727,6 @@ body {
   border-radius: 50%;
   display: block;
 }
-/* 昵称：33u 粗白字，文字顶边 = 中线 + 5u（与头像底间距 10u，空隙中点对齐视频中线）。 */
-.anime-name {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.anime-name span {
-  position: absolute;
-  left: 50%;
-  top: calc(50% + 5 * var(--u));
-  transform: translateX(-50%);
-  font-size: calc(33 * var(--u));
-  font-weight: 900;
-  letter-spacing: calc(1 * var(--u));
-  line-height: 1;
-  white-space: nowrap;
-  color: #fff;
-  font-family:
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui,
-    sans-serif;
-}
+/* 昵称（镂空）：没有独立的 DOM/样式——它由组件生成「白底挖出黑色昵称」的 SVG，作为
+   .anime-curtain-group 的 mask-image（见 VideoOverlay.tsx 的 knockMaskImage），在黑幕上
+   抠出文字形状；文字几何（33u 粗字、顶边 = 中线 + 5u、字距 1u）在 SVG 内部按 --u 计算。 */

@@ -26,11 +26,13 @@ import {
   type DisplayEntryPayload,
   type DisplayLayout,
   type EntryParticleMode,
+  type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
   DEFAULT_DISPLAY_LAYOUT,
   DEFAULT_DISPLAY_CONFIG,
+  isAnimeOpacity,
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import GiftFlower from "./GiftFlower";
@@ -146,6 +148,8 @@ type ServerMsg =
       giftBarOrientation: "horizontal" | "vertical";
       /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
       entryParticleMode: EntryParticleMode;
+      /** 礼物突出显示选择（giftId → 选中 uid 列表；点击 badge 时广播同步） */
+      giftHighlight: GiftHighlight;
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
@@ -156,6 +160,7 @@ type ServerMsg =
   | { type: "animeOpacity"; v: AnimeOpacity }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "entryParticleMode"; v: EntryParticleMode }
+  | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "celebrate" };
 
 /**
@@ -224,6 +229,8 @@ export default function DisplayCanvas() {
   const [entryParticleMode, setEntryParticleMode] = useState<EntryParticleMode>(
     DEFAULT_DISPLAY_CONFIG.entryParticleMode,
   );
+  // 礼物突出显示选择（init/giftHighlight 消息下发）：giftId → 选中展示的 uid 列表（顺序=循环顺序）
+  const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>({});
   // 朝向：由 init/orientation 消息驱动
   const [orientation, setOrientation] = useState<ScreenOrientation>("landscape");
   // 编辑模式（?mode=edit）：三个元素常驻，可拖/可缩放
@@ -301,14 +308,15 @@ export default function DisplayCanvas() {
         setAnimeSample(msg.animeSample);
         setBannerText(typeof msg.bannerText === "string" ? msg.bannerText : "");
         setAnimeOpacity(
-          msg.animeOpacity === "medium" || msg.animeOpacity === "heavy"
-            ? msg.animeOpacity
-            : DEFAULT_DISPLAY_CONFIG.animeOpacity,
+          isAnimeOpacity(msg.animeOpacity) ? msg.animeOpacity : DEFAULT_DISPLAY_CONFIG.animeOpacity,
         );
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
         );
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
+        setGiftHighlight(
+          msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
+        );
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -324,13 +332,13 @@ export default function DisplayCanvas() {
       } else if (msg.type === "bannerText") {
         setBannerText(msg.text ?? "");
       } else if (msg.type === "animeOpacity") {
-        setAnimeOpacity(
-          msg.v === "medium" || msg.v === "heavy" ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity,
-        );
+        setAnimeOpacity(isAnimeOpacity(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity);
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
       } else if (msg.type === "entryParticleMode") {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
+      } else if (msg.type === "giftHighlight") {
+        setGiftHighlight(msg.giftHighlight ?? {});
       } else if (msg.type === "celebrate") {
         // 面板"撒花"按钮：模块开关关闭时不播放
         if (flagsRef.current.banner) startPartyRef.current();
@@ -683,18 +691,25 @@ export default function DisplayCanvas() {
     return entryBase;
   }, [entryBase, entryDefault, entryMeasuredW, orientation]);
 
-  // 横幅：无论文字多少，水平方向永远按按钮实测宽度动态居中（x 忽略持久化值，
-  // 仅 y / scale 由用户拖动决定）——文字长短变化都能自动调整居中。
+  // 横幅：默认（layout 仍等于 DEFAULT，用户未拖动/缩放）按按钮实测宽度动态水平居中——
+  // 文字长短变化都能自动调整居中；一旦用户拖动/缩放并持久化了布局，则完全按保存的
+  // x/y/scale 自由摆放（与入场提示同规则）。默认 x=0 仅作"未自定义"哨兵：首次拖动即以
+  // 当前居中位置为起点提交绝对坐标，故不会出现"拖了又被拉回中间"。
   const bannerBase = layouts.banner[orientation];
+  const bannerDefault = DEFAULT_DISPLAY_LAYOUT.banner[orientation];
   const bannerRect = useMemo(() => {
-    if (bannerMeasuredW > 0) {
+    const untouched =
+      bannerBase.x === bannerDefault.x &&
+      bannerBase.y === bannerDefault.y &&
+      bannerBase.scale === bannerDefault.scale;
+    if (untouched && bannerMeasuredW > 0) {
       return {
         ...bannerBase,
         x: Math.round((CANVAS_SIZE[orientation].w - bannerMeasuredW * bannerBase.scale) / 2),
       };
     }
     return bannerBase;
-  }, [bannerBase, bannerMeasuredW, orientation]);
+  }, [bannerBase, bannerDefault, bannerMeasuredW, orientation]);
 
   // —— 礼物特效默认摆放 ——
   // 目标宽度：横屏占画布宽 1/2，竖屏占满宽；默认底边与画布底边对齐、水平居中。
@@ -864,12 +879,18 @@ export default function DisplayCanvas() {
           onCommit={commitLayout("gift")}
           editable={isEdit}
         >
-          <GiftFlower gifts={gifts} emptyPlaceholder={isEdit} orientation={giftBarOrientation} />
+          <GiftFlower
+            gifts={gifts}
+            emptyPlaceholder={isEdit}
+            orientation={giftBarOrientation}
+            highlight={giftHighlight}
+          />
         </MovableBox>
       )}
 
       {/* 横幅：画布顶部彩虹胶囊（样式严格参照 banner-sample.html，纯展示元素、无点击语义，
-          悬停仅显示拖拽光标）；默认位置距上边界 20px、按实测宽度水平居中。
+          悬停仅显示拖拽光标）；默认位置距上边界 30px、按实测宽度水平居中，拖动/缩放后
+          按保存坐标自由摆放。
           编辑模式常驻预览（空文字显示默认文案）；源模式仅在有已提交文字时渲染（输入中的草稿不会出现）。 */}
       {flags.banner && (isEdit || bannerText) && (
         <MovableBox

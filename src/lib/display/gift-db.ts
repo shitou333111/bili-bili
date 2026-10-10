@@ -3,7 +3,8 @@
  *
  * 目的解决"收入记录只能查到昨天/前天，没有今天（凌晨刚过 0 点连昨天也没有）"的缺陷：
  * 通过弹幕监听实时把礼物逐条记录到本地文件，供"今日 / 昨日（收入未更新时）"的盲盒盈亏计算，
- * 从而让观众发送查询弹幕即可得实时盈亏。礼物文件同时也作为"礼物展示"模块的数据来源。
+ * 从而让观众发送查询弹幕即可得实时盈亏。礼物文件同时也作为"礼物展示"模块的数据来源，
+ * 该模块按"最近一周"（今天 + 前 6 天）聚合展示。
  *
  * 盲盒盈亏口径与"盲盒"页面（stats-client calculateProfit）一致：
  *   - 抽数 = 爆出礼物记录抽数合计
@@ -42,6 +43,8 @@ export interface GiftLogEntry {
   ts: number;
   uid: number;
   uname: string;
+  /** 送礼人头像 URL（用于礼物展示的粉丝突出显示；旧记录可能缺失） */
+  face?: string;
   /** 到账（爆出）礼物 id。对盲盒即爆出礼物 id（与 open-live 一致） */
   giftId: number;
   giftName: string;
@@ -70,10 +73,11 @@ function yesterdayDayStr(): string {
   return localDayStr(d);
 }
 
-/** 允许保留的最早自然日 = 昨天（保留"今天 + 昨天"两天的逐条记录；历史查询都走收入记录，无需更长） */
+/** 允许保留的最早自然日 = 6 天前（保留"今天 + 前 6 天"共 7 个自然日的逐条记录，供"礼物展示"按最近一周聚合；
+ *  盲盒"今日/昨日"查询读取时会按日期/时间段过滤，不受保留期影响） */
 function minKeepDayStr(): string {
   const d = new Date();
-  d.setDate(d.getDate() - 1);
+  d.setDate(d.getDate() - 6);
   return localDayStr(d);
 }
 
@@ -101,7 +105,7 @@ async function saveGiftDb(platform: Platform, mid: number, db: GiftDb): Promise<
 let writeChain: Promise<void> = Promise.resolve();
 
 /**
- * 追加一条礼物记录并落盘；写入时顺手清掉超过"今天 + 昨天"的过期记录。
+ * 追加一条礼物记录并落盘；写入时顺手清掉超过"今天 + 前 6 天"的过期记录。
  * 供展示模块"礼物展示"与盲盒"今日/昨日"查询共用。
  */
 export async function appendGiftRecord(mid: number, e: GiftLogEntry): Promise<void> {
@@ -111,7 +115,7 @@ export async function appendGiftRecord(mid: number, e: GiftLogEntry): Promise<vo
       const db = await loadGiftDb(platform, mid);
       db.records.push(e);
       const min = minKeepDayStr();
-      // 仅保留最近两个自然天（今天 + 昨天）
+      // 仅保留最近 7 个自然天（今天 + 前 6 天）
       db.records = db.records.filter((r) => r.date >= min);
       await saveGiftDb(platform, mid, db);
     } catch {
@@ -119,18 +123,6 @@ export async function appendGiftRecord(mid: number, e: GiftLogEntry): Promise<vo
     }
   });
   await writeChain;
-}
-
-/** 读取某自然日的礼物逐条记录（无 → 空数组）。注：只在 Tauri 环境有意义。 */
-export async function loadGiftRecordsByDate(mid: number, date: string): Promise<GiftLogEntry[]> {
-  const platform = await getPlatform();
-  if (!platform.isNative) return [];
-  try {
-    const db = await loadGiftDb(platform, mid);
-    return db.records.filter((r) => r.date === date);
-  } catch {
-    return [];
-  }
 }
 
 /** 读取某时间段 [start, end) 内的礼物记录（供时间段查询；end 为空表示不设上界）。 */
@@ -150,17 +142,25 @@ export async function loadGiftRecordsByRange(
 }
 
 /**
- * 今日"达标礼物"清单（供"礼物展示"模块数据来源）：
- * 从礼物逐条记录聚合今日记录，仅保留单价 > threshold（0=全部）、且能配上图标者。
- * 每组按 giftId 汇总数量。空记录 → 空数组（画布清空）。
+ * 最近一周"达标礼物"清单（供"礼物展示"模块数据来源）：
+ * 从礼物逐条记录聚合最近 7 个自然日（今天 + 前 6 天）的记录，仅保留单价 > threshold（0=全部）、且能配上图标者。
+ * 每组按 giftId 汇总数量，并聚合送礼粉丝列表（fans，按数量降序，供突出显示选择）。
+ * 空记录 → 空数组（画布清空）。
  */
-export async function loadTodayQualifyingGifts(
+export async function loadRecentQualifyingGifts(
   mid: number,
   threshold: number,
 ): Promise<DisplayGiftItem[]> {
-  const today = localDayStr(new Date());
-  const rows = await loadGiftRecordsByDate(mid, today);
+  // 最近 7 个自然日：[今天往前 6 天的 0 点, 明天 0 点)
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 6);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  const rows = await loadGiftRecordsByRange(mid, { start, end });
   const map = new Map<number, { giftName: string; price: number; count: number; img: string }>();
+  // 每礼物的粉丝聚合：giftId → uid → 累计数量
+  const fanMaps = new Map<number, Map<number, { uname: string; face: string; count: number }>>();
   for (const r of rows) {
     const cur = map.get(r.giftId);
     // 图标：优先礼物列表的动态图（gif，无 gif 退 img_basic），目录查不到再回退弹幕直链图标
@@ -171,12 +171,30 @@ export async function loadTodayQualifyingGifts(
     } else {
       map.set(r.giftId, { giftName: r.giftName, price: r.price, count: r.num, img });
     }
+    if (r.uid > 0) {
+      let fm = fanMaps.get(r.giftId);
+      if (!fm) {
+        fm = new Map();
+        fanMaps.set(r.giftId, fm);
+      }
+      const f = fm.get(r.uid);
+      if (f) {
+        f.count += r.num;
+        if (!f.face && r.face) f.face = r.face;
+      } else {
+        fm.set(r.uid, { uname: r.uname, face: r.face || "", count: r.num });
+      }
+    }
   }
   const out: DisplayGiftItem[] = [];
   for (const [giftId, v] of map.entries()) {
     if (v.count <= 0 || v.price <= threshold) continue;
     if (!v.img) continue;
-    out.push({ giftId, giftName: v.giftName, price: v.price, count: v.count, img: v.img });
+    // 粉丝按数量降序（送得多的排前面，便于选择）
+    const fans = [...(fanMaps.get(giftId)?.entries() ?? [])]
+      .map(([uid, f]) => ({ uid, uname: f.uname, face: f.face, count: f.count }))
+      .sort((a, b) => b.count - a.count);
+    out.push({ giftId, giftName: v.giftName, price: v.price, count: v.count, img: v.img, fans });
   }
   return out;
 }

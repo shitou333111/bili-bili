@@ -72,8 +72,9 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
     portrait: { x: 0, y: 0, scale: 1 },
   },
   banner: {
-    // 默认：画布正上方、距上边界 30px。水平方向不持久化：渲染时永远按按钮实测宽度
-    // 动态居中（x=(画布宽-按钮宽×scale)/2），文字多少都自动调整；仅 y / scale 可拖动保存。
+    // 默认：画布正上方、距上边界 30px。默认布局（x=0/y=30/scale=1 哨兵）下渲染时按按钮
+    // 实测宽度动态居中（x=(画布宽-按钮宽×scale)/2），文字多少都自动调整；用户一旦拖动/缩放
+    // 即保存绝对坐标，此后按保存的 x/y/scale 自由摆放（不再强制居中）。
     landscape: { x: 0, y: 30, scale: 1 },
     portrait: { x: 0, y: 30, scale: 1 },
   },
@@ -149,17 +150,23 @@ export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
 /** 入场提示 · 粒子聚散方式："center" = 自研「四面八方（中心）聚散」；"lr" = 原库实现（左右聚散） */
 export type EntryParticleMode = "center" | "lr";
 
-/** 入场动画 · 整体透明度档位：轻 / 中 / 重（重 = 最透明，透出下层直播画面最多）。
- *  透明度按椭圆区域径向分布：中心最实、越往周边越透明，替代旧的「视频边缘羽化」。 */
-export type AnimeOpacity = "light" | "medium" | "heavy";
+/** 入场动画 · 整体透明度档位：「不透明」= 视频完全不透明；轻 / 中 / 重逐级更透明（重 = 透出下层直播画面最多）。
+ *  除「不透明」外透明度按椭圆区域径向分布：中心最实、越往周边越透明，替代旧的「视频边缘羽化」。 */
+export type AnimeOpacity = "opaque" | "light" | "medium" | "heavy";
 
 /** 各透明度档位对应的 alpha：center = 中心（椭圆圆心）不透明度，edge = 周边（四角）不透明度。
- *  中间按椭圆径向线性插值，故越往周边 alpha 越小、越透明。 */
+ *  中间按椭圆径向线性插值，故越往周边 alpha 越小、越透明；「不透明」两值均为 1（整幅不做透明）。 */
 export const ANIME_OPACITY_ALPHA: Record<AnimeOpacity, { center: number; edge: number }> = {
-  light: { center: 1, edge: 0.8 },
-  medium: { center: 0.8, edge: 0.6 },
-  heavy: { center: 0.7, edge: 0.5 },
+  opaque: { center: 1, edge: 1 },
+  light: { center: 1, edge: 0.95 },
+  medium: { center: 0.95, edge: 0.9 },
+  heavy: { center: 0.9, edge: 0.85 },
 };
+
+/** 合法透明度档位判定（配置容错与画布消息共用；档位集合只在 ANIME_OPACITY_ALPHA 定义一处） */
+export function isAnimeOpacity(v: unknown): v is AnimeOpacity {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(ANIME_OPACITY_ALPHA, v);
+}
 
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
@@ -187,8 +194,9 @@ export interface DisplayConfig {
   animeCooldown: EntryCooldownOption;
   /** 各用户上次触发动画的时间戳（uid → ms，本地记录，随本配置文件持久化） */
   animeLastSeen: Record<string, number>;
-  /** 入场动画整体透明度档位（按椭圆区域径向分布，中心最实、越往周边越透明，
-   *  可透出下层直播画面；闭幕黑幕形状不变、整体均匀套用该档位的中心不透明度） */
+  /** 入场动画整体透明度档位（持久化的是档位字符串而非 alpha 数值，重开后按档位还原；
+   *  除「不透明」外按椭圆区域径向分布，中心最实、越往周边越透明，可透出下层直播画面；
+   *  闭幕黑幕形状不变、整体均匀套用该档位的中心不透明度） */
   animeOpacity: AnimeOpacity;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
   giftPriceThreshold: number;
@@ -246,7 +254,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entryLastSeen: {},
   animeCooldown: "bilibili",
   animeLastSeen: {},
-  animeOpacity: "medium", // 整体透明度默认「中」
+  animeOpacity: "light", // 整体透明度默认「轻」
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）
   animeList: [],
@@ -271,17 +279,32 @@ export interface DisplayEntryPayload {
   medalLevel: number;
 }
 
+/** 礼物展示项中的送礼粉丝 */
+export interface DisplayGiftFan {
+  uid: number;
+  uname: string;
+  /** 头像 URL（可能为空） */
+  face: string;
+  /** 该粉丝近一周送该礼物的数量 */
+  count: number;
+}
+
 /** 礼物展示项 */
 export interface DisplayGiftItem {
   giftId: number;
   giftName: string;
   /** 单价（电池） */
   price: number;
-  /** 今日累计数量 */
+  /** 近一周累计数量 */
   count: number;
   /** 礼物图标 URL */
   img: string;
+  /** 送礼粉丝列表（按数量降序；可能为空/缺失 = 旧数据） */
+  fans?: DisplayGiftFan[];
 }
+
+/** 礼物突出显示选择：giftId → 选中展示的 uid 列表（顺序 = 循环顺序） */
+export type GiftHighlight = Record<number, number[]>;
 
 /** 礼物特效配套 JSON 配置（B站特效视频内含 rgbFrame 画面区 + aFrame 灰度透明区，
  *  由画布侧按 AlphaVideoPlayer 的处理方式合成 alpha 通道）。字段与模拟器 EffectConfig 一致。 */

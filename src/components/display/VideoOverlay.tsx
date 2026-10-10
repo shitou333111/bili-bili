@@ -10,8 +10,9 @@
  *  2. 结尾闭合：视频从自身上下边缘向中间被擦除成透明（--anime-curtain 0%→50%），
  *     **完全闭合的瞬间视频正好播放完毕**；黑幕只出现在中间固定区域（头像顶再上 20u ～
  *     昵称底再下 20u，u = 视频显示宽/328），前沿未进入区域时只是透明擦除、不露黑；
- *     头像+昵称只在被擦除的区域内随前沿显现（透明画布拿不到直播像素，昵称用黑底白字
- *     而非测试页的视频镂空）。
+ *     头像只在被擦除的区域内随前沿显现；昵称做镂空——一张「白底挖出黑色昵称」的 SVG 作为
+ *     黑幕容器的 mask-image，从黑幕上"抠"出文字形状（该处 alpha=0），画布本身透明，
+ *     故文字形状处直接透出下层直播画面（并非在黑幕上画白字）。
  *  3. 收尾：黑幕+头像+昵称保持 1s，再整体淡出 1s，随后释放画布；loop 预览模式则在
  *     淡出后复位并整段重播（编辑布局页可反复观察完整开合效果）。
  *
@@ -55,6 +56,39 @@ const CLOSE_MAX_SEC = 3;
 /** 测试页几何基准宽度（px）：该宽度下 1u = 1px */
 const U_BASE_W = 328;
 
+/** XML 文本转义（昵称可能含 & < > "，直接拼进 SVG 会破坏结构） */
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * 昵称「镂空」遮罩：一张与舞台同尺寸的 SVG 图（白色底 + 黑色昵称），供 CSS `mask-image` 使用。
+ * SVG 内部用 <mask>（默认亮度模式）把昵称从白底上挖掉 → 文字处 alpha=0；把它作为黑幕的
+ * mask-image 后，黑幕在文字形状处被抠空 → 透明画布直接透出下层直播画面。
+ * 尺寸/字号/位置都按舞台盒（w×h，px）与 --u 计算，随舞台尺寸变化重建。
+ * 说明：不能用 `mix-blend-mode: destination-out`——该 Porter-Duff 运算符并非 mix-blend-mode 的
+ * 合法取值（会被丢弃为 normal），只有 mask/filter 能真正扣 alpha。
+ */
+function knockMaskImage(w: number, h: number, u: number, uname: string): string {
+  const fs = 33 * u; // 昵称字号（与旧 .anime-name span 一致）
+  const y = h / 2 + 21.5 * u; // 文字垂直中心 = 中线 + 5u(顶边) + 33u/2
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+    `<defs><mask id="k" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse">` +
+    `<rect x="0" y="0" width="${w}" height="${h}" fill="#fff"/>` +
+    `<text x="${w / 2}" y="${y}" text-anchor="middle" dominant-baseline="central"` +
+    ` font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif"` +
+    ` font-weight="900" font-size="${fs}" letter-spacing="${u}" fill="#000">${xmlEscape(uname)}</text>` +
+    `</mask></defs>` +
+    `<rect x="0" y="0" width="${w}" height="${h}" fill="#fff" mask="url(#k)"/>` +
+    `</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
 /** 头像：face 缺失/加载失败时回退为昵称首字渐变圆（与 EntryBadge 的 Avatar 同视觉） */
 function AnimeAvatar({ face, uname }: { face: string; uname: string }) {
   const [failed, setFailed] = useState(!face);
@@ -94,6 +128,8 @@ export default function VideoOverlay({
   const [closing, setClosing] = useState(false);
   // 舞台实际盒宽（px）：用于把测试页的 px 几何换算成与视频显示宽成比例的 --u
   const [boxW, setBoxW] = useState(0);
+  // 舞台实际盒高（px）：昵称镂空遮罩的 SVG 需按盒高定位文字
+  const [boxH, setBoxH] = useState(0);
   // 开场/闭合动画时长（ms）：loadedmetadata 拿到有效时长后按视频实际长度计算
   const [timing, setTiming] = useState({ eMs: 2602, cMs: 3000 });
   const onEndRef = useRef(onEnd);
@@ -206,7 +242,9 @@ export default function VideoOverlay({
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? 0;
+      const h = entries[0]?.contentRect.height ?? 0;
       if (w > 0) setBoxW((prev) => (Math.abs(prev - w) < 0.5 ? prev : w));
+      if (h > 0) setBoxH((prev) => (Math.abs(prev - h) < 0.5 ? prev : h));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -250,11 +288,27 @@ export default function VideoOverlay({
   // 渐变椭圆取 71%（≈ √2/2）：mask 渐变 stop 的百分比相对「该方向上椭圆边界到圆心的射线长度」
   // （不是相对盒子尺寸），因此 71% 时盒内四角恰落在 100% 处 → 四角 = edge alpha、圆心 = center
   // alpha；且椭圆两轴各按盒宽/盒高解析，该结论与画幅宽高比无关（横竖屏都是四角最透）。
-  const oa = ANIME_OPACITY_ALPHA[opacity] ?? ANIME_OPACITY_ALPHA.medium;
+  const oa = ANIME_OPACITY_ALPHA[opacity] ?? ANIME_OPACITY_ALPHA.light;
   const alphaMask = `radial-gradient(ellipse 71% 71% at 50% 50%, rgba(0,0,0,${oa.center}) 0%, rgba(0,0,0,${oa.edge}) 100%)`;
   // 黑幕形状与之前完全一致（上下两条实心黑带铺满整宽），只是整体套当前档位的中心不透明度
   // → 黑幕按选中档位均匀半透明、透出下层画面；不挂径向渐变（否则两端被淡掉，看起来像“黑幕没了”）。
-  const curtainStyle: CSSProperties = { opacity: oa.center };
+  // 另挂「昵称镂空」mask-image：在昵称文字形状处把黑幕整块抠空 → 该处 alpha=0，透明画布
+  // 直接透出下层直播画面（替代原先的白字盖黑幕）。盒尺寸未测得前不挂，避免遮罩错位。
+  const knockMask =
+    boxW > 0 && boxH > 0 ? knockMaskImage(boxW, boxH, boxW / U_BASE_W, anime.user.uname) : undefined;
+  const curtainStyle: CSSProperties = {
+    opacity: oa.center,
+    ...(knockMask
+      ? {
+          maskImage: knockMask,
+          WebkitMaskImage: knockMask,
+          maskSize: "100% 100%",
+          WebkitMaskSize: "100% 100%",
+          maskRepeat: "no-repeat",
+          WebkitMaskRepeat: "no-repeat",
+        }
+      : {}),
+  };
 
   // 开场椭圆扩散 mask：中心实心大椭圆，横/纵半径都用 --anime-ripple（百分比分别按盒宽/盒高
   // 解析，故与视频同形）；内边缘收 6u 做轻微羽化。注意：渐变 stop 的百分比是相对「渐变射线」
@@ -386,15 +440,14 @@ export default function VideoOverlay({
                 <div className="anime-curtain anime-curtain-top" aria-hidden="true" />
                 <div className="anime-curtain anime-curtain-bottom" aria-hidden="true" />
               </div>
-              {/* 头像+昵称：前沿扫过黑幕区域后才显示，收尾随根容器一起淡出 */}
+              {/* 头像：前沿扫过黑幕区域后才显示，收尾随根容器一起淡出。
+                  昵称不在此处——它由黑幕自身的「镂空 mask」抠出（见 curtainStyle），
+                  形成真实的透明文字形状，直接透出下层直播画面。 */}
               <div
                 className="anime-content"
                 style={{ maskImage: contentMask, WebkitMaskImage: contentMask }}
               >
                 <AnimeAvatar face={anime.user.face} uname={anime.user.uname} />
-                <div className="anime-name">
-                  <span>{anime.user.uname}</span>
-                </div>
               </div>
             </>
           )}

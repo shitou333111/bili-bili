@@ -17,6 +17,7 @@ import {
   type DisplayGiftItem,
   type EntryParticleMode,
   type GiftEffectFrameConfig,
+  type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
@@ -30,16 +31,18 @@ import {
 } from "./config";
 import {
   appendGiftRecord,
-  loadTodayQualifyingGifts,
+  loadRecentQualifyingGifts,
   tryHandleBlindBoxQuery,
 } from "./gift-db";
 import {
   ensureGiftCatalogLoaded,
   getGiftImg,
+  getGiftImgByName,
   getGiftList,
   resolveGiftAliasName,
 } from "@/lib/gift-catalog-client";
 import { getGiftEffectsMap } from "@/lib/gift-local-store";
+import { fetchUserInfo } from "@/lib/tools-client";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
@@ -131,6 +134,9 @@ const RAW_CMDS = [
 /** GUARD_BUY/USER_TOAST_MSG 的 guard_level → 大航海名称兜底（1=总督 2=提督 3=舰长），
  *  两条命令都带 gift_name/role_name 时优先用其原值。 */
 const GUARD_LEVEL_GIFT_NAME: Record<number, string> = { 1: "总督", 2: "提督", 3: "舰长" };
+/** 大航海的虚拟 gift_id（不在普通礼物列表中，故 getGiftImg/gift 列表都查不到）。
+ *  用作礼物记录的聚合键；GUARD_BUY 缺 gift_id 时按等级回退。1=总督 2=提督 3=舰长 */
+const GUARD_LEVEL_GIFT_ID: Record<number, number> = { 1: 10001, 2: 10002, 3: 10003 };
 
 /** 把原始弹幕包精简为可读的关键字段（避免 JSON 里塞满无用字段） */
 function summarizeRaw(cmd: string, raw: any): any {
@@ -609,6 +615,9 @@ class DisplayDanmakuService {
   private serverPort: number | null = null;
   /** "display-server-message" 监听是否已注册（会话内只注册一次） */
   private serverListened = false;
+  /** 礼物突出显示选择（giftId → 选中 uid 列表）。会话内共享：面板点击礼物/粉丝 badge 后
+   *  广播给所有画布，新画布连入时随 init 下发；不持久化（重启 App 清空，主播重新点选即可）。 */
+  private giftHighlight: GiftHighlight = {};
   /** 重连定时器 */
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retry = 0;
@@ -622,8 +631,9 @@ class DisplayDanmakuService {
   private cachedRoomId = 0;
   /** 礼物特效配套 JSON 缓存（web_mp4_json URL → 配置；null=拉取失败，避免反复重试） */
   private effectJsonCache = new Map<string, GiftEffectFrameConfig | null>();
-  /** 大航海特效去重（uid:guardLevel → 最近触发时刻）：GUARD_BUY 与 USER_TOAST_MSG 可能同时下发 */
-  private guardEffectAt = new Map<string, number>();
+  /** 大航海去重（uid:名称 → 最近处理时刻）：GUARD_BUY 与 USER_TOAST_MSG 可能同时下发，
+   *  用于避免礼物记录写两条 / 特效播两遍 */
+  private guardDedupAt = new Map<string, number>();
   /** 入场触发去重（uid → 各类最近 emit 时刻）：同一次进场 B 站会对特殊用户同时下发
    *  INTERACT_WORD(_V2) 与 ENTRY_EFFECT，handleEntry 会被调用多次；冷却为 0（B站默认）
    *  时没有冷却兜底，若不去重会一次进场播两次特效。窗口 2s 只合并"同一次进场的重复
@@ -748,7 +758,7 @@ class DisplayDanmakuService {
   /**
    * 启动本地浏览器源服务（幂等）：Rust 端绑定 127.0.0.1:25100 起端口，并注册
    * `display-server-message` 全局监听（会话内只注册一次）。该监听按消息类型分发：
-   *  - ready → 组装并广播初始 init（布局 / 朝向 / 今日礼物 / 入场动画样本）
+   *  - ready → 组装并广播初始 init（布局 / 朝向 / 最近一周礼物 / 入场动画样本）
    *  - saveLayout → 持久化布局并回放 layout
    *  - orientation → 持久化朝向并回放 orientation
    *  - log → 打印画布/浏览器源的调试日志
@@ -834,17 +844,17 @@ class DisplayDanmakuService {
   }
 
   /**
-   * 浏览器源就绪后组提升级 init：布局 + 当前朝向 + 今日达标礼物 + 入场动画样本。
+   * 浏览器源就绪后组提升级 init：布局 + 当前朝向 + 最近一周达标礼物 + 入场动画样本。
    * 这些信息全部持久化在主进程侧（.data/display-config.json），由主窗口组装后广播。
    */
   private async broadcastInit() {
     const cfg = await loadDisplayConfig(this.mid);
     const orientation = cfg.screenOrientation;
-    // 礼物：今日达标清单
+    // 礼物：最近一周达标清单
     let gifts: DisplayGiftItem[] = [];
     if (cfg.gift && this.mid) {
       try {
-        gifts = await loadTodayQualifyingGifts(this.mid, cfg.giftPriceThreshold);
+        gifts = await loadRecentQualifyingGifts(this.mid, cfg.giftPriceThreshold);
       } catch {
         /* 拉取失败则以空清单下发，画布自行占位 */
       }
@@ -874,6 +884,7 @@ class DisplayDanmakuService {
       animeOpacity: cfg.animeOpacity,
       giftBarOrientation: cfg.giftBarOrientation,
       entryParticleMode: cfg.entryParticleMode,
+      giftHighlight: this.giftHighlight,
       flags: {
         master: displayMaster(cfg),
         entry: cfg.entry,
@@ -916,6 +927,18 @@ class DisplayDanmakuService {
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */
   async broadcastGiftBarOrientation(v: "horizontal" | "vertical"): Promise<void> {
     await this.broadcast({ type: "giftBarOrientation", v });
+  }
+
+  /** 面板点击礼物/粉丝 badge 后调用：更新会话内的礼物突出显示选择并广播给所有画布。
+   *  不持久化（重启 App 清空，主播重新点选即可）。 */
+  async broadcastGiftHighlight(v: GiftHighlight): Promise<void> {
+    this.giftHighlight = v;
+    await this.broadcast({ type: "giftHighlight", giftHighlight: v });
+  }
+
+  /** 面板（重新）挂载时读取当前突出显示选择，用于初始化本地状态。 */
+  getGiftHighlight(): GiftHighlight {
+    return this.giftHighlight;
   }
 
   /** 广播入场提示粒子聚散方式（中心聚散/左右聚散）到画布（面板切换后调用，配置已落盘）。 */
@@ -1139,8 +1162,8 @@ class DisplayDanmakuService {
 
     // ---- 大航海（真实开通/续费舰长·提督·总督）：GUARD_BUY / USER_TOAST_MSG ----
     // 真实开通大航海时 B站下发的是这两条命令（并非 SEND_GIFT），bili-live-listener 的 onGift
-    // 不会触发 → 特效漏播。这里单独触发礼物特效，名称统一交给 emitGiftEffect 做别名换算
-    // （舰长→舰长一号…）。只播特效，不写礼物记录、不改收益口径，避免影响既有送礼流程。
+    // 不会触发。这里做两件事：① 写一条礼物记录（大航海同样计入「收到的礼物」，与普通送礼同口径）；
+    // ② 触发礼物特效（名称交给 emitGiftEffect 做别名换算：舰长→舰长一号…）。
     for (const cmd of ["GUARD_BUY", "USER_TOAST_MSG"]) {
       this.removeHandlers.push(
         this.live.onRawMessage(cmd, async (raw: any) => {
@@ -1150,23 +1173,54 @@ class DisplayDanmakuService {
           const guardLevel = Number(d.guard_level) || 0;
           const name = String(d.gift_name || d.role_name || "").trim() || GUARD_LEVEL_GIFT_NAME[guardLevel] || "";
           if (!name) return;
-          // 「原始录屏」只读订阅点：审计口径 `price` 单位是金瓜子（1 电池 = 100 金瓜子），
-          // 故舰长 138000 金瓜子 → 1380 电池。放在展示配置判定之前（录制不吃展示配置）。
-          notifyQualifyingGift({
-            giftName: name,
-            priceBattery: (Number(d.price) || 0) / 100,
-            ts: Math.floor(Date.now() / 1000),
-            roomId: this.roomId,
-          });
-          const config = await loadDisplayConfig(mid);
-          if (!config.giftEffect?.enabled) return;
-          // 两条命令可能对同一次开通同时下发，短窗口内按"用户 + 等级"去重，避免特效播两遍
-          const key = `${uid}:${guardLevel || name}`;
+          const ts = Math.floor(Date.now() / 1000);
+          // price 单位 = 金瓜子；1 电池 = 100 金瓜子 → 换算为电池（与入库的电池口径一致）
+          const priceBattery = (Number(d.price) || 0) / 100;
+          // 「原始录屏」只读订阅点：放在展示配置判定之前（录制不吃展示配置）。
+          notifyQualifyingGift({ giftName: name, priceBattery, ts, roomId: this.roomId });
+          // 两条命令可能对同一次开通同时下发，短窗口内按"用户 + 名称"去重：
+          // 既避免特效播两遍，也避免礼物记录写两条导致「收到的礼物」数量翻倍。
+          // 键只用 name（两条命令的 guard_level 未必都带，用等级做键会漏合并）。
+          const key = `${uid}:${name}`;
           const now = Date.now();
-          if (now - (this.guardEffectAt.get(key) ?? 0) < 3000) return;
-          this.guardEffectAt.set(key, now);
-          this.pushDebug("guard", "开通/续费", { uid, guardLevel, giftName: name, cmd });
-          await this.emitGiftEffect(Number(d.gift_id) || 0, name);
+          if (now - (this.guardDedupAt.get(key) ?? 0) < 3000) return;
+          this.guardDedupAt.set(key, now);
+          // ① 落盘礼物记录（不受礼物特效开关影响——「收到的礼物」是独立模块）：
+          //    gift_id 用 GUARD_BUY 的虚拟大航海 id（舰长 10003 等，不在普通礼物列表中），
+          //    缺失时按等级回退，保证聚合键稳定（否则全落 0 会互相聚合成一行）。
+          //    图标用【原始名】查 memGuardMap（官方大航海资源图）；不能套特效别名"舰长一号"，
+          //    那是礼物面板里的另一张图。
+          const giftId = Number(d.gift_id) || GUARD_LEVEL_GIFT_ID[guardLevel] || 0;
+          const giftImg = getGiftImgByName(name);
+          // 送礼粉丝信息：优先事件自带（USER_TOAST_MSG 通常带 face；GUARD_BUY 可能只有 uid），
+          // 缺失的用既有 user-info 功能按 uid 补全（与主播页头像同源，带内存缓存）。
+          let uname = String(d.username || d.uname || d.user?.uname || d.user_name || "").trim();
+          let face = String(d.face || d.user?.face || "").trim();
+          if (uid > 0 && (!face || !uname)) {
+            try {
+              const hit = (await fetchUserInfo(await getPlatform(), [uid])).data?.[uid];
+              if (!face && hit?.face) face = hit.face;
+              if (!uname && hit?.name) uname = hit.name;
+            } catch {
+              /* 获取失败不影响礼物记录落盘 */
+            }
+          }
+          await appendGiftRecord(mid, {
+            date: localDayStr(new Date(ts * 1000)),
+            ts,
+            uid,
+            uname,
+            face,
+            giftId,
+            giftName: name,
+            price: priceBattery,
+            num: Number(d.num) || 1,
+            img: giftImg,
+          });
+          this.pushDebug("guard", "开通/续费", { uid, guardLevel, giftName: name, cmd, giftId, hasImg: !!giftImg, hasFace: !!face });
+          // ② 礼物特效（仅特效开关开启时）
+          const config = await loadDisplayConfig(mid);
+          if (config.giftEffect?.enabled) await this.emitGiftEffect(Number(d.gift_id) || 0, name);
         }),
       );
     }
@@ -1420,6 +1474,7 @@ class DisplayDanmakuService {
     const guser = d.user || {};
     const uid = Number(guser.uid) || 0;
     const uname = guser.uname || "";
+    const face = String(guser.face || "");
     // 礼物图标直链：优先取 gif（动画），没有则用 img_basic（静态 png）。
     // 旧协议 SEND_GIFT 的图标位于 raw.data.gift_info；新协议 SEND_GIFT_V2 的图标在
     // protobuf 的 gift_info.img_basic（parseGiftV2Pb 已解出到 d.img）。
@@ -1436,6 +1491,7 @@ class DisplayDanmakuService {
       ts,
       uid,
       uname,
+      face,
       giftId,
       giftName: d.giftName || "",
       price: priceBattery,
@@ -1458,8 +1514,8 @@ class DisplayDanmakuService {
 
     if (!config.gift) return;
 
-    // 从礼物逐条记录聚合今日达标清单（单价 > 阈值；阈值 0 = 不限制）
-    const qualifying: DisplayGiftItem[] = await loadTodayQualifyingGifts(
+    // 从礼物逐条记录聚合最近一周达标清单（单价 > 阈值；阈值 0 = 不限制）
+    const qualifying: DisplayGiftItem[] = await loadRecentQualifyingGifts(
       mid,
       config.giftPriceThreshold,
     );
@@ -1472,14 +1528,14 @@ class DisplayDanmakuService {
   }
 
   /**
-   * 配置变化（如修改礼物阈值）后，用当前配置重算今日达标礼物并即时重发到展示窗口，
+   * 配置变化（如修改礼物阈值）后，用当前配置重算最近一周达标礼物并即时重发到展示窗口，
    * 让阈值修改立刻生效，无需等下一次送礼。
    */
   async pushGiftUpdate(mid: number) {
     if (!this.active || !mid || !this.isNative()) return;
     const config = await loadDisplayConfig(mid);
     if (!config.gift) return;
-    const qualifying = await loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
+    const qualifying = await loadRecentQualifyingGifts(mid, config.giftPriceThreshold);
     this.pushDebug("gift", qualifying.length ? "emit" : "清空", {
       threshold: config.giftPriceThreshold,
       list: qualifying.map((q) => ({ name: q.giftName, count: q.count })),
@@ -1519,8 +1575,8 @@ export function toDisplayVideoSrc(path: string): string {
   return path ? `/api/video?p=${encodeURIComponent(path)}` : "";
 }
 
-/** 主窗口 UI 读取今日达标礼物（供"展示"页预览 + 关闭窗口后仍可查看）。 */
-export async function getTodayQualifyingGifts(mid: number): Promise<DisplayGiftItem[]> {
+/** 主窗口 UI 读取最近一周达标礼物（供"展示"页预览 + 关闭窗口后仍可查看）。 */
+export async function getRecentQualifyingGifts(mid: number): Promise<DisplayGiftItem[]> {
   const platform = await getPlatform();
   if (platform.isNative) {
     try {
@@ -1528,7 +1584,7 @@ export async function getTodayQualifyingGifts(mid: number): Promise<DisplayGiftI
     } catch {}
   }
   const config = await loadDisplayConfig(mid);
-  return loadTodayQualifyingGifts(mid, config.giftPriceThreshold);
+  return loadRecentQualifyingGifts(mid, config.giftPriceThreshold);
 }
 
 /** 收礼事件（只读订阅点用）。`priceBattery` = 礼物单价，单位电池。 */

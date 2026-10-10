@@ -1,5 +1,5 @@
 /**
- * 展示模块 —— 配置与今日礼物记录持久化。
+ * 展示模块 —— 配置与最近一周礼物记录持久化。
  *
  * - 配置：<dataDir>/uid_<mid>/display-config.json（按登录主播 uid 分目录，用户私有）。
  * - 展示相关三个用户文件（config / 弹幕调试日志 / 礼物记录）均在 uid_<mid>/ 下，
@@ -8,6 +8,7 @@
 import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  isAnimeOpacity,
   type DisplayConfig,
   type DisplayLayout,
   type EntryAnimeConfig,
@@ -160,9 +161,8 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
         ? r.animeCooldown
         : d.animeCooldown,
     animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
-    // 入场动画整体透明度档位：仅接受 light/medium/heavy，其余（含旧配置的边缘羽化字段）回退默认
-    animeOpacity:
-      r.animeOpacity === "medium" || r.animeOpacity === "heavy" ? r.animeOpacity : d.animeOpacity,
+    // 入场动画整体透明度档位（opaque/light/medium/heavy）：非法值（含旧配置的边缘羽化字段）回退默认
+    animeOpacity: isAnimeOpacity(r.animeOpacity) ? r.animeOpacity : d.animeOpacity,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&

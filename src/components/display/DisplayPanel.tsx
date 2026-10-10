@@ -6,7 +6,7 @@
  * 无独立总开关：是否运行（本地浏览器源服务 + 弹幕监听）由子模块派生——任一画布显示模块
  * （收到的礼物展示 / 礼物特效 / 入场提示 / 入场动画）或盲盒盈亏·弹幕查询开启即运行；
  * 全部关闭即停止监听。画布是否渲染内容（派生 master）只看 4 个画布显示模块。
- * 各信息模块各有开关：①入场提示（粒子 pill）②收到的礼物展示（今日礼物轮换）③入场动画（高级用户自定义动画）。
+ * 各信息模块各有开关：①入场提示（粒子 pill）②收到的礼物展示（最近一周礼物轮换）③入场动画（高级用户自定义动画）。
  * 附加"弹幕互动"模块：向直播间按间隔循环发送自定义弹幕（不参与派生，自己独立工作）。
  * 所有配置持久化到 <dataDir>/uid_<mid>/display-config.json（按账号分开）。
  */
@@ -16,9 +16,11 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   type AnimeOpacity,
   type DisplayConfig,
+  type DisplayGiftItem,
   type EntryAnimeConfig,
   type EntryCooldownOption,
   type EntryParticleMode,
+  type GiftHighlight,
   type ScreenOrientation,
 } from "@/lib/display/types";
 import {
@@ -40,7 +42,8 @@ import {
 } from "@/lib/display/video";
 import {
   displayDanmaku,
-  getTodayQualifyingGifts,
+  getRecentQualifyingGifts,
+  subscribeQualifyingGift,
   type DanmuDebugEvent,
   type DisplayServiceStatus,
 } from "@/lib/display/danmaku";
@@ -326,8 +329,15 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   const [guards, setGuards] = useState<GuardItem[]>([]);
   const [guardsLoading, setGuardsLoading] = useState(false);
   const [selectedGuardMid, setSelectedGuardMid] = useState<string>("");
-  const [qualityGifts, setQualityGifts] = useState<{ icon: string; name: string; count: number }[]>([]);
+  const [qualityGifts, setQualityGifts] = useState<DisplayGiftItem[]>([]);
   const [showAllQualityGifts, setShowAllQualityGifts] = useState(false);
+  // 礼物突出显示选择（giftId → 选中 uid 列表，顺序 = 循环顺序）：点选后广播给画布
+  // （画布展示随之变化），面板重挂载时从服务实例读回当前选择；会话内共享、不持久化。
+  const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>(() =>
+    displayDanmaku.getGiftHighlight(),
+  );
+  // 正在选择粉丝的礼物（多粉丝礼物点击 chip 后弹出粉丝列表；null = 关闭）
+  const [fanPopupGift, setFanPopupGift] = useState<DisplayGiftItem | null>(null);
   // 弹幕调试事件（页面实时展示）
   const [debugEvents, setDebugEvents] = useState<DanmuDebugEvent[]>(() =>
     displayDanmaku.getDebugEvents(),
@@ -511,7 +521,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         // 直播软件（如直播姬）添加浏览器源 http://127.0.0.1:<port>/display 透明叠加。
         await withTimeout(displayDanmaku.startServer(), 10000, "启动浏览器源服务");
         await displayDanmaku.start(info.roomId, mid);
-        // 立即推送一次今日礼物清单：已有礼物记录时无需等下一次送礼即可显示；
+        // 立即推送一次最近一周礼物清单：已有礼物记录时无需等下一次送礼即可显示；
         // 浏览器源就绪后还会因 ready 消息再做一次 broadcastInit 兜底推送。
         void displayDanmaku.pushGiftUpdate(mid);
         // 启动期间用户可能已把所有开关关掉 → 补一次判定，避免监听"偷偷"继续运行
@@ -527,7 +537,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   );
 
   // 模块开关变化：先按派生状态同步监听服务（开启任一模块即自动启动监听），再持久化后广播 flags，
-  // 让浏览器源即时显隐对应元素（无需重连）；重新开启礼物展示时主动重推今日礼物清单
+  // 让浏览器源即时显隐对应元素（无需重连）；重新开启礼物展示时主动重推最近一周礼物清单
   const toggleModule = useCallback(
     async (patch: Partial<DisplayConfig>) => {
       const next = await update(patch);
@@ -907,9 +917,24 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   const refreshGifts = useCallback(async () => {
     if (!mid) return;
-    const items = await getTodayQualifyingGifts(mid);
-    setQualityGifts(items.map((g) => ({ icon: g.img, name: g.giftName, count: g.count })));
+    const items = await getRecentQualifyingGifts(mid);
+    setQualityGifts(items);
   }, [mid]);
+
+  // 突出显示选择切换：单粉丝礼物点击 chip 直接切换；多粉丝礼物在粉丝列表弹窗中点击切换。
+  // 选中追加到尾部 = 循环顺序；取消后为空则移除该礼物。变更即广播给画布（展示随之变化）。
+  const toggleGiftFan = useCallback(
+    (giftId: number, uid: number) => {
+      const cur = giftHighlight[giftId] ?? [];
+      const next = cur.includes(uid) ? cur.filter((u) => u !== uid) : [...cur, uid];
+      const v: GiftHighlight = { ...giftHighlight };
+      if (next.length) v[giftId] = next;
+      else delete v[giftId];
+      setGiftHighlight(v);
+      void displayDanmaku.broadcastGiftHighlight(v);
+    },
+    [giftHighlight],
+  );
 
   // 修改礼物阈值：保存配置 + 刷新达标礼物预览 + 即时重发到画布（让修改立刻生效）
   const updateThreshold = useCallback(
@@ -925,6 +950,16 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   useEffect(() => {
     if (loaded && mid) refreshGifts();
+  }, [loaded, mid, refreshGifts]);
+
+  // 新礼物落盘后实时刷新卡片礼物列表：面板不在画布 WS 上收不到 emitTo 的 gift 广播，
+  // 而 notifyQualifyingGift 在 appendGiftRecord 落盘之后触发，此时重读清单即可拿到新礼物。
+  useEffect(() => {
+    if (!loaded || !mid) return;
+    const unsub = subscribeQualifyingGift(() => {
+      void refreshGifts();
+    });
+    return unsub;
   }, [loaded, mid, refreshGifts]);
 
   // 已连接时每 60s 刷新一次开播状态（未开播=黄点 / 直播中=绿点），断线重连也会重新刷新
@@ -1132,7 +1167,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               title="在 APP 内打开布局编辑框：可切换横/竖屏，分别调整各模块的位置和大小"
               className="inline-flex w-[170px] items-center justify-center whitespace-nowrap rounded-lg bg-white text-slate-700 shadow-sm px-4 py-1.5 text-xs font-medium transition active:scale-[0.98] hover:bg-white/80 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              编辑布局
+              编辑布局（所有位置/大小）
             </button>
           </div>
         </Card>
@@ -1158,7 +1193,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         />
         <Card bg="bg-amber-200" border="border-amber-400">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-black/45 leading-relaxed">今日收到的礼物，滚动显示，不区分谁送的</p>
+            <p className="text-xs text-black/45 leading-relaxed">
+              最近一周收到的礼物，滚动显示，默认不区分谁送的
+            </p>
             {/* 展示条方向：横条（礼物从右到左滚）/ 竖条（礼物从下到上滚） */}
             <div
               className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
@@ -1195,7 +1232,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               })}
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
+          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-black/60">
             <span className="shrink-0">礼物单价大于</span>
             <input
               type="number"
@@ -1206,20 +1243,45 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               }
               className={`${inputFlat} w-16`}
             />
-            <span className="shrink-0 text-black/35">电池的礼物才显示（0=全部）</span>
+            <span>电池才显示</span>
+            <span className="w-full text-black/35">如果想显示粉丝送的重要礼物，点击下方礼物选择</span>
           </div>
           {qualityGifts.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {(showAllQualityGifts ? qualityGifts : qualityGifts.slice(0, 10)).map((g) => (
-                <div
-                  key={g.name}
-                  className="flex items-center gap-1 rounded-md bg-white/60 px-1.5 py-0.5 text-[11px] leading-none text-black/70"
-                >
-                  <img src={g.icon} alt="" className="h-4 w-4 rounded-sm object-cover" />
-                  <span>{g.name}</span>
-                  <span className="font-bold">×{g.count}</span>
-                </div>
-              ))}
+              {(showAllQualityGifts ? qualityGifts : qualityGifts.slice(0, 10)).map((g) => {
+                const fans = g.fans ?? [];
+                const picked = (giftHighlight[g.giftId]?.length ?? 0) > 0;
+                // 无粉丝数据（旧数据/uid=0）→ 禁用；单粉丝 → 直接切换选中；
+                // 多粉丝 → 弹出粉丝列表供多选（循环展示）
+                const onClick = () => {
+                  if (!fans.length) return;
+                  if (fans.length === 1) toggleGiftFan(g.giftId, fans[0].uid);
+                  else setFanPopupGift(g);
+                };
+                return (
+                  <button
+                    key={g.giftId}
+                    type="button"
+                    onClick={onClick}
+                    title={
+                      !fans.length
+                        ? "缺少送礼人信息，无法突出显示"
+                        : fans.length === 1
+                          ? `点击突出显示送礼粉丝：${fans[0].uname}`
+                          : "点击选择要突出显示的送礼粉丝（可多选）"
+                    }
+                    className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] leading-none transition cursor-pointer ${
+                      picked
+                        ? "bg-amber-100 text-black/80 ring-2 ring-amber-500"
+                        : "bg-white/60 text-black/70 hover:bg-white/90"
+                    } ${!fans.length ? "cursor-default opacity-60" : ""}`}
+                  >
+                    <img src={g.img} alt="" className="h-4 w-4 rounded-sm object-cover" />
+                    <span>{g.giftName}</span>
+                    <span className="font-bold">×{g.count}</span>
+                  </button>
+                );
+              })}
               {qualityGifts.length > 10 && (
                 <button
                   type="button"
@@ -1247,6 +1309,84 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             </div>
           )}
         </Card>
+
+        {/* 粉丝选择弹窗：点击多粉丝礼物后弹出，可多选；选中顺序 = 画布循环展示顺序 */}
+        {fanPopupGift && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setFanPopupGift(null)}
+          >
+            <div
+              className="flex max-h-[88vh] w-full max-w-sm flex-col rounded-2xl bg-white p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <img
+                    src={fanPopupGift.img}
+                    alt=""
+                    className="h-6 w-6 rounded-md object-cover"
+                  />
+                  <span className="text-sm font-bold text-black/80">
+                    选择突出显示的粉丝
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFanPopupGift(null)}
+                  aria-label="关闭"
+                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full text-black/40 hover:bg-black/10 hover:text-black/70"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div className="mt-3 min-h-0 flex-1 overflow-y-auto p-2">
+                <div className="grid grid-cols-2 gap-x-2 gap-y-3">
+                  {(fanPopupGift.fans ?? []).map((fan) => {
+                    const picked = (giftHighlight[fanPopupGift.giftId] ?? []).includes(fan.uid);
+                    return (
+                      <button
+                        key={fan.uid}
+                        type="button"
+                        onClick={() => toggleGiftFan(fanPopupGift.giftId, fan.uid)}
+                        title={fan.uname}
+                        className={`flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 transition ${
+                          picked
+                            ? "bg-amber-100 ring-2 ring-amber-500"
+                            : "bg-black/5 hover:bg-black/10"
+                        }`}
+                      >
+                        {fan.face ? (
+                          <img
+                            src={fan.face}
+                            alt=""
+                            className="h-7 w-7 shrink-0 rounded-full object-cover ring-2 ring-white/70"
+                          />
+                        ) : (
+                          <span
+                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ring-2 ring-white/70"
+                            style={{ background: `hsl(${fan.uid % 360}, 65%, 55%)` }}
+                          >
+                            {(fan.uname || "?").slice(0, 1)}
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-black/80">
+                          {fan.uname}
+                        </span>
+                        <span className="shrink-0 text-xs font-medium text-black/45">×{fan.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="mt-3 text-center text-[11px] leading-relaxed text-black/45">
+                可多选：多个粉丝将循环轮播展示，选中顺序即轮播顺序
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 模块：礼物特效（收到带专属动画的礼物时在画布播放） */}
@@ -1627,6 +1767,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画透明度">
               {(
                 [
+                  ["opaque", "不透明"],
                   ["light", "轻"],
                   ["medium", "中"],
                   ["heavy", "重"],
