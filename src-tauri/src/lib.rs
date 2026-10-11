@@ -1374,7 +1374,7 @@ async fn download_ipa(_app: tauri::AppHandle, _url: String, _version: Option<Str
 /// Windows：仅下载新版本 EXE 到当前文件夹（应用所在目录），返回文件路径。
 /// 与 Android download_apk 同模式：静默后台先下载，用户点击按钮再原地替换安装。
 /// 不经过缓存目录：新版本与正式 exe 同目录，替换时同目录 rename 原子可靠；
-/// 文件名为 <原名>-新版本-<版本>.exe，同版本已存在则复用，避免重复下载。
+/// 文件名为 <原名>-<版本>.exe，同版本已存在则复用，避免重复下载。
 #[cfg(target_os = "windows")]
 #[tauri::command]
 async fn download_exe(_app: tauri::AppHandle, url: String, version: Option<String>) -> Result<String, String> {
@@ -1385,15 +1385,15 @@ async fn download_exe(_app: tauri::AppHandle, url: String, version: Option<Strin
         .map(|p| p.to_path_buf())
         .unwrap_or_else(std::env::temp_dir);
 
-    // 版本化临时文件名：<原名>-新版本-<版本>.exe，与正式 exe 同目录（与旧版本备份命名风格统一）
+    // 版本化临时文件名：<原名>-<版本>.exe，与正式 exe 同目录（与旧版本备份命名风格统一）
     let exe_stem = target
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("bili-live")
         .to_string();
     let file_name = match version.as_deref() {
-        Some(v) if !v.trim().is_empty() => format!("{}-新版本-{}.exe", exe_stem, v.trim()),
-        _ => format!("{}-新版本.exe", exe_stem),
+        Some(v) if !v.trim().is_empty() => format!("{}-{}.exe", exe_stem, v.trim()),
+        _ => format!("{}-update.exe", exe_stem),
     };
     let exe_path = target_dir.join(&file_name);
 
@@ -1442,7 +1442,7 @@ async fn download_exe(_app: tauri::AppHandle, _url: String, _version: Option<Str
 /// 新 exe 被从临时目录直接运行，关闭后消失，旧 exe 原封不动。此命令解决该问题。
 ///
 /// 更新策略：不经过缓存目录，直接在应用所在文件夹完成——
-///   · 新版本文件 <原名>-新版本-<版本>.exe 与正式 exe 同目录（download_exe 已下载）
+///   · 新版本文件 <原名>-<版本>.exe 与正式 exe 同目录（download_exe 已下载）
 ///   · 旧版本重命名为 <原名>-旧版本-<版本>.exe 保留，用户可随时找回/回退
 ///   · 新版本 rename 为正式名，重启即生效
 ///

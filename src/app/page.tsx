@@ -51,6 +51,7 @@ import {
   notifyAppReady,
   restartApp,
   compactBuildDate,
+  detectPlatform,
   formatHotUpdateVersion,
   type UpdateCheckResult,
   type VersionDisplay,
@@ -1144,6 +1145,12 @@ export default function HomePage() {
   // ==================== 应用更新 ====================
   // 检查更新（热更新 + 原生更新并行）。点击"检查更新"按钮触发。
   async function handleCheckUpdates() {
+    // 手动检查：清除上一次"已是最新"短暂提示，回到"检查中"
+    if (updateLatestFlashTimer.current) {
+      clearTimeout(updateLatestFlashTimer.current);
+      updateLatestFlashTimer.current = null;
+    }
+    setUpdateLatestFlash(false);
     setUpdateChecking(true);
     setUpdateError("");
     setUpdateResult(null);
@@ -1159,11 +1166,21 @@ export default function HomePage() {
           // 原生检查失败（网络/versions.json 拉不到等），不算"已是最新"
           // 如果同时热更新也失败或无，提示用户重试
           setUpdateError(`原生更新检查失败：${native.error || "网络错误"}，请稍后重试`);
-        } else if (native.currentVersion && native.currentVersion !== "0.0.0") {
-          setUpdateToast(`已是最新版本 V${native.currentVersion}`);
         } else {
-          setUpdateToast("已是最新版本");
+          // 无更新：按钮短暂显示"已是最新"（5s）后自动恢复为"检查更新"。
+          // 不再额外弹"已是最新版本"提示（与按钮重复）。
+          // （shellTooOld 例外：有前端更新但需更高 APP 版本，不显示"已是最新"）
+          if (!result.hot.shellTooOld) {
+            updateLatestFlashTimer.current = setTimeout(() => {
+              setUpdateLatestFlash(false);
+              updateLatestFlashTimer.current = null;
+            }, 5000);
+            setUpdateLatestFlash(true);
+          }
         }
+      } else {
+        // 检查到更新：启动既有后台自动下载流程（原生静默下载安装包 / 热更新后台下载激活）
+        startAutoUpdateFor(result);
       }
     } catch (err: any) {
       setUpdateError(`检查失败: ${err?.message || String(err)}`);
@@ -1172,24 +1189,74 @@ export default function HomePage() {
     }
   }
 
+  // 后台自动更新流程（冷启动与手动"检查更新"共用）：
+  //  - 有原生更新 → 后台静默下载安装包（Windows=exe、Android=apk、iOS=ipa），
+  //    下载就绪后卡片提示"点击重装"，不阻塞页面。
+  //  - 无原生但有可用热更新 → 后台下载并激活，就绪后提示点击刷新生效
+  //    （applyHotUpdate 对同一时刻的下载去重，用户点"点击刷新"只是复用这次下载）。
+  function startAutoUpdateFor(result: UpdateCheckResult) {
+    if (result.native.available && result.native.downloadUrl) {
+      setNativeSilentDownloaded({ kind: "downloading", progress: 0, total: 0 });
+      downloadNativeSilently(
+        result.native.downloadUrl,
+        (p) => {
+          setNativeSilentDownloaded((s) =>
+            s.kind === "downloading"
+              ? { kind: "downloading", progress: p.downloaded, total: p.total }
+              : s,
+          );
+        },
+        result.native.serverVersion || "",
+      )
+        .then((dr) => {
+          if (dr.status === "downloaded" && dr.platform && dr.filePath) {
+            setNativeSilentDownloaded({
+              kind: "ready",
+              filePath: dr.filePath,
+              platform: dr.platform,
+              version: result.native.serverVersion || "",
+            });
+          } else {
+            setNativeSilentDownloaded({ kind: "error", msg: dr.error || "下载失败" });
+          }
+        })
+        .catch(() => setNativeSilentDownloaded({ kind: "error", msg: "下载失败" }));
+    }
+    if (!result.native.available && result.hot.available && !result.hot.shellTooOld) {
+      applyHotUpdate((p) => setUpdateProgress(p))
+        .then((r) => {
+          if (r.status === "applied") setHotUpdateReady(true);
+        })
+        .catch(() => {})
+        .finally(() => setUpdateProgress(null));
+    }
+  }
+
   // 应用更新（按推荐类型：原生更新优先，其次热更新）
   // onProgress 回调用于显示下载进度
   // 新流程（统一用户体验）：
-  //   · 原生更新 = 后台静默下载安装包(带进度条) → 安装包"已就绪" → 点击按钮先弹防砖确认 → 立即安装
+  //   · 原生更新 = 后台静默下载安装包(带进度条) → 安装包"已就绪" → 点击按钮安装
+  //                （移动端先弹防砖确认弹窗，桌面端直接原地替换重装）
   //   · 热更新   = 冷启动自动应用，或"立即生效"一步下载+激活+刷新（无需重启）
   async function handleApplyUpdate() {
     if (!updateResult) return;
-    // 原生更新涉及手动安装（Android=系统安装器、iOS=Open In 自签工具、Windows=原地替换），
-    // 点击后先弹防砖确认弹窗，提示失败时的回退方案，再执行安装。
+    // 原生更新涉及手动安装（Android=系统安装器、iOS=Open In 自签工具、Windows=原地替换）。
+    // 防砖确认弹窗只针对移动端；桌面端（Windows）原地替换无需提示，直接重装。
     if (updateResult.recommended === "native" || nativeSilentDownloaded.kind === "ready") {
-      setShowNativeConfirm(true);
+      const platform =
+        nativeSilentDownloaded.kind === "ready" ? nativeSilentDownloaded.platform : detectPlatform();
+      if (platform === "windows") {
+        await handleNativeConfirmInstall();
+      } else {
+        setShowNativeConfirm(true);
+      }
       return;
     }
     // 热更新：一步下载+激活，reload 立即生效（无需重启）
     await handleActivateHotUpdate();
   }
 
-  // 原生更新确认安装（防砖弹窗点"确认安装"后执行）
+  // 原生更新安装（移动端防砖弹窗点"确认安装"后执行；桌面端由 handleApplyUpdate 直接调用）
   async function handleNativeConfirmInstall() {
     if (!updateResult) return;
     setShowNativeConfirm(false);
@@ -1377,6 +1444,9 @@ export default function HomePage() {
   const [updateError, setUpdateError] = useState<string>("");
   const [updateToast, setUpdateToast] = useState<string>("");
   const [canRestart, setCanRestart] = useState(false);
+  /** 手动"检查更新"未发现更新时，按钮短暂显示"已是最新"（5s）后自动恢复为"检查更新" */
+  const [updateLatestFlash, setUpdateLatestFlash] = useState(false);
+  const updateLatestFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 原生更新静默下载状态：统一UX，和热更新风格一致
    *  - none：没操作
    *  - downloading：正在后台下载 APK/IPA（进度在 nativeDownloadProgress）
@@ -1439,48 +1509,9 @@ export default function HomePage() {
         // 10s 太短会导致检查被静默放弃 → 既不显示更新卡片、也不会触发后台自动下载。
         const result = await withTimeout(checkForUpdates(), 30000);
         setUpdateResult(result);
-
-        // 原生更新静默下载：有原生更新则后台下载安装包（Windows=exe、Android=apk、iOS=ipa），
-        // 下载完成后卡片变为"安装包已就绪 · 立即安装"，不阻塞首页显示。
-        if (result.native.available && result.native.downloadUrl) {
-          setNativeSilentDownloaded({ kind: "downloading", progress: 0, total: 0 });
-          downloadNativeSilently(result.native.downloadUrl, (p) => {
-            setNativeSilentDownloaded((s) =>
-              s.kind === "downloading"
-                ? { kind: "downloading", progress: p.downloaded, total: p.total }
-                : s,
-            );
-          }, result.native.serverVersion || "")
-            .then((dr) => {
-              if (dr.status === "downloaded" && dr.platform && dr.filePath) {
-                setNativeSilentDownloaded({
-                  kind: "ready",
-                  filePath: dr.filePath,
-                  platform: dr.platform,
-                  version: result.native.serverVersion || "",
-                });
-              } else {
-                setNativeSilentDownloaded({ kind: "error", msg: dr.error || "下载失败" });
-              }
-            })
-            .catch(() => setNativeSilentDownloaded({ kind: "error", msg: "下载失败" }));
-        }
-
-        // 热更新后台准备：无原生更新等待 + 满足 min-shell + 有热更新时，
-        // 后台静默下载并激活（asset provider 已切换，当前页面仍是旧资源），
-        // 完成后顶部显示提示条，用户点击"立即生效"才刷新 —— 不阻塞首屏、不自动打断操作。
-        if (!result.native.available && result.hot.available && !result.hot.shellTooOld) {
-          // 后台静默下载+激活，并把进度写进 updateProgress：
-          // 帮助页更新卡片会实时显示后台下载进度，用户不会误以为"没有自动下载"而去点"点击刷新"。
-          // applyHotUpdate 对同一时刻的下载去重：即便用户点了"点击刷新"，也只是复用这次下载，
-          // 不会再起第二条下载（并发下载会争抢同一个 .tmp-seq-<n> 目录、进度互相覆盖）。
-          applyHotUpdate((p) => setUpdateProgress(p))
-            .then((r) => {
-              if (r.status === "applied") setHotUpdateReady(true);
-            })
-            .catch(() => {})
-            .finally(() => setUpdateProgress(null));
-        }
+        // 与手动"检查更新"共用同一套后台自动下载流程（见 startAutoUpdateFor）：
+        // 有原生更新则后台静默下载安装包，无原生但有热更新则后台下载并激活。
+        startAutoUpdateFor(result);
       } catch {
         // 检查失败/超时：首页照常显示，用户可通过"检查更新"卡片手动重试
       }
@@ -3024,15 +3055,17 @@ export default function HomePage() {
       note: `原生更新检查失败（${updateResult.native.error || "网络异常"}），请重试`,
     };
   } else {
-    // 已是最新（含 shellTooOld：有前端更新但需更高版本 APP，暂无可用操作）
+    // 无更新：按钮显示"检查更新"可点；手动检查无更新后短暂（5s）显示"已是最新"再自动恢复。
+    // （shellTooOld：有前端更新但需更高版本 APP，不闪烁"已是最新"，保持可点重试）
+    const flashing = updateLatestFlash;
     updateCard = {
       bg: "bg-green-50/70",
       border: "border-green-200",
       title: "text-green-900",
       sub: "text-green-800/75",
       button: "bg-[#22c55e] hover:bg-[#16a34a]",
-      label: "已是最新",
-      action: null,
+      label: flashing ? "已是最新" : "检查更新",
+      action: flashing ? null : handleCheckUpdates,
       disabled: false,
       note: updateResult?.hot.shellTooOld
         ? "检测到前端更新，但需要更高版本 APP 才能应用，请稍后再试"
@@ -3333,7 +3366,7 @@ export default function HomePage() {
                   className={`select-none rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    {/* 状态/操作按钮：圆形按钮，4 字文案分 2 行显示（绿=已是最新 不可点） */}
+                    {/* 状态/操作按钮：圆形按钮，4 字文案分 2 行显示（绿=无更新时可点"检查更新"；刚检查完短暂显示"已是最新"不可点） */}
                     <button
                       onClick={updateCard.action || undefined}
                       disabled={updateCard.disabled}
@@ -3509,12 +3542,8 @@ export default function HomePage() {
                           </div>
                           <span className="text-[11px] text-indigo-800/70">
                             当前 {fetchRate} 条/秒
-                            {fetchRate <= 2 ? "（最稳）" : fetchRate === 3 ? "（默认）" : fetchRate === 4 ? "（偏快，可能被拦截）" : "（很快，容易被拦截）"}
                           </span>
                         </div>
-                        <p className="mt-1.5 text-[11px] leading-relaxed text-indigo-800/60">
-                          只影响从 B站 拉取数据的节奏，所有更新都会按这个速度走（首次全量获取、重建数据时差别最明显）。B站 对单机请求速率有限制，调太快会被拦截并需要等待恢复。
-                        </p>
                       </div>
                     )}
                   </div>
