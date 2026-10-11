@@ -470,6 +470,26 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     [mid],
   );
 
+  // 弹幕互动 · 输入框"编辑态"文本：受控值改由本地同步 state 提供（输入即时跟上 DOM），
+  // 避免中文输入法合成被异步 setState（update 内 await 读盘后才 setConfig）打断——
+  // 那是"有的输入法打不了中文"的根因。停笔后防抖落盘，供运行中的发送定时器读取。
+  // 与横幅输入框同样以 composition 事件判定合成态：合成中不打断、不提前落盘。
+  const [danmakuEditText, setDanmakuEditText] = useState(DEFAULT_DISPLAY_CONFIG.danmaku.text);
+  const danmakuComposingRef = useRef(false);
+  useEffect(() => {
+    // 外部（磁盘/其他入口）变更时同步回输入框；合成中跳过，避免清掉未上屏的拼音
+    if (danmakuComposingRef.current) return;
+    setDanmakuEditText(config.danmaku.text);
+  }, [config.danmaku.text]);
+  useEffect(() => {
+    if (danmakuComposingRef.current) return;
+    if (danmakuEditText === config.danmaku.text) return;
+    const t = setTimeout(() => {
+      void update({ danmaku: { ...config.danmaku, text: danmakuEditText } });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [danmakuEditText, config.danmaku, update]);
+
   // 横幅 · 输入框"编辑态"文本：输入过程中不实时同步到画布，光标脱离输入框（失焦）才保存并广播，限 30 字
   const [bannerEditText, setBannerEditText] = useState(DEFAULT_DISPLAY_CONFIG.banner.text);
   // 中文输入法（IME）合成态：以输入法 composition 事件为准（主流做法，不按按键猜测）。
@@ -1924,8 +1944,20 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
         <Card bg="bg-emerald-200" border="border-emerald-400">
           <p className="text-xs text-black/45 leading-relaxed">向直播间循环发送自定义弹幕（直播间不只营业，还有你想表达的话）</p>
           <textarea
-            value={config.danmaku.text}
-            onChange={(e) => update({ danmaku: { ...config.danmaku, text: e.target.value } })}
+            value={danmakuEditText}
+            onChange={(e) => setDanmakuEditText(e.target.value)}
+            onCompositionStart={() => {
+              danmakuComposingRef.current = true;
+            }}
+            onCompositionEnd={(e) => {
+              danmakuComposingRef.current = false;
+              setDanmakuEditText(e.currentTarget.value);
+            }}
+            onBlur={(e) => {
+              // 失焦立即落盘，不等防抖（合成已结束，可安全提交）
+              const v = e.currentTarget.value;
+              if (v !== config.danmaku.text) void update({ danmaku: { ...config.danmaku, text: v } });
+            }}
             placeholder={`弹幕示例，每一行是一个弹幕
 
 第一个弹幕
