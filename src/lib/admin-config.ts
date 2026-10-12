@@ -159,6 +159,8 @@ export type AdminConfig = {
   faq?: FaqItem[];
   /** 主播活动素材列表（管理员在 admin 页编辑，显示在「主播」页「其他」tab 顶部供预览/下载） */
   anchor_activity_materials?: AnchorActivityMaterial[];
+  /** 帮助页「扫码加入微信群」二维码图片链接（管理员在 admin 页上传/替换，为空则回退 /feedback.jpg） */
+  wechat_qr_url?: string;
 };
 
 async function ensureConfigFile() {

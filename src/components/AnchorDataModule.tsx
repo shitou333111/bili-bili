@@ -455,6 +455,21 @@ const AnchorDataModule = memo(function AnchorDataModule({
     };
   }, []);
 
+  // 「活动素材下载」标题旁的文件夹图标：仅电脑端（Windows 桌面客户端）显示——
+  // 只有桌面端有可打开的素材下载文件夹（Web/移动端不显示，避免点了报错）
+  const [materialFolderSupported, setMaterialFolderSupported] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    usesOutputFolder()
+      .then((ok) => {
+        if (alive) setMaterialFolderSupported(ok);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 防重入锁：避免 StrictMode 双调用 / 父组件刷新导致 fetchData 并发重复拉取
   const fetchingRef = useRef(false);
   // 缓存快显只执行一次（挂载/账号 key 变更），避免重复读取本地
@@ -1787,7 +1802,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                     <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                       <h3 className="text-base font-bold tracking-tight mb-3 inline-flex items-center gap-1.5">
                         活动素材下载
-                        <FolderIconButton variant="material" />
+                        {materialFolderSupported && <FolderIconButton variant="material" />}
                       </h3>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {activityMaterials.map((mat, i) => (

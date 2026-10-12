@@ -31,6 +31,7 @@ export async function GET(request: Request) {
         announcement: "",
         faq: [],
         anchor_activity_materials: [],
+        wechat_qr_url: "",
       },
     });
   }
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
       announcement: adminConfig.announcement ?? "",
       faq: adminConfig.faq ?? [],
       anchor_activity_materials: adminConfig.anchor_activity_materials ?? [],
+      wechat_qr_url: adminConfig.wechat_qr_url ?? "",
     },
   });
 }
@@ -114,6 +116,7 @@ export async function POST(request: Request) {
           .map((m: Record<string, unknown>) => ({ name: String(m.name || ""), url: String(m.url || "") }))
           .filter((m: { url: string }) => m.url.trim())
       : [],
+    wechat_qr_url: typeof body.wechat_qr_url === "string" ? body.wechat_qr_url : "",
     // 模拟器活动入口配置（含算法类型），按原样持久化
     simulator_activities: Array.isArray(body.simulator_activities)
       ? body.simulator_activities.map((a: any) => ({

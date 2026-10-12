@@ -1385,6 +1385,8 @@ export default function HomePage() {
   const [helpAnnouncement, setHelpAnnouncement] = useState("");
   // 帮助页「常见问题」（管理员在 admin 页编辑；为空则不显示该卡片）
   const [helpFaq, setHelpFaq] = useState<{ q: string; a: string }[]>([]);
+  // 帮助页反馈卡片的微信群二维码图片链接（管理员在 admin 页上传/替换；为空则回退 /feedback.jpg）
+  const [wechatQrUrl, setWechatQrUrl] = useState("");
   // 「主播」页「其他」tab「活动素材下载」素材（管理员在 admin 页编辑；为空则卡片显示空态）
   const [anchorMaterials, setAnchorMaterials] = useState<{ name: string; url: string }[]>([]);
   // 当前展开的常见问题索引（null=全部折叠）
@@ -1415,6 +1417,8 @@ export default function HomePage() {
                 .filter((m) => m.url.trim())
             : [],
         );
+        const vQr = c?.wechat_qr_url;
+        setWechatQrUrl(typeof vQr === "string" ? vQr.trim() : "");
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -3722,9 +3726,17 @@ export default function HomePage() {
                 {/* 反馈卡片 */}
                 <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">
-                    欢迎点击<a href="https://wj.qq.com/s2/27596805/8vr6/" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold underline decoration-2 underline-offset-2 hover:text-blue-700 active:text-blue-800 transition">链接</a>或者扫码反馈使用中的问题，现阶段BUG满屏幕飞...
+                    有问题，反馈BUG，提需求，扫码加入微信群
                   </p>
-                  <img src="/feedback.jpg" alt="反馈二维码" className="w-24 h-24 object-contain shrink-0" />
+                  <img
+                    src={
+                      wechatQrUrl
+                        ? (wechatQrUrl.startsWith("/") ? serverApiUrl(wechatQrUrl) : wechatQrUrl)
+                        : "/feedback.jpg"
+                    }
+                    alt="微信群二维码"
+                    className="w-24 h-24 object-contain shrink-0"
+                  />
                 </div>
                 {/* 已使用过 admin 后，显示管理后台入口卡片 */}
                 {adminUsed && (
