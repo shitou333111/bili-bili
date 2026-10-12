@@ -477,7 +477,7 @@ body {
   z-index: -1;
 }
 
-/* 横幅专属：斜向色带的对角滚动（party-gradient 的反方向）。只动 background-position-x，
+/* 横幅专属：斜向色带的对角滚动（与 party-gradient 同向）。只动 background-position-x，
    位移取瓦片边长整数倍（960px = 2×480px），循环回跳时图案逐点重合 → 无缝；
    y 保持各自静态值（::before 的 8px 相位补偿不被动画覆盖） */
 @keyframes banner-gradient {
@@ -491,10 +491,10 @@ body {
 
 @keyframes party-gradient {
   from {
-    background-position: 0% 50%;
+    background-position: 300% 50%;
   }
   to {
-    background-position: 300% 50%;
+    background-position: 0% 50%;
   }
 }
 
@@ -515,7 +515,7 @@ body {
 }
 
 /* 背景颜色滚动层：与横幅按钮同源（90° 横向 party-gradient 彩虹大跨度配色），低透明度薄铺，
-   与礼物图标滚动同向（从右向左）配合 */
+   与礼物图标滚动同向（从左向右）配合 */
 .gift-bar::before {
   content: "";
   position: absolute;
@@ -536,8 +536,8 @@ body {
   pointer-events: none;
 }
 
-/* 竖条变体：颜色滚动层改 180° 纵向、沿纵向滚动，与礼物图标从下到上滚动同向配合 */
-/* 礼物条-竖条：竖向纵向色带，从下向上流 */
+/* 竖条变体：颜色滚动层改 180° 纵向、沿纵向滚动，与礼物图标从上到下滚动同向配合 */
+/* 礼物条-竖条：竖向纵向色带，从上向下流 */
 .gift-bar-v::before {
   background: linear-gradient(
     180deg,
@@ -553,30 +553,30 @@ body {
 
 @keyframes party-gradient-v {
   from {
-    background-position: 50% 0%;
-  }
-  to {
     background-position: 50% 300%;
   }
+  to {
+    background-position: 50% 0%;
+  }
 }
 
-/* 礼物 ≥3 个时从右到左无缝循环滚动（列表复制两份，位移正好一半） */
+/* 礼物 ≥3 个时从左到右无缝循环滚动（列表复制两份，位移正好一半） */
 @keyframes gift-bar-marquee {
   from {
-    transform: translateX(0);
+    transform: translateX(-50%);
   }
   to {
-    transform: translateX(-50%);
+    transform: translateX(0);
   }
 }
 
-/* 竖条：礼物 ≥3 个时从下到上无缝循环滚动（列表复制两份，位移正好一半） */
+/* 竖条：礼物 ≥3 个时从上到下无缝循环滚动（列表复制两份，位移正好一半） */
 @keyframes gift-bar-marquee-v {
   from {
-    transform: translateY(0);
+    transform: translateY(-50%);
   }
   to {
-    transform: translateY(-50%);
+    transform: translateY(0);
   }
 }
 

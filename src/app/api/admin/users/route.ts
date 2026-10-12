@@ -63,6 +63,8 @@ export async function GET(request: Request) {
       uname: entry.uname,
       updatedAt: entry.updatedAt,
       isLocal: false,
+      platform: entry.platform,
+      devices: entry.devices,
     });
   }
   for (const s of localSessions) {
@@ -76,6 +78,8 @@ export async function GET(request: Request) {
       updatedAt: existing ? existing.updatedAt : s.updatedAt,
       // 本机 = 有 B站 登录凭证（source!=="server"）的账号；服务器收集账号仅可查看，不算本机
       isLocal: s.source !== "server",
+      platform: existing?.platform,
+      devices: existing?.devices,
     });
   }
 
@@ -93,6 +97,8 @@ export async function GET(request: Request) {
         lastUpload: lastUpload || undefined,
         isCurrent: (u.sid !== null && u.sid === currentSid) || (currentMid !== null && u.mid === currentMid), // 标记当前激活账号
         isLocal: !!u.isLocal,
+        platform: u.platform, // 最近使用平台：web/desktop/android/ios
+        devices: u.devices, // 设备记录列表（品牌/系统版本/浏览器等）
       };
     })
   );

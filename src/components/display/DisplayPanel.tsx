@@ -956,6 +956,27 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
     [giftHighlight],
   );
 
+  // 全选：选中下方礼物列表的全部礼物（多粉丝礼物 = 选中其全部粉丝，已选的保持在前）；
+  // 清除选择：清空全部突出显示。变更即广播给画布。
+  const selectAllGifts = useCallback(() => {
+    const v: GiftHighlight = { ...giftHighlight };
+    for (const g of qualityGifts) {
+      const uids = (g.fans ?? []).map((f) => f.uid);
+      if (!uids.length) continue;
+      const cur = v[g.giftId] ?? [];
+      const merged = [...cur];
+      for (const u of uids) if (!merged.includes(u)) merged.push(u);
+      v[g.giftId] = merged;
+    }
+    setGiftHighlight(v);
+    void displayDanmaku.broadcastGiftHighlight(v);
+  }, [giftHighlight, qualityGifts]);
+
+  const clearGiftSelection = useCallback(() => {
+    setGiftHighlight({});
+    void displayDanmaku.broadcastGiftHighlight({});
+  }, []);
+
   // 修改礼物阈值：保存配置 + 刷新达标礼物预览 + 即时重发到画布（让修改立刻生效）
   const updateThreshold = useCallback(
     async (v: number) => {
@@ -1264,7 +1285,28 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
               className={`${inputFlat} w-16`}
             />
             <span>电池才显示</span>
-            <span className="w-full text-black/35">如果想显示粉丝送的重要礼物，点击下方礼物选择</span>
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <span className="text-black/35">如果想显示粉丝送的重要礼物，点击下方礼物选择</span>
+              <button
+                type="button"
+                onClick={selectAllGifts}
+                disabled={!qualityGifts.some((g) => (g.fans?.length ?? 0) > 0)}
+                title="选中下方全部礼物（多粉丝礼物选中其全部粉丝）"
+                className="shrink-0 cursor-pointer rounded-md bg-amber-100/80 px-2 py-0.5 text-[11px] leading-none text-amber-700 hover:bg-amber-200 disabled:cursor-default disabled:opacity-50"
+              >
+                全选
+              </button>
+              {Object.keys(giftHighlight).length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearGiftSelection}
+                  title="清除全部突出显示选择"
+                  className="shrink-0 cursor-pointer rounded-md bg-white/60 px-2 py-0.5 text-[11px] leading-none text-black/60 hover:bg-white/90"
+                >
+                  清除选择
+                </button>
+              )}
+            </div>
           </div>
           {qualityGifts.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">

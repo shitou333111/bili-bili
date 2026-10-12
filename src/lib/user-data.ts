@@ -7,7 +7,28 @@ const DATA_DIR = path.join(process.cwd(), ".data");
 
 const USERS_LIST_FILE = path.join(DATA_DIR, "users-list.json");
 
-export type UsersListEntry = { mid: number; uname: string; updatedAt: string };
+/** 单条设备记录（同一用户可能有多个设备） */
+export type UserDeviceRecord = {
+  platform: string;
+  brand?: string;
+  os?: string;
+  osVersion?: string;
+  browser?: string;
+  browserVersion?: string;
+  lastSeen: string;
+};
+
+export type UsersListEntry = {
+  mid: number;
+  uname: string;
+  updatedAt: string;
+  /** 最近一次上报的平台（web/desktop/android/ios） */
+  platform?: string;
+  /** 设备记录列表（按最近使用排序，最多保留 MAX_DEVICES 条） */
+  devices?: UserDeviceRecord[];
+};
+
+const MAX_DEVICES = 8;
 
 /** 读取 users-list.json（每个用户一条：uid/昵称/最近更新时间） */
 export async function readUsersList(): Promise<UsersListEntry[]> {
@@ -26,11 +47,39 @@ export async function writeUsersList(list: UsersListEntry[]): Promise<void> {
   await fs.writeFile(USERS_LIST_FILE, JSON.stringify(list, null, 2), "utf8");
 }
 
-/** 更新用户在 users-list.json 中的记录（昵称用最新、更新时间=当前） */
-export async function upsertUserInList(mid: number, uname: string): Promise<void> {
+/** 合并设备记录：按 platform|brand|os|browser 去重，更新 lastSeen，最新在前，截断到 MAX_DEVICES */
+function mergeDevices(
+  prev: UserDeviceRecord[] | undefined,
+  device: UserDeviceRecord,
+): UserDeviceRecord[] {
+  const key = (d: UserDeviceRecord) =>
+    [d.platform, d.brand ?? "", d.os ?? "", d.browser ?? ""].join("|");
+  const rest = (prev ?? []).filter((d) => key(d) !== key(device));
+  return [device, ...rest].slice(0, MAX_DEVICES);
+}
+
+/**
+ * 更新用户在 users-list.json 中的记录（昵称用最新、更新时间=当前）。
+ * 传入 device 时合并设备记录（去重保留最近一次）；不传时保留原有 devices。
+ */
+export async function upsertUserInList(
+  mid: number,
+  uname: string,
+  device?: Omit<UserDeviceRecord, "lastSeen">,
+): Promise<void> {
   const list = await readUsersList();
   const idx = list.findIndex((u) => u.mid === mid);
-  const entry: UsersListEntry = { mid, uname, updatedAt: new Date().toISOString() };
+  const prev = idx >= 0 ? list[idx] : undefined;
+  const now = new Date().toISOString();
+  const entry: UsersListEntry = {
+    mid,
+    uname,
+    updatedAt: now,
+    platform: device?.platform ?? prev?.platform,
+    devices: device
+      ? mergeDevices(prev?.devices, { ...device, lastSeen: now })
+      : prev?.devices,
+  };
   if (idx >= 0) list[idx] = entry;
   else list.push(entry);
   await writeUsersList(list);

@@ -2,8 +2,8 @@
 
 /**
  * 礼物展示：badge 条（横条/竖条可切换），沿滚动轴固定容纳 3 个礼物图标位。
- * 横条：礼物数 >= 3 时列表补齐铺满后复制两份从右到左无缝循环滚动；
- * 竖条：整个条竖直，礼物从下到上无缝循环滚动。
+ * 横条：礼物数 >= 3 时列表补齐铺满后复制两份从左到右无缝循环滚动；
+ * 竖条：整个条竖直，礼物从上到下无缝循环滚动。
  * < 3 时静态居中展示。
  * 显示/隐藏裁剪由 badge 自身（.gift-bar 的 overflow:hidden + 圆角）完成，
  * 与 badge 形状（含圆角端头）完全对齐，礼物滚到 badge 边界才隐藏。
@@ -23,14 +23,48 @@ const SLOT_GAP = 4; // 礼物位间距（每项自带末尾边距，复制两份
 const BAR_LEN = SLOT_SIZE * SLOTS + 24; // badge 沿滚动轴的长度（比 3 个礼物位多 24px，礼物可滚入两端）
 const BAR_THICK = 100; // badge 垂直于滚动轴的厚度（扁一些）
 const ICON = 84; // 礼物图标尺寸
-const HL_ICON = 84; // 高亮帧礼物图标尺寸（与非高亮礼物图标一致）
+const HL_ICON = 92; // 高亮帧礼物图标尺寸（数量移走后图标独占，放大以充分利用 badge 空间）
 const HL_AVATAR = 84; // 高亮帧粉丝头像尺寸（横条）
 const HL_AVATAR_V = 84; // 高亮帧粉丝头像尺寸（竖条）
-/** 高亮帧礼物图标（连同右下角数量）向条内收缩的距离：badge 的 border-radius(44px)
- *  会裁掉四角，图标原贴边放置时右下角数量正落在被圆角裁掉的角落，整体内移后即完整可见 */
-const HL_GIFT_INSET = 20;
+/** 高亮帧数目（×N）与昵称之间的间距（数目与昵称同字号并排/上下排列） */
+const HL_COUNT_GAP = 4;
+/**
+ * 高亮帧昵称字号填充系数：按实际字宽撑满空间后整体调小一点。
+ * 西文短名（如 "I-2-3"）字宽折算后字号会撑得过大，多调小一点（0.85）；
+ * 中文昵称（如 "B瓜爱西瓜"）字形密度高、同样填充下观感偏小，少调小一点（0.95）。
+ */
+const HL_NAME_FILL_CJK = 0.95;
+const HL_NAME_FILL_OTHER = 0.85;
+
+/** 是否含 CJK 字符（与 emWidth 的全角判定一致：码点 > 0x2E80） */
+function hasCjk(s: string): boolean {
+  for (const ch of s) {
+    if ((ch.codePointAt(0) ?? 0) > 0x2e80) return true;
+  }
+  return false;
+}
 /** 高亮帧轮播每帧时长（秒）：停顿 70% + 滑动 30% */
 const HL_FRAME_SEC = 5;
+
+/**
+ * 估算字符串宽度（em 单位）：高亮帧字号自适按实际字宽折算，而不是按字符个数。
+ * 西文昵称（如 "I-2-3"）每个字符远窄于 1em，按 length 算会把字号压得过小、
+ * 填不满头像与礼物图标之间的空间。CJK 全角=1，窄字形≈0.38，mwMW≈0.9，
+ * A-Z≈0.72，a-z/0-9≈0.6，其他≈0.5。
+ */
+function emWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (c > 0x2e80) w += 1;
+    else if ("iljtfI.,-'|!".includes(ch)) w += 0.38;
+    else if ("mwMW".includes(ch)) w += 0.9;
+    else if (ch >= "A" && ch <= "Z") w += 0.72;
+    else if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9")) w += 0.6;
+    else w += 0.5;
+  }
+  return w;
+}
 
 /** 单个礼物位：图标 + 右下角金色数量（紧贴图标右下角，数量为 1 时只显示图标） */
 function GiftSlot({ gift, vertical }: { gift: DisplayGiftItem; vertical: boolean }) {
@@ -116,46 +150,30 @@ function FanAvatar({ fan, size }: { fan: DisplayGiftFan; size: number }) {
   );
 }
 
-/** 高亮帧礼物图标：图标 + 右下角金色数量（该粉丝送出的数量），样式与非高亮礼物位一致。
- *  按朝向朝条内收缩 HL_GIFT_INSET，避开 badge 圆角对右下角数量的裁切。 */
-function HighlightGiftIcon({
-  gift,
-  count,
-  vertical,
-}: {
-  gift: DisplayGiftItem;
-  count: number;
-  vertical: boolean;
-}) {
+/** 高亮帧礼物图标：数量已移到昵称区域显示，图标独占（不再被数量遮挡/挤压） */
+function HighlightGiftIcon({ gift }: { gift: DisplayGiftItem }) {
   return (
-    <div
-      className="relative shrink-0"
-      style={{
-        width: HL_ICON,
-        height: HL_ICON,
-        ...(vertical ? { marginBottom: HL_GIFT_INSET } : { marginRight: HL_GIFT_INSET }),
-      }}
-    >
+    <div className="relative shrink-0" style={{ width: HL_ICON, height: HL_ICON }}>
       <img
         src={gift.img}
         alt={gift.giftName}
         className="object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.20)]"
         style={{ width: HL_ICON, height: HL_ICON }}
       />
-      <span className="absolute right-0 bottom-0 text-[19px] font-bold leading-none text-[#ffd54a] [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
-        ×{count}
-      </span>
     </div>
   );
 }
 
 /**
  * 突出显示帧：粉丝头像 + 昵称 + 礼物图标（整条替换礼物滚动内容，静态展示）。
- * 横条：头像在左、昵称在中（最多前 6 字，超宽直接截断，无省略号）、礼物图标在右；
+ * 横条：头像在左、昵称在中（最多前 6 字）、礼物图标在右；
  * 竖条：头像在上、昵称在中（竖排从上到下）、礼物图标在下。
- * 礼物图标右下角显示该粉丝送出数量（×N）。
- * 昵称字号自适：按头像与礼物图标之间的可用长度逐字排布（文字越少字号越大），
- * 同时受另一维几何限制（横条行高 / 竖条列宽不超过条厚），最多填满头像与礼物之间的空间。
+ * 昵称图层置于头像和礼物图标之上（z-index），超宽时压在图标上方显示而不被遮挡。
+ * 礼物数量（×N，该粉丝送出数量）放在昵称处：横条在昵称上方（两行），竖条在昵称右侧
+ * （两列，×与数字上下竖直排列）；数量为 1 时不显示，礼物图标独占不被数量挤压。
+ * 昵称字号自适：按实际字宽（em 折算）填满头像与礼物图标之间的空间（文字越少字号越大，
+ * 西文昵称也能撑满），撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.85 西文短名不过大），
+ * 数目与昵称同字号，同时受条厚几何限制（两行/两列并排时各占一半）。
  */
 function HighlightFrame({
   gift,
@@ -167,22 +185,40 @@ function HighlightFrame({
   vertical: boolean;
 }) {
   const name = fan.uname.slice(0, 6);
+  const showCount = fan.count > 1;
   const nameStyle: CSSProperties = {
-    overflow: "hidden",
+    // 昵称图层置于头像/礼物图标之上（容器 relative z-[2]），超宽时不裁剪、压在图标上方显示
     whiteSpace: "nowrap",
     fontWeight: 700,
     color: "#fff",
     textShadow: "0 1px 4px rgba(0,0,0,0.55)",
     lineHeight: 1,
   };
+  // 数目样式：金色 + 阴影，与非高亮礼物位的数量观感一致
+  const countStyle: CSSProperties = {
+    fontWeight: 700,
+    color: "#ffd54a",
+    textShadow: "0 1px 3px rgba(0,0,0,0.55)",
+    lineHeight: 1,
+  };
   if (vertical) {
-    // 可用高度 = 条长 - 上下 padding(8×2) - 头像 - 礼物 - 两段间距(10×2) - 礼物内缩
-    const availH = BAR_LEN - 16 - HL_AVATAR_V - HL_ICON - 20 - HL_GIFT_INSET;
-    // 字号自适填满头像与礼物图标之间的空间：按可用高度逐字排布（文字越少字号越大），
-    // 同时列宽（lineHeight 1×字号）不超过条内容宽（BAR_THICK - 左右 padding 12）
+    // 可用高度 = 条长 - 上下 padding(8×2) - 头像 - 礼物 - 两段间距(10×2)
+    const availH = BAR_LEN - 16 - HL_AVATAR_V - HL_ICON - 20;
+    const countStr = `×${fan.count}`;
+    // 字号自适填满头像与礼物图标之间的空间：按实际字宽（em 折算）排布，西文昵称也能撑满。
+    // 数目与昵称同字号：长度方向除数取两者占格较大者（数目列竖排每字符占一格），
+    // 厚度方向两列并排：昵称列宽 + 间距 + 数目列宽 = 2×字号 + HL_COUNT_GAP 不超过条内容宽
+    const units = Math.max(emWidth(name), showCount ? countStr.length : 0, 0.5);
+    // 撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.85 西文短名不过大），最小 12 保证可读
+    const fill = hasCjk(name) ? HL_NAME_FILL_CJK : HL_NAME_FILL_OTHER;
     const fontSize = Math.max(
       12,
-      Math.min(Math.floor(availH / Math.max(name.length, 1)), Math.floor(BAR_THICK - 12)),
+      Math.floor(
+        Math.min(
+          Math.floor(availH / units),
+          Math.floor((BAR_THICK - 12 - (showCount ? HL_COUNT_GAP : 0)) / (showCount ? 2 : 1)),
+        ) * fill,
+      ),
     );
     return (
       <div
@@ -190,30 +226,51 @@ function HighlightFrame({
         style={{ width: BAR_THICK, height: "100%", gap: 10, padding: "8px 6px" }}
       >
         <FanAvatar fan={fan} size={HL_AVATAR_V} />
-        {/* 昵称字号直接作用在占据 flex 空间的这一层（外层父容器 items-center 横向居中） */}
-        <div
-          style={{
-            ...nameStyle,
-            flex: "1 1 0",
-            minHeight: 0,
-            writingMode: "vertical-rl",
-            textAlign: "center",
-            fontSize,
-          }}
-        >
-          {name}
+        {/* 昵称列 + 数目列：数目在昵称右侧（两列），×与数字上下竖直排列。昵称图层高于头像/礼物图标 */}
+        <div className="relative z-[2] flex min-h-0 flex-1 items-center justify-center gap-1">
+          {/* 昵称字号直接作用在这一层（列宽 = lineHeight 1×字号） */}
+          <div
+            style={{
+              ...nameStyle,
+              writingMode: "vertical-rl",
+              textAlign: "center",
+              fontSize,
+            }}
+          >
+            {name}
+          </div>
+          {showCount && (
+            <div
+              className="flex flex-col items-center justify-center"
+              style={{ ...countStyle, fontSize }}
+            >
+              {Array.from(`×${fan.count}`).map((ch, i) => (
+                <span key={i}>{ch}</span>
+              ))}
+            </div>
+          )}
         </div>
-        <HighlightGiftIcon gift={gift} count={fan.count} vertical />
+        <HighlightGiftIcon gift={gift} />
       </div>
     );
   }
-  // 可用宽度 = 条长 - 左右 padding(8×2) - 头像 - 礼物 - 两段间距(8×2) - 礼物内缩
-  const availW = BAR_LEN - 16 - HL_AVATAR - HL_ICON - 16 - HL_GIFT_INSET;
-  // 字号自适填满头像与礼物图标之间的空间：按可用宽度逐字排布（文字越少字号越大），
-  // 同时行高（lineHeight 1×字号）不超过条厚
+  // 可用宽度 = 条长 - 左右 padding(8×2) - 头像 - 礼物 - 两段间距(8×2)
+  const availW = BAR_LEN - 16 - HL_AVATAR - HL_ICON - 16;
+  const countStr = `×${fan.count}`;
+  // 字号自适填满头像与礼物图标之间的空间：按实际字宽（em 折算）排布，西文昵称也能撑满。
+  // 数目与昵称同字号：宽度方向除数取两者较大者，
+  // 高度方向两行堆叠：数目行高 + 间距 + 昵称行高 = 2×字号 + HL_COUNT_GAP 不超过条厚
+  const units = Math.max(emWidth(name), showCount ? emWidth(countStr) : 0, 0.5);
+  // 撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.85 西文短名不过大），最小 12 保证可读
+  const fill = hasCjk(name) ? HL_NAME_FILL_CJK : HL_NAME_FILL_OTHER;
   const fontSize = Math.max(
     12,
-    Math.min(Math.floor(availW / Math.max(name.length, 1)), Math.floor(BAR_THICK)),
+    Math.floor(
+      Math.min(
+        Math.floor(availW / units),
+        Math.floor((BAR_THICK - (showCount ? HL_COUNT_GAP : 0)) / (showCount ? 2 : 1)),
+      ) * fill,
+    ),
   );
   return (
     <div
@@ -221,10 +278,12 @@ function HighlightFrame({
       style={{ width: "100%", height: BAR_THICK, gap: 8, padding: "0 8px" }}
     >
       <FanAvatar fan={fan} size={HL_AVATAR} />
-      <div style={{ ...nameStyle, flex: "1 1 0", minWidth: 0, textAlign: "center", fontSize }}>
-        {name}
+      {/* 昵称区：数目在昵称上方（两行），数量为 1 时不显示数目。昵称图层高于头像/礼物图标 */}
+      <div className="relative z-[2] flex min-w-0 flex-1 flex-col items-center justify-center gap-1">
+        {showCount && <div style={{ ...countStyle, fontSize }}>×{fan.count}</div>}
+        <div style={{ ...nameStyle, width: "100%", textAlign: "center", fontSize }}>{name}</div>
       </div>
-      <HighlightGiftIcon gift={gift} count={fan.count} vertical={false} />
+      <HighlightGiftIcon gift={gift} />
     </div>
   );
 }
@@ -238,7 +297,7 @@ export default function GiftFlower({
   gifts: DisplayGiftItem[];
   /** 无礼物时也渲染占位条（供编辑模式摆放/预览） */
   emptyPlaceholder?: boolean;
-  /** 条的方向：横条（礼物从右到左滚动）/ 竖条（礼物从下到上滚动） */
+  /** 条的方向：横条（礼物从左到右滚动）/ 竖条（礼物从上到下滚动） */
   orientation?: "horizontal" | "vertical";
   /** 突出显示选择（giftId → 选中 uid 列表，顺序 = 循环顺序）。编辑模式占位时忽略。 */
   highlight?: GiftHighlight;
@@ -338,9 +397,9 @@ export default function GiftFlower({
       : "relative z-[1] flex w-full items-center";
     // 一份列表（base）：礼物太少铺不满 badge 可视长度时整组重复补齐，
     // 保证滚动全程（周期末尾位移一份长度时）窗口始终被礼物铺满、无空白；
-    // 轨道 = base 复制两份 + translate(0 → -50%)：-50% 正好是一份 base 长度（max-content
+    // 轨道 = base 复制两份 + translate(-50% → 0)：-50% 正好是一份 base 长度（max-content
     // 保证按内容长度算，否则按容器算会跳变），回到 0 时与首帧完全重合，首尾无缝。
-    // 横条 translateX 从右到左；竖条 translateY 从下到上。
+    // 横条 translateX 从左到右；竖条 translateY 从上到下。
     const copyLen = gifts.length * (SLOT_SIZE + SLOT_GAP);
     const reps = Math.max(1, Math.ceil(BAR_LEN / copyLen));
     const base = Array.from({ length: reps }, () => gifts).flat();

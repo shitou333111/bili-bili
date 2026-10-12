@@ -53,6 +53,16 @@ function dateEndToTs(value: string): number | undefined {
   return Number.isFinite(ts) ? ts : undefined;
 }
 
+type UserDevice = {
+  platform: string;
+  brand?: string;
+  os?: string;
+  osVersion?: string;
+  browser?: string;
+  browserVersion?: string;
+  lastSeen: string;
+};
+
 type User = {
   sid: string;
   uname: string;
@@ -64,7 +74,30 @@ type User = {
   lastUpload?: string;
   isCurrent: boolean;
   isLocal?: boolean;
+  /** 最近使用平台：web/desktop/android/ios */
+  platform?: string;
+  /** 设备记录列表（按最近使用排序） */
+  devices?: UserDevice[];
 };
+
+/** 平台代号 → 中文名 */
+const PLATFORM_LABEL: Record<string, string> = {
+  web: "Web",
+  desktop: "电脑",
+  android: "安卓",
+  ios: "iOS",
+};
+
+/** 设备记录 → 概要文本（如「安卓 · Xiaomi 25102RKBEC · Android 14 · Chrome 146」） */
+function deviceSummary(d: UserDevice): string {
+  const parts = [
+    PLATFORM_LABEL[d.platform] ?? d.platform,
+    d.brand,
+    [d.os, d.osVersion].filter(Boolean).join(" ") || undefined,
+    [d.browser, d.browserVersion].filter(Boolean).join(" ") || undefined,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
 
 /** 盲盒内礼物明细（含过期盲盒的完整信息，可手动补充奖励礼物） */
 type BlindBoxGiftItemData = {
@@ -210,8 +243,8 @@ export default function AdminPage() {
   // 帮助页常见问题 / 主播活动素材：默认折叠
   const [faqCollapsed, setFaqCollapsed] = useState(true);
   const [materialsCollapsed, setMaterialsCollapsed] = useState(true);
-  // 素材本地文件上传中的条目下标（null = 无上传中）
-  const [materialUploadingIdx, setMaterialUploadingIdx] = useState<number | null>(null);
+  // 素材本地文件上传中的条目（null = 无上传中；text 显示进度文案）
+  const [materialUploading, setMaterialUploading] = useState<{ idx: number; text: string } | null>(null);
   // 算法参数全屏编辑器：记录正在编辑的活动序号 / 临时文本 / 校验错误
   const [paramsEditIndex, setParamsEditIndex] = useState<number | null>(null);
   const [paramsEditText, setParamsEditText] = useState("");
@@ -762,32 +795,58 @@ export default function AdminPage() {
   };
 
   /**
-   * 上传本地素材文件：读成 dataURL 提交到服务器落盘，
-   * 成功后把返回的相对链接回填到该条目的「图片链接」（名称为空时用文件名填充）。
+   * 上传本地素材文件（分片上传）：
+   * 按 512KB 切片依次提交到服务器追加落盘，最后一片返回素材链接后
+   * 回填到该条目的「图片链接」（名称为空时用文件名填充）。
+   * 分片原因：线上 nginx 对请求体有大小限制（默认 1m，超限返回 413 HTML 页），
+   * 整文件 base64 单发会被拦截，切成小片后任意大小的素材都能传。
    * 注意：回填后仍需点「保存配置」才会写入 admin 配置。
    */
   const uploadMaterialFile = async (idx: number, file: File) => {
     if (!config) return;
-    if (!file.type.startsWith("image/")) {
+    const mime = file.type === "image/jpg" ? "image/jpeg" : file.type;
+    if (!mime.startsWith("image/")) {
       alert("请选择图片文件（gif 或静态图片）");
       return;
     }
-    setMaterialUploadingIdx(idx);
+    if (file.size === 0) {
+      alert("文件内容为空");
+      return;
+    }
+    const CHUNK = 512 * 1024; // 每片原始字节；base64 后约 700KB，稳过 nginx 默认 1m 限制
+    const total = Math.ceil(file.size / CHUNK);
+    // uploadId 仅用字母数字 - _（服务端白名单），时间戳 + 随机数保证不撞名
+    const uploadId = `mat${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    setMaterialUploading({ idx, text: total > 1 ? `上传中 1/${total}` : "上传中..." });
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(typeof fr.result === "string" ? fr.result : "");
-        fr.onerror = () => reject(new Error("读取文件失败"));
-        fr.readAsDataURL(file);
-      });
-      const res = await adminFetch(serverApiUrl("/api/admin/material"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataUrl }),
-      });
-      const data = await res.json();
-      if (data.code !== 0) throw new Error(data.message || "上传失败");
-      const url = String(data?.data?.url || "");
+      let url = "";
+      for (let part = 0; part < total; part++) {
+        if (part > 0) setMaterialUploading({ idx, text: `上传中 ${part + 1}/${total}` });
+        const slice = file.slice(part * CHUNK, Math.min((part + 1) * CHUNK, file.size));
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(typeof fr.result === "string" ? fr.result : "");
+          fr.onerror = () => reject(new Error("读取文件失败"));
+          fr.readAsDataURL(slice);
+        });
+        // 去掉 data:...;base64, 前缀，只传纯 base64 分片
+        const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        const res = await adminFetch(serverApiUrl("/api/admin/material"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploadId, part, total, mime, data }),
+        });
+        type UploadResp = { code?: number; message?: string; data?: { url?: string } };
+        let body: UploadResp | null = null;
+        try {
+          body = (await res.json()) as UploadResp;
+        } catch {
+          // 服务器返回非 JSON（如网关 413 HTML 错误页）时给出可读提示
+          throw new Error(`上传失败：服务器返回异常(${res.status})，请检查网络或服务端请求体大小限制`);
+        }
+        if (!res.ok || body?.code !== 0) throw new Error(body?.message || `上传失败(${res.status})`);
+        if (body?.data?.url) url = body.data.url;
+      }
       if (!url) throw new Error("上传失败：服务器未返回链接");
       const list = [...(config.anchor_activity_materials ?? [])];
       const cur = list[idx];
@@ -801,7 +860,7 @@ export default function AdminPage() {
     } catch (err) {
       alert(err instanceof Error ? err.message : "素材上传失败");
     } finally {
-      setMaterialUploadingIdx(null);
+      setMaterialUploading(null);
     }
   };
 
@@ -1323,9 +1382,23 @@ export default function AdminPage() {
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
                       {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
+                      {user.platform && (
+                        <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">
+                          {PLATFORM_LABEL[user.platform] ?? user.platform}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[10px] text-black/30 mt-0.5">UID {user.mid}</div>
                     <div className="text-[10px] text-black/30 mt-0.5">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</div>
+                    {user.devices && user.devices.length > 0 && (
+                      <div
+                        className="text-[10px] text-black/40 mt-0.5 truncate"
+                        title={user.devices.map((d) => `${deviceSummary(d)}（${new Date(d.lastSeen).toLocaleString("zh-CN")}）`).join("\n")}
+                      >
+                        设备: {deviceSummary(user.devices[0])}
+                        {user.devices.length > 1 && ` 等${user.devices.length}台`}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     {user.isLocal ? (
@@ -1510,13 +1583,13 @@ export default function AdminPage() {
                         placeholder="图片链接（gif 或静态图片）"
                         className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
                       />
-                      <label className={`text-xs shrink-0 ${materialUploadingIdx === i ? "text-black/40" : "text-[#00a1d6] hover:underline"} ${materialUploadingIdx !== null && materialUploadingIdx !== i ? "opacity-50 pointer-events-none" : ""} cursor-pointer`}>
-                        {materialUploadingIdx === i ? "上传中..." : "上传本地文件"}
+                      <label className={`text-xs shrink-0 ${materialUploading?.idx === i ? "text-black/40" : "text-[#00a1d6] hover:underline"} ${materialUploading !== null && materialUploading.idx !== i ? "opacity-50 pointer-events-none" : ""} cursor-pointer`}>
+                        {materialUploading?.idx === i ? materialUploading.text : "上传本地文件"}
                         <input
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"
                           className="hidden"
-                          disabled={materialUploadingIdx !== null}
+                          disabled={materialUploading !== null}
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             // 清空以便同一文件重选时也能触发 onChange
