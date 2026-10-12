@@ -1387,6 +1387,8 @@ export default function HomePage() {
   const [helpFaq, setHelpFaq] = useState<{ q: string; a: string }[]>([]);
   // 帮助页反馈卡片的微信群二维码图片链接（管理员在 admin 页上传/替换；为空则回退 /feedback.jpg）
   const [wechatQrUrl, setWechatQrUrl] = useState("");
+  // 点击反馈卡片二维码后放大弹窗
+  const [wechatQrZoom, setWechatQrZoom] = useState(false);
   // 「主播」页「其他」tab「活动素材下载」素材（管理员在 admin 页编辑；为空则卡片显示空态）
   const [anchorMaterials, setAnchorMaterials] = useState<{ name: string; url: string }[]>([]);
   // 当前展开的常见问题索引（null=全部折叠）
@@ -3728,16 +3730,46 @@ export default function HomePage() {
                   <p className="text-base text-black/75 leading-relaxed">
                     有问题，反馈BUG，提需求，扫码加入微信群
                   </p>
-                  <img
-                    src={
-                      wechatQrUrl
-                        ? (wechatQrUrl.startsWith("/") ? serverApiUrl(wechatQrUrl) : wechatQrUrl)
-                        : "/feedback.jpg"
-                    }
-                    alt="微信群二维码"
-                    className="w-24 h-24 object-contain shrink-0"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setWechatQrZoom(true)}
+                    title="点击放大"
+                    className="shrink-0 rounded-lg transition hover:opacity-80 active:scale-95"
+                  >
+                    <img
+                      src={
+                        wechatQrUrl
+                          ? (wechatQrUrl.startsWith("/") ? serverApiUrl(wechatQrUrl) : wechatQrUrl)
+                          : "/feedback.jpg"
+                      }
+                      alt="微信群二维码"
+                      className="w-24 h-24 object-contain shrink-0"
+                    />
+                  </button>
                 </div>
+                {/* 微信群二维码放大弹窗（点击遮罩关闭） */}
+                {wechatQrZoom &&
+                  createPortal(
+                    <div
+                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+                      onClick={() => setWechatQrZoom(false)}
+                    >
+                      <div className="bg-white rounded-2xl p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={
+                            wechatQrUrl
+                              ? (wechatQrUrl.startsWith("/") ? serverApiUrl(wechatQrUrl) : wechatQrUrl)
+                              : "/feedback.jpg"
+                          }
+                          alt="微信群二维码"
+                          className="w-64 h-64 object-contain"
+                        />
+                        <div className="mt-3 text-center text-sm text-black/70 font-medium">扫码加入微信群</div>
+                      </div>
+                    </div>,
+                    document.body,
+                  )}
                 {/* 已使用过 admin 后，显示管理后台入口卡片 */}
                 {adminUsed && (
                   <button
