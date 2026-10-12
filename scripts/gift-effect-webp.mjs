@@ -15,15 +15,18 @@
  *
  * 运行方式（在项目根目录，需要可用的 ffmpeg，如 conda activate mfa；
  * WebM 需要带 libvpx 的 ffmpeg，会自动查找 imageio-ffmpeg 自带的静态 ffmpeg）：
- *   node scripts/gift-effect-webp.mjs <gift_id> [--out <输出路径前缀>] [--fps <帧率>] [--quality <1-100>] [--keep-h <高度保留比例>]
+ *   node scripts/gift-effect-webp.mjs <gift_id> [--out <输出路径前缀>] [--fps <帧率>] [--quality <1-100>] [--keep-h <高度保留比例>] [--keep-top <向上多保留的像素>]
  *
  * --keep-h：从底部向上保留最终输出高度的百分比（作用于缩放后的输出尺寸，而非原始视频画幅），
  *           宽度不变。接受 0.3 或 30% 写法，均为 30%。默认 0.5。
+ * --keep-top：在 keep-h 裁剪结果的基础上，顶部再向上多保留的像素数（输出坐标系），
+ *             让画面上沿多露出一段，避免贴顶裁切。默认 40，传 0 关闭。
  *
  * 示例：
  *   node scripts/gift-effect-webp.mjs 31100
  *   node scripts/gift-effect-webp.mjs 31100 --out ./my --fps 30 --quality 90
  *   node scripts/gift-effect-webp.mjs 31100 --keep-h 30%   # 只保留底部向上 30% 高度
+ *   node scripts/gift-effect-webp.mjs 31100 --keep-top 0   # 关闭顶部额外保留
  *
  * 若指定礼物没有绑定特效，则输出提示且不生成文件。
  */
@@ -62,15 +65,27 @@ function parseKeepH(raw) {
   return ratio;
 }
 
+/** 解析顶部向上多保留的像素数（非负整数像素，输出坐标系） */
+function parseKeepTop(raw) {
+  if (raw == null) return 40; // 默认在 keep-h 基础上顶部再向上多保留 40px
+  const n = Number(String(raw).trim());
+  if (isNaN(n) || n < 0) {
+    console.error(`[gift-effect-webp] 无效的 --keep-top 值: ${raw}（需为 >=0 的像素数，如 40）`);
+    process.exit(1);
+  }
+  return n;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { giftId: null, out: null, fps: null, quality: 90, keepH: 0.5 };
+  const opts = { giftId: null, out: null, fps: null, quality: 90, keepH: 0.5, keepTop: 40 };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--out") opts.out = args[++i];
     else if (a === "--fps") opts.fps = Number(args[++i]);
     else if (a === "--quality") opts.quality = Number(args[++i]);
     else if (a === "--keep-h") opts.keepH = parseKeepH(args[++i]);
+    else if (a === "--keep-top") opts.keepTop = parseKeepTop(args[++i]);
     else if (!a.startsWith("--") && opts.giftId === null) opts.giftId = a;
     else {
       console.error(`[gift-effect-webp] 未知参数: ${a}`);
@@ -246,11 +261,16 @@ async function main() {
   const outH = Math.max(1, Math.round(info.h * scale));
   const fps = opts.fps || info.fps || 30;
   // 按 --keep-h 从底部向上保留输出高度的百分比（作用于缩放后的输出尺寸，宽度不变）
-  const cropH = Math.max(2, Math.floor(outH * opts.keepH / 2) * 2); // 取偶，保证 yuva420p 可编码
+  let cropH = Math.max(2, Math.floor(outH * opts.keepH / 2) * 2); // 取偶，保证 yuva420p 可编码
+  // 在 keep-h 基础上，顶部再向上多保留 keepTop 像素（同样取偶，且不超过整幅高度）
+  if (opts.keepTop > 0) {
+    const grow = Math.min(Math.floor(opts.keepTop / 2) * 2, outH - cropH);
+    cropH = Math.min(outH, cropH + Math.max(0, grow));
+  }
   const cropY = outH - cropH;
   const doCrop = cropH < outH;
   console.log(`[gift-effect-webp] 视频 ${info.videoW}×${info.videoH} | rgbFrame=[${info.rgbFrame}] aFrame=[${info.aFrame}] | 输出 ${outW}×${outH} @ ${fps}fps`);
-  console.log(`[gift-effect-webp] 高度保留 ${(opts.keepH * 100).toFixed(1)}%: 底部向上裁剪至 ${outW}×${cropH} (y=${cropY})`);
+  console.log(`[gift-effect-webp] 高度保留 ${(opts.keepH * 100).toFixed(1)}% + 顶部上移 ${opts.keepTop}px: 底部向上裁剪至 ${outW}×${cropH} (y=${cropY})`);
 
   // 3. 下载 mp4 到临时目录
   const tmpMp4 = path.join(os.tmpdir(), `gift-effect-${giftId}-${Date.now()}.mp4`);

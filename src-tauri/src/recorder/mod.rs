@@ -136,7 +136,10 @@ pub fn fit_geometry_for(wa_w: i32, wa_h: i32, frame_w: i32, frame_h: i32) -> Geo
 }
 
 /// 产物目录名。三个模块（礼物截图 / 礼物模拟录屏 / 完整录屏）的产物都落在这里。
-const OUT_DIR_NAME: &str = "礼物截图录屏";
+const OUT_DIR_NAME: &str = "B瓜礼物截图录屏";
+
+/// 活动素材下载目录名（exe 同级子文件夹，「活动素材下载」卡片下载素材落盘处）。
+const MATERIAL_DIR_NAME: &str = "B瓜活动素材下载";
 
 /// 编码回调里的共享状态。COM 接口本身没有标 `Send`，但它们只在 `Mutex` 保护下使用，
 /// 跨线程交出去是安全的（帧池是 free-threaded 的，回调在 MF 线程池里跑）。
@@ -386,9 +389,19 @@ pub fn stop(dir: &Path, stem: Option<&str>) -> Result<Option<PathBuf>, String> {
 
 /// 产物目录：优先 exe 同级 `礼物截图录屏`（绿色单文件的使用习惯），不可写则回退应用数据目录。
 pub fn resolve_output_dir(app: &tauri::AppHandle) -> PathBuf {
+    resolve_named_dir(app, OUT_DIR_NAME)
+}
+
+/// 活动素材下载目录：exe 同级 `B瓜活动素材下载`，不可写则回退应用数据目录。
+pub fn resolve_material_dir(app: &tauri::AppHandle) -> PathBuf {
+    resolve_named_dir(app, MATERIAL_DIR_NAME)
+}
+
+/// exe 同级的指定子目录（不存在则创建），不可写则回退应用数据目录下的同名目录。
+fn resolve_named_dir(app: &tauri::AppHandle, name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let dir = parent.join(OUT_DIR_NAME);
+            let dir = parent.join(name);
             if std::fs::create_dir_all(&dir).is_ok() && probe_writable(&dir) {
                 return dir;
             }
@@ -398,7 +411,7 @@ pub fn resolve_output_dir(app: &tauri::AppHandle) -> PathBuf {
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir());
-    let dir = base.join(OUT_DIR_NAME);
+    let dir = base.join(name);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

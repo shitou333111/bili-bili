@@ -1385,6 +1385,8 @@ export default function HomePage() {
   const [helpAnnouncement, setHelpAnnouncement] = useState("");
   // 帮助页「常见问题」（管理员在 admin 页编辑；为空则不显示该卡片）
   const [helpFaq, setHelpFaq] = useState<{ q: string; a: string }[]>([]);
+  // 「主播」页「其他」tab「活动素材下载」素材（管理员在 admin 页编辑；为空则卡片显示空态）
+  const [anchorMaterials, setAnchorMaterials] = useState<{ name: string; url: string }[]>([]);
   // 当前展开的常见问题索引（null=全部折叠）
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   // 拉取管理者发布的帮助页公告与常见问题（公开配置接口 /api/config，APP 与 WEB 均可读取）
@@ -1403,6 +1405,14 @@ export default function HomePage() {
             ? rawFaq
                 .map((f) => ({ q: String((f as Record<string, unknown>)?.q ?? ""), a: String((f as Record<string, unknown>)?.a ?? "") }))
                 .filter((f) => f.q.trim())
+            : [],
+        );
+        const rawMaterials = c?.anchor_activity_materials;
+        setAnchorMaterials(
+          Array.isArray(rawMaterials)
+            ? rawMaterials
+                .map((m) => ({ name: String((m as Record<string, unknown>)?.name ?? ""), url: String((m as Record<string, unknown>)?.url ?? "") }))
+                .filter((m) => m.url.trim())
             : [],
         );
       })
@@ -3308,6 +3318,7 @@ export default function HomePage() {
           uname={currentAccount?.uname ?? ""}
           isServerAccount={currentAccount?.source === "server"}
           syncing={syncing}
+          activityMaterials={anchorMaterials}
           // 仅首次/重建初始化（isFirstTime）才用主 loading 顶起主播页的加载遮罩；
           // 正常重开（非首次，已有本地数据）时主 loading 在整个启动增量拉取期间恒为 true，
           // 会让"本就该静默的后台同步"在主播放展示一个不必要的更新遮罩。
@@ -3683,7 +3694,7 @@ export default function HomePage() {
                 <AutostartCard />
                 {/* 常见问题卡片（管理员在 admin 页编辑；无内容则不显示） */}
                 {helpFaq.length > 0 && (
-                  <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                  <div className="rounded-xl border border-black/10 bg-white/80 px-3 py-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                     <h3 className="text-base font-bold mb-3">常见问题</h3>
                     <div className="space-y-2">
                       {helpFaq.map((item, i) => {

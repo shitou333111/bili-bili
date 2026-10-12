@@ -14,6 +14,9 @@ fn main() {
                 "wsa_setup_abort",
                 // 检测直播姬是否运行（一键添加浏览器源前调用）
                 "is_bililive_running",
+                // 活动素材下载（打开 exe 同级「B瓜活动素材下载」目录 + 文件落盘）
+                "open_material_folder",
+                "commit_material_file",
             ]),
         ),
     )

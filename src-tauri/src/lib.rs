@@ -1723,6 +1723,37 @@ async fn commit_output_file(
     Ok(dst.to_string_lossy().to_string())
 }
 
+/// 在文件管理器里打开活动素材下载目录（「活动素材下载」标题右侧的文件夹图标）。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn open_material_folder(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = recorder::resolve_material_dir(&app);
+    std::process::Command::new("explorer.exe")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("SPAWN_FAILED::打开文件夹失败：{e}"))?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// 把已落盘的临时文件收进活动素材下载目录（exe 同级「B瓜活动素材下载」）。
+/// 与 commit_output_file 同机制：前端先写应用数据目录，再由这里移过去。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn commit_material_file(
+    app: tauri::AppHandle,
+    src_path: String,
+    file_name: String,
+) -> Result<String, String> {
+    let dir = recorder::resolve_material_dir(&app);
+    let dst = recorder::output_path(&dir, &file_name);
+    let src = std::path::PathBuf::from(&src_path);
+    if std::fs::rename(&src, &dst).is_err() {
+        std::fs::copy(&src, &dst).map_err(|e| format!("COPY_FAILED::移动失败：{e}"))?;
+        let _ = std::fs::remove_file(&src);
+    }
+    Ok(dst.to_string_lossy().to_string())
+}
+
 // 非 Windows：同样名字的 stub，保证 invoke_handler 在三端都能编译过
 
 #[cfg(not(target_os = "windows"))]
@@ -1793,6 +1824,22 @@ async fn commit_output_file(
     _file_name: String,
 ) -> Result<String, String> {
     Err("产物目录仅在 Windows 桌面端可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn open_material_folder(_app: tauri::AppHandle) -> Result<String, String> {
+    Err("素材文件夹仅在 Windows 桌面端可用".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn commit_material_file(
+    _app: tauri::AppHandle,
+    _src_path: String,
+    _file_name: String,
+) -> Result<String, String> {
+    Err("素材文件夹仅在 Windows 桌面端可用".into())
 }
 
 /// Windows：原地替换更新 helper 主逻辑。
@@ -2088,6 +2135,9 @@ pub fn run() {
             output_dir,
             open_output_folder,
             commit_output_file,
+            // 活动素材下载目录（exe 同级「B瓜活动素材下载」）
+            open_material_folder,
+            commit_material_file,
         ])
         .run(context)
         .expect("error while running tauri application");

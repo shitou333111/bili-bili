@@ -133,6 +133,14 @@ export type FaqItem = {
   a: string;
 };
 
+/** 主播活动素材（礼物图标等，供「主播」页「其他」tab 预览与下载） */
+export type AnchorActivityMaterial = {
+  /** 素材名称（用作下载文件名） */
+  name: string;
+  /** 素材链接（gif 或静态图片） */
+  url: string;
+};
+
 export type AdminConfig = {
   current_activity_blind_box_ids: number[];
   blind_boxes: BlindBoxItem[];
@@ -149,6 +157,8 @@ export type AdminConfig = {
   announcement?: string;
   /** 帮助页「常见问题」列表（管理员在 admin 页编辑，为空则不显示该卡片） */
   faq?: FaqItem[];
+  /** 主播活动素材列表（管理员在 admin 页编辑，显示在「主播」页「其他」tab 顶部供预览/下载） */
+  anchor_activity_materials?: AnchorActivityMaterial[];
 };
 
 async function ensureConfigFile() {

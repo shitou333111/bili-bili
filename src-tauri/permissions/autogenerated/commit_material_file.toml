@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-commit-material-file"
+description = "Enables the commit_material_file command without any pre-configured scope."
+commands.allow = ["commit_material_file"]
+
+[[permission]]
+identifier = "deny-commit-material-file"
+description = "Denies the commit_material_file command without any pre-configured scope."
+commands.deny = ["commit_material_file"]

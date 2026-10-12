@@ -20,6 +20,8 @@ import PieTooltip from "@/components/PieTooltip";
 import DisplayPanel from "@/components/display/DisplayPanel";
 import { showToast } from "@/lib/toast";
 import { saveMobileOrDownload } from "@/lib/save-image";
+import { saveToMaterialFolder, usesOutputFolder } from "@/lib/output-folder";
+import FolderIconButton from "@/components/FolderIconButton";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
 
@@ -87,6 +89,17 @@ type AnchorStats = {
 function fixImageUrl(url: string): string {
   if (!url) return "";
   return url.replace(/^\/\//, "https://").replace(/^http:/, "https:");
+}
+
+/**
+ * 活动素材链接 → 实际请求地址。
+ * 管理员在 admin 页「上传本地文件」的素材存的是服务器相对路径（/api/admin/material?f=...），
+ * Tauri 模式下前端与服务器不同源，必须拼上服务器地址；远程链接则沿用 fixImageUrl。
+ */
+function materialSrcUrl(url: string): string {
+  if (!url) return "";
+  if (url.startsWith("/")) return serverApiUrl(url);
+  return fixImageUrl(url);
 }
 
 function formatCoinsShort(coins: number): string {
@@ -342,6 +355,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   anchorFace = "",
   mid = 0,
   uname = "",
+  /** 「其他」tab「活动素材下载」素材列表（由父组件从 /api/config 拉取后透传） */
+  activityMaterials = [],
   isServerAccount = false,
   /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
   syncing = false,
@@ -365,6 +380,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   anchorFace?: string;
   mid?: number;
   uname?: string;
+  /** 「其他」tab「活动素材下载」素材列表 */
+  activityMaterials?: { name: string; url: string }[];
   /** 是否为服务器收集账号：本机无登录凭证，仅可查看；顶部显示提示横幅 */
   isServerAccount?: boolean;
   /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
@@ -395,6 +412,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedFan, setSelectedFan] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
+  // 活动素材下载：正在下载的素材索引 / 移动端保存失败时的预览（供长按保存）
+  const [downloadingMaterial, setDownloadingMaterial] = useState<number | null>(null);
+  const [materialPreview, setMaterialPreview] = useState<{ url: string; name: string } | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   // 撞到 B站 412 限流时的提示：说明已抓多少、还剩多少个月份待补
   const [quotaHint, setQuotaHint] = useState<string | null>(null);
@@ -812,6 +832,53 @@ const AnchorDataModule = memo(function AnchorDataModule({
     : "";
 
   const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
+
+  /**
+   * 下载活动素材：远程链接先经服务器图片代理取回为 dataURL（规避跨域/Referer 限制），
+   * 再按平台落盘——Windows 桌面端写入软件所在目录的「B瓜活动素材下载」子文件夹，
+   * 移动端存入系统相册，Web 直接下载。
+   */
+  async function downloadMaterial(index: number, mat: { name: string; url: string }) {
+    if (downloadingMaterial !== null) return;
+    setDownloadingMaterial(index);
+    try {
+      // 本地上传的素材是服务器相对路径，直取即可；远程链接走图片代理规避跨域/Referer 限制
+      const fetchUrl = mat.url.startsWith("/")
+        ? serverApiUrl(mat.url)
+        : serverApiUrl(`/api/proxy/image?url=${encodeURIComponent(mat.url)}`);
+      const res = await fetch(fetchUrl);
+      if (!res.ok) throw new Error(`素材获取失败(${res.status})`);
+      const blob = await res.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(typeof fr.result === "string" ? fr.result : "");
+        fr.onerror = () => reject(new Error("素材读取失败"));
+        fr.readAsDataURL(blob);
+      });
+      // 文件名沿用链接扩展名（gif/png/jpg/webp/avif/bmp），无扩展名时按 gif
+      const ext = (mat.url.match(/\.(gif|png|jpe?g|webp|avif|bmp)(?:$|[?&#])/i)?.[1] || "gif").toLowerCase();
+      const safeName = (mat.name || "素材").replace(/[\\/:*?"<>|]/g, "_");
+      const fileName = `${safeName}.${ext}`;
+      let saveRes: "ok" | "fallback" = "ok";
+      if (await usesOutputFolder()) {
+        // Windows 桌面端：落盘到软件所在目录的「B瓜活动素材下载」子文件夹
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        await saveToMaterialFolder(bytes, fileName);
+        showToast?.("素材已保存到「B瓜活动素材下载」文件夹");
+      } else {
+        saveRes = await saveMobileOrDownload(dataUrl, fileName);
+      }
+      if (saveRes === "fallback") {
+        // 移动端插件不可用：弹出预览供长按保存
+        setMaterialPreview({ url: dataUrl, name: mat.name || "素材" });
+      }
+    } catch (err) {
+      console.error("[downloadMaterial] 下载失败:", err);
+      showToast?.("素材下载失败，请稍后重试");
+    } finally {
+      setDownloadingMaterial(null);
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -1713,66 +1780,112 @@ const AnchorDataModule = memo(function AnchorDataModule({
               )}
 
               {/* 其他数据 tab */}
-              {activeTab === "other" && stats.otherStats && (
+              {activeTab === "other" && (
                 <div className="space-y-4">
-                  {/* 活跃天数统计 */}
-                  <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-                    <h3 className="text-base font-bold tracking-tight mb-3 inline-flex items-center gap-1">活跃天数<InfoHint text="最长只有最近3年记录" /></h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
-                        <div className="text-xs text-black/70">收礼总天数</div>
-                        <div className="mt-1 text-2xl font-semibold">{stats.otherStats.dayStats.totalDays} <span className="text-sm font-normal text-black/45">天</span></div>
-                      </div>
-                      <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
-                        <div className="text-xs text-black/70">连续收礼最长</div>
-                        <div className="mt-1 text-2xl font-semibold">{stats.otherStats.dayStats.maxConsecutiveDays} <span className="text-sm font-normal text-black/45">天</span></div>
-                      </div>
-                    </div>
-                  </article>
-
-                  {/* 粉丝送礼详情 */}
-                  <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-                    <h3 className="text-base font-bold tracking-tight mb-3">粉丝送礼详情</h3>
-                    {stats.otherStats.fanStats.length > 0 ? (
-                      <div className="space-y-2">
-                        {stats.otherStats.fanStats.slice(0, 20).map((fan) => (
-                          <div key={fan.uid} className="rounded-lg border border-black/10 bg-white p-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium">{fan.uname}</span>
+                  {/* 活动素材下载（置顶）：预览 + 跨平台下载；无素材则不显示该卡片 */}
+                  {activityMaterials.length > 0 && (
+                    <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                      <h3 className="text-base font-bold tracking-tight mb-3 inline-flex items-center gap-1.5">
+                        活动素材下载
+                        <FolderIconButton variant="material" />
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {activityMaterials.map((mat, i) => (
+                          <div key={i} className="rounded-lg border border-black/10 bg-white p-2 flex flex-col items-center gap-2">
+                            <div className="w-full aspect-square rounded bg-black/[0.03] flex items-center justify-center overflow-hidden">
+                              <img src={materialSrcUrl(mat.url)} alt={mat.name} className="max-w-full max-h-full object-contain" loading="lazy" />
                             </div>
-                            <div className="mt-1 space-y-1 text-xs text-black/55">
-                              <div>共 {fan.totalDays} 天来给你送礼物</div>
-                              {fan.maxConsecutiveDays > 0 && (
-                                <div>
-                                  连续 {fan.maxConsecutiveDays} 天来给你送礼物
-                                  {fan.consecutiveStart && fan.consecutiveEnd && (
-                                    <span className="text-black/35 ml-1">
-                                      ({fan.consecutiveStart.replace(/-/g, ".")} - {fan.consecutiveEnd.replace(/-/g, ".")})
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
+                            <div className="w-full text-xs text-black/70 text-center truncate" title={mat.name}>{mat.name || "未命名"}</div>
+                            <button
+                              onClick={() => downloadMaterial(i, mat)}
+                              disabled={downloadingMaterial !== null}
+                              className="w-full rounded-lg bg-[#1f1c17] py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50"
+                            >
+                              {downloadingMaterial === i ? "下载中…" : "下载"}
+                            </button>
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-3">
-                        <div className="text-xs text-black/35">暂无粉丝记录</div>
-                      </div>
-                    )}
-                  </article>
-                </div>
-              )}
+                    </article>
+                  )}
 
-              {activeTab === "other" && !stats.otherStats && (
-                <article className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
-                  <div className="text-sm text-black/45">正在加载其他数据...</div>
-                </article>
+                  {stats.otherStats ? (
+                    <>
+                      {/* 活跃天数统计 */}
+                      <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                        <h3 className="text-base font-bold tracking-tight mb-3 inline-flex items-center gap-1">活跃天数<InfoHint text="最长只有最近3年记录" /></h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
+                            <div className="text-xs text-black/70">收礼总天数</div>
+                            <div className="mt-1 text-2xl font-semibold">{stats.otherStats.dayStats.totalDays} <span className="text-sm font-normal text-black/45">天</span></div>
+                          </div>
+                          <div className="rounded-lg border border-black/10 bg-[#eef3fb] p-3">
+                            <div className="text-xs text-black/70">连续收礼最长</div>
+                            <div className="mt-1 text-2xl font-semibold">{stats.otherStats.dayStats.maxConsecutiveDays} <span className="text-sm font-normal text-black/45">天</span></div>
+                          </div>
+                        </div>
+                      </article>
+
+                      {/* 粉丝送礼详情 */}
+                      <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                        <h3 className="text-base font-bold tracking-tight mb-3">粉丝送礼详情</h3>
+                        {stats.otherStats.fanStats.length > 0 ? (
+                          <div className="space-y-2">
+                            {stats.otherStats.fanStats.slice(0, 20).map((fan) => (
+                              <div key={fan.uid} className="rounded-lg border border-black/10 bg-white p-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-sm font-medium">{fan.uname}</span>
+                                </div>
+                                <div className="mt-1 space-y-1 text-xs text-black/55">
+                                  <div>共 {fan.totalDays} 天来给你送礼物</div>
+                                  {fan.maxConsecutiveDays > 0 && (
+                                    <div>
+                                      连续 {fan.maxConsecutiveDays} 天来给你送礼物
+                                      {fan.consecutiveStart && fan.consecutiveEnd && (
+                                        <span className="text-black/35 ml-1">
+                                          ({fan.consecutiveStart.replace(/-/g, ".")} - {fan.consecutiveEnd.replace(/-/g, ".")})
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-3">
+                            <div className="text-xs text-black/35">暂无粉丝记录</div>
+                          </div>
+                        )}
+                      </article>
+                    </>
+                  ) : (
+                    <article className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
+                      <div className="text-sm text-black/45">正在加载其他数据...</div>
+                    </article>
+                  )}
+                </div>
               )}
             </section>
           </div>
         </div>
+      )}
+
+      {/* 活动素材保存失败（移动端插件不可用）时的长按保存预览 */}
+      {materialPreview && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-6" onClick={() => setMaterialPreview(null)}>
+          <div className="flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <img src={materialPreview.url} alt={materialPreview.name} className="max-h-[60vh] max-w-full rounded-lg bg-white object-contain" />
+            <p className="text-xs text-white/80">长按图片保存到相册</p>
+            <button
+              onClick={() => setMaterialPreview(null)}
+              className="rounded-lg bg-white/90 px-5 py-1.5 text-xs font-medium text-black/80 hover:bg-white transition"
+            >
+              关闭
+            </button>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {/* 礼物清单保存图片弹窗 */}

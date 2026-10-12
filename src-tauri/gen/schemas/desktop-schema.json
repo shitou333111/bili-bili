@@ -2337,6 +2337,12 @@
           "markdownDescription": "Enables the close_real_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Enables the commit_material_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-commit-material-file",
+          "markdownDescription": "Enables the commit_material_file command without any pre-configured scope."
+        },
+        {
           "description": "Enables the commit_output_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-commit-output-file",
@@ -2383,6 +2389,12 @@
           "type": "string",
           "const": "allow-open-activity-panel",
           "markdownDescription": "Enables the open_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_material_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-material-folder",
+          "markdownDescription": "Enables the open_material_folder command without any pre-configured scope."
         },
         {
           "description": "Enables the open_output_folder command without any pre-configured scope.",
@@ -2505,6 +2517,12 @@
           "markdownDescription": "Denies the close_real_activity_panel command without any pre-configured scope."
         },
         {
+          "description": "Denies the commit_material_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-commit-material-file",
+          "markdownDescription": "Denies the commit_material_file command without any pre-configured scope."
+        },
+        {
           "description": "Denies the commit_output_file command without any pre-configured scope.",
           "type": "string",
           "const": "deny-commit-output-file",
@@ -2551,6 +2569,12 @@
           "type": "string",
           "const": "deny-open-activity-panel",
           "markdownDescription": "Denies the open_activity_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_material_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-material-folder",
+          "markdownDescription": "Denies the open_material_folder command without any pre-configured scope."
         },
         {
           "description": "Denies the open_output_folder command without any pre-configured scope.",

@@ -30,6 +30,7 @@ export async function GET(request: Request) {
         simulator_activities: [],
         announcement: "",
         faq: [],
+        anchor_activity_materials: [],
       },
     });
   }
@@ -46,6 +47,7 @@ export async function GET(request: Request) {
       simulator_activities: adminConfig.simulator_activities ?? [],
       announcement: adminConfig.announcement ?? "",
       faq: adminConfig.faq ?? [],
+      anchor_activity_materials: adminConfig.anchor_activity_materials ?? [],
     },
   });
 }
@@ -106,6 +108,11 @@ export async function POST(request: Request) {
       ? body.faq
           .map((f: any) => ({ q: String(f?.q || ""), a: String(f?.a || "") }))
           .filter((f: { q: string }) => f.q.trim())
+      : [],
+    anchor_activity_materials: Array.isArray(body.anchor_activity_materials)
+      ? body.anchor_activity_materials
+          .map((m: Record<string, unknown>) => ({ name: String(m.name || ""), url: String(m.url || "") }))
+          .filter((m: { url: string }) => m.url.trim())
       : [],
     // 模拟器活动入口配置（含算法类型），按原样持久化
     simulator_activities: Array.isArray(body.simulator_activities)

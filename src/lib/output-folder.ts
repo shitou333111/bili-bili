@@ -34,14 +34,29 @@ export async function openOutputFolder(): Promise<string> {
   return invokeCmd<string>("open_output_folder");
 }
 
-/**
- * 落盘到统一产物目录。先在（已授权的）应用数据目录写盘，再让 Rust 移过去——
+/** 落盘到统一产物目录。先在（已授权的）应用数据目录写盘，再让 Rust 移过去——
  * 几 MB 的产物不做 Base64/数组形式的 IPC 拷贝。
  */
 export async function saveToOutputFolder(data: Uint8Array, fileName: string): Promise<string> {
   const tmp = await join(await appDataDir(), `_out-${Date.now()}-${fileName}`);
   await writeFile(tmp, data);
   return invokeCmd<string>("commit_output_file", { srcPath: tmp, fileName });
+}
+
+/** 在文件管理器里打开活动素材下载目录（exe 同级「B瓜活动素材下载」）。 */
+export async function openMaterialFolder(): Promise<string> {
+  if (!(await usesOutputFolder())) throw new Error("素材文件夹仅 Windows 桌面客户端可用");
+  return invokeCmd<string>("open_material_folder");
+}
+
+/**
+ * 落盘到活动素材下载目录（exe 同级「B瓜活动素材下载」）。
+ * 与 saveToOutputFolder 同机制：先写应用数据目录，再由 Rust 移过去。
+ */
+export async function saveToMaterialFolder(data: Uint8Array, fileName: string): Promise<string> {
+  const tmp = await join(await appDataDir(), `_mat-${Date.now()}-${fileName}`);
+  await writeFile(tmp, data);
+  return invokeCmd<string>("commit_material_file", { srcPath: tmp, fileName });
 }
 
 /** 本地日期 YYYYMMDD（产物文件名前缀）。 */

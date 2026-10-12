@@ -43,6 +43,8 @@
     "allow-output-dir",
     "allow-open-output-folder",
     "allow-commit-output-file",
+    "allow-open-material-folder",
+    "allow-commit-material-file",
     {
       "identifier": "http:default",
       "allow": [

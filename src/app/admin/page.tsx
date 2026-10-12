@@ -136,10 +136,15 @@ type AdminConfigData = {
   simulator_activities: SimulatorActivityItem[];
   announcement: string;
   faq: FaqItemData[];
+  /** 主播活动素材（名字 + 链接地址），显示在「主播」页「其他」tab 顶部供预览/下载 */
+  anchor_activity_materials: AnchorMaterialItemData[];
 };
 
 /** 帮助页「常见问题」条目 */
 type FaqItemData = { q: string; a: string };
+
+/** 主播活动素材条目 */
+type AnchorMaterialItemData = { name: string; url: string };
 
 /** 读取本地保存的管理员会话 sid */
 function getStoredAdminSid(): string | null {
@@ -202,6 +207,11 @@ export default function AdminPage() {
   const [blindBoxCollapsed, setBlindBoxCollapsed] = useState(true);
   const [simulatorCollapsed, setSimulatorCollapsed] = useState(true);
   const [synthesisCollapsed, setSynthesisCollapsed] = useState(true);
+  // 帮助页常见问题 / 主播活动素材：默认折叠
+  const [faqCollapsed, setFaqCollapsed] = useState(true);
+  const [materialsCollapsed, setMaterialsCollapsed] = useState(true);
+  // 素材本地文件上传中的条目下标（null = 无上传中）
+  const [materialUploadingIdx, setMaterialUploadingIdx] = useState<number | null>(null);
   // 算法参数全屏编辑器：记录正在编辑的活动序号 / 临时文本 / 校验错误
   const [paramsEditIndex, setParamsEditIndex] = useState<number | null>(null);
   const [paramsEditText, setParamsEditText] = useState("");
@@ -402,6 +412,9 @@ export default function AdminPage() {
           announcement: typeof data.announcement === "string" ? data.announcement : "",
           faq: Array.isArray(data.faq)
             ? data.faq.map((f: any) => ({ q: String(f?.q ?? ""), a: String(f?.a ?? "") }))
+            : [],
+          anchor_activity_materials: Array.isArray(data.anchor_activity_materials)
+            ? data.anchor_activity_materials.map((m: Record<string, unknown>) => ({ name: String(m?.name ?? ""), url: String(m?.url ?? "") }))
             : [],
           simulator_activities: simActs.map((a: any) => ({
                 id: String(a.id ?? ""),
@@ -745,6 +758,50 @@ export default function AdminPage() {
       setTimeout(() => setConfigSaved(false), 2000);
     } else {
       alert(data.message || "保存失败");
+    }
+  };
+
+  /**
+   * 上传本地素材文件：读成 dataURL 提交到服务器落盘，
+   * 成功后把返回的相对链接回填到该条目的「图片链接」（名称为空时用文件名填充）。
+   * 注意：回填后仍需点「保存配置」才会写入 admin 配置。
+   */
+  const uploadMaterialFile = async (idx: number, file: File) => {
+    if (!config) return;
+    if (!file.type.startsWith("image/")) {
+      alert("请选择图片文件（gif 或静态图片）");
+      return;
+    }
+    setMaterialUploadingIdx(idx);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(typeof fr.result === "string" ? fr.result : "");
+        fr.onerror = () => reject(new Error("读取文件失败"));
+        fr.readAsDataURL(file);
+      });
+      const res = await adminFetch(serverApiUrl("/api/admin/material"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl }),
+      });
+      const data = await res.json();
+      if (data.code !== 0) throw new Error(data.message || "上传失败");
+      const url = String(data?.data?.url || "");
+      if (!url) throw new Error("上传失败：服务器未返回链接");
+      const list = [...(config.anchor_activity_materials ?? [])];
+      const cur = list[idx];
+      if (!cur) return;
+      list[idx] = {
+        ...cur,
+        url,
+        name: cur.name.trim() ? cur.name : file.name.replace(/\.[^.]+$/, ""),
+      };
+      setConfig({ ...config, anchor_activity_materials: list });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "素材上传失败");
+    } finally {
+      setMaterialUploadingIdx(null);
     }
   };
 
@@ -1325,10 +1382,22 @@ export default function AdminPage() {
               />
             </div>
 
-            {/* 帮助页常见问题 */}
+            {/* 帮助页常见问题（可折叠，默认折叠） */}
             <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">帮助页常见问题</h3>
+              <button
+                type="button"
+                onClick={() => setFaqCollapsed((v) => !v)}
+                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-3 h-3 transition-transform ${faqCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                  帮助页常见问题
+                </span>
+                <span className="text-[10px] font-normal text-black/35">{faqCollapsed ? "展开" : "折叠"}</span>
+              </button>
+              {!faqCollapsed && (<>
+              <p className="text-[10px] text-black/40">显示在“帮助”页面“开机自启动”下方的“常见问题”卡片，每个问题为可展开折叠项（默认折叠）。全部留空则不显示该卡片。</p>
+              <div className="flex justify-end">
                 <button
                   onClick={() => setConfig({ ...config, faq: [{ q: "", a: "" }, ...(config.faq ?? [])] })}
                   className="text-xs text-[#00a1d6] hover:underline shrink-0"
@@ -1336,7 +1405,6 @@ export default function AdminPage() {
                   + 添加问题
                 </button>
               </div>
-              <p className="text-[10px] text-black/40">显示在“帮助”页面“开机自启动”下方的“常见问题”卡片，每个问题为可展开折叠项（默认折叠）。全部留空则不显示该卡片。</p>
               {(config.faq ?? []).length === 0 && (
                 <p className="text-[10px] text-black/30">暂无问题</p>
               )}
@@ -1378,6 +1446,90 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+              </>)}
+            </div>
+
+            {/* 主播活动素材上传（可折叠，默认折叠） */}
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => setMaterialsCollapsed((v) => !v)}
+                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg className={`w-3 h-3 transition-transform ${materialsCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+                  主播活动素材上传
+                </span>
+                <span className="text-[10px] font-normal text-black/35">{materialsCollapsed ? "展开" : "折叠"}</span>
+              </button>
+              {!materialsCollapsed && (<>
+              <p className="text-[10px] text-black/40">显示在“主播”页面“其他”tab 顶部的“活动素材下载”卡片，每个素材含名称与图片链接（gif 或静态图片）。链接可直接粘贴远程地址，也可点“上传本地文件”上传到服务器（上传后需点右上角“保存配置”）。全部留空则不显示该卡片。</p>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setConfig({ ...config, anchor_activity_materials: [{ name: "", url: "" }, ...(config.anchor_activity_materials ?? [])] })}
+                  className="text-xs text-[#00a1d6] hover:underline shrink-0"
+                >
+                  + 添加素材
+                </button>
+              </div>
+              {(config.anchor_activity_materials ?? []).length === 0 && (
+                <p className="text-[10px] text-black/30">暂无素材</p>
+              )}
+              <div className="space-y-1">
+                {(config.anchor_activity_materials ?? []).map((item, i) => (
+                  <div key={i} className="rounded-lg border border-black/10 p-1.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={item.name}
+                        onChange={(e) => {
+                          const list = [...(config.anchor_activity_materials ?? [])];
+                          list[i] = { ...list[i], name: e.target.value };
+                          setConfig({ ...config, anchor_activity_materials: list });
+                        }}
+                        placeholder="素材名称"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <button
+                        onClick={() => {
+                          const list = (config.anchor_activity_materials ?? []).filter((_, idx) => idx !== i);
+                          setConfig({ ...config, anchor_activity_materials: list });
+                        }}
+                        className="text-xs text-[#e74c3c] hover:underline shrink-0"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={item.url}
+                        onChange={(e) => {
+                          const list = [...(config.anchor_activity_materials ?? [])];
+                          list[i] = { ...list[i], url: e.target.value };
+                          setConfig({ ...config, anchor_activity_materials: list });
+                        }}
+                        placeholder="图片链接（gif 或静态图片）"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <label className={`text-xs shrink-0 ${materialUploadingIdx === i ? "text-black/40" : "text-[#00a1d6] hover:underline"} ${materialUploadingIdx !== null && materialUploadingIdx !== i ? "opacity-50 pointer-events-none" : ""} cursor-pointer`}>
+                        {materialUploadingIdx === i ? "上传中..." : "上传本地文件"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"
+                          className="hidden"
+                          disabled={materialUploadingIdx !== null}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            // 清空以便同一文件重选时也能触发 onChange
+                            e.target.value = "";
+                            if (file) void uploadMaterialFile(i, file);
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              </>)}
             </div>
 
             <hr className="border-t-2 border-black/30" />
@@ -1429,6 +1581,29 @@ export default function AdminPage() {
                           className="admin-move-btn"
                           title="下移"
                         >▼</button>
+                      </div>
+                      {/* 卡片 / 盈亏：置于上下移按钮之后、上下两行堆叠，标题行直接可见状态 */}
+                      <div className="flex flex-col shrink-0 gap-0.5" onClick={(e) => e.stopPropagation()}>
+                        <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
+                          <input
+                            type="checkbox"
+                            checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
+                            onChange={() => toggleCurrentBoxId(box.id)}
+                            disabled={box.id <= 0}
+                            className="w-3.5 h-3.5 accent-[#00a1d6]"
+                          />
+                          <span className="text-[10px] text-black/50">卡片</span>
+                        </label>
+                        <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
+                          <input
+                            type="checkbox"
+                            checked={box.id > 0 && config.blind_box_profit_ids.includes(box.id)}
+                            onChange={() => toggleProfitBoxId(box.id)}
+                            disabled={box.id <= 0}
+                            className="w-3.5 h-3.5 accent-[#00a1d6]"
+                          />
+                          <span className="text-[10px] text-black/50">盈亏</span>
+                        </label>
                       </div>
                       {/* 图标：点击弹出链接编辑框 */}
                       <button
@@ -1509,30 +1684,10 @@ export default function AdminPage() {
                         <span className="text-[10px] text-black/40">电池</span>
                       </label>
                     </div>
-                    {/* 卡片 / 盈亏 / 从B站获取 / 删除（折叠卡内） */}
+                    {/* 从B站获取 / 删除（折叠卡内；卡片/盈亏已移至标题行） */}
                     {expanded && (
                       <div className="border-t border-black/5 bg-black/[0.03] px-2 py-1 space-y-1">
                         <div className="flex items-center gap-2 flex-wrap pb-1">
-                          <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
-                            <input
-                              type="checkbox"
-                              checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
-                              onChange={() => toggleCurrentBoxId(box.id)}
-                              disabled={box.id <= 0}
-                              className="w-3.5 h-3.5 accent-[#00a1d6]"
-                            />
-                            <span className="text-[10px] text-black/50">卡片</span>
-                          </label>
-                          <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
-                            <input
-                              type="checkbox"
-                              checked={box.id > 0 && config.blind_box_profit_ids.includes(box.id)}
-                              onChange={() => toggleProfitBoxId(box.id)}
-                              disabled={box.id <= 0}
-                              className="w-3.5 h-3.5 accent-[#00a1d6]"
-                            />
-                            <span className="text-[10px] text-black/50">盈亏</span>
-                          </label>
                           <button
                             onClick={() => fetchBlindBoxFromBili(realIndex)}
                             disabled={box.id <= 0 || fetchingBoxInfo === realIndex}
