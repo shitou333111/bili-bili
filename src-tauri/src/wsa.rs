@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 use windows::core::BOOL;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
@@ -24,7 +24,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::SystemInformation::GetLocalTime;
-use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId, CREATE_NO_WINDOW};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
     IUIAutomationInvokePattern, IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern,
@@ -35,9 +35,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     mouse_event, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetCursorPos, SetForegroundWindow,
-    WM_CLOSE,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW,
+    GetWindowThreadProcessId, IsChild, IsWindowVisible, PostMessageW, SetCursorPos,
+    SetForegroundWindow, WindowFromPoint, WM_CLOSE,
 };
 
 use crate::recorder;
@@ -79,12 +79,6 @@ const POLL_MS: u64 = 250;
 const WSA_BOOT_BUDGET: Duration = Duration::from_secs(180);
 /// 冷启动期间探测 adb 的间隔（越小越快接上，代价是每秒开一次 adb 子进程）
 const WSA_POLL: Duration = Duration::from_secs(1);
-/// **WSA 首次启动**时留给用户「点掉权限申请框」的时间窗。实测：相机 / 麦克风 / 位置那类
-/// 授权框是在 **WSA 自己启动**时弹的（不是启动 B 站 APP 时），模态、会压住设置窗口和
-/// 后面的自动化。我们不代用户点掉（认窗口只能靠类名，会误伤别的系统对话框），改为把时间留出来。
-/// 这段等待与 WSA 冷启动**重叠**：冷启动本来就要几十秒才连得上 adb，这里边等边轮询，
-/// 连上就立刻结束 —— 只有真的在冷启动时才等得满，WSA 只是睡着了的时候几乎不花时间。
-const WSA_FIRST_RUN_GRACE: Duration = Duration::from_secs(12);
 /// 等**设备侧 adb 授权**（WSA 弹出的「是否允许 ADB 调试？」）时的轮询间隔。
 ///
 /// 实测（Win10）：这个弹窗要等 Android 的**系统 UI 就绪**才渲染得出来，约 1~2 分钟；
@@ -95,44 +89,26 @@ const WSA_FIRST_RUN_GRACE: Duration = Duration::from_secs(12);
 /// （日志里补发间隔 17~18s > 目标 15s 就是这么来的），比弹窗存活还长，必然次次错过。
 /// 扫描改成「先 Win32 廉价挑候选、再 UIA 定向查」之后单轮降到毫秒级，才能压到亚秒。
 const ADB_AUTH_POLL: Duration = Duration::from_millis(500);
-/// **单次 `ensure_wsa` 的授权等待总预算**，按场景给：安装/修复（会摆设置窗口、可能整台冷启动）
-/// 给足；点「开始录制」只给一点点 —— 那一刻用户正等着窗口弹出来，不该为授权干等。
+/// 等设备侧 adb 授权（WSA 弹出的「是否允许 ADB 调试？」）的总预算，按场景给：
+/// 安装 / 修复给足（可能整台冷启动 + 首次弹授权框），点「开始录制」只给一点点 ——
+/// 那一刻用户正等着窗口弹出来，不该为授权干等。
 ///
-/// 为什么必须封顶：以前 `wait_for_adb_auth` 内部是「3 轮 × 30s」的嵌套循环，而 `ensure_wsa`
-/// 的两个轮询循环**每秒**都会调进来一次 —— 单次 `ensure_wsa` 能拖到 5 分钟以上
-/// （实测反馈「点录制后一直卡住没响应」就是这个）。预算花完后授权等待降级成
-/// 「一次应答 + 复查」（几乎不花时间）；若那时设备仍卡在 `unauthorized`，直接报错
-/// （见 `ensure_wsa` 里的提前失败分支）。
-///
-/// 注意这个预算是**从「等到起点」重新锚定**的（见 [`wait_for_adb_auth`] 开头）：
-/// 弹窗渲染延迟从「设备进入 unauthorized」起算，实测最慢 89s（第 4 次测试），
-/// 加上「点击失败 → 补发重弹」一轮约 10s 和余量 → 150s。原来锚在 `ensure` 入口，
-/// 冷启动吃掉 106s 后只剩 29s（第 3 次测试），数学上必然超时。
+/// **预算从「设备真正进入 unauthorized」那一刻起算**（在 [`wait_for_adb_auth`] 首次进入时
+/// 重锚），不是从 `ensure` 入口起算 —— 入口到「开始等」之间隔着整段冷启动（实测 20~106s），
+/// 弹窗渲染又要 ~100s，若从入口起算，冷启动越慢剩给弹窗的时间越少，实测正好在到点前 0.3s
+/// 才弹出（Win10 日志：入口 21:07:38 → 弹窗 21:09:38 → 预算 21:09:38 到点），数学上必超时。
+/// 所以安装 / 修复给到 150s 留足余量。
 const ADB_AUTH_BUDGET_SETUP: Duration = Duration::from_secs(150);
 const ADB_AUTH_BUDGET_RECORD: Duration = Duration::from_secs(12);
-/// **点掉一次授权框之后的宽限期**（见 [`wait_for_adb_auth`]）。
+/// 等授权期间**补发握手**的节奏（见 [`rearm_auth_handshake`]）。
 ///
-/// 实测（Win10）：授权框常在握手后 60~104 秒才渲染出来，而总预算刚好在「点掉弹窗后 1 秒」
-/// 到期 —— 我们判了失败，设备侧却还在把这次「允许」落定，于是「点了确认仍连不上」。
-/// 所以每成功点掉一次弹窗，就把 deadline 往后推这么久；最多推 3 次（弹两次是常态，
-/// 见下面的循环），推的过程中一旦 `adb_usable` 立刻返回。
-const ADB_AUTH_GRACE: Duration = Duration::from_secs(30);
-/// **重发授权握手的间隔**（见 [`wait_for_adb_auth`]）。
-///
-/// 首次握手是「adb 端口一开就发」的，而端口在 WSA 启动 ~11s 就监听了 —— 那时安卓的提示服务
-/// （`system_server` 里的 AdbDebuggingManager）常常还没起来，设备侧会把这个请求**直接丢掉**，
-/// 且 adb 不会为同一条已存在的连接重新协商（`adb connect` 只回 already connected）。于是
-/// 「等多久都不弹框」—— 实测 3 次连续失败里窗口快照从头到尾没有授权框，而成功的几次都是
-/// 端口晚些才开。解法不是等更久，是**按节奏把那个被丢掉的请求补发一次**。
+/// 首次 `adb connect` 常在 Android SystemUI 就绪**之前**发出，会被设备侧丢掉 —— 而 adb 一旦
+/// 把 serial 记成已连接，后续 `connect` 只回 `already connected`、**不重新协商**，于是桌面上
+/// 根本没有「活着的」授权请求，弹窗自然不弹（Win10 实测：端口 00:09:50 起监听，弹窗直到
+/// 00:11:34 才出现，点掉后设备仍 unauthorized —— 点的是一条早已丢掉的旧请求）。
+/// 每隔这么久补发一次（`disconnect` + `connect`，只动这一个 serial、不碰 adb server），
+/// 让 SystemUI 就绪时桌面上始终挂着一条**新鲜**的握手请求。
 const ADB_AUTH_REARM: Duration = Duration::from_secs(15);
-/// **整台重启 WSA** 之后，等设备侧重新授权 / 重新起来的预算（只走一次，且只在安装 / 修复
-/// 路径上 —— 见 [`restart_wsa_and_reconnect`]）。
-///
-/// 90 → 150：实测两次重启后的等待窗都恰好只有 81s（90s 减去 shutdown+launch 的 ~22s 再被
-/// 首次 observed unauthorized 吃掉 9s），零弹窗超时；而重启前那次冷启动的弹窗渲染花了 89s。
-/// 81 < 89，第二次机会天然比第一次短 —— 必须给足与冷启动同级的预算，并同样从等待起点锚定。
-const WSA_RESTART_AUTH: Duration = Duration::from_secs(150);
-const WSA_RESTART_BOOT: Duration = Duration::from_secs(150);
 /// 等窗口出现的预算（进房后 Android 顶层窗口可能还要几秒才可见）
 const WINDOW_BUDGET: Duration = Duration::from_secs(30);
 /// 等窗口出现的轮询间隔
@@ -224,16 +200,13 @@ pub(crate) fn wlog_reset() {
     }
     // 顶层窗口 dump 也按「新一轮」重新给额度：上一轮用光后，这一轮就再也看不到窗口快照了
     AUTH_DUMPED.store(0, Ordering::Relaxed);
-    // 两个「只做一次」的自救标志同样复位：用户点一次「安装/修复」就是在要求重新自愈一轮。
-    // 不复位的话，第一次失败后后续几次点安装都变成空跑（实测用户会连点好几次）。
-    ADB_KEY_ROTATED.store(false, Ordering::Relaxed);
-    WSA_RESTARTED.store(false, Ordering::Relaxed);
-    // 授权框识别的「出现 / 消失 / 认不出 / UIA 失败 / 在场」标记同样按新一轮复位，
+    // 授权框识别的「出现 / 消失 / 认不出 / UIA 失败」标记同样按新一轮复位，
     // 否则新一轮弹出的框不再打「出现」日志，UIA 失败也一条都出不来（日志只截断不清空）。
     AUTH_DLG_SEEN.store(0, Ordering::Relaxed);
     UNMATCHED_LOGGED.store(0, Ordering::Relaxed);
     UIA_FAIL_LOGGED.store(0, Ordering::Relaxed);
-    DIALOG_ON_DESK.store(false, Ordering::Relaxed);
+    // 授权预算锚点按新一轮复位：新一轮要重新从「设备进入 unauthorized」那一刻起算预算。
+    AUTH_BUDGET_ANCHORED.store(false, Ordering::Relaxed);
     // 说明框标记按新一轮复位：重装 WSA 会重置它的一次性状态，说明框可能再弹一次；
     // 探测日志游标也要清 —— 否则新一轮的头几条探测会被当成「结论没变」吞掉，
     // 日志里只剩一条 banner、看不出到底有没有开始连。
@@ -508,76 +481,12 @@ pub(crate) fn extract_platform_tools(zip_path: &Path, dest: &Path) -> Result<(),
 
 // ==================== adb 调用 ====================
 
-/// 本应用**私有的 adb 用户目录**（`%APPDATA%\com.bili-live.app\setup\android-home`）：
-/// adb 会把客户端密钥（`adbkey` / `adbkey.pub`）生成在这里，而不是用户的 `%USERPROFILE%\.android`。
-///
-/// **只在「卡死授权」时才切过来**（见 [`ensure_wsa`] 里的换钥分支）：正常用户一个字节都不碰。
-/// 切过来的目的是**拿到一把全新的公钥** —— WSA 宿主的「是否允许 ADB 调试？」弹窗只在它见到
-/// **没见过的**公钥时才弹；一旦它把某把公钥记成「已拒绝 / 已处理过」，用同一把再连就永远是
-/// `unauthorized` 且**再也不弹窗**，日志里那串「已重做全新握手 3 轮 × 30s 全超时」正是这个死锁。
-fn adb_home_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("APPDATA")?;
-    Some(
-        PathBuf::from(base)
-            .join("com.bili-live.app")
-            .join("setup")
-            .join("android-home"),
-    )
-}
-
-/// 当前 adb 用户目录（`None` = 用系统默认的 `%USERPROFILE%\.android`）。由 [`output_of`] 注入。
-static ADB_HOME: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-/// **换一把全新密钥**：切到私有 adb 用户目录（见 [`adb_home_dir`]）并删掉里面已有的密钥文件。
-///
-/// 删文件是必要的：光切目录，adb 第二次还是接着用同一把密钥，等于白换。整个进程内由
-/// [`ADB_KEY_ROTATED`] 保证只换一次（每轮安装会复位它，见 [`wlog_reset`]）。
-fn use_private_adb_home() -> bool {
-    let Some(dir) = adb_home_dir() else {
-        // 不留静默分支：这条路一旦悄悄失败，日志里就会出现「已换过密钥=true」却没有换钥记录，
-        // 现场直接断线（实测吃过这个亏）。
-        wlog("[adb] 取不到 %APPDATA%，无法改用私有密钥目录");
-        return false;
-    };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        wlog(&format!("[adb] 建私有密钥目录 {} 失败：{e}", dir.display()));
-        return false;
-    }
-    // 删掉旧密钥 → adb 下次调用时会现场生成一把全新的
-    for name in ["adbkey", "adbkey.pub"] {
-        let f = dir.join(name);
-        if f.exists() {
-            let _ = std::fs::remove_file(&f);
-            wlog(&format!("[adb] 已删除旧密钥 {}", f.display()));
-        }
-    }
-    if let Ok(mut g) = ADB_HOME.lock() {
-        *g = Some(dir.clone());
-    }
-    wlog(&format!(
-        "[adb] 已改用私有密钥目录 {} 并将生成全新密钥（不碰用户自己的 .android）",
-        dir.display()
-    ));
-    true
-}
-
-/// 进程内是否已经为「授权死锁」换过密钥 —— 只换一次：换完还要用户点弹窗，
-/// 每次都换只会让刚点完的那次授权作废。
-static ADB_KEY_ROTATED: AtomicBool = AtomicBool::new(false);
-
 /// 跑子进程并拿到输出（`CREATE_NO_WINDOW`：不弹黑框）。
-///
-/// 顺带注入 `ANDROID_USER_HOME`：切到私有密钥目录后，**每一条** adb 命令都必须用同一个目录，
-/// 否则 `kill-server` / `connect` / `shell` 会各自拿着一把不同的密钥，授权永远对不上。
 fn output_of(exe: &Path, args: &[String]) -> Result<Output, String> {
-    let mut cmd = Command::new(exe);
-    cmd.args(args).creation_flags(CREATE_NO_WINDOW.0);
-    if let Ok(g) = ADB_HOME.lock() {
-        if let Some(dir) = g.as_ref() {
-            cmd.env("ANDROID_USER_HOME", dir);
-        }
-    }
-    cmd.output()
+    Command::new(exe)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .output()
         .map_err(|e| format!("ADB_NOT_FOUND::无法启动 {}: {e}", exe.display()))
 }
 
@@ -625,17 +534,46 @@ unsafe fn click_at(x: i32, y: i32) {
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
 }
 
-/// 把窗口顶到前台（最多试 3 次），返回它是否**确实**在前台 —— 不是就别点，
-/// 免得这几下点击落到别的窗口上。
+/// 把窗口顶到前台（最多试 3 次），返回它是否**确实**在前台。
+///
+/// **前台锁**（Win10 实测的失败现场）：不是前台进程的 `SetForegroundWindow` 会被 Windows
+/// 直接静默拒绝 —— 20261014 日志里授权框明明就在桌面上、后代样本也全对，却次次
+/// 「没能切到前台（被别的窗口占着）」→ [`accept_adb_auth`] 放弃点击 → 弹窗自己消失 →
+/// 设备永远 unauthorized。破解办法是 `AttachThreadInput`：把自己线程**附加**到当前前台窗口
+/// 的线程上，使两者共享输入队列；附加期间前台锁对本进程失效，`SetForegroundWindow` 才真的生效。
 unsafe fn bring_to_front(hwnd: HWND) -> bool {
     for _ in 0..3 {
         if GetForegroundWindow() == hwnd {
             return true;
         }
+        let fg = GetForegroundWindow();
+        let fg_tid = if fg.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, None)
+        };
+        let cur_tid = GetCurrentThreadId();
+        let attached =
+            fg_tid != 0 && fg_tid != cur_tid && AttachThreadInput(fg_tid, cur_tid, true).as_bool();
         let _ = SetForegroundWindow(hwnd);
+        let _ = BringWindowToTop(hwnd);
+        if attached {
+            let _ = AttachThreadInput(fg_tid, cur_tid, false);
+        }
+        if GetForegroundWindow() == hwnd {
+            return true;
+        }
         std::thread::sleep(Duration::from_millis(250));
     }
     GetForegroundWindow() == hwnd
+}
+
+/// 屏幕点 `(x, y)` 是否落在 `hwnd` 上（含它的各级子控件）—— 拿 `WindowFromPoint` 问系统
+/// 「这个点上是谁」，比「窗口当前是不是前台」更贴近我们真正关心的事：**点击会不会落偏**。
+/// 抢不到前台时，只要「允许」按钮所在的点确属本框，点它就不会误伤别的窗口。
+unsafe fn point_in_window(hwnd: HWND, x: i32, y: i32) -> bool {
+    let hit = WindowFromPoint(POINT { x, y });
+    hit == hwnd || IsChild(hwnd, hit).as_bool()
 }
 
 /// 自动应答 WSA 的 adb 授权弹窗。
@@ -670,10 +608,8 @@ unsafe fn bring_to_front(hwnd: HWND) -> bool {
 /// 系统语言 / Android 版本变，这个按钮对变不掉；实测两次弹窗都栽在字面判据没赶上。
 /// 两条都过、且拿到「允许」按钮才动手（[`bring_to_front`] 切不到前台就不点）。
 fn accept_adb_auth() -> bool {
-    // ① 廉价候选（Win32 枚举，毫秒级）。顺手记下「桌面上有没有对话框在场」，
-    // 供 [`wait_for_adb_auth`] 决定要不要补发握手 —— `disconnect` 会把在场的弹窗掐掉。
+    // ① 廉价候选（Win32 枚举，毫秒级）。
     let candidates = unsafe { collect_auth_candidates() };
-    DIALOG_ON_DESK.store(!candidates.is_empty(), Ordering::Relaxed);
     // 之前认到的那个框若已经关掉，在这里打「消失」边沿（每次只花一次 IsWindowVisible）。
     let _ = auth_dialog_gone();
     if candidates.is_empty() {
@@ -752,7 +688,19 @@ fn accept_adb_auth() -> bool {
                 }
                 continue;
             }
-            mark_auth_dialog_present(hwnd, &format!("{class} | {title}"));
+            // 判据过了也把后代样本带进那条（边沿去重的）「出现」日志：它决定了我们**点的是不是**
+            // 真授权框 —— 只记 `类名 | 标题` 时，实测里面对一个空标题的 `#32770` 只能靠猜。
+            mark_auth_dialog_present(
+                hwnd,
+                &format!(
+                    "{class} | {title}；后代样本：{}",
+                    if samples.is_empty() {
+                        "（无）".to_string()
+                    } else {
+                        samples.join(" / ")
+                    }
+                ),
+            );
             if allow.is_none() {
                 wlog(&format!(
                     "[wsa] 认到 adb 授权框但没找到「允许」按钮，无法自动应答（后代元素样本：{}）",
@@ -761,27 +709,37 @@ fn accept_adb_auth() -> bool {
                 dump_top_windows();
                 continue;
             }
-            // 只有确认弹窗真的在最前面才动手 —— 否则这两下点击会落在别的窗口上
-            if !bring_to_front(hwnd) {
-                wlog("[wsa] adb 授权框没能切到前台（被别的窗口占着），放弃自动应答");
-                return false;
-            }
             // 「始终允许」是那一行的**左端**小方块：该 Pane 的矩形覆盖了整行（含文字），
             // 所以取左侧内缩一小段，而不是取矩形中心。
-            if let Some(r) = checkbox.filter(|r| r.right > r.left) {
-                click_at(r.left + 10, r.top + (r.bottom - r.top) / 2);
-                std::thread::sleep(Duration::from_millis(300));
-                // 勾选那下点击可能被系统弹层（「文档」文件夹、诊断说明框）抢走前台 ——
-                // 点「允许」前复查一次，被抢就抢回来；抢不回来就放弃本轮，
-                // 绝不把点击落在别的窗口上（那正是「框关了但设备没授权」的一种来源）。
-                if GetForegroundWindow() != hwnd && !bring_to_front(hwnd) {
-                    wlog("[wsa] 勾选后授权框失去前台且抢不回来 —— 放弃本轮点击，下轮重试");
-                    return false;
-                }
-            }
+            let checkbox_pt = checkbox
+                .filter(|r| r.right > r.left)
+                .map(|r| (r.left + 10, r.top + (r.bottom - r.top) / 2));
             let allow_pt = allow
                 .filter(|r| r.right > r.left)
                 .map(|r| (r.left + (r.right - r.left) / 2, r.top + (r.bottom - r.top) / 2));
+            // 只有确认点击点真的属于本框才动手 —— 否则这两下点击会落在别的窗口上。
+            // **抢不到前台时不再直接放弃**（20261014 日志的失败点）：前台锁让后台进程的
+            // `SetForegroundWindow` 失效，但「允许」按钮所在的屏幕点照样确属本框，
+            // 点它就会同时激活对话框并按下按钮（激活不了顶多多等一轮，下一轮前台就到手了）。
+            let foreground = bring_to_front(hwnd);
+            if !foreground
+                && !allow_pt
+                    .map(|(x, y)| point_in_window(hwnd, x, y))
+                    .unwrap_or(false)
+            {
+                wlog("[wsa] adb 授权框没能切到前台、点击点也不属于本框 —— 放弃自动应答");
+                dump_top_windows();
+                return false;
+            }
+            if !foreground {
+                wlog("[wsa] adb 授权框抢不到前台（前台锁），但「允许」所在的点确属本框 —— 直接点，点一下会顺带激活它");
+            }
+            if let Some((cx, cy)) = checkbox_pt {
+                if foreground || point_in_window(hwnd, cx, cy) {
+                    click_at(cx, cy);
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            }
             if let Some((x, y)) = allow_pt {
                 click_at(x, y);
             }
@@ -830,18 +788,18 @@ static AUTH_DLG_SEEN: AtomicIsize = AtomicIsize::new(0);
 static UNMATCHED_LOGGED: AtomicIsize = AtomicIsize::new(0);
 /// UIA 初始化失败的计数（每轮安装最多打 3 条 —— 失败时它每 500ms 就会再失败一次）。
 static UIA_FAIL_LOGGED: AtomicU8 = AtomicU8::new(0);
-/// 桌面上**有对话框候选在场**（可见的 `#32770` / 标题带 adb，不管认没认出来）。
-/// [`wait_for_adb_auth`] 据此跳过补发握手：`disconnect` 会把正等点击的弹窗掐掉 ——
-/// 与 `kill-server` 同机制，是「弹窗没人点却自己消失」的直接嫌疑。
-static DIALOG_ON_DESK: AtomicBool = AtomicBool::new(false);
-/// 本轮 `ensure` 是否已经把授权预算**重新锚定到等待起点**（见 [`wait_for_adb_auth`]）。
-/// 每轮 ensure 只锚一次：外层按秒轮询反复进等待时不会无限续期；`restart_wsa_and_reconnect`
-/// 起 phase2 前复位一次，给重启后的新一轮等待一个全新锚点。
-static AUTH_BUDGET_ANCHORED: AtomicBool = AtomicBool::new(false);
 /// 「可选诊断数据」说明框**已经被点掉**。它一辈子只弹一次，点掉过就再也不必等它 ——
 /// 实测三轮 `设置窗口自动化` 全是 6.5s：说明框不在场时，[`ensure_wsa_inner`] 那个
 /// `8 × 500ms` 的等待就是纯空转 4.0 秒。boot 期点掉后置位，后面的等待直接跳过。
 static FIRST_RUN_DIALOG_GONE: AtomicBool = AtomicBool::new(false);
+/// 本轮 `ensure` 是否已经把授权预算**重锚到「开始等待授权」那一刻**（见 [`wait_for_adb_auth`]）。
+///
+/// 必须重锚：`ensure` 入口到「设备真正进入 unauthorized」之间隔着整段冷启动（Win10 实测 20s，
+/// 别的机器可到 106s），而授权弹窗要等系统 UI 就绪才渲染、约 100s —— 若从入口起算，冷启动
+/// 越慢剩给弹窗的时间越少，实测正好在预算到点前 0.3s 才弹出，数学上必超时。
+/// 每轮 `ensure` 只锚一次（[`wlog_reset`] 与 [`ensure_wsa_inner`] 入口复位），否则外层按秒
+/// 轮询会把预算无限续期，变成加时补丁而非修锚点。
+static AUTH_BUDGET_ANCHORED: AtomicBool = AtomicBool::new(false);
 /// adb 探测日志的**去重游标**：[`connect_inner`] 每 1~2 秒跑一趟，成功/失败各刷一条会把
 /// 日志刷成瀑布（实测一轮等待 50+ 条 `连不上`，有用的行全被淹掉）。只在**结论变化**时打。
 static ADB_PROBE_LAST: Mutex<String> = Mutex::new(String::new());
@@ -1020,16 +978,13 @@ fn connect(exe: &Path) -> Option<Adb> {
     connect_inner(exe, None)
 }
 
-/// 同 [`connect`]，但卡在 `unauthorized` 时愿意花时间等用户授权（见 [`wait_for_adb_auth`]）。
-/// 只给 `ensure_wsa`（安装/录屏这种"就是要连上"的场景）用；`deadline` 是这次等待的**总预算**
-/// 上界（见 [`ADB_AUTH_BUDGET_SETUP`]），到点后授权等待自动降级成「一次应答 + 复查」。
+/// 同 [`connect`]，但卡在 `unauthorized` 时愿意花时间等用户授权，直到 `deadline` 为止。
+/// 只给 `ensure_wsa`（安装/录屏这种"就是要连上"的场景）用。
 ///
-/// `budget` 是「每次开始等授权」的**起算预算**：[`wait_for_adb_auth`] 首次进入时会把
-/// `deadline` 重锚到 `now + budget`（每轮 ensure 只锚一次）—— 弹窗渲染延迟是从「设备进入
-/// unauthorized」起算的（实测 64~89s），而不是从 ensure 入口起算；锚错会让冷启动后的等待
-/// 窗只剩十几秒，数学上必然超时（第 3 次测试：入口设的 deadline 只剩 29s 就到点）。
-fn connect_waiting_auth(exe: &Path, auth_deadline: &mut Instant, budget: Duration) -> Option<Adb> {
-    connect_inner(exe, Some((auth_deadline, budget)))
+/// `budget` 是「每次进入等待」的起算预算：首次真正开始等时会把它**重锚**到 `now + budget`
+/// （见 [`wait_for_adb_auth`]），因此要传 `&mut`，重锚后的新上界回写给外层循环。
+fn connect_waiting_auth(exe: &Path, deadline: &mut Instant, budget: Duration) -> Option<Adb> {
+    connect_inner(exe, Some((deadline, budget)))
 }
 
 fn connect_inner<'a>(exe: &Path, mut auth: Option<(&'a mut Instant, Duration)>) -> Option<Adb> {
@@ -1070,206 +1025,95 @@ fn adb_usable(cand: &Adb) -> bool {
     cand.shell("echo ok").map(|s| s.contains("ok")).unwrap_or(false)
 }
 
-/// 等设备侧完成 adb 授权（WSA 弹出的「是否允许 ADB 调试？」）。
+/// 等设备侧完成 adb 授权（WSA 弹出的「是否允许 ADB 调试？」弹窗）。
 ///
-/// **为什么不能"睡一下再复查一次"**：实测（Win10，DESKNEATH）——adb 端口在第 7 秒就监听了，
-/// 而那个授权弹窗要等 Android 的**系统 UI 就绪**才渲染得出来，实测约 1~2 分钟。于是第一次
-/// 握手必然发生在 UI 就绪**之前**，弹窗请求根本发不出来；更糟的是 adb 一旦把这个 serial 记成
-/// 已连接，后续 `adb connect` 只回 `already connected to ...`、**不会重新协商**，于是
-/// 「握手太早」会永久卡在 `unauthorized`，怎么等都不会自己好（实测：反复 `connect` 无效）。
-/// 所以这里的做法是**保留现有那条连接，按 [`ADB_AUTH_REARM`] 的节奏补发请求**
-/// （`disconnect` + `connect`，只针对这一个 serial，不碰 adb server）—— 补发会让设备侧
-/// 重新走一次协商，请求就有机会落在系统就绪之后。
+/// 端口在监听但设备停在 `unauthorized` 时：每 [`ADB_AUTH_POLL`] 替用户点一次弹窗
+/// （[`accept_adb_auth`]），点完立刻回读设备状态，`deadline` 到点才放弃。
 ///
-/// **绝不 `kill-server`；请求丢了只补发，不重做服务端** —— 原实现是「3 轮 × 30s，每轮开头
-/// 都 kill-server」，而 `kill-server` 会把 adb server 连同它那条**正在等授权的连接**一起掐掉，
-/// WSA 侧的授权框是挂在那条连接上的，于是刚弹出来就跟着消失。用户的现场描述是弹窗
-/// 「闪现了一下就没了」，日志里则从头到尾看不到任何授权框 —— 正是我们自己把它点掉了。
-/// 走到这个函数时 `connect_inner` 刚 `adb connect` 过、并确认设备 `unauthorized`，那条连接
-/// 就是「请求正挂着」的那条，必须原样留着。
+/// **预算重锚**（见 [`AUTH_BUDGET_ANCHORED`]）：首次进入时把 `deadline` 重锚到 `now + budget`
+/// （每轮 `ensure` 只锚一次）。弹窗要等 Android 系统 UI 就绪才渲染，实测约 100s —— 而这一整段
+/// 发生在 `ensure` 入口之后，若从入口起算预算，冷启动越慢剩给弹窗的时间越少，Win10 日志里
+/// 正好在预算到点前 0.3s 才弹出、刚点到「允许」就判超时。重锚保证「无论冷启动多久，弹窗都有
+/// 完整的 `budget` 可用」。
 ///
-/// **等待期间绝不换钥**。实测（4 次换钥 4 次失败、3 次没换 3 次成功）：换钥的那次 `kill-server`
-/// 会掐掉正在等授权的连接，用户点掉的「允许」记在旧钥上，新钥依旧 unauthorized。换钥只允许
-/// 发生在进入等待**之前**（见 [`ensure_wsa_inner`] 的 `ADB_KEY_ROTATED` 分支）。
-///
-/// **点掉弹窗就往后宽限**（见 [`ADB_AUTH_GRACE`]）：弹窗要等系统 UI 就绪才渲染，常在握手后
-/// 60~104 秒才出现，而预算往往在「点掉后 1 秒」就到 —— 设备侧还没来得及把授权落定。
-///
-/// **必须受 `deadline` 约束**：否则 `ensure_wsa` 的两个轮询循环每秒调进来一次，能把单次调用
-/// 拖到五分钟以上（实测「点录制后一直卡住没反应」就是它）。预算花完就降级成
-/// 「一次应答 + 复查」，几乎不花时间。
-///
-/// **预算从等待起点重新锚定**（第 3、4 次测试的根因之一）：deadline 原来在 `ensure` 入口
-/// 就固定成一个 `Instant`，可入口到「设备真正进入 unauthorized」之间隔着整段冷启动
-/// （实测 106s）—— 到开始等时只剩 29s，而弹窗渲染要 64~89s，**数学上必然超时**，
-/// 白白触发一次整台重启。现在首次进入时重锚到 `now + budget`（`deadline` 是 `&mut`，
-/// 重锚与宽限都回写给外层「预算用尽 → 结束冷启动 / 整台重启」的判据；每轮 ensure 只锚
-/// 一次，否则外层每秒轮询会把预算无限续期 —— 那就成了加时补丁而不是修锚点）。
-///
-/// **点击必须闭环**（第 3、4 次测试 4 点 2 中的根因）：成功的两次点后 **0.17s** 就授权；
-/// 失败的两次是「框关了、设备始终没授权」，老实现只能等 grace 30s 和 15s 补发周期碰运气
-/// （实测空耗 27s 才靠重弹恢复）。现在点完立刻回读 `adb_usable`：成功就地返回；
-/// 框已关还不成功 → **立即**补发握手要回新弹窗；框还在 → 下一轮用刷新坐标重点。
-///
-/// **每 2s 顺手排掉「可选诊断数据」说明框**：它模态压住桌面（第 3 次测试亲眼所见、
-/// 没人点掉），出现时机不受启动阶段约束，而老实现只在启动期给 4 秒窗口试一次、
-/// 重启路径干脆不试。放进等待循环后，冷启动与重启两条路径都被覆盖。
+/// **点击闭环**：成功点掉弹窗后设备侧授权传播要 0.5~1s（实测），所以点完给 3 × 500ms 复查，
+/// 否则刚点中就因「还没传播到」而误判超时。
 fn wait_for_adb_auth(cand: &Adb, deadline: &mut Instant, budget: Duration) -> Option<Adb> {
-    // **预算锚点修正**：首次进入等待时重锚（取较晚值），实测依据见函数文档。
+    // 首次进入等待：重锚预算（取较晚值，只放宽不缩短）。
     if !AUTH_BUDGET_ANCHORED.swap(true, Ordering::Relaxed) {
         let anchored = Instant::now() + budget;
         if anchored > *deadline {
             *deadline = anchored;
-            wlog(&format!(
-                "[wsa] 授权预算重新锚定在等待起点（+{:.0}s；弹窗渲染延迟从设备进入 unauthorized 起算，实测最慢 89s）",
-                budget.as_secs_f32()
-            ));
         }
+        wlog(&format!(
+            "[wsa] 授权预算重锚到等待起点：+{:.0}s（弹窗要等系统 UI 就绪才渲染，实测约 100s）",
+            budget.as_secs_f32()
+        ));
     }
+    // 预算已尽：外层循环每秒还会调进来一次，这里只做收尾且**不打任何日志** ——
+    // 否则就是 Win10 日志里 21:09:49→21:10:47 那段每秒两条的瀑布。
     if Instant::now() >= *deadline {
-        // 预算已尽：不进入等待，只顺手替用户点一下弹窗（若正好在）并复查一次。
         accept_adb_auth();
         return adb_usable(cand).then(|| cand.clone());
     }
-    let total = (*deadline).saturating_duration_since(Instant::now());
-    // 预算宽裕 = 安装 / 修复这条路（≥30s）。点「开始录制」那条路只给 12s，要的是快，
-    // 所以下面「点掉弹窗就再宽限一会儿」只在宽裕时生效。
-    let generous = total >= Duration::from_secs(30);
-    // **从进入等待到结束，密钥必须一动不动。** 实测（4 次换钥 4 次失败、3 次没换 3 次成功）：
-    // 换钥前那次握手会在安卓侧挂起一条「等授权的连接」，它的弹窗往往要等系统起来才渲染出来；
-    // 等它终于弹出来时，`kill-server` 早把服务端换成新钥了 —— 用户点掉的「允许」记在**旧钥**
-    // 上，新钥依旧 unauthorized。换钥只允许发生在进入等待**之前**（见 `ensure_wsa_inner`）。
-    wlog(&format!(
-        "[wsa] 设备未授权：保留现有连接等授权框（总预算 {:.0}s；每 {:.0}s 补发一次握手，绝不 kill-server）",
-        total.as_secs_f32(),
-        ADB_AUTH_REARM.as_secs_f32()
-    ));
-    // **定时给桌面拍快照**：只在「认不到弹窗时」顺手 dump 是不够的 —— 那两次额度往往在
-    // 等待刚开始的一秒内就被用光，而那时弹窗根本还没渲染出来，于是最关键的中段一片空白
-    // （实测就是这样：120s 等待里一条窗口快照都没有）。改成按时间点强制 dump。
-    let mut next_dump = Instant::now() + Duration::from_secs(15);
-    // 「点掉了弹窗」还能宽限几次 —— 见 [`ADB_AUTH_GRACE`]。
-    let mut grace_left = 3u8;
-    // 上一次认到（并点掉）弹窗的时刻。弹窗点完不会立刻关，下一秒轮询会再匹配到同一个窗口
-    // （实测「连续弹出两次、间隔约 2 秒」就是这么来的）—— 重复点击既不该再吃掉一次宽限，
-    // 也不该触发下面那次「补发握手」（那会掐掉刚被点掉的授权）。
-    let mut last_click: Option<Instant> = None;
-    let mut clicked = false;
-    let mut next_rearm = Instant::now() + ADB_AUTH_REARM;
-    // 「可选诊断数据」说明框的定期排除（2s 一次，见函数文档）。没候选时只花一次窗口枚举，
-    // 有设置窗口时才做一次 UIA 定向扫 —— 对 500ms 的轮询节奏无感。
+    wlog("[wsa] 设备未授权：等授权框（会自动替你点「允许」）…");
     let mut next_dismiss = Instant::now();
+    let mut next_rearm = Instant::now() + ADB_AUTH_REARM;
     while Instant::now() < *deadline {
-        // ① 先排掉可能压住授权框的模态说明框（Invoke 不抢焦点；失败它自己会留痕）。
+        // 每 2 秒排一次「可选诊断数据」说明框 —— 它是模态的，可能压在授权框前面。
         if Instant::now() >= next_dismiss {
             next_dismiss = Instant::now() + Duration::from_secs(2);
             dismiss_first_run_dialog();
         }
-        // ② 应答授权框 + **点击闭环验证**（点完立刻回读，见函数文档）。
-        if accept_adb_auth() {
-            clicked = true;
-            let now = Instant::now();
-            let repeat = last_click
-                .map(|t| now.duration_since(t) < Duration::from_secs(5))
-                .unwrap_or(false);
-            last_click = Some(now);
-            if generous && grace_left > 0 && !repeat {
-                grace_left -= 1;
-                // 只**放宽**、绝不缩短：宽限是在既有预算上追加的，否则点一次框反而把
-                // 剩余预算砍到 30s（预算锚点修正的意义就被这一行抵消了）。
-                let g = now + ADB_AUTH_GRACE;
-                if g > *deadline {
-                    *deadline = g;
+        let clicked = accept_adb_auth();
+        if clicked {
+            wlog("[wsa] 已自动应答 adb 授权框");
+            // 点击闭环：授权传播要 0.5~1s，给 3 × 500ms 复查再判。
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(500));
+                if adb_usable(cand) {
+                    wlog("[wsa] 设备已授权，adb 可用（点击后闭环验证通过）");
+                    return Some(cand.clone());
                 }
-                wlog(&format!(
-                    "[wsa] 已点掉授权框 —— 再宽限 {:.0}s 等设备侧把授权落定（可能还要再点一次）",
-                    ADB_AUTH_GRACE.as_secs_f32()
-                ));
             }
-            if verify_after_click(cand) {
-                wlog("[wsa] 设备已授权，adb 可用（点击后闭环验证通过）");
-                return Some(cand.clone());
-            }
-            if unsafe { collect_auth_candidates() }.is_empty() {
-                // 框关了但设备没认：点击没生效（坐标过期 / 点偏）或这条握手已废。
-                // 立即补发要回新弹窗，不等 15s 周期 —— 前两次失败各空耗 27s 就耗在这一步。
-                rearm_auth_handshake(cand, "点后授权框已关但设备仍未授权");
-                next_rearm = Instant::now() + ADB_AUTH_REARM;
-            } else {
-                wlog("[wsa] 点击后授权框仍在场 —— 下一轮会用刷新后的坐标重点");
-            }
-        }
-        // **补发那个可能被丢掉的授权请求**（见 [`ADB_AUTH_REARM`]）。只 `disconnect` 这一个
-        // serial 再 `connect`，不碰 adb server，所以不会伤到别的连接、也不算「重新开始」。
-        if Instant::now() >= next_rearm {
+            // 点掉了、设备却没认 —— 这条弹窗对应的多半是早已丢掉的旧请求（见 [`ADB_AUTH_REARM`]）：
+            // 立刻补发一条新的握手，要回一个「挂在活连接上」的弹窗。
+            rearm_auth_handshake(cand);
             next_rearm = Instant::now() + ADB_AUTH_REARM;
-            let just_clicked = last_click
-                .map(|t| t.elapsed() < ADB_AUTH_REARM)
-                .unwrap_or(false);
-            if DIALOG_ON_DESK.load(Ordering::Relaxed) {
-                // 桌面上有对话框正等应答（本轮开头的 accept 刚刷新过这个标记，是最新的）——
-                // `disconnect` 会把弹窗掐掉，和 `kill-server` 同机制，正是「弹窗没人点
-                // 却自己消失」的来源。这一轮宁可不补发，等它关掉再补。
-                wlog("[wsa] 桌面上有对话框在场 —— 本轮跳过补发握手（disconnect 会把弹窗掐掉）");
-            } else if !just_clicked {
-                rearm_auth_handshake(
-                    cand,
-                    "首次握手常在安卓提示服务就绪前发出，会被设备侧丢掉",
-                );
-            }
+            wlog("[wsa] 点掉授权框后设备仍未授权 → 已补发握手（要回新弹窗）");
         }
-        // 无条件复查：用户手动点过「允许」时 accept 找不到弹窗会返回 false，
-        // 若写成 `accept() && usable()` 就会短路掉这条最该走通的路。
+        // 无条件复查：用户自己点了「允许」时 accept 找不到弹窗会返回 false。
         if adb_usable(cand) {
             wlog("[wsa] 设备已授权，adb 可用");
             return Some(cand.clone());
         }
-        if Instant::now() >= next_dump {
-            next_dump = Instant::now() + Duration::from_secs(30);
-            dump_top_windows();
+        // 桌面上没有弹窗在场时，定期补发握手：保证 SystemUI 就绪那一刻桌面上挂着一条**新鲜**的
+        // 授权请求。有弹窗在场时刻意**不**补发 —— `disconnect` 会把正等点击的弹窗一起掐掉。
+        if AUTH_DLG_SEEN.load(Ordering::Relaxed) == 0 && Instant::now() >= next_rearm {
+            next_rearm = Instant::now() + ADB_AUTH_REARM;
+            rearm_auth_handshake(cand);
         }
         std::thread::sleep(ADB_AUTH_POLL);
     }
-    wlog(&format!(
-        "[wsa] 等设备授权超时：adb 端口在监听，但设备侧始终未授权（{}）",
-        if clicked {
-            "点掉过授权框，但设备侧没认"
-        } else {
-            "全程没认到授权框"
-        }
-    ));
+    // 预算用尽：最后替用户点一下弹窗（若正好在）并复查一次 —— 用户手动点的授权才有机会被认到。
+    accept_adb_auth();
+    if adb_usable(cand) {
+        wlog("[wsa] 设备已授权，adb 可用（预算用尽前的最后一次复查）");
+        return Some(cand.clone());
+    }
+    wlog("[wsa] 等设备授权超时（端口在监听，设备侧始终未授权）");
     None
 }
 
-/// **点击闭环验证**：点完授权框后立刻回读设备状态。实测两次成功的等待里，
-/// 「点掉授权框」到 `device authorized` 只隔 **0.17s** —— 所以给 3 轮 × 500ms 足够；
-/// 若 1.5s 后设备仍未授权，说明这次点击没生效（坐标过期 / 被抢前台 / 握手已废），
-/// 调用方据 [`collect_auth_candidates`] 的结果决定「立即补发」还是「下轮重点」。
-/// 这就是「4 点 2 中、失败那次白等 27s」的闭环修复。
-fn verify_after_click(cand: &Adb) -> bool {
-    for _ in 0..3 {
-        std::thread::sleep(Duration::from_millis(500));
-        if adb_usable(cand) {
-            return true;
-        }
-    }
-    false
-}
-
-/// **补发授权握手**：只 `disconnect` 这一个 serial 再 `connect`，不碰 adb server，
-/// 所以不会伤到别的连接、也不算「重新开始」。结果打进日志（原来 `let _ =` 丢弃，
+/// 补发一次该 serial 的授权握手：`disconnect` + `connect`，只动这一个连接、不碰 adb server，
+/// 所以不会伤到别的连接、也不算「重新开始」。结果打进日志（原来只 `let _ =` 丢弃，
 /// 补发失败与否无从取证）。
-fn rearm_auth_handshake(cand: &Adb, why: &str) {
+fn rearm_auth_handshake(cand: &Adb) {
     let _ = output_of(&cand.exe, &["disconnect".to_string(), cand.serial.clone()]);
-    let conn = output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]);
-    let receipt = match &conn {
-        Ok(o) => combined(o).trim().to_string(),
-        Err(e) => format!("connect 失败: {e}"),
-    };
-    wlog(&format!(
-        "[wsa] 补发一次授权握手（{}）→ {receipt}",
-        why
-    ));
+    match output_of(&cand.exe, &["connect".to_string(), cand.serial.clone()]) {
+        Ok(o) => wlog(&format!("[wsa] 补发一次授权握手 → {}", combined(&o).trim())),
+        Err(e) => wlog(&format!("[wsa] 补发授权握手失败：{e}")),
+    }
 }
 
 fn boot_completed(adb: &Adb) -> bool {
@@ -1301,17 +1145,40 @@ fn wsa_client_exe() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// WSA 的**系统协议 URI**：经 Windows 的 URI 处理器交给 WSA，**完整启动整个子系统**。
+///
+/// 这是本轮修复的**根因**：只裸跑 `WsaClient.exe` 往往只是把宿主拉起来注册一下，子系统
+/// （虚拟机 / 安卓）并没有真正跑完 —— 于是 adb 端口迟迟不监听、连不上。改用 `wsa://system`
+/// 之后子系统会被完整启动，端口正常监听，adb 自然就连上了，之前那一大堆重连容错都成了多余。
+const WSA_BOOT_URI: &str = "wsa://system";
+
 /// 拉起 WSA **本体**（子系统）。
 ///
-/// 直接跑 `WsaClient.exe`（无参数）：它不显示任何界面，只把子系统启起来 —— 比经 `explorer`
-/// 走开始菜单 AppID 少一层，也不依赖资源管理器。别名不在时退回 AppID。
+/// **首选走 WSA 协议**（见 [`WSA_BOOT_URI`]）：`cmd /C start "" "wsa://system"` —— 这是本机实测
+/// 唯一能可靠「完整启动」子系统的做法（用户实测总结）。`start` 的第一个带引号参数是窗口标题，
+/// 故留空串。
 ///
-/// 实测冷启动时序：**1.4 秒**出现 `vmmemWSA`、**7.4 秒** adb 端口 58526 开始监听。
+/// 退路：裸跑 `WsaClient.exe`（不显示界面，只把子系统启起来）；再不行经 `explorer` 走开始菜单
+/// AppID。实测冷启动时序：**1.4 秒**出现 `vmmemWSA`、**7.4 秒** adb 端口 58526 开始监听 ——
 /// 所以**别拿 `vmmemWSA` 当就绪信号**（它出现得太早，那会儿端口还没开），轮询 adb 才准。
 ///
 /// 拉起之前先 [`pre_allow_host_capabilities`]：那三个宿主隐私弹窗就是在这时候冒出来的。
 fn launch_wsa() {
     pre_allow_host_capabilities();
+    // 首选：经 WSA 协议完整启动子系统（`start` 首个带引号参数是窗口标题，故留空串）。
+    if Command::new("cmd")
+        .args(["/C", "start", "", WSA_BOOT_URI])
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+    {
+        wlog(&format!("[wsa] 经 WSA 协议完整启动子系统：{WSA_BOOT_URI}"));
+        return;
+    }
+    // 退路 1：裸跑 `WsaClient.exe`（不显示界面，只把子系统启起来）。
     if let Some(exe) = wsa_client_exe() {
         if Command::new(exe)
             .creation_flags(CREATE_NO_WINDOW.0)
@@ -1324,6 +1191,7 @@ fn launch_wsa() {
             return;
         }
     }
+    // 退路 2：经开始菜单 AppID
     launch_wsa_shell();
 }
 
@@ -1822,18 +1690,16 @@ fn enable_developer_mode() -> bool {
     }
 }
 
-/// 确保 WSA 在跑且 adb 可连：能连就直接用；连不上就唤醒 WSA（需要时先代开「开发人员模式」），
-/// 再轮询到启动完成。
+/// 确保 WSA 在跑且 adb 可连：能连就直接用；连不上就用 `wsa://system` 完整启动子系统
+/// （安装 / 修复时顺带代开「开发人员模式」），再轮询到启动完成。
 ///
-/// `show_settings`：唤醒 WSA 时是否**代开「开发人员模式」开关**（adb 端口 58526 只有开了它
+/// `show_settings`：启动 WSA 时是否**代开「开发人员模式」开关**（adb 端口 58526 只有开了它
 /// 才监听）。安装 / 修复流程给 `true`；开始录屏那条路给 `false`，因为那里 WSA 往往只是睡着了、
 /// 再弹一个设置窗口纯属打扰。
 ///
-/// 整条链：开设置窗口 → 点掉诊断说明框 → 切开关 → 收窗口 →（没在跑才）显式 `launch_wsa()`
-/// → 轮询 `connect`（首次连上会弹授权窗，由 [`accept_adb_auth`] 应答）。
-///
-/// 切开关**不需要**重启子系统：安装流程早就把 WSA 提前拉起来了（见 [`boot_wsa_early`]），
-/// 这时候切开关照样能让端口监听，直接连上就行 —— 以前那套 shutdown + 再 launch 是多余的一轮。
+/// 整条链：先试直连 → 连不上就 `wsa://system` 完整启动 →（安装 / 修复才）开设置窗口 →
+/// 点掉诊断说明框 → 切开关 → 收窗口 → 轮询 `connect` 到 adb 可用且 `sys.boot_completed=1`
+/// （首次连上会弹授权窗，由 [`accept_adb_auth`] 应答）。
 ///
 /// [`ensure_wsa_inner`] 的对外入口：顺手把「这一次到底有没有把 adb 通道建起来」记进
 /// [`LAST_ADB_OK`]，供环境检测（`setup::status`）决定该不该把灯判红。
@@ -1844,18 +1710,17 @@ pub(crate) fn ensure_wsa(exe: &Path, show_settings: bool) -> Result<Adb, String>
 }
 
 fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
-    // 本次调用允许花在「等设备授权」上的**总预算**：安装 / 修复给足（要摆设置窗口、可能整台
-    // 冷启动），点「开始录制」只给一点点 —— 那一刻用户正等着窗口弹出来。
-    // 预算从**进入等待的那一刻**起算（见 [`wait_for_adb_auth`] 开头的重新锚定）：
-    // 冷启动的窗口自动化 + 首启等待实测可吃掉 106s，若锚在本函数入口，剩下的 29s
-    // 连弹窗渲染（实测最慢 89s）都撑不满 —— 数学上必然超时。
+    // 等设备授权的总预算：安装 / 修复给足（可能整台冷启动 + 首次弹授权框），
+    // 点「开始录制」只给一点点 —— 那一刻用户正等着窗口弹出来。
+    // `auth_deadline` 是**可重锚**的上界：真正开始等授权时 [`wait_for_adb_auth`] 会把它
+    // 重锚到「等待起点 + budget」（见 [`AUTH_BUDGET_ANCHORED`]），避免冷启动吃掉弹窗的等待时间。
     let auth_budget = if show_settings {
         ADB_AUTH_BUDGET_SETUP
     } else {
         ADB_AUTH_BUDGET_RECORD
     };
     let mut auth_deadline = Instant::now() + auth_budget;
-    // 每轮 ensure 只给一次重新锚定的机会（外层若按秒轮询反复进等待，不能无限续期）。
+    // 每轮 ensure 只给授权预算**一次**重锚机会（外层按秒轮询不能无限续期）。
     AUTH_BUDGET_ANCHORED.store(false, Ordering::Relaxed);
     // 日志的「清空」只在 `setup::install` 入口做一次 —— 若在这里也清，会把安装第 1、2 步
     // 的记录一起抹掉（本函数是第 3 步才被调到的）。
@@ -1864,8 +1729,7 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
     }
     wlog("[wsa] ensure_wsa 开始：先试直连现有 adb");
     if let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, auth_budget) {
-        // adb 已经通了，设置窗口就多余了：可能是上一轮超时留下的那一个（当时特意留给
-        // 用户手点开关），现在既然连上了就顺手收起，别一直挂在桌面上。
+        // adb 已经通了，设置窗口就多余了：可能是上一轮超时留下的那一个，顺手收起，别一直挂桌面上。
         if show_settings {
             close_wsa_settings();
         }
@@ -1874,50 +1738,19 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
     if !wsa_installed() {
         return Err("WSA_NOT_INSTALLED::未检测到 WSA（Windows Subsystem for Android），请先安装".into());
     }
-    // 走到这里说明「连不上」。若设备侧停在 `unauthorized`，就是那个著名的授权死锁现场 ——
-    // WSA 宿主的授权弹窗只对**没见过的**公钥弹；旧公钥一旦被它记成「已处理」，用同一把再连
-    // 就永远是 unauthorized 且再也不弹窗（实测日志：三轮全新握手 × 多次，全超时、零痕迹）。
-    // 这里换一把全新公钥（换到应用私有目录，不碰用户自己的 .android），整个进程只换一次。
-    let unauth: Vec<bool> = ADB_PORTS
-        .iter()
-        .map(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
-        .collect();
-    let stuck = unauth.iter().any(|&b| b);
-    // 留痕：这一行能同时回答「设备到底什么状态」和「换钥为什么没触发」（进程内已换过 / 没卡在
-    // unauthorized）。上一轮实测里换钥分支静默没生效，正是缺这一行。
-    wlog(&format!(
-        "[adb] 直连失败后的端口状态：{}；本进程是否已换过密钥={}",
-        ADB_PORTS
-            .iter()
-            .zip(&unauth)
-            .map(|(p, u)| format!("{p} unauthorized={u}"))
-            .collect::<Vec<_>>()
-            .join("，"),
-        ADB_KEY_ROTATED.load(Ordering::Relaxed)
-    ));
-    if stuck && !ADB_KEY_ROTATED.swap(true, Ordering::Relaxed) {
-        wlog("[wsa] 设备停在 unauthorized 且迟迟不弹授权窗 —— 换一把全新 adb 公钥再试");
-        if use_private_adb_home() {
-            let _ = output_of(exe, &["kill-server".to_string()]);
-            if let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, auth_budget) {
-                if show_settings {
-                    close_wsa_settings();
-                }
-                return Ok(adb);
-            }
-            wlog("[wsa] 换钥后仍未授权（用户需在弹窗里点「允许」）");
-        }
-    }
-    wlog("[wsa] adb 未连上，拉起 WSA 并等待启动 …");
+    // **根因修复**：adb 连不上，绝大多数是因为 WSA **没有完全启动**（只把宿主注册 / 拉起来，
+    // 虚拟机 · 安卓子系统并没有真正跑完）。先用 WSA 协议 `wsa://system` 把子系统完整启动，
+    // 端口起来后 adb 自然能连。以前那套「重连 / 换钥 / 整台重启」的容错都是绕开这个真问题，
+    // 已全部删除。
+    wlog("[wsa] adb 未连上，用 wsa://system 完整启动 WSA 并等待启动 …");
     let t0 = Instant::now();
+    launch_wsa();
     if show_settings {
         let t1 = Instant::now();
         launch_wsa_settings();
         // 首次启动 WSA 会弹「可选诊断数据」说明框，正好压在设置窗口前面 —— 先替用户点掉
         // （只点「继续」，不勾那个复选框），否则下面的开关会被它挡着点不到。
-        // 它一辈子只弹一次，所以最多等 4 秒；没弹就直接往下走，不拖流程。
-        // boot 期已经点掉过就整个跳过 —— 三轮实测这一段固定空转 4.0s（`设置窗口自动化`
-        // 三轮全是 6.5s，而 boot 期日志都写着「已自动点掉」）。
+        // 它一辈子只弹一次，所以最多等 4 秒；boot 期已经点掉过就整个跳过（省 4 秒空转）。
         if !FIRST_RUN_DIALOG_GONE.load(Ordering::Relaxed) {
             for _ in 0..8 {
                 std::thread::sleep(Duration::from_millis(500));
@@ -1936,170 +1769,57 @@ fn ensure_wsa_inner(exe: &Path, show_settings: bool) -> Result<Adb, String> {
         // 耗时一律走 wlog：release 下没有控制台，用户「觉得安装很慢」时只能靠日志里的这几行定位
         wlog(&format!("[wsa][计时] 设置窗口自动化：{:.1}s", t1.elapsed().as_secs_f32()));
     }
-    // 设置窗口只是 UI，它自己**不会**把子系统拉起来（实测：窗口开着、开关也报了成功，端口照样
-    // 不监听）—— 所以这里要显式拉。但 WSA 已经在跑（安装流程提前拉的）就别再拉一次，
-    // `WsaClient.exe` 虽然只是激活已有实例，白跑一趟也没意义。
-    // 注意：Win10 上虚拟机进程名是 `Vmmem`、不是 `vmmemWSA`，所以 `vm_running()` 在 Win10 上
-    // **恒为 false**、这里每次都白拉一次 —— 先把它的返回值记下来，别让这个假信号把诊断带偏。
-    wlog(&format!("[wsa] vm_running={}（Win10 上该值不可信）", vm_running()));
-    if !vm_running() {
-        launch_wsa();
-    }
-    // 相机 / 麦克风 / 位置那类**宿主侧隐私弹窗**在这时候冒出来 —— 但已经不会弹了：启动 WSA
-    // 之前 [`pre_allow_host_capabilities`] 就把三个能力的结论预先写成「允许」了，Windows
-    // 一看已有结论就直接放行。万一还有别的弹窗（时机不定，压不住），这里只把时间留出来，
-    // 交回用户。这段等待与冷启动**重叠** —— 冷启动本来就要几十秒才连得上 adb，
-    // 这里边等边轮询，连上就提前结束，不空等。
-    wlog(&format!(
-        "[wsa] 正在启动 WSA，最多等 {} 秒，连上就继续 …",
-        WSA_FIRST_RUN_GRACE.as_secs()
-    ));
-    // 顺带把「这一轮有没有问到 adb」记下来：问到就说明开发者模式本来就开着，后面不用再碰
-    // 设置窗口（也顺手把可能残留的面板收起）。
-    let t_grace = Instant::now();
-    let mut early = None;
-    let grace = Instant::now() + WSA_FIRST_RUN_GRACE;
-    while Instant::now() < grace {
-        if let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, auth_budget) {
-            early = Some(adb);
-            break;
-        }
+    // 轮询到「adb 可用 **且** 系统启动完成」。`wsa://system` 只是把子系统拉起来，真正能连、
+    // 能跑命令还要等一会儿（冷启首次还要初始化 data 分区，实测 130s），所以这里给足预算。
+    let deadline = Instant::now() + WSA_BOOT_BUDGET;
+    let mut logged_boot = false;
+    while Instant::now() < deadline {
         std::thread::sleep(WSA_POLL);
-    }
-    wlog(&format!(
-        "[wsa][计时] 首启等待：{:.1}s（adb {}；累计 {:.1}s）",
-        t_grace.elapsed().as_secs_f32(),
-        if early.is_some() { "已连上" } else { "尚未连上" },
-        t0.elapsed().as_secs_f32()
-    ));
-    if show_settings && early.is_some() {
-        // 面板（刚打开但现在已多余 / 上一轮超时留下的）既然 adb 通了就顺手收起，别一直挂桌面上。
-        // 只在这条会自己开面板的路上收；录屏那条路（`show_settings == false`）从不碰它，
-        // 免得把用户自己打开的设置窗口关掉。
-        close_wsa_settings();
-    }
-    // 上面那一轮已经问到 adb 了就别再白连一次（一次 `connect` 实测要 ~2 秒）
-    if let Some(adb) = early.take() {
+        let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, auth_budget) else {
+            // 授权预算已尽（重锚后仍等不到）且设备还卡在 `unauthorized` → 不必再耗冷启动预算，
+            // 立刻判失败。这同时也是「预算用尽后每秒两条日志瀑布」的止血点。
+            if Instant::now() >= auth_deadline
+                && ADB_PORTS
+                    .iter()
+                    .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
+            {
+                wlog("[wsa] 授权等待预算用尽且设备仍未授权 → 立即结束本轮等待");
+                return Err(err_adb_unauthorized());
+            }
+            continue;
+        };
         let booted = boot_completed(&adb);
-        wlog(&format!(
-            "[wsa] 首启等待窗口内已连上 adb，sys.boot_completed={booted}"
-        ));
+        if !logged_boot {
+            logged_boot = true;
+            // 只记一次，避免每秒刷屏：这个值是"adb 都通了却仍判失败"的关键线索
+            wlog(&format!(
+                "[wsa] adb 已可用，sys.boot_completed={booted}（启动预算 {}s）",
+                WSA_BOOT_BUDGET.as_secs()
+            ));
+        }
         if booted {
+            wlog(&format!("[wsa][计时] 等 WSA 启动完成：{:.1}s", t0.elapsed().as_secs_f32()));
+            // 设置窗口的使命（代开开关）已经完成，收起它再交差 —— 别把面板留在桌面上
             if show_settings {
                 close_wsa_settings();
             }
             return Ok(adb);
         }
     }
-    let deadline = Instant::now() + WSA_BOOT_BUDGET;
-    let t2 = Instant::now();
-    let mut logged_boot = false;
-    while Instant::now() < deadline {
-        std::thread::sleep(WSA_POLL);
-        if let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, auth_budget) {
-            let booted = boot_completed(&adb);
-            if !logged_boot {
-                logged_boot = true;
-                // 只记一次，避免每秒刷屏：这个值是"adb 都通了却仍判失败"的关键线索
-                wlog(&format!(
-                    "[wsa] adb 已可用，sys.boot_completed={booted}（启动预算 {}s）",
-                    WSA_BOOT_BUDGET.as_secs()
-                ));
-            }
-            if booted {
-                wlog(&format!("[wsa][计时] 等 WSA 启动完成：{:.1}s", t2.elapsed().as_secs_f32()));
-                // 设置窗口的使命（代开开关）已经完成，收起它再交差 —— 别把面板留在桌面上
-                if show_settings {
-                    close_wsa_settings();
-                }
-                return Ok(adb);
-            }
-        }
-        // 授权预算已尽、设备还卡在 `unauthorized` → 不等冷启动预算了（那一整段只是让用户干等）。
-        // 这是「点录制后一直卡住没反应」的止血点。
-        if Instant::now() >= auth_deadline
-            && ADB_PORTS
-                .iter()
-                .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
-        {
-            wlog("[wsa] 授权等待预算用尽且设备仍未授权 → 立即结束本轮冷启动等待");
-            // 安装 / 修复路径上再试最后一招：整台重启 WSA（见 restart_wsa_and_reconnect）。
-            // 点录屏那条路不给做 —— 那里用户只等着窗口弹出来，会直接报错引导去点「安装/修复」。
-            if show_settings {
-                if let Some(adb) = restart_wsa_and_reconnect(exe) {
-                    close_wsa_settings();
-                    return Ok(adb);
-                }
-            }
-            return Err(err_adb_unauthorized());
-        }
-    }
-    // 分流：`unauthorized` 说明 adb 端口是通的（=「开发人员模式」早就开了），卡的是设备侧
-    // 授权。这时候再摆设置窗口、让人去开「开发人员模式」是彻底指错方向（实测踩过这个坑）。
+    // 分流：`unauthorized` 说明 adb 端口是通的（=「开发人员模式」早就开了），卡的是设备侧授权。
+    // 这时候再摆设置窗口、让人去开「开发人员模式」是彻底指错方向（实测踩过这个坑）。
     wlog("[wsa] 等待预算用尽，判定失败原因");
-    let unauthorized = ADB_PORTS
+    if ADB_PORTS
         .iter()
-        .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")));
-    if unauthorized {
+        .any(|p| is_unauthorized(exe, &format!("127.0.0.1:{p}")))
+    {
         wlog("[wsa] 判定：端口在监听但设备未授权（与「开发人员模式」无关）");
-        // 授权预算从等待起点锚定后可能比冷启动预算更长 —— 循环会先被 boot deadline 截断，
-        // 于是走到这里。原来这个出口直接报错，等于把「最后一招」整台重启永久掐死，
-        // 所以与循环内那个分支一样，先给 restart 一次机会。
-        if show_settings {
-            if let Some(adb) = restart_wsa_and_reconnect(exe) {
-                close_wsa_settings();
-                return Ok(adb);
-            }
-        }
         return Err(err_adb_unauthorized());
     }
     // 等不到就把设置窗口摆出来：多半是「开发人员模式」没开，用户点一下开关就能救活
     wlog("[wsa] 判定：adb 端口未监听（多半是「开发人员模式」未开）");
     launch_wsa_settings();
     Err("ADB_CONNECT_FAILED::连不上 WSA（等待启动超时）。已为你打开 WSA 的设置窗口：请在左侧「高级设置」里把「开发人员模式」打开 —— adb 端口 58526 只有开了它才监听。若 WSA 自己都打不开，请回到「完整录屏」卡片点「首次使用点击安装插件」修复".into())
-}
-
-/// 进程内是否已经整台重启过 WSA（见 [`restart_wsa_and_reconnect`]）。
-static WSA_RESTARTED: AtomicBool = AtomicBool::new(false);
-
-/// 最后一招：**整台重启 WSA**（`WsaClient.exe /shutdown` → 重新拉起），复位设备侧的 adb 状态。
-///
-/// 与 `adb kill-server` 有**本质区别**：`kill-server` 只动 Windows 这头的 adb 服务，Android 侧
-/// 「这台计算机的密钥已被处理过」那个结论还留在子系统里 —— 实测反复重做握手、换新公钥、
-/// 耐心等满 120s，全都无效。只有把整台子系统重启，guest 侧的 adbd 状态才会被一起清掉，
-/// 让公钥重新走一遍「没见过 → 弹授权框」的流程。
-///
-/// 只在安装 / 修复路径上做，且整个进程只做一次；点「开始录制」时**不给做** —— 那一刻用户
-/// 只等着窗口弹出来，不该被卷进一次几分钟的子系统重启（那条路会直接报错并引导去点安装）。
-fn restart_wsa_and_reconnect(exe: &Path) -> Option<Adb> {
-    if WSA_RESTARTED.swap(true, Ordering::Relaxed) {
-        return None;
-    }
-    wlog("[wsa] 整台重启 WSA，以复位设备侧的 adb 授权状态（kill-server 做不到这件事）…");
-    let _ = output_of(exe, &["kill-server".to_string()]);
-    shutdown_wsa();
-    launch_wsa();
-    let t = Instant::now();
-    // phase2 是一轮**全新**的授权等待：给它一个新的预算锚点（否则 ensure 入口那次
-    // 锚定已消费，重启后会沿用旧 deadline，等待窗反而更短）。
-    AUTH_BUDGET_ANCHORED.store(false, Ordering::Relaxed);
-    let mut auth_deadline = Instant::now() + WSA_RESTART_AUTH;
-    let boot_deadline = Instant::now() + WSA_RESTART_BOOT;
-    while Instant::now() < boot_deadline {
-        std::thread::sleep(WSA_POLL);
-        let Some(adb) = connect_waiting_auth(exe, &mut auth_deadline, WSA_RESTART_AUTH) else {
-            continue;
-        };
-        if boot_completed(&adb) {
-            wlog(&format!(
-                "[wsa] 重启 WSA 后已连上且启动完成（{:.1}s）",
-                t.elapsed().as_secs_f32()
-            ));
-            return Some(adb);
-        }
-    }
-    wlog("[wsa] 重启 WSA 后仍未拿到可用 adb");
-    None
 }
 
 /// 设备未授权时的统一错误串（几处出口共用，免得文案各自漂移）。
@@ -2111,8 +1831,7 @@ fn err_adb_unauthorized() -> String {
     format!(
         "ADB_UNAUTHORIZED::已连上 WSA 的 adb 端口，但设备侧始终未授权。\
          请在 WSA 弹出的「是否允许 ADB 调试？」窗口点「允许」（建议勾上「始终允许从此计算机」）；\
-         若窗口一直不出现、或点完仍无效，请回到「完整录屏」卡片点「首次使用点击安装插件」——\
-         安装 / 修复流程会整台重启一次 WSA，把设备侧的授权状态复位。\
+         若窗口一直不出现，请回到「完整录屏」卡片点「首次使用点击安装插件」重试。\
          详细过程见日志：{log}"
     )
 }
