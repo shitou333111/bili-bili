@@ -704,15 +704,17 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
     }
   }
   const checkedIds = new Set((adminConfig.current_activity_blind_box_ids ?? []).filter((id) => validBoxIds.has(id)));
-  // 卡片盲盒完全按 admin 勾选控制（无心动/幸运特殊路径），按 blind_boxes 顺序输出
-  const filteredIds: number[] = [];
-  for (const box of adminConfig.blind_boxes) {
-    if (box.id > 0 && checkedIds.has(box.id)) filteredIds.push(box.id);
-  }
   // 盈亏查询范围完全按 admin 勾选控制（过滤幽灵引用并去重），为空即不涵盖任何盲盒
   const profitIds = (adminConfig.blind_box_profit_ids ?? [])
     .filter((id) => validBoxIds.has(id))
     .filter((id, i, arr) => arr.indexOf(id) === i);
+  // 「卡片」⊆「盈亏」：作为独立卡片显示的盲盒必然纳入盈亏统计（含弹幕查询），
+  // 二次收敛兜住历史配置中"仅勾卡片未勾盈亏"的违规状态；按 blind_boxes 顺序输出
+  const profitIdSet = new Set(profitIds);
+  const filteredIds: number[] = [];
+  for (const box of adminConfig.blind_boxes) {
+    if (box.id > 0 && checkedIds.has(box.id) && profitIdSet.has(box.id)) filteredIds.push(box.id);
+  }
   return {
     xindong: BLIND_BOX_CONFIG.xindong,
     current_activity_blind_box_ids: filteredIds,

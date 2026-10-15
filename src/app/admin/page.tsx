@@ -78,6 +78,8 @@ type User = {
   platform?: string;
   /** 设备记录列表（按最近使用排序） */
   devices?: UserDevice[];
+  /** 是否为主播：复用本地 noRevenue 标记（无收益=非主播）；undefined/false=主播 */
+  noRevenue?: boolean;
 };
 
 /** 平台代号 → 中文名 */
@@ -919,6 +921,9 @@ export default function AdminPage() {
       current_activity_blind_box_ids: removedId
         ? config.current_activity_blind_box_ids.filter((id) => id !== removedId)
         : config.current_activity_blind_box_ids,
+      blind_box_profit_ids: removedId
+        ? config.blind_box_profit_ids.filter((id) => id !== removedId)
+        : config.blind_box_profit_ids,
     });
   };
 
@@ -1288,23 +1293,37 @@ export default function AdminPage() {
     setConfig({ ...config, recommended_anchors: list });
   };
 
+  // 盲盒「卡片」配置：单独作为一个盲盒卡片显示。
+  // 「卡片」⊆「盈亏」不变量：显示为独立卡片就必须纳入盈亏统计（含弹幕查询），故勾「卡片」时自动补齐「盈亏」
   const toggleCurrentBoxId = (id: number) => {
     if (!config) return;
     const ids = config.current_activity_blind_box_ids;
+    if (ids.includes(id)) {
+      setConfig({ ...config, current_activity_blind_box_ids: ids.filter((x) => x !== id) });
+      return;
+    }
+    const profitIds = config.blind_box_profit_ids;
     setConfig({
       ...config,
-      current_activity_blind_box_ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
+      current_activity_blind_box_ids: [...ids, id],
+      blind_box_profit_ids: profitIds.includes(id) ? profitIds : [...profitIds, id],
     });
   };
 
-  // 盲盒盈亏查询配置：增删可查询盈亏的盲盒 id（有序保留）
+  // 盲盒盈亏查询配置：增删可查询盈亏的盲盒 id（有序保留）。
+  // 取消「盈亏」时同步取消「卡片」，维持「卡片」⊆「盈亏」
   const toggleProfitBoxId = (id: number) => {
     if (!config) return;
     const ids = config.blind_box_profit_ids;
-    setConfig({
-      ...config,
-      blind_box_profit_ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
-    });
+    if (ids.includes(id)) {
+      setConfig({
+        ...config,
+        blind_box_profit_ids: ids.filter((x) => x !== id),
+        current_activity_blind_box_ids: config.current_activity_blind_box_ids.filter((x) => x !== id),
+      });
+      return;
+    }
+    setConfig({ ...config, blind_box_profit_ids: [...ids, id] });
   };
 
   const toggleActivityActive = (index: number) => {
@@ -1409,6 +1428,9 @@ export default function AdminPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
+                      {user.noRevenue
+                        ? <span className="text-[10px] px-1.5 rounded bg-black/5 text-black/40 shrink-0">非主播</span>
+                        : <span className="text-[10px] px-1.5 rounded bg-[#e54d4c]/10 text-[#e54d4c] shrink-0">主播</span>}
                       {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
                       {user.platform && (
                         <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">
@@ -1698,7 +1720,7 @@ export default function AdminPage() {
               </button>
               {!blindBoxCollapsed && (<>
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <p className="text-[10px] text-black/40">☑卡片 = 单独作为一个盲盒卡片显示；☑盈亏 = 纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒</p>
+                <p className="text-[10px] text-black/40">☑盈亏 = 纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒；☑卡片 = 单独作为一个盲盒卡片显示（需先勾「盈亏」）</p>
                 <button onClick={addBlindBox} className="text-xs text-[#00a1d6] hover:underline shrink-0">+ 添加盲盒</button>
               </div>
               <div className="space-y-1">
@@ -1733,15 +1755,15 @@ export default function AdminPage() {
                       </div>
                       {/* 卡片 / 盈亏：置于上下移按钮之后、上下两行堆叠，标题行直接可见状态 */}
                       <div className="flex flex-col shrink-0 gap-0.5" onClick={(e) => e.stopPropagation()}>
-                        <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示">
+                        <label className="flex items-center gap-1 shrink-0" title="单独作为一个盲盒卡片显示（需先勾选「盈亏」，卡片必然纳入盈亏统计）">
                           <input
                             type="checkbox"
                             checked={box.id > 0 && config.current_activity_blind_box_ids.includes(box.id)}
                             onChange={() => toggleCurrentBoxId(box.id)}
-                            disabled={box.id <= 0}
-                            className="w-3.5 h-3.5 accent-[#00a1d6]"
+                            disabled={box.id <= 0 || !config.blind_box_profit_ids.includes(box.id)}
+                            className="w-3.5 h-3.5 accent-[#00a1d6] disabled:opacity-40"
                           />
-                          <span className="text-[10px] text-black/50">卡片</span>
+                          <span className={`text-[10px] ${box.id > 0 && !config.blind_box_profit_ids.includes(box.id) ? "text-black/30" : "text-black/50"}`}>卡片</span>
                         </label>
                         <label className="flex items-center gap-1 shrink-0" title="纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒">
                           <input

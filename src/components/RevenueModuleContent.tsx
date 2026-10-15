@@ -303,6 +303,9 @@ interface RevenueModuleContentProps {
   formatCoinsShort: (coins: number) => string;
   fixImageUrl: (url: string) => string;
   formatProfit: (coins: number) => string;
+
+  /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「天选&红包」之前 */
+  otherToolsExtra?: React.ReactNode;
 }
 
 // ==================== 防氪记录 ====================
@@ -632,6 +635,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     formatCoinsShort,
     fixImageUrl,
     formatProfit,
+    otherToolsExtra,
   } = props;
 
   // 防氪记录轻提示：标题按钮只弹说明文案，圆形按钮只弹分级说明+消费数据；
@@ -1667,6 +1671,9 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   )}
                 </div>
               </article>
+
+              {/* 从帮助页迁移过来的工具卡片（粉丝清理 / 粉丝牌清理 / 黑抽） */}
+              {otherToolsExtra}
 
               {/* Card 1: 天选/红包礼物统计 */}
               <article className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">

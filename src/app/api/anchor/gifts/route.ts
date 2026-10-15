@@ -1580,7 +1580,7 @@ export async function GET(request: Request) {
     // 注意：盲盒统计已在上面主循环中通过 giftIdToBlindBoxId 反向映射完成
 
     // 构建盲盒盈亏数据（数组，支持多种盲盒）
-    const blindBoxProfits: Array<{
+    const allBoxProfits: Array<{
       gift_id: number;
       name: string;
       drawCount: number;
@@ -1677,7 +1677,7 @@ export async function GET(request: Request) {
             .sort((a, b) => b.records[0].localeCompare(a.records[0]))
         : [];
 
-      blindBoxProfits.push({
+      allBoxProfits.push({
         gift_id: blindBoxId,
         name: boxName,
         drawCount,
@@ -1692,6 +1692,13 @@ export async function GET(request: Request) {
         castleFans,
       });
     }
+
+    // 「卡片」勾选的盲盒 = 单独作为一个卡片显示；「盈亏」勾选的盲盒 = 纳入"全部盲盒"卡片统计与下拉框。
+    // 两者独立：仅勾"盈亏"不应单独成卡片，仅勾"卡片"不进入"全部盲盒"统计/下拉。
+    const cardIdSet = new Set(activityBoxIds);
+    const profitIdSet = new Set(blindBoxConfig.profitIds ?? []);
+    const blindBoxProfits = allBoxProfits.filter((b) => cardIdSet.has(b.gift_id));
+    const blindBoxProfitStats = allBoxProfits.filter((b) => profitIdSet.has(b.gift_id));
 
     // 兼容旧版：blindBoxProfit 指向第一个盲盒（或心动盲盒）
     const blindBoxProfit = blindBoxProfits.length > 0 ? blindBoxProfits[0] : {
@@ -1767,6 +1774,7 @@ export async function GET(request: Request) {
       dateRange,
       blindBoxProfit,
       blindBoxProfits,
+      blindBoxProfitStats,
       otherStats,
       records: filteredRecords,
       filter: { dateRange: dateRangeFilter, fan: fanFilter },

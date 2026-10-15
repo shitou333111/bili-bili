@@ -14,12 +14,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  GIFT_BAR_SLOTS,
+  scBackgroundColor,
   type AnimeOpacity,
   type DisplayConfig,
   type DisplayGiftItem,
   type EntryAnimeConfig,
   type EntryCooldownOption,
   type EntryParticleMode,
+  type GiftBarWidth,
   type GiftHighlight,
   type ScreenOrientation,
 } from "@/lib/display/types";
@@ -66,6 +69,13 @@ interface Props {
   /** 本机是否持有该账号的 B站 登录凭证（服务器账号无凭证，无法监听自家直播间） */
   isLocalAccount?: boolean;
   showToast?: (msg: string, kind?: ToastKind) => void;
+  /**
+   * 渲染分区：本面板的 UI 分布在「主播」页两个 tab 中——
+   * - "display"（默认）：画布相关（状态/浏览器源/各画布模块/横幅/调试面板）→ 「展示」tab
+   * - "danmaku"：弹幕类模块（盲盒盈亏·弹幕查询 / 弹幕互动）→ 「盲盒」tab 末尾
+   * 两种分区的逻辑代码共用（配置读写、监听服务启停、发送定时器），只是渲染内容不同。
+   */
+  part?: "display" | "danmaku";
 }
 
 // 统一的开关行组件
@@ -158,12 +168,18 @@ function Switch({
   checked: boolean;
   disabled?: boolean;
   onToggle: (next: boolean) => void;
-  size?: "sm" | "md";
+  size?: "xs" | "sm" | "md";
   onColor?: string;
 }) {
-  const w = size === "sm" ? "w-[40px] h-[22px]" : "w-[46px] h-[26px]";
-  const thumb = size === "sm" ? "w-[18px] h-[18px] top-[2px]" : "w-[22px] h-[22px] top-[2px]";
-  const on = size === "sm" ? "left-[20px]" : "left-[22px]";
+  const w =
+    size === "xs" ? "w-[34px] h-[16px]" : size === "sm" ? "w-[40px] h-[22px]" : "w-[46px] h-[26px]";
+  const thumb =
+    size === "xs"
+      ? "w-[12px] h-[12px] top-[2px]"
+      : size === "sm"
+        ? "w-[18px] h-[18px] top-[2px]"
+        : "w-[22px] h-[22px] top-[2px]";
+  const on = size === "xs" ? "left-[20px]" : size === "sm" ? "left-[20px]" : "left-[22px]";
   const off = "left-[2px]";
   return (
     <button
@@ -179,6 +195,21 @@ function Switch({
         }`}
       />
     </button>
+  );
+}
+
+/** 醒目留言（SC）小图标：与画布礼物条同款——圆形纯色背景（按电池价位取色）+ "SC"/电池数 两行文字。
+ *  SC 无礼物图标，列表里也要用它替代 <img>（否则空 src 会触发浏览器告警）。 */
+function ScMiniIcon({ battery }: { battery: number }) {
+  const n = Math.round(battery);
+  return (
+    <span
+      className="flex h-5 w-5 shrink-0 flex-col items-center justify-center rounded-full font-extrabold text-white"
+      style={{ background: scBackgroundColor(n), lineHeight: 1, letterSpacing: 0.2 }}
+    >
+      <span style={{ fontSize: 7 }}>SC</span>
+      <span style={{ fontSize: 8 }}>{n}</span>
+    </span>
   );
 }
 
@@ -319,7 +350,9 @@ function ModuleTitle({
 
 // ==================== 页面 ====================
 
-export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: Props) {
+export default function DisplayPanel({ mid, isLocalAccount = true, showToast, part = "display" }: Props) {
+  // 弹幕分区：仅渲染「盲盒盈亏·弹幕查询」与「弹幕互动」两个模块（其余为画布分区的内容）
+  const isDanmakuPart = part === "danmaku";
   const [config, setConfig] = useState<DisplayConfig>(DEFAULT_DISPLAY_CONFIG);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<DisplayServiceStatus>({ state: "idle" });
@@ -423,6 +456,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
   const initialNeedRef = useRef<boolean | null>(null);
   const autoDetectedRef = useRef(false);
   useEffect(() => {
+    if (isDanmakuPart) return; // 弹幕分区不展示连接状态，也不负责恢复监听（画布分区/auto-start 负责）
     if (!loaded) return;
     if (initialNeedRef.current === null) {
       initialNeedRef.current = displayNeedsService(config);
@@ -450,11 +484,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   // 订阅弹幕调试事件，页面实时展示（仅保留最近 20 条）
   useEffect(() => {
+    if (isDanmakuPart) return; // 弹幕调试面板在画布分区，弹幕分区无需订阅（否则每条弹幕都会触发重渲染）
     const unsub = displayDanmaku.subscribeDebug((e) =>
       setDebugEvents((prev) => [...prev.slice(-19), e]),
     );
     return unsub;
-  }, []);
+  }, [isDanmakuPart]);
 
   const update = useCallback(
     async (patch: Partial<DisplayConfig>): Promise<DisplayConfig> => {
@@ -604,6 +639,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   // 检测直播姬是否已添加本浏览器源（按 URL 判断，不看名称）；检测失败按未添加处理（红色按钮可点）
   useEffect(() => {
+    if (isDanmakuPart) return; // 弹幕分区无浏览器源 UI，无需检测/回填直播姬源
     if (!isNative) return;
     let alive = true;
     detectBililiveSource(mid)
@@ -1123,6 +1159,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
 
   return (
     <div className="space-y-8 w-full min-w-0">
+      {/* ===== 画布分区（「展示」tab）：状态/浏览器源/各画布模块/横幅/调试面板 ===== */}
+      {!isDanmakuPart && (<>
       {/* 面板说明卡片（无独立总开关：由下方各子模块开关自动决定是否运行） */}
       <section>
         <div className="flex items-center justify-center mb-2.5 select-none">
@@ -1233,79 +1271,136 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           onToggle={(v) => void toggleModule({ gift: v })}
         />
         <Card bg="bg-amber-200" border="border-amber-400">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-black/45 leading-relaxed">
-              最近一周收到的礼物，滚动显示，默认不区分谁送的
-            </p>
-            {/* 展示条方向：横条（礼物从右到左滚）/ 竖条（礼物从下到上滚） */}
-            <div
-              className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
-              role="radiogroup"
-              aria-label="礼物展示条方向"
-            >
-              {(
-                [
-                  ["horizontal", "横条"],
-                  ["vertical", "竖条"],
-                ] as Array<["horizontal" | "vertical", string]>
-              ).map(([key, label]) => {
-                const active = config.giftBarOrientation === key;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() =>
-                      void update({ giftBarOrientation: key }).then((next) =>
-                        displayDanmaku.broadcastGiftBarOrientation(next.giftBarOrientation),
-                      )
-                    }
-                    className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
-                      active
-                        ? "bg-amber-600 text-white shadow"
-                        : "text-black/55 hover:bg-white/80"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+          <p className="text-xs text-black/45 leading-relaxed">
+            最近一周收到的礼物，滚动显示，默认不区分谁送的
+          </p>
+          {/* 第二行：方向（横条/竖条）+ 宽度（短/中/长）+ 显示单价大于
+              三者用 justify-between 均匀分布（等间距），避免挤在一起难以区分 */}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-y-2">
+            {/* 方向：横条（礼物从右到左滚）/ 竖条（礼物从下到上滚） */}
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-xs text-black/55">方向</span>
+              <div
+                className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
+                role="radiogroup"
+                aria-label="礼物展示条方向"
+              >
+                {(
+                  [
+                    ["horizontal", "横条"],
+                    ["vertical", "竖条"],
+                  ] as Array<["horizontal" | "vertical", string]>
+                ).map(([key, label]) => {
+                  const active = config.giftBarOrientation === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() =>
+                        void update({ giftBarOrientation: key }).then((next) =>
+                          displayDanmaku.broadcastGiftBarOrientation(next.giftBarOrientation),
+                        )
+                      }
+                      className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
+                        active
+                          ? "bg-amber-600 text-white shadow"
+                          : "text-black/55 hover:bg-white/80"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {/* 宽度：短 = 3 个礼物位（默认）/ 中 = 4 / 长 = 5；只改条长，条厚不变，整体缩放仍在画布中调整 */}
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-xs text-black/55">宽度</span>
+              <div
+                className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
+                role="radiogroup"
+                aria-label="礼物展示条宽度"
+              >
+                {(
+                  [
+                    ["short", "短"],
+                    ["medium", "中"],
+                    ["long", "长"],
+                  ] as Array<[GiftBarWidth, string]>
+                ).map(([key, label]) => {
+                  const active = config.giftBarWidth === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      title={`${GIFT_BAR_SLOTS[key]} 个礼物位`}
+                      onClick={() =>
+                        void update({ giftBarWidth: key }).then((next) =>
+                          displayDanmaku.broadcastGiftBarWidth(next.giftBarWidth),
+                        )
+                      }
+                      className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
+                        active
+                          ? "bg-amber-600 text-white shadow"
+                          : "text-black/55 hover:bg-white/80"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {/* 单价大于：与「方向/宽度」同一行末尾；单位电池（输入框去掉上下箭头，节省空间） */}
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-xs text-black/55">显示单价大于</span>
+              <input
+                type="number"
+                min={0}
+                value={config.giftPriceThreshold}
+                onChange={(e) => updateThreshold(Math.max(0, Number(e.target.value) || 0))}
+                className={`${inputFlat} ${noSpin} w-14 text-center`}
+              />
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-black/60">
-            <span className="shrink-0">礼物单价大于</span>
-            <input
-              type="number"
-              min={0}
-              value={config.giftPriceThreshold}
-              onChange={(e) =>
-                updateThreshold(Math.max(0, Number(e.target.value) || 0))
-              }
-              className={`${inputFlat} w-16`}
-            />
-            <span>电池才显示</span>
-            <div className="flex w-full flex-wrap items-center gap-2">
-              <span className="text-black/35">如果想显示粉丝送的重要礼物，点击下方礼物选择</span>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-black/60">
+            <span className="text-black/35">点击下方礼物突出显示</span>
+            <button
+              type="button"
+              onClick={selectAllGifts}
+              disabled={!qualityGifts.some((g) => (g.fans?.length ?? 0) > 0)}
+              title="选中下方全部礼物（多粉丝礼物选中其全部粉丝）"
+              className="shrink-0 cursor-pointer rounded-md bg-amber-100/80 px-2 py-0.5 text-[11px] leading-none text-amber-700 hover:bg-amber-200 disabled:cursor-default disabled:opacity-50"
+            >
+              全选
+            </button>
+            {Object.keys(giftHighlight).length > 0 && (
               <button
                 type="button"
-                onClick={selectAllGifts}
-                disabled={!qualityGifts.some((g) => (g.fans?.length ?? 0) > 0)}
-                title="选中下方全部礼物（多粉丝礼物选中其全部粉丝）"
-                className="shrink-0 cursor-pointer rounded-md bg-amber-100/80 px-2 py-0.5 text-[11px] leading-none text-amber-700 hover:bg-amber-200 disabled:cursor-default disabled:opacity-50"
+                onClick={clearGiftSelection}
+                title="清除全部突出显示选择"
+                className="shrink-0 cursor-pointer rounded-md bg-white/60 px-2 py-0.5 text-[11px] leading-none text-black/60 hover:bg-white/90"
               >
-                全选
+                清除选择
               </button>
-              {Object.keys(giftHighlight).length > 0 && (
-                <button
-                  type="button"
-                  onClick={clearGiftSelection}
-                  title="清除全部突出显示选择"
-                  className="shrink-0 cursor-pointer rounded-md bg-white/60 px-2 py-0.5 text-[11px] leading-none text-black/60 hover:bg-white/90"
-                >
-                  清除选择
-                </button>
-              )}
+            )}
+            {/* 单独条开关：置于本行右侧（与说明行同高，xs 更扁）；高亮礼物单独占一条，与常规条并存 */}
+            <div className="ml-auto flex items-center gap-1.5">
+              <Switch
+                checked={!!config.giftSeparateBar}
+                size="xs"
+                onColor="bg-amber-500"
+                onToggle={(v) =>
+                  void update({ giftSeparateBar: v }).then((next) =>
+                    displayDanmaku.broadcastGiftSeparateBar(next.giftSeparateBar),
+                  )
+                }
+              />
+              <span className="shrink-0 text-black/55">单独条</span>
             </div>
           </div>
           {qualityGifts.length > 0 && (
@@ -1338,9 +1433,16 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
                         : "bg-white/60 text-black/70 hover:bg-white/90"
                     } ${!fans.length ? "cursor-default opacity-60" : ""}`}
                   >
-                    <img src={g.img} alt="" className="h-4 w-4 rounded-sm object-cover" />
+                    {/* 醒目留言无礼物图标 → 用与礼物条一致的圆形纯色 SC 图标（避免空 src 告警） */}
+                    {typeof g.scBattery === "number" ? (
+                      <ScMiniIcon battery={g.scBattery} />
+                    ) : (
+                      <img src={g.img} alt="" className="h-4 w-4 rounded-sm object-cover" />
+                    )}
                     <span>{g.giftName}</span>
-                    <span className="font-bold">×{g.count}</span>
+                    {typeof g.scBattery !== "number" && (
+                      <span className="font-bold">×{g.count}</span>
+                    )}
                   </button>
                 );
               })}
@@ -1475,7 +1577,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
             />
           </div>
           <p className="mt-2 text-xs text-black/35 leading-relaxed">
-            开启后，弹幕内容如果是某个礼物名称，就会在播放该礼物特效
+            开启后，弹幕内容如果是某个礼物名称，就会直接播放该礼物特效
           </p>
         </Card>
       </section>
@@ -1929,14 +2031,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           </p> */}
         </Card>
       </section>
+      </>)}
 
-      {/* 入场动画 与 弹幕互动 之间的分隔线 + 加大间距（横向贯穿整列，虚线、更深色） */}
-      <div className="pt-4">
-        <div className="w-full border-t-2 border-dashed border-black/40" />
-      </div>
-
+      {/* ===== 弹幕分区（「盲盒」tab 末尾）：盲盒盈亏·弹幕查询 / 弹幕互动 ===== */}
+      {isDanmakuPart && (<>
       {/* 盲盒盈亏 · 弹幕查询 */}
-      <section className="mt-4">
+      <section>
         <ModuleTitle
           title="盲盒盈亏 · 弹幕查询"
           onColor="bg-rose-500"
@@ -2052,7 +2152,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           )}
         </Card>
       </section>
+      </>)}
 
+      {!isDanmakuPart && (<>
       {/* 调试面板：实时弹幕事件（默认折叠，点击标题展开；仅展示最近 20 条） */}
       <section>
         <Card bg="bg-gray-300" border="border-gray-400">
@@ -2184,6 +2286,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast }: 
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

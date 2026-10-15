@@ -157,6 +157,10 @@ async function dispatchNative(
       const { deleteMedal } = await import("./tools-client");
       return jsonResponse(await deleteMedal(platform, (parseBody(init) as { medal_id: number }) ?? {}));
     }
+    case "/api/tools/year-vip-bcoin": {
+      const { claimYearVipBCoin } = await import("./tools-client");
+      return jsonResponse(await claimYearVipBCoin(platform));
+    }
     case "/api/user-data/write": {
       // 本地写入用户数据文件（如 received-anchors-list.json）
       const body = parseBody(init) as { type?: string; data?: unknown } | null;

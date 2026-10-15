@@ -34,11 +34,13 @@ export interface MovableRect {
 }
 
 /** 可编辑布局的元素 ID */
-export type LayoutElementId = "gift" | "giftEffect" | "entry" | "anime" | "banner";
+export type LayoutElementId = "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
   gift: Record<ScreenOrientation, MovableRect>;
+  /** 单独条（突出显示专用礼物条，与常规礼物条并存；仅"单独条"开关开启时使用） */
+  giftSeparate: Record<ScreenOrientation, MovableRect>;
   giftEffect: Record<ScreenOrientation, MovableRect>;
   entry: Record<ScreenOrientation, MovableRect>;
   anime: Record<ScreenOrientation, MovableRect>;
@@ -53,6 +55,12 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
     // 恢复迁移前（960 坐标系）的默认位置：左上角，不水平居中（较此前默认右移、下移各 10px）
     landscape: { x: 60, y: 60, scale: 1 },
     portrait: { x: 70, y: 70, scale: 1 },
+  },
+  giftSeparate: {
+    // 单独条（突出显示专用礼物条）：默认放在常规礼物条正下方（上边距隔开一个条厚 100px + 16px），
+    // 避免与常规条重叠；拖动/缩放后按保存坐标自由摆放（横竖屏各一套，与常规条同样记住位置）。
+    landscape: { x: 60, y: 176, scale: 1 },
+    portrait: { x: 70, y: 186, scale: 1 },
   },
   giftEffect: {
     // {0,0,1} 表示"尚未自定义"：渲染时按特效实际尺寸动态摆放（横屏宽 1/4、距下边界 10%，
@@ -168,6 +176,33 @@ export function isAnimeOpacity(v: unknown): v is AnimeOpacity {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ANIME_OPACITY_ALPHA, v);
 }
 
+/** 礼物展示条宽度档位：短 = 3 个礼物位（默认）/ 中 = 4 / 长 = 5。仅改变条长（沿滚动轴），
+ *  条厚（垂直方向）不变，整体缩放仍在画布中调整。 */
+export type GiftBarWidth = "short" | "medium" | "long";
+
+/** 各宽度档位对应的礼物位数（沿滚动轴可容纳的图标数） */
+export const GIFT_BAR_SLOTS: Record<GiftBarWidth, number> = {
+  short: 3,
+  medium: 4,
+  long: 5,
+};
+
+/** 合法宽度档位判定 */
+export function isGiftBarWidth(v: unknown): v is GiftBarWidth {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(GIFT_BAR_SLOTS, v);
+}
+
+/** 醒目留言（SC）按价位对应的圆形纯色背景色。阈值单位 = 电池。
+ *  低于 500 / 500-999 / 1000-4999 / 5000-9999 / 10000-19999 / >=20000。 */
+export function scBackgroundColor(battery: number): string {
+  if (battery >= 20000) return "#AC1933";
+  if (battery >= 10000) return "#E54D4C";
+  if (battery >= 5000) return "#E09345";
+  if (battery >= 1000) return "#E3B52B";
+  if (battery >= 500) return "#447C9D";
+  return "#2960B2";
+}
+
 /** 展示模块整体配置（持久化到 <dataDir>/uid_<mid>/display-config.json，按账号分开） */
 export interface DisplayConfig {
   /** 画布朝向（横屏 1920x1080 / 竖屏 1080x1920） */
@@ -202,6 +237,11 @@ export interface DisplayConfig {
   giftPriceThreshold: number;
   /** 礼物展示条方向：横条（礼物从右到左滚动）/ 竖条（礼物从下到上滚动） */
   giftBarOrientation: "horizontal" | "vertical";
+  /** 礼物展示条宽度档位（短 3 位 / 中 4 位 / 长 5 位；条厚不变，整体缩放仍在画布中调整） */
+  giftBarWidth: GiftBarWidth;
+  /** 单独条开关：开启后突出显示的礼物在画布上单独占一条（与常规礼物条并存），
+   *  关闭时突出显示仍替换常规礼物条内容。 */
+  giftSeparateBar: boolean;
   /** 高级用户入场动画名单 */
   animeList: EntryAnimeConfig[];
   /** 弹幕互动 */
@@ -257,6 +297,8 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   animeOpacity: "light", // 整体透明度默认「轻」
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）
+  giftBarWidth: "medium", // 默认中（4 个礼物位）
+  giftSeparateBar: false, // 默认关闭：突出显示替换常规礼物条内容
   animeList: [],
   layout: DEFAULT_DISPLAY_LAYOUT,
   danmaku: {
@@ -299,8 +341,22 @@ export interface DisplayGiftItem {
   count: number;
   /** 礼物图标 URL */
   img: string;
+  /** 醒目留言（SC）：存在时表示该项为 SC（无图标），值为该条 SC 的电池数，
+   *  礼物位以圆形纯色背景 + "SC"/电池数 两行文字呈现（背景色按价位取 scBackgroundColor）。 */
+  scBattery?: number;
   /** 送礼粉丝列表（按数量降序；可能为空/缺失 = 旧数据） */
   fans?: DisplayGiftFan[];
+}
+
+/** 新到礼物标记：真实收到一个达标礼物时随 gift 事件附带（配置变更重发清单不带此字段，
+ *  不触发动画）。画布据此播放"礼物图标从画布中心飘入礼物条并被吸收"的动画。 */
+export interface DisplayGiftArrival {
+  giftId: number;
+  giftName: string;
+  /** 礼物图标 URL（空则不触发飘入动画） */
+  img: string;
+  /** 本次送礼的礼物单价（电池） */
+  priceBattery: number;
 }
 
 /** 礼物突出显示选择：giftId → 选中展示的 uid 列表（顺序 = 循环顺序） */
@@ -348,4 +404,4 @@ export type DisplayEvent =
       /** 配套 JSON 配置（缺失时退化为整段绘制） */
       config: GiftEffectFrameConfig | null;
     }
-  | { type: "gift"; gifts: DisplayGiftItem[] };
+  | { type: "gift"; gifts: DisplayGiftItem[]; arrived?: DisplayGiftArrival };

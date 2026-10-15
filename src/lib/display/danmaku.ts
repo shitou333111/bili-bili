@@ -17,6 +17,7 @@ import {
   type DisplayGiftItem,
   type EntryParticleMode,
   type GiftEffectFrameConfig,
+  type GiftBarWidth,
   type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
@@ -883,6 +884,8 @@ class DisplayDanmakuService {
       bannerText: cfg.banner?.text ?? "",
       animeOpacity: cfg.animeOpacity,
       giftBarOrientation: cfg.giftBarOrientation,
+      giftBarWidth: cfg.giftBarWidth,
+      giftSeparateBar: cfg.giftSeparateBar,
       entryParticleMode: cfg.entryParticleMode,
       giftHighlight: this.giftHighlight,
       flags: {
@@ -927,6 +930,16 @@ class DisplayDanmakuService {
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */
   async broadcastGiftBarOrientation(v: "horizontal" | "vertical"): Promise<void> {
     await this.broadcast({ type: "giftBarOrientation", v });
+  }
+
+  /** 广播礼物展示条宽度档位（短/中/长）到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastGiftBarWidth(v: GiftBarWidth): Promise<void> {
+    await this.broadcast({ type: "giftBarWidth", v });
+  }
+
+  /** 广播"单独条"开关到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastGiftSeparateBar(v: boolean): Promise<void> {
+    await this.broadcast({ type: "giftSeparateBar", v });
   }
 
   /** 面板点击礼物/粉丝 badge 后调用：更新会话内的礼物突出显示选择并广播给所有画布。
@@ -1224,6 +1237,70 @@ class DisplayDanmakuService {
         }),
       );
     }
+
+    // ---- 醒目留言（SC）：SUPER_CHAT_MESSAGE ----
+    // SC 是特殊礼物（花费电池发送的醒目弹幕，无图标），同样计入「收到的礼物」展示：
+    // 以圆形纯色背景（按价位）+ "SC"/电池数 两行文字呈现。
+    // 单位：网页协议 SUPER_CHAT_MESSAGE 的 data.price 是「人民币元」（与 SEND_GIFT 的金瓜子口径不同），
+    // 1 元 = 10 电池（1 元 = 1000 金瓜子，100 金瓜子 = 1 电池）→ 电池 = price × rate / 100（rate 默认 1000）。
+    // 注意：data.time 是 SC 的「展示时长（秒）」而非时间戳；时间戳只用 start_time（网页协议为 unix 秒）。
+    this.removeHandlers.push(
+      this.live.onRawMessage("SUPER_CHAT_MESSAGE", async (raw: any) => {
+        if (!this.active) return;
+        const d = raw?.data ?? {};
+        const uid = Number(d.uid) || 0;
+        const priceRmb = Number(d.price) || 0;
+        const rate = Number(d.rate) || 1000;
+        const battery = Math.max(0, Math.round((priceRmb * rate) / 100));
+        // 时间戳：只用 start_time（兼容毫秒 → 除 1000），绝不用 d.time（展示时长）
+        const st = Number(d.start_time) || 0;
+        const ts =
+          st > 1e12 ? Math.floor(st / 1000) : st > 1e9 ? st : Math.floor(Date.now() / 1000);
+        // 调试：丢弃前也先记录（含原始单位字段与换算结果），便于排查单位/时间戳问题
+        this.pushDebug("sc", "醒目留言", {
+          uid,
+          uname: String(d.user_info?.uname || d.uname || ""),
+          priceRmb,
+          rate,
+          battery,
+          startTime: st,
+          durationSec: Number(d.time) || 0,
+          giftId: Number(d.gift?.gift_id) || 0,
+          ts,
+        });
+        if (battery <= 0) return;
+        let uname = String(d.user_info?.uname || d.uname || "").trim();
+        let face = String(d.user_info?.face || d.face || "").trim();
+        if (uid > 0 && (!face || !uname)) {
+          try {
+            const hit = (await fetchUserInfo(await getPlatform(), [uid])).data?.[uid];
+            if (!face && hit?.face) face = hit.face;
+            if (!uname && hit?.name) uname = hit.name;
+          } catch {
+            /* 获取失败不影响礼物记录落盘 */
+          }
+        }
+        await appendGiftRecord(mid, {
+          date: localDayStr(new Date(ts * 1000)),
+          ts,
+          uid,
+          uname,
+          face,
+          giftId: 0,
+          giftName: "醒目留言",
+          price: battery,
+          num: 1,
+          scBattery: battery,
+        });
+        notifyQualifyingGift({ giftName: "醒目留言", priceBattery: battery, ts, roomId: this.roomId });
+        if (!this.isNative()) return;
+        const config = await loadDisplayConfig(mid);
+        if (!config.gift) return;
+        // 与普通送礼一致：重发达标清单，画布即时更新
+        const qualifying = await loadRecentQualifyingGifts(mid, config.giftPriceThreshold);
+        this.emitTo({ type: "gift", gifts: qualifying });
+      }),
+    );
 
     // ---- 盲盒盈亏 · 弹幕查询 ----
     this.removeHandlers.push(
@@ -1523,8 +1600,17 @@ class DisplayDanmakuService {
       threshold: config.giftPriceThreshold,
       list: qualifying.map((q) => ({ name: q.giftName, count: q.count })),
     });
-    // 每次送礼都重发当前达标清单（含空清单 → 清空画布），保证画布与阈值始终一致
-    this.emitTo({ type: "gift", gifts: qualifying });
+    // 每次送礼都重发当前达标清单（含空清单 → 清空画布），保证画布与阈值始终一致。
+    // 本次礼物若达标（单价 > 阈值；阈值 0 = 不限制）则附带 arrived 标记 → 画布播放
+    // "礼物图标从画布中心飘入礼物条"的动画（配置变更重发的清单不带该标记，不触发动画）。
+    const arrives = giftImg !== "" && (config.giftPriceThreshold <= 0 || priceBattery > config.giftPriceThreshold);
+    this.emitTo({
+      type: "gift",
+      gifts: qualifying,
+      arrived: arrives
+        ? { giftId, giftName: d.giftName || "", img: giftImg, priceBattery }
+        : undefined,
+    });
   }
 
   /**

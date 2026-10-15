@@ -26,16 +26,19 @@ import {
   type DisplayEntryPayload,
   type DisplayLayout,
   type EntryParticleMode,
+  type GiftBarWidth,
   type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
   DEFAULT_DISPLAY_LAYOUT,
   DEFAULT_DISPLAY_CONFIG,
+  GIFT_BAR_SLOTS,
   isAnimeOpacity,
+  isGiftBarWidth,
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
-import GiftFlower from "./GiftFlower";
+import GiftFlower, { GIFT_BAR_THICK, giftBarLength } from "./GiftFlower";
 import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
 import MovableBox from "./MovableBox";
@@ -146,6 +149,10 @@ type ServerMsg =
       animeOpacity: AnimeOpacity;
       /** 礼物展示条方向（横条/竖条） */
       giftBarOrientation: "horizontal" | "vertical";
+      /** 礼物展示条宽度档位（短 3 位 / 中 4 位 / 长 5 位） */
+      giftBarWidth: GiftBarWidth;
+      /** 单独条开关：开启后突出显示礼物单独占一条（与常规礼物条并存） */
+      giftSeparateBar: boolean;
       /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
       entryParticleMode: EntryParticleMode;
       /** 礼物突出显示选择（giftId → 选中 uid 列表；点击 badge 时广播同步） */
@@ -159,6 +166,8 @@ type ServerMsg =
   | { type: "bannerText"; text: string }
   | { type: "animeOpacity"; v: AnimeOpacity }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
+  | { type: "giftBarWidth"; v: GiftBarWidth }
+  | { type: "giftSeparateBar"; v: boolean }
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "celebrate" };
@@ -198,6 +207,64 @@ function TestEntryLoop({
   );
 }
 
+/** 是否存在真实高亮帧（选中 uid 命中礼物粉丝）→ 决定"单独条"是否显示 / 常规条是否被高亮内容占用 */
+function computeHasHighlight(gifts: DisplayGiftItem[], highlight: GiftHighlight): boolean {
+  for (const [gid, uids] of Object.entries(highlight)) {
+    if (!uids?.length) continue;
+    const gift = gifts.find((g) => g.giftId === Number(gid));
+    if (gift?.fans?.some((f) => uids.includes(f.uid))) return true;
+  }
+  return false;
+}
+
+/** 礼物飘入动画的一次飞行：起止点在设计坐标中固定（飞行途中不随布局变化而漂移） */
+interface FlyingGift {
+  img: string;
+  giftName: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  /** 飞行图标设计尺寸（跟随礼物条缩放，与礼物条内图标大小观感一致） */
+  icon: number;
+}
+
+/** 礼物飘入飞行时长（ms）与图标设计尺寸（画布设计坐标，随画布整体缩放） */
+const GIFT_FLY_MS = 3800;
+const GIFT_FLY_ICON = 76;
+
+/** 礼物飘入起始点（画布设计坐标）：横屏从画布底边、距左边界 500px 处起飞；
+ *  竖屏从距底边 600px、距左边界 300px 处起飞。图标以该点为几何中心（0x0 容器 + 图标负半偏移）。 */
+const GIFT_FLY_START: Record<ScreenOrientation, { x: number; y: number }> = {
+  landscape: { x: 500, y: CANVAS_SIZE.landscape.h },
+  portrait: { x: 300, y: CANVAS_SIZE.portrait.h - 600 },
+};
+
+/**
+ * 礼物飘入的位移关键帧（起点 → 落点 + 垂直飞行方向的左右摆动，最简单的"飘"感）：
+ * 用几个中间点错开垂直方向偏移形成轻微 S 形飘动（摆动幅度取飞行距离的一小部分，观感柔和）；
+ * 透明度 20% → 55% → 100% 逐渐变得清晰——起点不用 0，否则起步阶段几乎透明、看不到图标。
+ */
+function giftFlyFrames(f: FlyingGift): Keyframe[] {
+  const dx = f.toX - f.fromX;
+  const dy = f.toY - f.fromY;
+  const len = Math.hypot(dx, dy) || 1;
+  // 垂直于飞行方向的单位向量（摆动方向）
+  const px = -dy / len;
+  const py = dx / len;
+  const wob = Math.min(18, len * 0.03);
+  const at = (t: number, s: number) =>
+    `translate(${Math.round(dx * t + px * wob * s)}px,${Math.round(dy * t + py * wob * s)}px)`;
+  return [
+    { opacity: 0.2, transform: "translate(0px,0px) scale(0.72)" },
+    { opacity: 0.55, transform: `${at(0.25, 0.7)} scale(0.85)`, offset: 0.25 },
+    { transform: `${at(0.45, -0.35)} scale(0.9)`, offset: 0.45 },
+    { transform: `${at(0.62, -0.75)} scale(0.94)`, offset: 0.65 },
+    { transform: `${at(0.84, 0.4)} scale(0.98)`, offset: 0.85 },
+    { opacity: 1, transform: `${at(1, 0)} scale(1)` },
+  ];
+}
+
 export default function DisplayCanvas() {
   const [currentEntry, setCurrentEntry] = useState<DisplayEntryPayload | null>(null);
   // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
@@ -206,6 +273,10 @@ export default function DisplayCanvas() {
   const [entrySeq, setEntrySeq] = useState(0);
   const [, setEntryQueue] = useState<DisplayEntryPayload[]>([]);
   const [gifts, setGifts] = useState<DisplayGiftItem[]>([]);
+  // 礼物飘入动画：收到达标礼物时图标从固定起点飘向礼物条落点（null = 无飞行）
+  const [flyingGift, setFlyingGift] = useState<FlyingGift | null>(null);
+  // 礼物条"吸收"闪烁代际（自增 → GiftFlower 的 flash 层重放动画）
+  const [giftBarFlash, setGiftBarFlash] = useState(0);
   const [anime, setAnime] = useState<AnimeEvent | null>(null);
   // 布局（受控：经主进程持久化 + WS 下发；gift/entry 各按朝向一套）
   const [layouts, setLayouts] = useState<DisplayLayout>(DEFAULT_DISPLAY_LAYOUT);
@@ -225,6 +296,12 @@ export default function DisplayCanvas() {
   const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
     DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
   );
+  // 礼物展示条宽度档位（init/giftBarWidth 消息下发）：决定条长（短 3 位 / 中 4 位 / 长 5 位）
+  const [giftBarWidth, setGiftBarWidth] = useState<GiftBarWidth>(
+    DEFAULT_DISPLAY_CONFIG.giftBarWidth,
+  );
+  // 单独条开关（init/giftSeparateBar 消息下发）：开启后高亮礼物单独占一条，与常规礼物条并存
+  const [giftSeparateBar, setGiftSeparateBar] = useState(false);
   // 入场提示粒子聚散方式（init/entryParticleMode 消息下发）：center=中心聚散(自研) / lr=左右聚散(原库)
   const [entryParticleMode, setEntryParticleMode] = useState<EntryParticleMode>(
     DEFAULT_DISPLAY_CONFIG.entryParticleMode,
@@ -249,6 +326,21 @@ export default function DisplayCanvas() {
   useEffect(() => {
     flagsRef.current = flags;
   }, [flags]);
+
+  // 礼物飘入触发条件所需的即时上下文（applyEvent 在 [] 依赖下经 ref 读取，避免闭包过期）：
+  // 编辑模式不触发；常规条被高亮内容占用时（未开单独条且有高亮）不触发。
+  const flyCtxRef = useRef({
+    isEdit: false,
+    giftSeparateBar: false,
+    giftHighlight: {} as GiftHighlight,
+  });
+  useEffect(() => {
+    flyCtxRef.current = { isEdit, giftSeparateBar, giftHighlight };
+  }, [isEdit, giftSeparateBar, giftHighlight]);
+  // 飘入的起点（GIFT_FLY_START）与落点（礼物条底边/下端端点中心，画布设计坐标）+ 礼物条当前缩放
+  const flyGeomRef = useRef({ cx: 0, cy: 0, tx: 0, ty: 0, scale: 1 });
+  // 飘入预载代际：连续收礼时只让最新一次起飞（陈旧图标的 onload 回调作废）
+  const flightTokenRef = useRef(0);
 
   // —— WS 客户端 ——
   const wsRef = useRef<WebSocket | null>(null);
@@ -313,6 +405,8 @@ export default function DisplayCanvas() {
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
         );
+        setGiftBarWidth(isGiftBarWidth(msg.giftBarWidth) ? msg.giftBarWidth : "short");
+        setGiftSeparateBar(!!msg.giftSeparateBar);
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
         setGiftHighlight(
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
@@ -335,6 +429,10 @@ export default function DisplayCanvas() {
         setAnimeOpacity(isAnimeOpacity(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity);
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
+      } else if (msg.type === "giftBarWidth") {
+        setGiftBarWidth(isGiftBarWidth(msg.v) ? msg.v : "short");
+      } else if (msg.type === "giftSeparateBar") {
+        setGiftSeparateBar(!!msg.v);
       } else if (msg.type === "entryParticleMode") {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
       } else if (msg.type === "giftHighlight") {
@@ -550,6 +648,43 @@ export default function DisplayCanvas() {
       // 礼物展示模块关闭：忽略事件
       if (!flagsRef.current.gift) return;
       setGifts(p.gifts);
+      const arrived = p.arrived;
+      if (arrived?.img) {
+        // 仅在"普通礼物条显示常规礼物内容"时触发飘入动画：编辑模式不触发；常规条被高亮内容
+        // 占用（未开单独条且有真实高亮）时不触发；开了单独条则高亮走单独条、常规条照常触发。
+        const ctx = flyCtxRef.current;
+        const hlOccupies = !ctx.giftSeparateBar && computeHasHighlight(p.gifts, ctx.giftHighlight);
+        if (!ctx.isEdit && !hlOccupies) {
+          const g = flyGeomRef.current;
+          const url = arrived.img;
+          const name = arrived.giftName;
+          const token = ++flightTokenRef.current;
+          const fire = () => {
+            // 陈旧回调（期间又收到更新的礼物）作废
+            if (token !== flightTokenRef.current) return;
+            setFlyingGift({
+              img: url,
+              giftName: name,
+              fromX: g.cx,
+              fromY: g.cy,
+              toX: g.tx,
+              toY: g.ty,
+              icon: Math.round(GIFT_FLY_ICON * g.scale),
+            });
+          };
+          // 先预载 + 解码礼物图标再起飞：冷缓存的礼物图可能比整段飞行动画还慢，
+          // 之前边飞边加载导致动画跑完时图标仍未绘制（只看到礼物条闪烁、看不到飘动）。
+          const el = new Image();
+          el.onerror = () => {
+            /* 图标加载失败：放弃本次飘入（不触发吸收特效，礼物条自身更新已是反馈） */
+          };
+          el.onload = () => {
+            const ready = el.decode ? el.decode() : Promise.resolve();
+            ready.catch(() => {}).then(fire);
+          };
+          el.src = url;
+        }
+      }
     } else if (p.type === "giftEffect") {
       // 礼物特效模块关闭：忽略事件
       if (!flagsRef.current.giftEffect) return;
@@ -766,6 +901,55 @@ export default function DisplayCanvas() {
     [send, orientation, canvas.h, giftEffectDisp.h],
   );
 
+  // 礼物条宽度档位 → 沿滚动轴可容纳的礼物位数（短 3 / 中 4 / 长 5）；条厚不变，整体缩放仍在画布中调整。
+  const giftSlots = GIFT_BAR_SLOTS[giftBarWidth];
+  // 当前是否存在真实高亮帧（选中 uid 命中礼物粉丝）→ 决定"单独条"在源模式下是否显示；
+  // 无高亮时单独条自动隐藏，避免画布上留一条空条。
+  const hasHighlight = useMemo(
+    () => computeHasHighlight(gifts, giftHighlight),
+    [giftHighlight, gifts],
+  );
+
+  // 礼物飘入落点（画布设计坐标，含整体缩放）：横条 = 底边水平中心；竖条 = 下端端点中心。
+  // 起点按朝向取固定坐标（GIFT_FLY_START）。落点随布局/朝向/宽度档位变化即时写入 ref
+  // （applyEvent 经 ref 读取）。
+  useEffect(() => {
+    const start = GIFT_FLY_START[orientation];
+    const rect = layouts.gift[orientation];
+    const len = giftBarLength(giftSlots) * rect.scale;
+    const thick = GIFT_BAR_THICK * rect.scale;
+    flyGeomRef.current =
+      giftBarOrientation === "vertical"
+        ? { cx: start.x, cy: start.y, tx: rect.x + thick / 2, ty: rect.y + len, scale: rect.scale }
+        : { cx: start.x, cy: start.y, tx: rect.x + len / 2, ty: rect.y + thick, scale: rect.scale };
+  }, [layouts, orientation, giftBarOrientation, giftSlots]);
+
+  // 礼物飘入：飞行元素挂载后用 WAAPI 播放位移（起点 → 落点 + 垂直方向摆动），播完触发礼物条吸收特效。
+  // 用命令式动画而非注入 @keyframes（避免 CSS 名/注入时序的不确定性）；
+  // fill: "both" 从首帧生效（opacity 0），挂载到起飞之间不会闪出图标本体。
+  const flyElRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = flyElRef.current;
+    if (!flyingGift || !el) return;
+    const anim = el.animate(giftFlyFrames(flyingGift), {
+      duration: GIFT_FLY_MS,
+      easing: "ease-in-out",
+      fill: "both",
+    });
+    let cancelled = false;
+    anim.finished
+      .then(() => {
+        if (cancelled) return;
+        setFlyingGift(null);
+        setGiftBarFlash((n) => n + 1);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      anim.cancel();
+    };
+  }, [flyingGift]);
+
   // 服务端不可达（APP/本地服务已退出）：浏览器源清空不渲染任何内容，
   // 避免关闭 APP 后直播姬仍残留上一帧画面；服务恢复重连成功后自动恢复显示。
   if (serverDown) {
@@ -871,7 +1055,8 @@ export default function DisplayCanvas() {
         </MovableBox>
       )}
 
-      {/* 礼物展示：编辑模式常驻显示（无礼物时也显示控件便于摆放）；否则有礼品才显示 */}
+      {/* 礼物展示：编辑模式常驻显示（无礼物时也显示控件便于摆放）；否则有礼品才显示。
+          开启"单独条"时本常规条不接收高亮选择（高亮内容改由下方单独条承载），内容保持常规礼物滚动。 */}
       {flags.gift && (isEdit || gifts.length > 0) && (
         <MovableBox
           id="gift"
@@ -883,9 +1068,65 @@ export default function DisplayCanvas() {
             gifts={gifts}
             emptyPlaceholder={isEdit}
             orientation={giftBarOrientation}
-            highlight={giftHighlight}
+            highlight={giftSeparateBar ? undefined : giftHighlight}
+            slots={giftSlots}
+            flash={giftBarFlash}
           />
         </MovableBox>
+      )}
+
+      {/* 单独条（突出显示专用礼物条）：仅"单独条"开关开启时存在，与常规礼物条并存；
+          只渲染高亮帧（无高亮时源模式自动隐藏），位置与常规条一样按横竖屏分别持久化。 */}
+      {flags.gift && giftSeparateBar && (isEdit || hasHighlight) && (
+        <MovableBox
+          id="giftSeparate"
+          rect={layouts.giftSeparate[orientation]}
+          onCommit={commitLayout("giftSeparate")}
+          editable={isEdit}
+        >
+          <GiftFlower
+            gifts={gifts}
+            emptyPlaceholder={isEdit}
+            orientation={giftBarOrientation}
+            highlight={giftHighlight}
+            slots={giftSlots}
+            highlightOnly
+          />
+        </MovableBox>
+      )}
+
+      {/* 礼物飘入动画：收到达标礼物时图标从固定起点飘向礼物条落点，落点处礼物条闪一下（被吸收）。
+          仅普通礼物条触发（编辑模式/高亮内容占用常规条时不触发，判定在 applyEvent 内完成）。
+          起止点在设计坐标（随画布整体缩放），落点：横条底边水平中心 / 竖条下端端点中心。 */}
+      {flyingGift && (
+        <div
+          ref={flyElRef}
+          className="pointer-events-none absolute"
+          style={{
+            left: flyingGift.fromX,
+            top: flyingGift.fromY,
+            width: 0,
+            height: 0,
+            zIndex: 40,
+            opacity: 0.2,
+          }}
+        >
+          <img
+            src={flyingGift.img}
+            alt={flyingGift.giftName}
+            className="absolute object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.35)]"
+            style={{
+              left: -flyingGift.icon / 2,
+              top: -flyingGift.icon / 2,
+              width: flyingGift.icon,
+              height: flyingGift.icon,
+              // 飞行容器是 0x0 的定位盒，Tailwind Preflight 的 `img { max-width: 100% }` 会把
+              // 宽度钳成 0（图标完全不可见，只见礼物条闪烁）。必须显式解除该钳制。
+              maxWidth: "none",
+              animation: "gift-fly-sway 6s ease-in-out infinite",
+            }}
+          />
+        </div>
       )}
 
       {/* 横幅：画布顶部彩虹胶囊（样式严格参照 banner-sample.html，纯展示元素、无点击语义，

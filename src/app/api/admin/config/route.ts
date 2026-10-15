@@ -74,13 +74,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ code: 400, message: "blind_boxes must be an array" }, { status: 400 });
   }
 
+  // "卡片"⊆"盈亏"不变量：作为独立卡片显示的盲盒必须纳入盈亏统计（含弹幕查询盈亏），
+  // 保存时把 current_activity_blind_box_ids 收敛为 blind_box_profit_ids 的子集，兜住历史违规配置
+  const profitIds: number[] = Array.isArray(body.blind_box_profit_ids)
+    ? body.blind_box_profit_ids.map(Number).filter((n: number) => n > 0)
+    : [];
   const config: AdminConfig = {
     current_activity_blind_box_ids: Array.isArray(body.current_activity_blind_box_ids)
-      ? body.current_activity_blind_box_ids.map(Number).filter((n: number) => n > 0)
+      ? body.current_activity_blind_box_ids.map(Number).filter((n: number) => n > 0 && profitIds.includes(n))
       : [],
-    blind_box_profit_ids: Array.isArray(body.blind_box_profit_ids)
-      ? body.blind_box_profit_ids.map(Number).filter((n: number) => n > 0)
-      : undefined,
+    blind_box_profit_ids: Array.isArray(body.blind_box_profit_ids) ? profitIds : undefined,
     blind_boxes: body.blind_boxes.map((b: unknown) => normalizeBlindBoxItem(b)),
     synthesis_activities: body.synthesis_activities.map((a: any) => ({
       // 用活动名称作为活动标识（id），不再使用独立的 activity-n 输入框

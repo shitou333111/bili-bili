@@ -77,6 +77,18 @@ let memRoomGiftList: RoomGiftListData | null = null;
 // 守护礼物（舰长/提督/总督）名 -> 图标，不在普通 list 中，来自 guard_resources
 let memGuardMap: Record<string, string> | null = null;
 
+/**
+ * 大航海（舰长/提督/总督）固定图标：这三个是 B站 直播付费关系页的官方资源图，
+ * 与礼物列表里同名的「舰长一号/提督一号/总督一号」图标不同，必须用这三张。
+ * 来源：https://s1.hdslb.com/bfs/static/blive/live-pay-mono/relation/relation/assets/
+ * guard_resources 返回的图标不对，故优先使用这里的固定地址（缺失时回退 guard_resources）。
+ */
+const GUARD_FIXED_ICON: Record<string, string> = {
+  舰长: "https://s1.hdslb.com/bfs/static/blive/live-pay-mono/relation/relation/assets/captain-Bjw5Byb5.png",
+  提督: "https://s1.hdslb.com/bfs/static/blive/live-pay-mono/relation/relation/assets/supervisor-u43ElIjU.png",
+  总督: "https://s1.hdslb.com/bfs/static/blive/live-pay-mono/relation/relation/assets/governor-DpDXKEdA.png",
+};
+
 function filePath(dir: string, file: string): string {
   return `${dir}/${file}`;
 }
@@ -270,8 +282,12 @@ export function getGiftImgAnimated(giftId: number): string {
  */
 export function getGiftImgByName(name: string): string {
   if (!name) return "";
+  // 大航海（舰长/提督/总督）优先用官方固定图标：礼物目录里若存在同名项，
+  // 其图标也并非大航海资源图（且通常是"舰长一号"等别名），必须优先固定地址。
+  if (GUARD_FIXED_ICON[name]) return GUARD_FIXED_ICON[name];
   const item = memList?.find((g) => g.name === name);
   if (item) return item.img_basic || item.webp || item.gif || "";
+  // 兜底：guard_resources 返回的图标（较弱，仅在固定图标缺失时使用）
   return memGuardMap?.[name] ?? "";
 }
 

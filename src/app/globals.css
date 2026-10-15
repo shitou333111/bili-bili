@@ -560,6 +560,30 @@ body {
   }
 }
 
+/* 礼物条"吸收"内闪：收到礼物飘入落点后条内闪一下（配合根节点 WAAPI 的膨胀 + 外围光芒） */
+@keyframes gift-bar-absorb {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 礼物飘入：飞行图标自身的轻微摇摆（外层负责位移，内层负责"飘"的观感，最简单的实现） */
+@keyframes gift-fly-sway {
+  0%,
+  100% {
+    transform: rotate(-3.5deg);
+  }
+  50% {
+    transform: rotate(3.5deg);
+  }
+}
+
 /* 礼物 ≥3 个时从左到右无缝循环滚动（列表复制两份，位移正好一半） */
 @keyframes gift-bar-marquee {
   from {

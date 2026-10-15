@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, memo, Fragment, type MutableRefObject } from "react";
+import { useState, useEffect, useRef, memo, Fragment, type MutableRefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { toPng } from "html-to-image";
@@ -38,6 +38,22 @@ type AnchorGiftRecord = {
   room_id: number;
 };
 
+/** 单个盲盒的盈亏数据（卡片与"全部盲盒"统计共用同一结构） */
+type AnchorBlindBoxProfit = {
+  gift_id: number;
+  name: string;
+  drawCount: number;
+  totalHamster: number;
+  cost: number;
+  profit: number;
+  gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
+  img: string;
+  blindPrice: number;
+  anchors: Array<{ ruid: number; rname: string; count: number }>;
+  dateRange: { start: string; end: string } | null;
+  castleFans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
+};
+
 type AnchorStats = {
   totalHamster: number;
   totalCount: number;
@@ -59,20 +75,10 @@ type AnchorStats = {
     gifts: Array<{ gift_id: number; name: string; num: number; hamster: number }>;
     img: string;
   };
-  blindBoxProfits?: Array<{
-    gift_id: number;
-    name: string;
-    drawCount: number;
-    totalHamster: number;
-    cost: number;
-    profit: number;
-    gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
-    img: string;
-    blindPrice: number;
-    anchors: Array<{ ruid: number; rname: string; count: number }>;
-    dateRange: { start: string; end: string } | null;
-    castleFans: Array<{ uid: number; uname: string; face: string; count: number; records: string[] }>;
-  }>;
+  /** admin「卡片」勾选的盲盒：单独作为一个卡片显示 */
+  blindBoxProfits?: Array<AnchorBlindBoxProfit>;
+  /** admin「盈亏」勾选的盲盒：纳入"全部盲盒"卡片统计与下拉框（与卡片列表独立） */
+  blindBoxProfitStats?: Array<AnchorBlindBoxProfit>;
   otherStats?: {
     dayStats: { totalDays: number; maxConsecutiveDays: number };
     fanStats: Array<{
@@ -375,6 +381,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onFetchProgress = undefined,
   /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
   onNoRevenue,
+  /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「活动素材下载」之后 */
+  otherToolsExtra,
 }: {
   anchorName?: string;
   anchorFace?: string;
@@ -402,6 +410,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onFetchProgress?: (p: { text: string; ratio?: number; anchorGift?: boolean } | null) => void;
   /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
   onNoRevenue?: () => void;
+  /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「活动素材下载」之后 */
+  otherToolsExtra?: ReactNode;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -423,7 +433,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   // 保存完整粉丝列表（不受筛选影响），用于下拉框始终显示全部粉丝
   const [fullBlindBoxAnchors, setFullBlindBoxAnchors] = useState<Record<number, Array<{ ruid: number; rname: string; count: number }>>>({});
   // 盲盒盈亏独立数据（与收入统计解耦，互不影响）
+  // blindBoxProfits = admin「卡片」勾选的盲盒（单独成卡片）；blindBoxProfitStats = admin「盈亏」勾选的盲盒（"全部盲盒"统计）
   const [blindBoxProfits, setBlindBoxProfits] = useState<AnchorStats["blindBoxProfits"]>(undefined);
+  const [blindBoxProfitStats, setBlindBoxProfitStats] = useState<AnchorStats["blindBoxProfitStats"]>(undefined);
   const [yesterdayAvailable, setYesterdayAvailable] = useState(true); // 默认 true，避免初始闪烁
   // 浪漫城堡统计模态框：选中"所有粉丝"时点击心动盲盒内城堡行打开
   const [castleModal, setCastleModal] = useState<{ name: string; fans: NonNullable<AnchorStats["blindBoxProfits"]>[number]["castleFans"] } | null>(null);
@@ -505,6 +517,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
         setStats(cachedData.data);
         setYesterdayAvailable(cachedData.data.yesterdayAvailable ?? true);
         setBlindBoxProfits(cachedData.data.blindBoxProfits);
+        setBlindBoxProfitStats(cachedData.data.blindBoxProfitStats);
         if (cachedData.data.blindBoxProfits) {
           const anchors: Record<number, Array<{ ruid: number; rname: string; count: number }>> = {};
           for (const bb of cachedData.data.blindBoxProfits) {
@@ -590,6 +603,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
         if (data.data.noRevenue) onNoRevenue?.();
         // 盲盒盈亏数据独立存储，与收入统计解耦
         setBlindBoxProfits(data.data.blindBoxProfits);
+        setBlindBoxProfitStats(data.data.blindBoxProfitStats);
         // 首次加载时保存完整粉丝列表，供筛选下拉框使用
         if (data.data.blindBoxProfits) {
           const anchors: Record<number, Array<{ ruid: number; rname: string; count: number }>> = {};
@@ -1451,7 +1465,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                         const fanParam = blindBoxFanFilter ? `&fan=${blindBoxFanFilter}` : "";
                                         const url = `/api/anchor/gifts${key !== "all" ? `?dateRange=${key}${fanParam}` : (fanParam ? `?${fanParam.slice(1)}` : "")}`;
                                         dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
-                                          if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                          if (data.code === 0 && data.data) { setBlindBoxProfits(data.data.blindBoxProfits); setBlindBoxProfitStats(data.data.blindBoxProfitStats); }
                                         });
                                       }}
                                       className={`flex-1 px-1 py-1 text-[10px] whitespace-nowrap transition ${
@@ -1476,7 +1490,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                   const params = [dateParam, fanParam].filter(Boolean).join("&");
                                   const url = `/api/anchor/gifts${params ? `?${params}` : ""}`;
                                   dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
-                                    if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                    if (data.code === 0 && data.data) { setBlindBoxProfits(data.data.blindBoxProfits); setBlindBoxProfitStats(data.data.blindBoxProfitStats); }
                                   });
                                 }}
                                 className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
@@ -1551,13 +1565,14 @@ const AnchorDataModule = memo(function AnchorDataModule({
                         );
                       })}
 
-                    {/* 全部盲盒卡片（末尾）：下拉选"全部盲盒合计"或指定盲盒，复用同一份盈亏数据 */}
-                    {blindBoxProfits && blindBoxProfits.length > 0 && (() => {
+                    {/* 全部盲盒卡片（末尾）：下拉选"全部盲盒合计"或指定盲盒。
+                        仅统计 admin「盈亏」勾选的盲盒（blindBoxProfitStats），与上方「卡片」勾选的单独卡片独立 */}
+                    {blindBoxProfitStats && blindBoxProfitStats.length > 0 && (() => {
                       const isAllBoxes = allBoxFilter === "";
                       const selId = allBoxFilter === "" ? null : Number(allBoxFilter);
                       const boxes = selId === null
-                        ? blindBoxProfits
-                        : blindBoxProfits.filter((b2) => b2.gift_id === selId);
+                        ? blindBoxProfitStats
+                        : blindBoxProfitStats.filter((b2) => b2.gift_id === selId);
                       const agg = boxes.reduce(
                         (acc, b2) => {
                           acc.drawCount += b2.drawCount;
@@ -1612,7 +1627,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                               className="rounded-lg border border-black/10 bg-white px-2 py-1 text-sm font-semibold outline-none"
                               options={[
                                 { value: "", label: "全部盲盒" },
-                                ...blindBoxProfits.map((b2) => ({
+                                ...blindBoxProfitStats.map((b2) => ({
                                   value: String(b2.gift_id),
                                   label: (
                                     <span className="inline-flex items-center gap-1.5">
@@ -1649,7 +1664,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                       const fanParam = blindBoxFanFilter ? `&fan=${blindBoxFanFilter}` : "";
                                       const url = `/api/anchor/gifts${key !== "all" ? `?dateRange=${key}${fanParam}` : (fanParam ? `?${fanParam.slice(1)}` : "")}`;
                                       dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
-                                        if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                        if (data.code === 0 && data.data) { setBlindBoxProfits(data.data.blindBoxProfits); setBlindBoxProfitStats(data.data.blindBoxProfitStats); }
                                       });
                                     }}
                                     className={`flex-1 px-1 py-1 text-[10px] whitespace-nowrap transition ${
@@ -1674,7 +1689,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                 const params = [dateParam, fanParam].filter(Boolean).join("&");
                                 const url = `/api/anchor/gifts${params ? `?${params}` : ""}`;
                                 dataFetch(url, { cache: "no-store" }).then(r => r.json()).then(data => {
-                                  if (data.code === 0 && data.data) setBlindBoxProfits(data.data.blindBoxProfits);
+                                  if (data.code === 0 && data.data) { setBlindBoxProfits(data.data.blindBoxProfits); setBlindBoxProfitStats(data.data.blindBoxProfitStats); }
                                 });
                               }}
                               className="rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] text-black/65 outline-none"
@@ -1765,12 +1780,20 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       <div className="text-sm text-black/35">暂无盲盒记录</div>
                     </div>
                   )}
+
+                  {/* 从「展示」页迁移过来的弹幕类模块（盲盒盈亏·弹幕查询 / 弹幕互动）：
+                      归入盲盒页末尾更符合逻辑；逻辑与画布分区共用同一 DisplayPanel 实现 */}
+                  {displaySupported && (
+                    <div className="mt-6">
+                      <DisplayPanel mid={mid} isLocalAccount={isLocalAccount} showToast={showToast} part="danmaku" />
+                    </div>
+                  )}
                 </>
               )}
 
               {/* 展示 tab（直播展示画布：入场/礼物/高级动画）—— 仅 Windows 桌面可用 */}
               {displaySupported && activeTab === "display" && (
-                <DisplayPanel mid={mid} isLocalAccount={isLocalAccount} showToast={showToast} />
+                <DisplayPanel mid={mid} isLocalAccount={isLocalAccount} showToast={showToast} part="display" />
               )}
 
               {/* 礼物截图 tab */}
@@ -1804,7 +1827,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
                         活动素材下载
                         {materialFolderSupported && <FolderIconButton variant="material" />}
                       </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {/* 每行 3 个素材 */}
+                      <div className="grid grid-cols-3 gap-2">
                         {activityMaterials.map((mat, i) => (
                           <div key={i} className="rounded-lg border border-black/10 bg-white p-2 flex flex-col items-center gap-2">
                             <div className="w-full aspect-square rounded bg-black/[0.03] flex items-center justify-center overflow-hidden">
@@ -1823,6 +1847,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       </div>
                     </article>
                   )}
+
+                  {/* 从帮助页迁移过来的工具卡片（复活区截图 / 多人接力PK医药费） */}
+                  {otherToolsExtra}
 
                   {stats.otherStats ? (
                     <>

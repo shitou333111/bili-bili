@@ -53,6 +53,9 @@ export interface GiftLogEntry {
   num: number;
   /** 礼物图标直链（来自送礼弹幕原始数据 img/gift_pic），避免展示时再查询礼物目录 */
   img?: string;
+  /** 醒目留言（SC）：存在时表示该条为 SC（无图标），值为该条 SC 的电池数。
+   *  SC 展示在礼物条中以圆形纯色背景（按价位）+ "SC"/电池数 两行文字呈现。 */
+  scBattery?: number;
 }
 
 interface GiftDb {
@@ -161,7 +164,27 @@ export async function loadRecentQualifyingGifts(
   const map = new Map<number, { giftName: string; price: number; count: number; img: string }>();
   // 每礼物的粉丝聚合：giftId → uid → 累计数量
   const fanMaps = new Map<number, Map<number, { uname: string; face: string; count: number }>>();
+  // 醒目留言（SC）：每条单独成项（不聚合、无图标），保留各自的电池数以按价位着色
+  const scItems: DisplayGiftItem[] = [];
   for (const r of rows) {
+    if (typeof r.scBattery === "number") {
+      // 醒目留言（SC）：与其他礼物一致，同样受「显示单价大于 X 电池」阈值筛选（下面 v.price <= threshold 同理）
+      // 负的唯一 id：每条单独成项（不聚合），且不与真实 gift_id 冲突
+      if (r.price > threshold) {
+        scItems.push({
+          giftId: -(r.ts * 100000 + (r.uid % 100000) + 1),
+          giftName: r.giftName || "醒目留言",
+          price: r.price,
+          count: 1,
+          img: "",
+          scBattery: r.scBattery,
+          // 与普通礼物一致：带上送礼粉丝，面板点选后可进入高亮条
+          fans:
+            r.uid > 0 ? [{ uid: r.uid, uname: r.uname, face: r.face || "", count: 1 }] : [],
+        });
+      }
+      continue;
+    }
     const cur = map.get(r.giftId);
     // 图标：优先礼物列表的动态图（gif，无 gif 退 img_basic），目录查不到再回退弹幕直链图标
     const img = getGiftImgAnimated(r.giftId) || r.img || "";
@@ -196,7 +219,7 @@ export async function loadRecentQualifyingGifts(
       .sort((a, b) => b.count - a.count);
     out.push({ giftId, giftName: v.giftName, price: v.price, count: v.count, img: v.img, fans });
   }
-  return out;
+  return [...out, ...scItems];
 }
 
 // ==================== 收入记录读取（anchor-gifts-records.json） ====================

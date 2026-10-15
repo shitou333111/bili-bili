@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { readState, getSessionCookieName, getUserTokenCookieName, getSessionBySid } from "@/lib/auth/session";
-import { readUsersList, type UsersListEntry } from "@/lib/user-data";
+import { readUsersList, readAccountNoRevenue, type UsersListEntry } from "@/lib/user-data";
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -86,6 +86,8 @@ export async function GET(request: Request) {
   const users = await Promise.all(
     Array.from(map.values()).map(async (u) => {
       const lastUpload = await getLastUploadDate(u.mid);
+      // 是否为主播：复用本地已有的 noRevenue 标记（拉取主播数据时判定并持久化），无需重新实现
+      const noRevenue = await readAccountNoRevenue(u.mid, u.uname);
       return {
         sid: u.sid ?? null, // 本机登录账号才有本地会话 sid（可用于切换）
         uname: u.uname,
@@ -99,6 +101,7 @@ export async function GET(request: Request) {
         isLocal: !!u.isLocal,
         platform: u.platform, // 最近使用平台：web/desktop/android/ios
         devices: u.devices, // 设备记录列表（品牌/系统版本/浏览器等）
+        noRevenue, // true=非主播（无收益/无直播间），false=主播
       };
     })
   );

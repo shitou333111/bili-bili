@@ -9,6 +9,7 @@ import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   isAnimeOpacity,
+  isGiftBarWidth,
   type DisplayConfig,
   type DisplayLayout,
   type EntryAnimeConfig,
@@ -35,7 +36,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "giftEffect" | "entry" | "anime" | "banner", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -45,6 +46,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
   };
   return {
     gift: norm("gift", r.gift),
+    giftSeparate: norm("giftSeparate", (r as any).giftSeparate),
     giftEffect: norm("giftEffect", (r as any).giftEffect),
     entry: norm("entry", r.entry),
     anime: norm("anime", r.anime),
@@ -172,6 +174,10 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
         : d.giftPriceThreshold,
     // 礼物展示条方向：仅接受 "vertical"，其余（含旧配置缺失）回退横条
     giftBarOrientation: r.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
+    // 礼物展示条宽度档位：仅接受三档之一，其余（含旧配置缺失）回退短（旧版宽度）
+    giftBarWidth: isGiftBarWidth(r.giftBarWidth) ? r.giftBarWidth : d.giftBarWidth,
+    // 单独条开关：缺失/非法回退默认（关闭）
+    giftSeparateBar: !!r.giftSeparateBar,
     animeList: Array.isArray(r.animeList)
       ? r.animeList.map((a) => {
           // 兼容旧配置字段 videoPath：作为横屏视频迁移

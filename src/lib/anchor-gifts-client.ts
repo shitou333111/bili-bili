@@ -91,6 +91,8 @@ export type AnchorGiftsResult = {
   dateRange: { start: string; end: string } | null;
   blindBoxProfit: unknown;
   blindBoxProfits: unknown[];
+  /** 「盈亏」勾选的盲盒（"全部盲盒"卡片统计与下拉框用），与 blindBoxProfits（「卡片」勾选）独立 */
+  blindBoxProfitStats: unknown[];
   otherStats: {
     dayStats: { totalDays: number; maxConsecutiveDays: number };
     fanStats: Array<{
@@ -1695,7 +1697,7 @@ export async function fetchAnchorGifts(
     }
 
     // 构建盲盒盈亏
-    const blindBoxProfits: BlindBoxProfit[] = [];
+    const allBoxProfits: BlindBoxProfit[] = [];
     for (const blindBoxId of blindBoxIds) {
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
@@ -1756,7 +1758,7 @@ export async function fetchAnchorGifts(
             .sort((a, b) => b.records[0].localeCompare(a.records[0]))
         : [];
 
-      blindBoxProfits.push({
+      allBoxProfits.push({
         gift_id: blindBoxId,
         name: boxName,
         drawCount,
@@ -1771,6 +1773,13 @@ export async function fetchAnchorGifts(
         castleFans,
       });
     }
+
+    // 「卡片」勾选的盲盒 = 单独作为一个卡片显示；「盈亏」勾选的盲盒 = 纳入"全部盲盒"卡片统计与下拉框。
+    // 两者独立：仅勾"盈亏"不应单独成卡片，仅勾"卡片"不进入"全部盲盒"统计/下拉。
+    const cardIdSet = new Set(activityBoxIds);
+    const profitIdSet = new Set(blindBoxConfig.profitIds ?? []);
+    const blindBoxProfits = allBoxProfits.filter((b) => cardIdSet.has(b.gift_id));
+    const blindBoxProfitStats = allBoxProfits.filter((b) => profitIdSet.has(b.gift_id));
 
     // 兼容旧版
     const blindBoxProfit = blindBoxProfits.length > 0 ? blindBoxProfits[0] : null;
@@ -1833,6 +1842,7 @@ export async function fetchAnchorGifts(
       dateRange: computedDateRange,
       blindBoxProfit,
       blindBoxProfits,
+      blindBoxProfitStats,
       otherStats: {
         dayStats: { totalDays: sortedDates.length, maxConsecutiveDays: allConsecutive.max },
         fanStats,

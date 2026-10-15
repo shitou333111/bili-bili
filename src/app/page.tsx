@@ -854,6 +854,65 @@ const FETCH_RATE_PRESETS: Array<{ label: string; rate: number; hint: string }> =
 ];
 const FETCH_RATE_OPTIONS = FETCH_RATE_PRESETS.map((p) => p.rate);
 
+/** 工具卡片定义（帮助页「工具」与移到「粉丝」「主播」其他 tab 的卡片共用同一外观与点击逻辑） */
+type ToolDef = { icon: string; title: string; desc: string; needsLogin: boolean };
+const LIKE_TOOL: ToolDef = { icon: "/like.png", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true };
+const LOTTERY_TOOL: ToolDef = { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "指定直播间，自动抢天选福袋和红包", needsLogin: true };
+const FANS_CLEAN_TOOL: ToolDef = { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true };
+const MEDAL_CLEAN_TOOL: ToolDef = { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true };
+const REVIVE_SHOT_TOOL: ToolDef = { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false };
+const MEDICAL_TOOL: ToolDef = { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false };
+const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "每月自动领取年度大会员赠送的5个B币，并全部兑换为直播电池", needsLogin: true };
+/** 帮助页「工具」区保留的卡片 */
+const HELP_TOOLS: ToolDef[] = [LIKE_TOOL, LOTTERY_TOOL];
+/** 移到「粉丝」页「其他」tab（天选红包卡片上方）的卡片 */
+const FANS_TOOLS: ToolDef[] = [FANS_CLEAN_TOOL, MEDAL_CLEAN_TOOL];
+/** 移到「主播」页「其他」tab（活动素材下载下方）的卡片 */
+const ANCHOR_TOOLS: ToolDef[] = [REVIVE_SHOT_TOOL, MEDICAL_TOOL];
+
+/** 工具卡片：帮助页工具网格与移动后的卡片共用（置灰项显示锁标） */
+function ToolCard({
+  icon,
+  title,
+  desc,
+  disabled,
+  onClick,
+}: {
+  icon: string;
+  title: string;
+  desc: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
+        disabled
+          ? "border-black/5 bg-gray-100/70 cursor-not-allowed opacity-60"
+          : "border-black/10 bg-white/80 hover:border-black/20 hover:shadow-lg"
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        {icon.endsWith(".png") ? (
+          <img src={icon} alt={title} className={`h-9 w-9 object-contain ${disabled ? "grayscale opacity-50" : ""}`} />
+        ) : (
+          <span className={`text-3xl ${disabled ? "grayscale opacity-50" : ""}`}>{icon}</span>
+        )}
+        <div className="min-w-0">
+          <h3 className="text-base font-bold">{title}</h3>
+          <p className="mt-0.5 text-xs text-black/45">{desc}</p>
+        </div>
+        {disabled ? (
+          <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+        ) : (
+          <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        )}
+      </div>
+    </button>
+  );
+}
+
 export default function HomePage() {
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -999,6 +1058,9 @@ export default function HomePage() {
   useEffect(() => { activeModuleRef.current = activeModule; }, [activeModule]);
   useEffect(() => { toolsPageRef.current = toolsPage; }, [toolsPage]);
   const navStackRef = useRef<Array<{ module: string; toolsPage: string }>>([]);
+  // 工具子页的返回目标模块：从「粉丝」/「主播」页打开工具时记录来源模块，
+  // 子页"返回"回到来源页（此前固定回"帮助"截图模块，从粉丝/主播页进入后会错误跳回帮助页）
+  const toolSourceModuleRef = useRef<string>("screenshot");
 
   // 导航前调用：把当前视图压栈并 pushState，使系统返回键可触发 popstate 回退
   const pushView = useCallback((nextModule: string, nextToolsPage: string) => {
@@ -1074,6 +1136,12 @@ export default function HomePage() {
   const [fansSelected, setFansSelected] = useState<Set<number>>(new Set());
   const [fansRemoving, setFansRemoving] = useState(false);
   const [fansMsg, setFansMsg] = useState("");
+  // 年度大会员领取B币并兑换电池：卡片状态
+  // unknown=待检查/未领取可点击 claimable=可兑换 claimed=本月度已兑换 not_annual=非年度大会员
+  const [yearVipStatus, setYearVipStatus] = useState<"unknown" | "claimable" | "claimed" | "not_annual">("unknown");
+  // 冷启动自动领取成功后弹出的提醒内容（空表示不弹）
+  const [yearVipAutoNotice, setYearVipAutoNotice] = useState("");
+  const yearVipAutoRanRef = useRef<number | null>(null);
   // 助力主播 自动点赞：关注主播列表 + 每日点赞状态（每账号每天最多 5 位主播/5000 赞）
   const [likeList, setLikeList] = useState<LikeAnchor[]>([]);
   const [likeLoading, setLikeLoading] = useState(false);
@@ -1100,6 +1168,22 @@ export default function HomePage() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAccount?.mid]);
+
+  // 冷启动自动检查年度大会员 B币 权益：仅本机登录的客户端执行；
+  // 若本月可领取则自动领取并兑换为电池，成功后弹提醒框；无可领取则不弹。
+  useEffect(() => {
+    const mid = currentAccount?.mid;
+    if (!mid || yearVipAutoRanRef.current === mid) return;
+    if (currentAccount?.source === "server") return; // 服务器账号无登录凭证
+    import("@/lib/platform")
+      .then(async ({ getPlatform }) => {
+        const platform = await getPlatform().catch(() => null);
+        if (!platform || !platform.isNative) return; // 仅客户端自动执行
+        yearVipAutoRanRef.current = mid;
+        await runYearVipBCoin(true);
+      })
+      .catch(() => {});
+  }, [currentAccount?.mid, currentAccount?.source]);
   // 离线功能轻提示（短时间内自动消失）
   const [offlineToast, setOfflineToast] = useState("");
   const offlineToastTimer = useRef<number | null>(null);
@@ -1671,12 +1755,15 @@ export default function HomePage() {
   ];
   // "主播"页面是否显示下载引导提示：WEB 端恒显示；客户端等直播间检测完成后、无直播间时显示
   const showAnchorPromo = isWeb || (liveRoomChecked && !hasLiveRoom);
+  // 服务器账号（source=server）无登录凭证，需要登录的功能应禁用
+  const serverAccount = currentAccount?.source === "server";
   // WEB 端不开放、仅 APP 可用的帮助页工具卡片（点击置灰卡片轻提示"只能在APP中使用"）
   const WEB_APP_ONLY_TOOLS = new Set([
     "助力主播 自动点赞",
     "自动抢天选和红包",
     "粉丝清理",
     "粉丝牌清理",
+    "年度大会员领取B币并换成电池",
     "多人接力PK医药费",
   ]);
   // 默认隐藏的帮助页工具卡片：与"管理后台"入口同一触发方式（连击版本卡片 10 次），
@@ -1685,6 +1772,131 @@ export default function HomePage() {
     "助力主播 自动点赞",
     "自动抢天选和红包",
   ]);
+
+  /** 工具卡片置灰判定：WEB 端仅 APP 可用 / 需要登录凭证但当前为服务器账号或离线 */
+  const isToolDisabled = (tool: ToolDef) =>
+    (isWeb && WEB_APP_ONLY_TOOLS.has(tool.title)) ||
+    (tool.needsLogin && (serverAccount || !isOnline));
+
+  /** 工具卡片点击统一入口：拦截提示 + 跳转到对应工具页（帮助页与移到其他页的卡片共用） */
+  const runTool = (tool: ToolDef) => {
+    if (isWeb && WEB_APP_ONLY_TOOLS.has(tool.title)) {
+      showOfflineToast("只能在APP中使用");
+      return;
+    }
+    if (tool.needsLogin && (serverAccount || !isOnline)) {
+      showOfflineToast(
+        serverAccount ? "该功能需要登录凭证，服务器账号无法使用" : "当前处于离线模式，无法使用此项功能",
+      );
+      return;
+    }
+    // 记录来源模块，供工具子页"返回"回到当前所在页
+    toolSourceModuleRef.current = activeModule;
+    if (tool.title === LIKE_TOOL.title) { pushView("screenshot", "like"); loadLikeAnchors(); }
+    else if (tool.title === LOTTERY_TOOL.title) { pushView("screenshot", "lottery"); }
+    else if (tool.title === FANS_CLEAN_TOOL.title) { pushView("screenshot", "fans"); loadFans(1); }
+    else if (tool.title === MEDAL_CLEAN_TOOL.title) { pushView("screenshot", "medal"); loadMedals(1); }
+    else if (tool.title === MEDICAL_TOOL.title) { pushView("screenshot", "medical"); }
+    else { openScreenshotPage(); }
+  };
+
+  /** 年度大会员B币卡片：左侧圆形按钮文案（分两行）与可点击状态 */
+  const yearVipDisabled = isToolDisabled(YEAR_VIP_TOOL);
+  const yearVipClickable = !yearVipDisabled && (yearVipStatus === "unknown" || yearVipStatus === "claimable");
+  const yearVipBtnText: [string, string] =
+    yearVipStatus === "not_annual" ? ["非年度", "大会员"]
+    : yearVipStatus === "claimed" ? ["本月度", "已兑换"]
+    : ["点击", "兑换"];
+  const yearVipBtnClass = yearVipClickable
+    ? "bg-[#00a1d6] text-white hover:opacity-90 active:scale-95"
+    : "bg-black/5 text-black/40 cursor-default";
+
+  /** 「粉丝」页「其他」tab（天选&红包卡片上方）：清理类工具卡片 + 合成活动"黑抽"卡片 */
+  const fansOtherTools = (
+    <>
+      {FANS_TOOLS.map((tool) => (
+        <ToolCard
+          key={tool.title}
+          icon={tool.icon}
+          title={tool.title}
+          desc={tool.desc}
+          disabled={isToolDisabled(tool)}
+          onClick={() => runTool(tool)}
+        />
+      ))}
+      {/* 年度大会员领取B币并换成电池：仅左侧圆形按钮可点，卡片本身不可点击 */}
+      <div className={`w-full rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur ${yearVipDisabled ? "border-black/5 bg-gray-100/70 opacity-60" : "border-black/10 bg-white/80"}`}>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { if (yearVipClickable) runYearVipBCoin(false); }}
+            disabled={!yearVipClickable}
+            className={`h-14 w-14 flex-shrink-0 rounded-full flex flex-col items-center justify-center text-[11px] font-semibold leading-tight transition ${yearVipBtnClass}`}
+          >
+            <span>{yearVipBtnText[0]}</span>
+            <span>{yearVipBtnText[1]}</span>
+          </button>
+          <div className="min-w-0">
+            <h3 className="text-base font-bold">{YEAR_VIP_TOOL.title}</h3>
+            <p className="mt-0.5 text-xs text-black/45">{YEAR_VIP_TOOL.desc}</p>
+          </div>
+          {yearVipDisabled && (
+            <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+          )}
+        </div>
+      </div>
+      {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟；服务器账号无登录凭证不可用 */}
+      <button
+        onClick={() => {
+          if (serverAccount) {
+            showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+            return;
+          }
+          setRealActivityModalOpen(true);
+        }}
+        disabled={!realActivityUrl}
+        className={
+          !realActivityUrl || serverAccount
+            ? "w-full rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+            : "w-full rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
+        }
+      >
+        <div className="flex items-center gap-3">
+          <span className={`text-3xl ${serverAccount ? "grayscale opacity-50" : ""}`}>⚡</span>
+          <div>
+            <h3 className={!realActivityUrl || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-red-700"}>合成活动"黑抽"</h3>
+            <p className={!realActivityUrl || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-red-600/60"}>
+              {serverAccount
+                ? "服务器账号无登录凭证，无法使用真实消费功能"
+                : realActivityUrl
+                  ? "主播未开播时直接进入真实合成活动页面，真实消费"
+                  : "管理员暂未配置黑抽活动地址"}
+            </p>
+          </div>
+          {!realActivityUrl || serverAccount ? (
+            <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+          ) : (
+            <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          )}
+        </div>
+      </button>
+    </>
+  );
+
+  /** 「主播」页「其他」tab（活动素材下载下方）：复活曲截图 + 多人接力PK医药费 */
+  const anchorOtherTools = (
+    <>
+      {ANCHOR_TOOLS.map((tool) => (
+        <ToolCard
+          key={tool.title}
+          icon={tool.icon}
+          title={tool.title}
+          desc={tool.desc}
+          disabled={isToolDisabled(tool)}
+          onClick={() => runTool(tool)}
+        />
+      ))}
+    </>
+  );
 
   // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
   useEffect(() => {
@@ -2277,6 +2489,33 @@ export default function HomePage() {
   openAnchorBubbleChartRef.current = openAnchorBubbleChart;
   const openAnchorBubbleChartStable = useCallback(() => openAnchorBubbleChartRef.current(), []);
 
+  /**
+   * 年度大会员领取B币并兑换电池（冷启动自动与卡片按钮手动共用），并同步卡片状态。
+   * auto=true 时静默执行，仅在确实领取/兑换成功时弹出提醒；无领取则什么都不做。
+   */
+  async function runYearVipBCoin(auto = false) {
+    try {
+      const res = await dataFetch("/api/tools/year-vip-bcoin", { method: "POST", cache: "no-store" });
+      const data = await res.json();
+      const msg: string = data?.message || (data?.code === 0 ? "完成" : "操作失败");
+      const d = data?.data;
+      if (data?.code === 0 && d) {
+        // 同步卡片状态
+        if (d.isYearVip === false) setYearVipStatus("not_annual");
+        else if (d.claimed || d.exchanged || d.alreadyClaimed) setYearVipStatus("claimed");
+        else setYearVipStatus("claimable");
+        if (d.claimed || d.exchanged) setYearVipAutoNotice(msg);
+        else if (!auto) showToast(msg, "info");
+      } else {
+        if (!auto) showToast(msg, "error");
+        setYearVipStatus(d?.isYearVip === false ? "not_annual" : "unknown");
+      }
+    } catch {
+      if (!auto) showToast("网络错误", "error");
+      setYearVipStatus("unknown");
+    }
+  }
+
   async function loadFans(pn: number, append = false) {
     setFansLoading(true);
     setFansMsg("");
@@ -2674,8 +2913,6 @@ export default function HomePage() {
   }
 
   const isLoggedIn = Boolean(currentAccount) || apiLoggedIn;
-  // 服务器账号（source=server）无登录凭证，需要登录的功能应禁用
-  const serverAccount = currentAccount?.source === "server";
   const isRealSnapshot = snapshot?.source === "real";
 
   // 礼物天选特殊处理：主播给自己发天选，昵称为空、ruid=0，归到当前登录账号
@@ -3149,7 +3386,6 @@ export default function HomePage() {
             <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
             <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
             <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会很快。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">建议安装APP，不用频繁登录，体验更好。</p>
 
             {fetchProgress && (
               <div className="mt-5">
@@ -3250,6 +3486,7 @@ export default function HomePage() {
           formatCoinsShort={formatCoinsShort}
           fixImageUrl={fixImageUrl}
           formatProfit={formatProfit}
+          otherToolsExtra={fansOtherTools}
         />
       </div>
 
@@ -3342,6 +3579,7 @@ export default function HomePage() {
             setHasLiveRoom(false);
             setLiveRoomChecked(true);
           }}
+          otherToolsExtra={anchorOtherTools}
         />
         </div>
         )}
@@ -3565,100 +3803,20 @@ export default function HomePage() {
                     )}
                   </div>
                 )}
-                {[
-                  { icon: "/like.png", title: "助力主播 自动点赞", desc: "为关注主播自动批量点赞", needsLogin: true },
-                  { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "指定直播间，自动抢天选福袋和红包", needsLogin: true },
-                  { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true },
-                  { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true },
-                  { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false },
-                  { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false },
-                ].map((tool) => {
-                  // WEB 端仅 APP 可用的工具：置灰（点赞/天选/粉丝清理/粉丝牌清理/PK医药费）
-                  const isWebOnlyApp = isWeb && WEB_APP_ONLY_TOOLS.has(tool.title);
+                {HELP_TOOLS.map((tool) => {
                   // 默认隐藏的工具（点赞/天选）：连击版本卡片 10 次解锁后（adminUsed）才显示
                   if (!adminUsed && HIDDEN_BY_DEFAULT_TOOLS.has(tool.title)) return null;
-                  // 服务器账号无登录凭证、或离线时，禁用需要登录的工具（粉丝清理/粉丝牌清理）
-                  const disabled = isWebOnlyApp || (tool.needsLogin && (serverAccount || !isOnline));
                   return (
-                  <button
-                    key={tool.title}
-                    onClick={() => {
-                      if (isWebOnlyApp) {
-                        showOfflineToast("只能在APP中使用");
-                        return;
-                      }
-                      if (disabled) {
-                        if (serverAccount) showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
-                        else showOfflineToast("当前处于离线模式，无法使用此项功能");
-                        return;
-                      }
-                      if (tool.title === "助力主播 自动点赞") { pushView("screenshot", "like"); loadLikeAnchors(); }
-                      else if (tool.title === "自动抢天选和红包") { pushView("screenshot", "lottery"); }
-                      else if (tool.title === "粉丝清理") { pushView("screenshot", "fans"); loadFans(1); }
-                      else if (tool.title === "粉丝牌清理") { pushView("screenshot", "medal"); loadMedals(1); }
-                      else if (tool.title === "多人接力PK医药费") { pushView("screenshot", "medical"); }
-                      else { openScreenshotPage(); }
-                    }}
-                    className={`rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
-                      disabled
-                        ? "border-black/5 bg-gray-100/70 cursor-not-allowed opacity-60"
-                        : "border-black/10 bg-white/80 hover:border-black/20 hover:shadow-lg"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      {tool.icon.endsWith(".png") ? (
-                        <img src={tool.icon} alt={tool.title} className={`h-9 w-9 object-contain ${disabled ? "grayscale opacity-50" : ""}`} />
-                      ) : (
-                        <span className={`text-3xl ${disabled ? "grayscale opacity-50" : ""}`}>{tool.icon}</span>
-                      )}
-                      <div>
-                        <h3 className="text-base font-bold">{tool.title}</h3>
-                        <p className="mt-0.5 text-xs text-black/45">{tool.desc}</p>
-                      </div>
-                      {disabled ? (
-                        <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
-                      ) : (
-                        <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                      )}
-                    </div>
-                  </button>
+                    <ToolCard
+                      key={tool.title}
+                      icon={tool.icon}
+                      title={tool.title}
+                      desc={tool.desc}
+                      disabled={isToolDisabled(tool)}
+                      onClick={() => runTool(tool)}
+                    />
                   );
                 })}
-                {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟；服务器账号无登录凭证不可用 */}
-                <button
-                  onClick={() => {
-                    if (serverAccount) {
-                      showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
-                      return;
-                    }
-                    setRealActivityModalOpen(true);
-                  }}
-                  disabled={!realActivityUrl}
-                  className={
-                    !realActivityUrl || serverAccount
-                      ? "rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
-                      : "rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
-                  }
-                >
-                  <div className="flex items-center gap-3">
-                    <span className={`text-3xl ${serverAccount ? "grayscale opacity-50" : ""}`}>⚡</span>
-                    <div>
-                      <h3 className={!realActivityUrl || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-red-700"}>合成活动"黑抽"</h3>
-                      <p className={!realActivityUrl || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-red-600/60"}>
-                        {serverAccount
-                          ? "服务器账号无登录凭证，无法使用真实消费功能"
-                          : realActivityUrl
-                            ? "主播未开播时直接进入真实合成活动页面，真实消费"
-                            : "管理员暂未配置黑抽活动地址"}
-                      </p>
-                    </div>
-                    {!realActivityUrl || serverAccount ? (
-                      <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
-                    ) : (
-                      <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                    )}
-                  </div>
-                </button>
                 {/* 抽奖卡片：登录账号可抽奖（中奖率1/20，奖品为一个月舰长，每人一次）；服务器账号/未登录置灰不可点击 */}
                 <button
                   onClick={() => {
@@ -3961,7 +4119,7 @@ export default function HomePage() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { pushView("screenshot", "home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -4076,7 +4234,7 @@ export default function HomePage() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { pushView("screenshot", "home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -4189,7 +4347,7 @@ export default function HomePage() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { pushView("screenshot", "home"); setLikeList([]); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setLikeList([]); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
@@ -4262,7 +4420,7 @@ export default function HomePage() {
               <MedicalFeeSettlement
                 currentUid={currentAccount?.mid ?? 0}
                 currentUname={currentAccount?.uname ?? ""}
-                onBack={() => pushView("screenshot", "home")}
+                onBack={() => pushView(toolSourceModuleRef.current, "home")}
               />
             )}
 
@@ -4454,6 +4612,25 @@ export default function HomePage() {
         onClose={() => setRealActivityModalOpen(false)}
         activityUrlTemplate={realActivityUrl}
       />
+
+      {/* 冷启动自动领取年度大会员 B币 并兑换电池成功的提醒框 */}
+      {yearVipAutoNotice && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/30 backdrop-blur-sm px-4" onClick={() => setYearVipAutoNotice("")}>
+          <div className="w-full max-w-sm rounded-2xl bg-white/95 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.25)]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">🎁</span>
+              <h3 className="text-base font-bold text-black/85">年度大会员 B币 已自动兑换</h3>
+            </div>
+            <p className="mt-3 text-sm text-black/60 leading-relaxed">{yearVipAutoNotice}</p>
+            <button
+              onClick={() => setYearVipAutoNotice("")}
+              className="mt-5 w-full rounded-xl bg-[#00a1d6] py-2.5 text-sm font-medium text-white hover:opacity-90 transition active:scale-[0.98]"
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 抽奖页面：登录账号可抽奖（中奖率1/20，奖品为一个月舰长）；服务器账号入口已置灰，此处兜底 */}
       {lotteryOpen && (
