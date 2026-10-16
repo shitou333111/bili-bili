@@ -465,6 +465,32 @@ export async function readAccountNoRevenue(mid: number, uname: string): Promise<
   return info?.noRevenue === true;
 }
 
+/** 账号"是否主播"三态判定（仅依据本地已有数据，不发起任何网络探测）。
+ *  - streamer：存在收益记录（收过礼物流水）→ 确为主播
+ *  - non-streamer：已确认无收益（noRevenue=true）→ 确为非主播
+ *  - unknown：既无收益记录、也未判定无收益（未分析 / web 登录 / 服务器收集账号）
+ *  每次读取都实时依据当前文件计算，因此本地数据更新后（拉取到收益或无收益判定落盘）
+ *  状态会自动跟随变化，无需额外置位。 */
+export type StreamerStatus = "streamer" | "non-streamer" | "unknown";
+
+export async function readAccountStreamerStatus(mid: number, uname: string): Promise<StreamerStatus> {
+  const dir = getUserDataDir(mid, uname);
+  try {
+    const raw = await fs.readFile(path.join(dir, "anchor-gifts-records.json"), "utf8");
+    const parsed = JSON.parse(raw) as { noRevenue?: boolean; records?: unknown[]; total_count?: number };
+    if (parsed && typeof parsed === "object") {
+      const recordCount = Array.isArray(parsed.records) ? parsed.records.length : 0;
+      if (recordCount > 0 || (typeof parsed.total_count === "number" && parsed.total_count > 0)) return "streamer";
+      if (parsed.noRevenue === true) return "non-streamer";
+    }
+  } catch {
+    // 记录文件缺失/损坏：回退 account-info
+  }
+  const info = await loadAccountInfo(mid, uname);
+  if (info?.noRevenue === true) return "non-streamer";
+  return "unknown";
+}
+
 // ====== 天选/红包礼物 ID 持久化存储（全局共享：列表对所有用户一致） ======
 
 interface SpecialGiftDB {

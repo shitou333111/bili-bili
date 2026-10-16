@@ -15,6 +15,7 @@ import {
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
+  type EntryColors,
   type EntryParticleMode,
   type GiftEffectFrameConfig,
   type GiftBarWidth,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/gift-catalog-client";
 import { getGiftEffectsMap } from "@/lib/gift-local-store";
 import { fetchUserInfo } from "@/lib/tools-client";
+import { getVersionDisplay } from "@/lib/updater";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
@@ -605,6 +607,12 @@ function looksLikeGiftName(content: string): boolean {
  *  INTERACT_WORD(_V2) 与 ENTRY_EFFECT，handleEntry 因此被调用多遍，这些都算同一次入场。 */
 const ENTRY_DEDUP_MS = 2000;
 
+/** 「B瓜版本」查询指令：弹幕内容精确匹配该关键词时，机器人回复当前 APP 版本号（帮助页显示的版本号） */
+const VERSION_QUERY_KEYWORD = "B瓜版本";
+/** 「B瓜版本」回复的全局冷却（ms）：多个观众短时间内先后发送同一关键词，回复内容完全一致，
+ *  只需回复一次；同时兜底防刷（B站发送本身另有 5s 冷却，见 barrage.ts）。 */
+const VERSION_REPLY_COOLDOWN_MS = 10_000;
+
 class DisplayDanmakuService {
   private roomId = 0;
   /** 当前监听的主播 uid（供画布就绪后补推礼物清单） */
@@ -630,6 +638,10 @@ class DisplayDanmakuService {
   // 首次进房间拉一次，后续断线重连直接复用，避免高频请求把 IP 打成 -352。
   private cachedToken: string | null = null;
   private cachedRoomId = 0;
+  /** 「B瓜版本号」查询：最近一次回复时刻（全局冷却，见 VERSION_REPLY_COOLDOWN_MS） */
+  private lastVersionReplyAt = 0;
+  /** 当前 APP 版本号缓存（帮助页显示的格式，如 V1.4.0-20260816） */
+  private versionFullCache: string | null = null;
   /** 礼物特效配套 JSON 缓存（web_mp4_json URL → 配置；null=拉取失败，避免反复重试） */
   private effectJsonCache = new Map<string, GiftEffectFrameConfig | null>();
   /** 大航海去重（uid:名称 → 最近处理时刻）：GUARD_BUY 与 USER_TOAST_MSG 可能同时下发，
@@ -887,6 +899,7 @@ class DisplayDanmakuService {
       giftBarWidth: cfg.giftBarWidth,
       giftSeparateBar: cfg.giftSeparateBar,
       entryParticleMode: cfg.entryParticleMode,
+      entryColors: cfg.entryColors,
       giftHighlight: this.giftHighlight,
       flags: {
         master: displayMaster(cfg),
@@ -957,6 +970,11 @@ class DisplayDanmakuService {
   /** 广播入场提示粒子聚散方式（中心聚散/左右聚散）到画布（面板切换后调用，配置已落盘）。 */
   async broadcastEntryParticleMode(mode: EntryParticleMode): Promise<void> {
     await this.broadcast({ type: "entryParticleMode", v: mode });
+  }
+
+  /** 广播入场提示配色（badge 渐变 + 粒子同源 + 昵称色）到画布（面板「设置颜色」保存后调用，配置已落盘）。 */
+  async broadcastEntryColors(v: EntryColors): Promise<void> {
+    await this.broadcast({ type: "entryColors", v });
   }
 
   /** 触发一次撒花庆祝（纸屑 + 飘带，一次性效果；面板"撒花"按钮调用）。 */
@@ -1310,6 +1328,13 @@ class DisplayDanmakuService {
         const content = String(d.content || "").trim();
         if (!content) return;
 
+        // 「B瓜版本」查询：弹幕内容精确匹配关键词 → 回复当前 APP 版本号（帮助页显示的版本号）。
+        // 不依赖任何配置开关，只要有弹幕监听即可用；全局冷却防刷。
+        if (content === VERSION_QUERY_KEYWORD) {
+          void this.replyVersionQuery(Number(d.user.uid));
+          return;
+        }
+
         const config = await loadDisplayConfig(mid);
 
         // 礼物关键字特效：弹幕精确匹配"有特效礼物名称"→ 在收礼特效同位置播放（独立于盲盒查询）
@@ -1347,6 +1372,36 @@ class DisplayDanmakuService {
         }
       }),
     );
+  }
+
+  /**
+   * 回复「B瓜版本」查询：内容精确匹配 VERSION_QUERY_KEYWORD 时，向当前直播间发送
+   * "B瓜当前版本为（<版本>）"（版本号取帮助页显示的当前版本号）。
+   * 全局冷却 VERSION_REPLY_COOLDOWN_MS：多个观众短时间内重复触发时只回复一次，兼顾防刷。
+   */
+  private async replyVersionQuery(uid: number) {
+    if (!this.active || !this.roomId) return;
+    const now = Date.now();
+    if (now - this.lastVersionReplyAt < VERSION_REPLY_COOLDOWN_MS) return;
+    this.lastVersionReplyAt = now;
+    try {
+      if (!this.versionFullCache) {
+        this.versionFullCache = (await getVersionDisplay()).full;
+      }
+      const reply = `B瓜当前版本为（${this.versionFullCache}）`;
+      const { sendDanmakuWithRetry } = await import("@/lib/barrage");
+      const res = await sendDanmakuWithRetry(this.roomId, reply);
+      this.pushDebug("danmu", res.code === 0 ? "版本号查询回复" : "版本号查询回复失败", {
+        uid,
+        reply,
+        code: res.code,
+      });
+      if (res.code !== 0) {
+        console.warn("[展示]版本号查询回复弹幕发送失败", res.message || res.msg || res.code);
+      }
+    } catch (e) {
+      console.warn("[展示]版本号查询处理异常", (e as Error)?.message || e);
+    }
   }
 
   /** 入场触发去重：同一 uid 同一类（anime/entry）在 2s 窗口内只允许 emit 一次。

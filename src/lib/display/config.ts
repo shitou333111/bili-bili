@@ -10,6 +10,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   isAnimeOpacity,
   isGiftBarWidth,
+  isHexColor,
   type DisplayConfig,
   type DisplayLayout,
   type EntryAnimeConfig,
@@ -128,6 +129,12 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     entry: r.entry ?? d.entry,
     // 粒子聚散方式：仅接受 "lr"（左右聚散/原库），其余（含旧配置缺失）回退 "center"（中心聚散/自研）
     entryParticleMode: r.entryParticleMode === "lr" ? "lr" : "center",
+    // 入场配色：逐色校验 #rrggbb，非法/缺失（含旧配置）回退默认（红橙黄 + 白）
+    entryColors: {
+      start: isHexColor(r.entryColors?.start) ? r.entryColors.start : d.entryColors.start,
+      end: isHexColor(r.entryColors?.end) ? r.entryColors.end : d.entryColors.end,
+      name: isHexColor(r.entryColors?.name) ? r.entryColors.name : d.entryColors.name,
+    },
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
     giftEffect: {

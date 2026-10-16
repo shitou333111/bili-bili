@@ -16,8 +16,36 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ParticleButton from "react-particle-effect-button";
-import type { DisplayEntryPayload, EntryParticleMode } from "@/lib/display/types";
+import type {
+  DisplayEntryPayload,
+  EntryColors,
+  EntryParticleMode,
+} from "@/lib/display/types";
+import { DEFAULT_ENTRY_COLORS } from "@/lib/display/types";
 import { RadialBadge } from "./radial-particles";
+
+/** #rrggbb/#rgb → rgba(r,g,b,a)；非法色回退原串（浏览器会忽略）。 */
+function withAlpha(hex: string, a: number): string {
+  const h = String(hex || "").trim().replace("#", "");
+  const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  if (![r, g, b].every((v) => Number.isFinite(v))) return hex;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/** 两色线性插值（sRGB）→ rgb 串；供旧版库粒子（单色）取渐变中点色 */
+function mixHex(a: string, b: string, t: number): string {
+  const pa = a.replace("#", "");
+  const pb = b.replace("#", "");
+  const na = pa.length === 3 ? pa.split("").map((c) => c + c).join("") : pa;
+  const nb = pb.length === 3 ? pb.split("").map((c) => c + c).join("") : pb;
+  const ca = [0, 2, 4].map((i) => parseInt(na.slice(i, i + 2), 16));
+  const cb = [0, 2, 4].map((i) => parseInt(nb.slice(i, i + 2), 16));
+  if (![...ca, ...cb].every((v) => Number.isFinite(v))) return a;
+  return `rgb(${ca.map((v, i) => Math.round(v + (cb[i] - v) * t)).join(",")})`;
+}
 
 /* ============================================================================
  * ★ 粒子聚散方式（由面板「入场提示」卡片内的开关驱动，见 DisplayConfig.entryParticleMode）
@@ -61,6 +89,8 @@ type EntryBadgeProps = {
   onMeasure?: (width: number) => void;
   /** 粒子聚散方式（面板开关）："center"=中心聚散（自研）/"lr"=左右聚散（原库）；缺省=中心聚散 */
   particleMode?: EntryParticleMode;
+  /** 入场配色（badge 渐变 + 粒子同源 + 昵称单色）；缺省 = 默认红橙黄/白 */
+  colors?: EntryColors;
 };
 
 /** 首次出现前的延迟（让粒子动画在挂载后启动） */
@@ -76,20 +106,7 @@ const HOLD_MS = 3000;
  * 否则会在粒子尚在飞散时强拆 badge，造成"消散被截断"（之前 6000ms 会在消散中途截断）。
  */
 export const ENTRY_TOTAL_MS = 12000;
-/** 粒子颜色：仅作 fallback（库内已按时间点映射到红橙黄暖色相区间 0°~60°） */
-const PARTICLE_COLOR = "#003ff1";
-/** badge 核心渐变（红→橙→黄，与粒子色相对应）；光晕层复用同一渐变保证融合一致 */
-const BADGE_GRADIENT =
-  "linear-gradient(90deg,hsl(0,90%,60%),hsl(30,90%,60%),hsl(60,90%,60%))";
-/**
- * 【仅旧版 Legacy 分支使用】badge 背景专用：同一渐变但颜色整体带 50% alpha —— badge 底与
- * 三层光晕整体半透明，更易与底层直播画面融合；头像/昵称元素不使用它，保持完全不透明。
- * （用带 alpha 的渐变而非对整个 badge 设 opacity：opacity 会作用于子元素，
- *   头像/昵称也会跟着变透明。）
- * 注意：新的径向分支（EntryBadgeRadial）已改用不透明的 BADGE_GRADIENT，见该处注释。
- */
-const BADGE_GRADIENT_50 =
-  "linear-gradient(90deg,hsla(0,90%,60%,0.5),hsla(30,90%,60%,0.5),hsla(60,90%,60%,0.5))";
+/** 旧版 Legacy 分支的 badge/辉光渐变与粒子色已改为按「入场配色」配置动态生成，见 EntryBadgeLegacy。 */
 /** 光晕组整体不透明度：与 badge 背景的 50% alpha 对齐，整个入场提示半透明融入直播画面 */
 const GLOW_OPACITY = 0.5;
 /** 粒子聚合/滑入滑出时长（= 库 duration）；光晕滑动窗口擦除与之同步 */
@@ -163,7 +180,12 @@ function Avatar({ face, uname }: { face: string; uname: string }) {
  * 与其配套的常量（SHOW_DELAY_MS / HOLD_MS / ANIM_MS / ENTRY_EASE /
  * ENTRY_EASE_MIRROR / HALO_* / BADGE_GRADIENT* 等）也全部保留在文件上方。
  * ========================================================================== */
-function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
+function EntryBadgeLegacy({ user, onDone, onMeasure, colors = DEFAULT_ENTRY_COLORS }: EntryBadgeProps) {
+  // 配色随配置生效：badge 底用 50% alpha 渐变，辉光用不透明渐变，粒子用同组渐变
+  // （三者取自同一组配置色；粒子走库的 particleColors，见下方 ParticleButton 传参）。
+  const grad = `linear-gradient(90deg,${colors.start},${colors.end})`;
+  const grad50 = `linear-gradient(90deg,${withAlpha(colors.start, 0.5)},${withAlpha(colors.end, 0.5)})`;
+  const particleColor = mixHex(colors.start, colors.end, 0.5);
   const [hidden, setHidden] = useState(true);
   const hiddenRef = useRef(hidden);
   hiddenRef.current = hidden;
@@ -279,7 +301,7 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
             style={{
               inset: -HALO_PAD,
               borderRadius: 999,
-              background: BADGE_GRADIENT,
+              background: grad,
               filter: "blur(18px)",
               opacity: 0.5,
             }}
@@ -290,7 +312,7 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
             style={{
               inset: -HALO_PAD / 2,
               borderRadius: 999,
-              background: BADGE_GRADIENT,
+              background: grad,
               filter: "blur(10px)",
               opacity: 0.75,
             }}
@@ -301,7 +323,7 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
             style={{
               inset: -3,
               borderRadius: 999,
-              background: BADGE_GRADIENT,
+              background: grad,
               filter: "blur(6px)",
               opacity: 1,
             }}
@@ -311,7 +333,10 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
       <ParticleButton
         hidden={hidden}
         onComplete={handleComplete}
-        color={PARTICLE_COLOR}
+        color={particleColor}
+        // 粒子渐变色（左色 → 右色）：库补丁 26 让每粒子颜色按水平位置在两端色间插值，
+        // 使「左右聚散」的粒子色跟随「设置样式」配色（此前被库硬编码为红黄、改色不生效）
+        particleColors={[colors.start, colors.end]}
         duration={ANIM_MS}
         // 以下参数除 size/speed 外与库官方 demo 第 5 个 "Refresh" 按钮完全一致
         // （example/src/demos.js）：duration:1300 / easing:'easeInExpo' / size:3 / speed:1 /
@@ -337,8 +362,8 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
         oscillationCoefficient={1}
         className="pointer-events-none"
       >
-        {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）；背景为红橙黄暖色
-            渐变（0°→30°→60°），与粒子时间点色相对应：聚合时粒子沿 红→橙→黄 收拢。
+        {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）；背景为配置的
+            左色→右色渐变，与粒子色对应（粒子沿 左色→右色 收拢，见 particleColors 传参）。
             inline-flex 宽度严格按"头像+昵称+内边距"收缩自适应。
             不加 inset box-shadow：白色内发光会在 badge 边缘叠一层"白色背景"，
             与外侧三层光晕之间形成明显分界。去掉后 badge 渐变直接与同色光晕相接、无缝融合。
@@ -350,7 +375,7 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
           position: "relative",
           // 背景用 50% alpha 渐变（而非整元素 opacity）：badge 底半透明融入直播画面，
           // 但头像/昵称保持完全不透明
-          background: BADGE_GRADIENT_50,
+          background: grad50,
           // 布局关键样式全部走内联 style（不依赖 Tailwind 类）：pr-6 等新增类未被打包进
           // Tailwind v4 JIT 产物，实测 paddingRight 为 0 导致昵称紧贴右边界；
           // 48px = 昵称末字到 badge 右边界间距（1920 设计坐标）
@@ -371,8 +396,8 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
       >
         <Avatar face={user.face} uname={user.uname} />
         <span
-          className="font-bold text-white whitespace-nowrap tracking-wider"
-          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1 }}
+          className="font-bold whitespace-nowrap tracking-wider"
+          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1, color: colors.name }}
         >
           {user.uname}
         </span>
@@ -392,23 +417,29 @@ function EntryBadgeLegacy({ user, onDone, onMeasure }: EntryBadgeProps) {
  * 结构（自内向外 / 自下而上）：
  *   holder（定位容器，无变换 → 供引擎测算祖先视觉缩放 VS）
  *     ├─ badge（揭示作用对象：缩放淡入；也是取色 LUT 的取样元素）
- *     │     ├─ 圆角底：由全局类 .entry-badge-feather 的 ::before / ::after 两个模糊伪元素
- *     │     │   羽化而成（见 globals.css），不再使用内联不透明渐变 + 外挂三层辉光
  *     │     ├─ 头像（children[0]，引擎按子元素顺序取色）
- *     │     └─ 昵称 span（children[1]）
+ *     │     ├─ 昵称 span（children[1]）
+ *     │     └─ 两个模糊填充层（children[2]/[3]，z-index:-1，带 data-badge-fill）
  *     └─ canvas（绝对定位、居中于 holder；粒子绘制层，位于 badge 之上）
  *
  * 边界柔化（羽化）：旧实现的三层硬边辉光画在"不透明硬边胶囊"背后，边界处存在
  * "不透明填充 → 半透明辉光"的强度跳变，无论把辉光加多大都无法消除分明感。现改为把
- * 底色本身上移到伪元素并做 filter:blur()——由内向外形成连续的深浅渐变，且 blur 只在
+ * 底色本身下移到独立填充层并做 filter:blur()——由内向外形成连续的深浅渐变，且 blur 只在
  * 首次光栅化计一次，动画期间只动 transform/opacity，不产生逐帧重算开销。
+ * 填充层是真实 DOM 元素（非伪元素）且渐变内联自 props：色值更新走与昵称色同一条路径，
+ * 不依赖 CSS 变量/伪元素计算样式，避免"改色不生效"（引擎取色也直接读该元素）。
  *
  * 时序（与旧版一致）：
  *   挂载 → 延迟 SHOW_DELAY_MS → 聚合(setHidden(false)) → 聚合真正结束(onComplete "showing")
  *   → 停留 HOLD_MS → 消散(setHidden(true)) → 消散真正结束(onComplete "hiding") → onDone()
  *   每轮由父组件用新 key 重新挂载本组件（与旧版同策略），故组件内只跑一轮。
  * ========================================================================== */
-function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
+function EntryBadgeRadial({
+  user,
+  onDone,
+  onMeasure,
+  colors = DEFAULT_ENTRY_COLORS,
+}: EntryBadgeProps) {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const badgeRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -444,6 +475,9 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
       { holder, badge, canvas },
       {
         ...RADIAL_PARAMS,
+        // 回退色 = 配置的 badge 渐变两端（LUT 取色不可用/圆角外时按 x 插值）
+        fallbackStart: colors.start,
+        fallbackEnd: colors.end,
         // 每次动画"真正"结束（粒子全部离场）后回调；参数 = 刚结束的模式
         onComplete: (finished) => {
           if (finished === "showing") {
@@ -486,20 +520,21 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
       if (img && onImgLoad) img.removeEventListener("load", onImgLoad);
       engine.destroy();
     };
-  }, [user.uid, user.uname]);
+    // 配色变化时重跑：重新测量并重建取色 LUT，使粒子颜色即时跟随新配色（无需重挂载）
+  }, [user.uid, user.uname, colors.start, colors.end, colors.name]);
 
   return (
     // 最外层定位容器：与旧版同为 inline-flex + fontSize:0（去掉行盒 strut 带来的额外高度，
     // 使容器高度严格等于 badge 高度）。holder 自身无任何变换 → 引擎据此测算祖先视觉缩放 VS。
     <div ref={holderRef} className="relative inline-flex" style={{ fontSize: 0 }}>
       {/* 胶囊 badge（核心，唯一参与测量的元素）：头像（左）+ 昵称（右）。
-          底色不再用内联不透明渐变，而由 .entry-badge-feather 的模糊伪元素羽化而成：
-          边界处不再有"不透明填充 → 半透明辉光"的强度跳变，改为连续深浅渐变向外淡出。
+          底色由两个模糊填充层（内联渐变，见下）羽化而成：边界处不再有"不透明填充 →
+          半透明辉光"的强度跳变，改为连续深浅渐变向外淡出。
           该分支额外承载：引擎的缩放淡入（transformOrigin/willChange），同时作为取色 LUT 的
           取样元素（其子元素顺序：children[0]=头像、children[1]=昵称）。 */}
       <div
         ref={badgeRef}
-        className="rounded-full entry-badge-feather"
+        className="rounded-full"
         style={{
           position: "relative",
           display: "inline-flex",
@@ -512,16 +547,50 @@ function EntryBadgeRadial({ user, onDone, onMeasure }: EntryBadgeProps) {
           verticalAlign: "top",
           lineHeight: 1,
           transformOrigin: "50% 50%",
+          // will-change:transform 使 badge 成为独立层叠上下文 → 下方 z-index:-1 的羽化底色
+          // 画在本体背景之上、头像/昵称之下（无本体背景，故视觉上就是"内容之后的底色"）
           willChange: "transform, opacity",
         }}
       >
         <Avatar face={user.face} uname={user.uname} />
         <span
-          className="font-bold text-white whitespace-nowrap tracking-wider"
-          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1 }}
+          className="font-bold whitespace-nowrap tracking-wider"
+          style={{ fontSize: NAME_FONT_SIZE, lineHeight: 1, color: colors.name }}
         >
           {user.uname}
         </span>
+        {/* 羽化底色：两个绝对定位的模糊填充层（本体无背景）。用真实 DOM 元素承载渐变，
+            色值直接内联自 props —— 与昵称色同一条更新路径，无需 CSS 变量/伪元素计算样式，
+            引擎取色（读 data-badge-fill 元素）与视觉更新都必定跟随配置。
+            置于内容之后 + z-index:-1 → 画在头像/昵称之下，且 blur 只作用于底色、内容保持清晰。 */}
+        <div
+          aria-hidden
+          data-badge-fill
+          className="pointer-events-none"
+          style={{
+            position: "absolute",
+            inset: -2,
+            zIndex: -1,
+            borderRadius: 999,
+            background: `linear-gradient(90deg,${colors.start},${colors.end})`,
+            filter: "blur(14px)",
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none"
+          style={{
+            position: "absolute",
+            inset: -12,
+            zIndex: -1,
+            borderRadius: 999,
+            background: `linear-gradient(90deg,${withAlpha(colors.start, 0.55)},${withAlpha(
+              colors.end,
+              0.55,
+            )})`,
+            filter: "blur(30px)",
+          }}
+        />
       </div>
       {/* 粒子画布：绝对定位于 holder 中心（holder 尺寸=badge 尺寸 → 即 badge 中心），
           尺寸/分辨率由引擎在 _measure() 中按 badge 尺寸 + 场半径设置。

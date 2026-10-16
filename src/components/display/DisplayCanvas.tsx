@@ -25,6 +25,7 @@ import {
   type DisplayGiftItem,
   type DisplayEntryPayload,
   type DisplayLayout,
+  type EntryColors,
   type EntryParticleMode,
   type GiftBarWidth,
   type GiftHighlight,
@@ -33,9 +34,11 @@ import {
   type ScreenOrientation,
   DEFAULT_DISPLAY_LAYOUT,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_ENTRY_COLORS,
   GIFT_BAR_SLOTS,
   isAnimeOpacity,
   isGiftBarWidth,
+  isHexColor,
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import GiftFlower, { GIFT_BAR_THICK, giftBarLength } from "./GiftFlower";
@@ -155,6 +158,8 @@ type ServerMsg =
       giftSeparateBar: boolean;
       /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
       entryParticleMode: EntryParticleMode;
+      /** 入场提示配色（badge 渐变 + 粒子同源 + 昵称单色） */
+      entryColors: EntryColors;
       /** 礼物突出显示选择（giftId → 选中 uid 列表；点击 badge 时广播同步） */
       giftHighlight: GiftHighlight;
       flags: DisplayFlags;
@@ -169,6 +174,7 @@ type ServerMsg =
   | { type: "giftBarWidth"; v: GiftBarWidth }
   | { type: "giftSeparateBar"; v: boolean }
   | { type: "entryParticleMode"; v: EntryParticleMode }
+  | { type: "entryColors"; v: EntryColors }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "celebrate" };
 
@@ -182,10 +188,12 @@ type ServerMsg =
 function TestEntryLoop({
   scale,
   particleMode,
+  colors,
   onMeasure,
 }: {
   scale: number;
   particleMode: EntryParticleMode;
+  colors: EntryColors;
   onMeasure: (w: number) => void;
 }) {
   const [cycle, setCycle] = useState(0);
@@ -201,6 +209,7 @@ function TestEntryLoop({
       key={`${cycle}-${scale}`}
       user={TEST_ENTRY_USER}
       particleMode={particleMode}
+      colors={colors}
       onDone={() => {}}
       onMeasure={onMeasure}
     />
@@ -265,6 +274,16 @@ function giftFlyFrames(f: FlyingGift): Keyframe[] {
   ];
 }
 
+/** 校验并规整下发的入场配色（逐字段非法即回退默认）。 */
+function pickEntryColors(v: unknown): EntryColors {
+  const o = (v ?? {}) as Partial<EntryColors>;
+  return {
+    start: isHexColor(o.start) ? o.start : DEFAULT_ENTRY_COLORS.start,
+    end: isHexColor(o.end) ? o.end : DEFAULT_ENTRY_COLORS.end,
+    name: isHexColor(o.name) ? o.name : DEFAULT_ENTRY_COLORS.name,
+  };
+}
+
 export default function DisplayCanvas() {
   const [currentEntry, setCurrentEntry] = useState<DisplayEntryPayload | null>(null);
   // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
@@ -306,6 +325,8 @@ export default function DisplayCanvas() {
   const [entryParticleMode, setEntryParticleMode] = useState<EntryParticleMode>(
     DEFAULT_DISPLAY_CONFIG.entryParticleMode,
   );
+  // 入场提示配色（init/entryColors 消息下发）：badge 渐变两端色 + 昵称单色
+  const [entryColors, setEntryColors] = useState<EntryColors>(DEFAULT_ENTRY_COLORS);
   // 礼物突出显示选择（init/giftHighlight 消息下发）：giftId → 选中展示的 uid 列表（顺序=循环顺序）
   const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>({});
   // 朝向：由 init/orientation 消息驱动
@@ -408,6 +429,7 @@ export default function DisplayCanvas() {
         setGiftBarWidth(isGiftBarWidth(msg.giftBarWidth) ? msg.giftBarWidth : "short");
         setGiftSeparateBar(!!msg.giftSeparateBar);
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
+        setEntryColors(pickEntryColors(msg.entryColors));
         setGiftHighlight(
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
         );
@@ -435,6 +457,8 @@ export default function DisplayCanvas() {
         setGiftSeparateBar(!!msg.v);
       } else if (msg.type === "entryParticleMode") {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
+      } else if (msg.type === "entryColors") {
+        setEntryColors(pickEntryColors(msg.v));
       } else if (msg.type === "giftHighlight") {
         setGiftHighlight(msg.giftHighlight ?? {});
       } else if (msg.type === "celebrate") {
@@ -1159,6 +1183,7 @@ export default function DisplayCanvas() {
             <TestEntryLoop
               scale={entryRect.scale}
               particleMode={entryParticleMode}
+              colors={entryColors}
               onMeasure={setEntryMeasuredW}
             />
           ) : currentEntry ? (
@@ -1166,6 +1191,7 @@ export default function DisplayCanvas() {
               key={`${currentEntry.uid}-${entrySeq}`}
               user={currentEntry}
               particleMode={entryParticleMode}
+              colors={entryColors}
               onDone={onEntryDone}
               onMeasure={setEntryMeasuredW}
             />

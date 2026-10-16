@@ -621,6 +621,65 @@ const PATCHES = [
       this._ctx.globalAlpha = 1;
     }`,
   },
+  {
+    // 背景：补丁 25 把每粒子颜色硬编码为 'hsl(k,90%,60%)'（hue 0~60 红→黄），导致
+    // 「左右聚散」的粒子色恒为红黄、完全不随「设置样式」的配色变化（badge 会变、粒子不变）。
+    // 本补丁新增可选 prop `particleColors: [左色, 右色]`：颜色缓存改为在两端色间按 RGB
+    // 插值（位置映射不变：左端=左色、右端=右色）；prop 变化时按 key 重建缓存，
+    // 拖动拾色板即可实时跟随，无需重挂载组件。未传该 prop 时保持原红黄默认（向后兼容）。
+    name: "26 自定义粒子渐变色（particleColors，修「左右聚散」改色不生效）",
+    marker: "_pc26",
+    old: `      if (!this._hslCache) {
+        this._hslCache = [];
+        for (var _k25 = 0; _k25 <= 60; _k25++) this._hslCache[_k25] = 'hsl(' + _k25 + ',90%,60%)';
+      }
+      var _cache25 = this._hslCache;`,
+    now: `      // _pc26 自定义粒子渐变色：默认红橙黄 hue 0~60（与改造前一致）；
+      // 传入 particleColors:['#aaa','#bbb'] 时改为按 RGB 在两端色间插值。
+      var _pc26 = this.props.particleColors;
+      var _pkey26 = _pc26 && _pc26.length ? _pc26.join('|') : '';
+      if (!this._hslCache || this._colorKey26 !== _pkey26) {
+        this._colorKey26 = _pkey26;
+        this._hslCache = [];
+        if (_pkey26) {
+          var _rgb26 = function (css) {
+            var s = String(css || '').trim();
+            var m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(s);
+            if (m) {
+              var hx = m[1];
+              if (hx.length === 3) hx = hx[0] + hx[0] + hx[1] + hx[1] + hx[2] + hx[2];
+              return [parseInt(hx.slice(0, 2), 16), parseInt(hx.slice(2, 4), 16), parseInt(hx.slice(4, 6), 16)];
+            }
+            var mm = /^rgba?\\(([^)]+)\\)$/.exec(s);
+            if (mm) {
+              var pp = mm[1].split(',');
+              return [parseFloat(pp[0]) || 0, parseFloat(pp[1]) || 0, parseFloat(pp[2]) || 0];
+            }
+            return [0, 0, 0];
+          };
+          var _a26 = _rgb26(_pc26[0]);
+          var _b26 = _rgb26(_pc26[1] || _pc26[0]);
+          for (var _k26 = 0; _k26 <= 60; _k26++) {
+            var _t26 = _k26 / 60;
+            this._hslCache[_k26] = 'rgb(' +
+              Math.round(_a26[0] + (_b26[0] - _a26[0]) * _t26) + ',' +
+              Math.round(_a26[1] + (_b26[1] - _a26[1]) * _t26) + ',' +
+              Math.round(_a26[2] + (_b26[2] - _a26[2]) * _t26) + ')';
+          }
+        } else {
+          for (var _k25 = 0; _k25 <= 60; _k25++) this._hslCache[_k25] = 'hsl(' + _k25 + ',90%,60%)';
+        }
+      }
+      var _cache25 = this._hslCache;`,
+  },
+  {
+    // 为 26 的 particleColors 声明 propType（仅开发期类型校验/文档用途）
+    name: "27 声明 particleColors propType",
+    marker: "particleColors: PropTypes.arrayOf",
+    old: `  color: PropTypes.string,`,
+    now: `  color: PropTypes.string,
+  particleColors: PropTypes.arrayOf(PropTypes.string),`,
+  },
 ];
 
 function applyReplace(name, marker, old, now, src) {

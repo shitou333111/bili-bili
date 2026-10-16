@@ -11,8 +11,13 @@ declare module "react-particle-effect-button" {
     onComplete?: () => void;
     /** 动画开始回调 */
     onBegin?: () => void;
-    /** 粒子颜色 */
+    /** 粒子颜色（单色；本项目实际按位置渐变着色，见 particleColors） */
     color?: string;
+    /**
+     * 自定义粒子渐变色 [左色, 右色]（库补丁 26）：
+     * 每粒子颜色按其水平位置在两端色间按 RGB 插值；缺省时保持库原始红黄（hue 0~60）。
+     */
+    particleColors?: string[];
     /** 粒子类型：circle=圆点  rectangle=方块  triangle=三角 */
     type?: ParticleType;
     /** 粒子填充方式：fill=实心  stroke=描边 */

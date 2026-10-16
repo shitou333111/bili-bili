@@ -158,6 +158,30 @@ export const ENTRY_COOLDOWN_MS: Record<EntryCooldownOption, number> = {
 /** 入场提示 · 粒子聚散方式："center" = 自研「四面八方（中心）聚散」；"lr" = 原库实现（左右聚散） */
 export type EntryParticleMode = "center" | "lr";
 
+/** 入场提示配色：badge 底色渐变（起点→终点）与粒子取色共用同一组色（粒子颜色即 badge 像素色），
+ *  昵称为单一颜色（默认纯白）。三色均为 #rrggbb。 */
+export interface EntryColors {
+  /** badge / 粒子渐变起始色（左端） */
+  start: string;
+  /** badge / 粒子渐变结束色（右端） */
+  end: string;
+  /** 昵称字体颜色（单一颜色） */
+  name: string;
+}
+
+/** 默认入场配色：与改造前的红橙黄渐变完全一致（hsl(0,90%,60%)→hsl(60,90%,60%)，
+ *  两端等亮度、中点在 sRGB 线性混合下恰为 hsl(30,90%,60%)），昵称默认纯白。 */
+export const DEFAULT_ENTRY_COLORS: EntryColors = {
+  start: "#f53d3d",
+  end: "#f5f53d",
+  name: "#ffffff",
+};
+
+/** 合法 #rrggbb / #rgb 色值判定（配置容错与拾色板共用） */
+export function isHexColor(v: unknown): v is string {
+  return typeof v === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v.trim());
+}
+
 /** 入场动画 · 整体透明度档位：「不透明」= 视频完全不透明；轻 / 中 / 重逐级更透明（重 = 透出下层直播画面最多）。
  *  除「不透明」外透明度按椭圆区域径向分布：中心最实、越往周边越透明，替代旧的「视频边缘羽化」。 */
 export type AnimeOpacity = "opaque" | "light" | "medium" | "heavy";
@@ -211,6 +235,8 @@ export interface DisplayConfig {
   entry: boolean;
   /** 模块1 · 入场提示粒子聚散方式（面板开关，默认"center"=中心聚散） */
   entryParticleMode: EntryParticleMode;
+  /** 模块1 · 入场提示配色（badge 底色渐变 + 粒子取色同源 + 昵称单色；面板「设置颜色」模态框编辑） */
+  entryColors: EntryColors;
   /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
@@ -274,6 +300,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   // 盲盒盈亏弹幕查询默认开启，弹幕互动默认关闭
   entry: false,
   entryParticleMode: "center", // 默认「中心聚散」（自研四面八方聚散）
+  entryColors: DEFAULT_ENTRY_COLORS, // 默认红橙黄渐变 + 白色昵称（与改造前一致）
   gift: false,
   anime: false,
   giftEffect: {

@@ -63,6 +63,11 @@ export interface RadialBadgeOptions {
   vStretch: number;
   /** 纵向收口：横向位置越靠两端，纵向位移越小（外扩云呈圆台/胶囊轮廓） */
   vTaper: number;
+  /** LUT 取色不可用时的回退渐变端点（#rrggbb；缺省用默认红橙黄）。
+   *  与 badge 渐变色保持一致：粒子在"badge 圆角外/取色失败"时按 x 在两色间插值，
+   *  使粒子颜色始终与用户配置的 badge 渐变同族。 */
+  fallbackStart?: string;
+  fallbackEnd?: string;
   /** 每次动画真正结束后的回调，参数 = 刚结束的模式 */
   onComplete?: (finished: "showing" | "hiding") => void;
 }
@@ -133,6 +138,31 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
 const easeInOutCubic = (t: number) =>
   t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+/** #rrggbb / #rgb → [r,g,b]；非法返回 null */
+function hexToRgb(hex: string): [number, number, number] | null {
+  const h = String(hex || "").trim().replace("#", "");
+  const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  if (!/^[0-9a-fA-F]{6}$/.test(n)) return null;
+  return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+}
+
+/** 按比例 t 在两色间线性插值（sRGB），返回 rgb 串；端点非法时回退红→黄色相 */
+function mixRgb(a: string, b: string, t: number): string {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  if (!ca || !cb) return HSL[Math.round(60 * clamp(t, 0, 1))];
+  const k = clamp(t, 0, 1);
+  return (
+    "rgb(" +
+    Math.round(lerp(ca[0], cb[0], k)) +
+    "," +
+    Math.round(lerp(ca[1], cb[1], k)) +
+    "," +
+    Math.round(lerp(ca[2], cb[2], k)) +
+    ")"
+  );
+}
 
 /** hsl 串缓存（hue 仅 0~60 共 61 种取值；回退色与库补丁 25 同族） */
 const HSL: string[] = [];
@@ -378,15 +408,14 @@ function buildBadgeLut(badgeEl: HTMLElement, vs: number): BadgeLutData | null {
     if (!c) return null;
 
     // 1) 胶囊底：直接用渐变色停本身（已在解析时剥掉 alpha）着色
-    //    优先读 badge 本体背景；羽化方案把底色移到了 ::before 伪元素（本体 background:none），
-    //    此时本体 backgroundImage 解析为 null，回退读伪元素的渐变。
+    //    优先读 badge 本体背景；羽化方案把底色下移到了独立填充层（本体 background:none），
+    //    此时本体 backgroundImage 解析为 null，回退读该填充层（data-badge-fill）的渐变。
+    //    填充层是真实 DOM 元素、渐变内联自 props —— getComputedStyle 必定返回当前配置值
+    //    （不像伪元素那样可能读到未解析的 var()），故粒子主体色始终与 badge 同源同步。
     let bg = parseLinearGradient(cs.backgroundImage);
     if (!bg) {
-      try {
-        bg = parseLinearGradient(getComputedStyle(badgeEl, "::before").backgroundImage);
-      } catch {
-        bg = null;
-      }
+      const fillEl = badgeEl.querySelector<HTMLElement>("[data-badge-fill]");
+      if (fillEl) bg = parseLinearGradient(getComputedStyle(fillEl).backgroundImage);
     }
     if (!bg) return null;
     c.save();
@@ -533,6 +562,9 @@ export class RadialBadge {
   private shapePow: number;
   private vStretch: number;
   private vTaper: number;
+  /** 回退渐变端点（badge 圆角外 / 取色失败时的粒子色） */
+  private fbStart: string;
+  private fbEnd: string;
   private onComplete: (finished: "showing" | "hiding") => void;
 
   /** 当前状态：null=空闲 | showing=聚合中 | hiding=消散中 */
@@ -564,6 +596,8 @@ export class RadialBadge {
     this.shapePow = opts.shapePow;
     this.vStretch = opts.vStretch;
     this.vTaper = opts.vTaper;
+    this.fbStart = opts.fallbackStart || "#f53d3d";
+    this.fbEnd = opts.fallbackEnd || "#f5f53d";
     this.onComplete = opts.onComplete || (() => {});
     // rAF 回调以裸函数引用登记，必须绑定 this（严格模式下裸调用 this=undefined）
     this._frame = this._frame.bind(this);
@@ -798,9 +832,9 @@ export class RadialBadge {
     return p;
   }
 
-  /** LUT 不可用时的回退：按 badge 局部 x 映射红→黄色相 */
+  /** LUT 不可用时的回退：按 badge 局部 x 在配置的渐变两端色之间插值 */
   private _fallbackColor(lx: number, w: number): string {
-    return HSL[Math.round(60 * clamp(lx / (w || 1), 0, 1))];
+    return mixRgb(this.fbStart, this.fbEnd, clamp(lx / (w || 1), 0, 1));
   }
 
   private _frame(now: number): void {

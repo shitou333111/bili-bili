@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
 import { readState, getSessionCookieName, getUserTokenCookieName, getSessionBySid } from "@/lib/auth/session";
-import { readUsersList, readAccountNoRevenue, type UsersListEntry } from "@/lib/user-data";
+import { readUsersList, readAccountStreamerStatus, type UsersListEntry, type UserDeviceRecord } from "@/lib/user-data";
+import { resolveDeviceBrand } from "@/lib/device-model";
 import { promises as fs } from "fs";
 import path from "path";
+
+/** 设备记录 → 返回给 admin 的展示形态：把机型代号（如 V2301A）解析为「品牌 市场名」（如 Vivo iQOO Neo8） */
+function resolveDevices(devices?: UserDeviceRecord[]) {
+  return devices?.map((d) => ({ ...d, brand: resolveDeviceBrand(d.brand) ?? d.brand }));
+}
 
 export const dynamic = "force-dynamic";
 
@@ -86,8 +92,9 @@ export async function GET(request: Request) {
   const users = await Promise.all(
     Array.from(map.values()).map(async (u) => {
       const lastUpload = await getLastUploadDate(u.mid);
-      // 是否为主播：复用本地已有的 noRevenue 标记（拉取主播数据时判定并持久化），无需重新实现
-      const noRevenue = await readAccountNoRevenue(u.mid, u.uname);
+      // 是否为主播：三态判定（有收益记录=主播；已确认无收益=非主播；其余=未判定）。
+      // 仅依据本地已有数据，每次加载实时计算——本地数据更新后状态自动跟随变化。
+      const streamerStatus = await readAccountStreamerStatus(u.mid, u.uname);
       return {
         sid: u.sid ?? null, // 本机登录账号才有本地会话 sid（可用于切换）
         uname: u.uname,
@@ -100,8 +107,8 @@ export async function GET(request: Request) {
         isCurrent: (u.sid !== null && u.sid === currentSid) || (currentMid !== null && u.mid === currentMid), // 标记当前激活账号
         isLocal: !!u.isLocal,
         platform: u.platform, // 最近使用平台：web/desktop/android/ios
-        devices: u.devices, // 设备记录列表（品牌/系统版本/浏览器等）
-        noRevenue, // true=非主播（无收益/无直播间），false=主播
+        devices: resolveDevices(u.devices), // 设备记录列表（品牌型号/系统版本/浏览器等）
+        streamerStatus, // 主播三态：streamer=有收益记录 / non-streamer=已确认无收益 / unknown=未判定
       };
     })
   );

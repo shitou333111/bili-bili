@@ -14,12 +14,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_ENTRY_COLORS,
   GIFT_BAR_SLOTS,
   scBackgroundColor,
   type AnimeOpacity,
   type DisplayConfig,
+  type DisplayEntryPayload,
   type DisplayGiftItem,
   type EntryAnimeConfig,
+  type EntryColors,
   type EntryCooldownOption,
   type EntryParticleMode,
   type GiftBarWidth,
@@ -55,6 +58,100 @@ import { dataFetch } from "@/lib/client-fetch";
 import { getEffectiveBlindBoxConfig, getAllBlindBoxInfo } from "@/lib/stats-client";
 import { type ToastKind } from "@/lib/toast";
 import DisplayEditModal from "./DisplayEditModal";
+import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
+import ColorBoard from "./ColorBoard";
+
+/** 「设置样式」模态框内的实时预览用演示用户（真实 EntryBadge，跑完整粒子聚散循环） */
+const COLOR_PREVIEW_USER: DisplayEntryPayload = {
+  uid: -1,
+  uname: "观众入场",
+  face: "",
+  guardType: 0,
+  medalLevel: 0,
+};
+
+/** 「设置样式」模态框内的实时预览：真实 EntryBadge，按周期重挂载跑完整粒子聚散循环。
+ *  配色/聚散方式作为 props 传入 → 内部引擎重建取色 LUT，拖动拾色板/切换聚散时即时跟随。 */
+function ColorPreview({ colors, mode }: { colors: EntryColors; mode: EntryParticleMode }) {
+  const [cycle, setCycle] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setCycle((c) => c + 1), ENTRY_TOTAL_MS + 400);
+    return () => clearTimeout(t);
+  }, [cycle]);
+  return (
+    <EntryBadge
+      key={`${cycle}-${mode}`}
+      user={COLOR_PREVIEW_USER}
+      particleMode={mode}
+      colors={colors}
+      onDone={() => {}}
+    />
+  );
+}
+
+/** 模态框内的一行颜色设置：标签 + 圆形色钮（点击选中，下方色相条即编辑该色）+ 右侧编码。
+ *  圆形直接取当前色、不额外套色块；编码输入框在聚焦编辑期间不被外部值覆盖。 */
+function ColorRow({
+  label,
+  color,
+  active,
+  compact,
+  onPick,
+  onHex,
+}: {
+  label: string;
+  color: string;
+  active: boolean;
+  /** 紧凑布局：用于「左色 / 右色」同行并排（标签与编码收窄） */
+  compact?: boolean;
+  onPick: () => void;
+  onHex: (hex: string) => void;
+}) {
+  const [text, setText] = useState(color);
+  const [typing, setTyping] = useState(false);
+  // 非编辑期间跟随外部值（React 官方"随 props 调整 state"写法；聚焦编辑时让位于用户输入）
+  if (!typing && text !== color) setText(color);
+  return (
+    <div className={`flex items-center ${compact ? "min-w-0 flex-1 gap-2" : "gap-3"}`}>
+      <span
+        className={`shrink-0 ${compact ? "text-[11px]" : "w-20 text-xs"} ${
+          active ? "font-semibold text-black/85" : "text-black/55"
+        }`}
+      >
+        {label}
+      </span>
+      <button
+        type="button"
+        onClick={onPick}
+        aria-label={`选择${label}`}
+        aria-pressed={active}
+        className={`h-[18px] w-[18px] shrink-0 rounded-full transition cursor-pointer ${
+          active ? "ring-2 ring-[#1f1c17] ring-offset-1" : "ring-1 ring-black/15 hover:ring-black/35"
+        }`}
+        style={{ background: color }}
+      />
+      <input
+        value={text}
+        onFocus={() => setTyping(true)}
+        onChange={(e) => {
+          setText(e.target.value);
+          const t = e.target.value.trim();
+          if (/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t)) {
+            onHex((t.startsWith("#") ? t : `#${t}`).toLowerCase());
+          }
+        }}
+        onBlur={() => {
+          setTyping(false);
+          setText(color);
+        }}
+        spellCheck={false}
+        className={`min-w-0 rounded-md bg-black/5 font-mono text-black/85 outline-none ${
+          compact ? "w-[72px] px-1.5 py-0.5 text-[11px]" : "w-24 px-2 py-1 text-xs"
+        }`}
+      />
+    </div>
+  );
+}
 
 interface GuardItem {
   mid: number;
@@ -898,6 +995,29 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
   } | null>(null);
   const [segmentErr, setSegmentErr] = useState("");
 
+  // —— 入场提示「设置样式」模态框（聚散方式 + 配色）——
+  // 打开时把当前样式拷进草稿，模态框内实时改草稿并预览；「确定」才写盘 + 广播。
+  // 两种聚散共享同一套配色，切换聚散只改预览与最终应用效果。
+  const [styleModal, setStyleModal] = useState<{
+    colors: EntryColors;
+    mode: EntryParticleMode;
+  } | null>(null);
+  const [colorTarget, setColorTarget] = useState<"start" | "end" | "name">("start");
+  const openStyleModal = useCallback(() => {
+    setStyleModal({ colors: { ...config.entryColors }, mode: config.entryParticleMode });
+    setColorTarget("start");
+  }, [config.entryColors, config.entryParticleMode]);
+  const saveStyleModal = useCallback(() => {
+    if (!styleModal) return;
+    void update({ entryColors: styleModal.colors, entryParticleMode: styleModal.mode }).then(
+      (next) => {
+        displayDanmaku.broadcastEntryColors(next.entryColors);
+        displayDanmaku.broadcastEntryParticleMode(next.entryParticleMode);
+      },
+    );
+    setStyleModal(null);
+  }, [styleModal, update]);
+
   // 点击视频文件名：解析当前朝向实际使用的视频路径，探测时长；>30s 才打开设置模态框
   const openSegmentModal = useCallback(
     async (idx: number, orient: "landscape" | "portrait", a: EntryAnimeConfig) => {
@@ -1593,42 +1713,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
         <Card bg="bg-blue-200" border="border-blue-400">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
-            {/* 粒子聚散方式（样式对齐「收到的礼物展示」卡片的方向切换）：
-                中心聚散 = 自研四面八方聚散；左右聚散 = 原有的库实现。默认中心聚散。 */}
-            <div
-              className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
-              role="radiogroup"
-              aria-label="粒子聚散方式"
+            <button
+              type="button"
+              onClick={openStyleModal}
+              title="设置粒子聚散方式（中心/左右）与 badge、粒子、昵称的颜色"
+              className="shrink-0 rounded-full bg-white/70 px-2.5 py-0.5 text-xs text-black/60 shadow-sm transition hover:bg-white cursor-pointer"
             >
-              {(
-                [
-                  ["center", "中心聚散"],
-                  ["lr", "左右聚散"],
-                ] as Array<[EntryParticleMode, string]>
-              ).map(([key, label]) => {
-                const active = config.entryParticleMode === key;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() =>
-                      void update({ entryParticleMode: key }).then((next) =>
-                        displayDanmaku.broadcastEntryParticleMode(next.entryParticleMode),
-                      )
-                    }
-                    className={`rounded-full px-2.5 py-0.5 text-xs leading-none transition cursor-pointer ${
-                      active
-                        ? "bg-blue-600 text-white shadow"
-                        : "text-black/55 hover:bg-white/80"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
+              设置样式
+            </button>
           </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
             <Check
@@ -2282,6 +2374,136 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               >
                 确定
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 入场提示「设置样式」模态框：聚散方式（中心/左右）+ 配色（左色/右色/昵称文字颜色），
+          顶部实时预览（真实 EntryBadge 跑粒子聚散动效，随草稿样式即时变化）。
+          两种聚散共享同一套配色，切换仅改变预览与最终应用效果。 */}
+      {styleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="max-h-[88vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-black/85">设置入场提示样式</h3>
+            <p className="mt-1 text-xs text-black/45">
+              聚散方式，横幅/粒子、昵称的颜色
+            </p>
+
+            {/* 实时预览：真实 EntryBadge（聚合→停留→消散循环），缩放后居中展示 */}
+            <div className="relative mt-3 flex h-40 items-center justify-center overflow-hidden rounded-xl bg-[#141210]">
+              <div style={{ transform: "scale(0.5)" }}>
+                <ColorPreview colors={styleModal.colors} mode={styleModal.mode} />
+              </div>
+            </div>
+
+            {/* 粒子聚散方式（中心聚散 = 自研四面八方聚散；左右聚散 = 原有库实现），
+                两种聚散共享下方同一套配色 */}
+            <div
+              className="mt-3 flex items-center gap-0.5 rounded-full bg-black/5 p-0.5"
+              role="radiogroup"
+              aria-label="粒子聚散方式"
+            >
+              {(
+                [
+                  ["center", "中心聚散"],
+                  ["lr", "左右聚散"],
+                ] as Array<[EntryParticleMode, string]>
+              ).map(([key, label]) => {
+                const active = styleModal.mode === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setStyleModal({ ...styleModal, mode: key })}
+                    className={`flex-1 rounded-full py-1.5 text-xs leading-none transition cursor-pointer ${
+                      active
+                        ? "bg-[#1f1c17] text-white shadow"
+                        : "text-black/55 hover:bg-white/70"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 左色 / 右色：同一行并排（紧凑），文字 + 圆形色钮（点击选中，下方色相条即编辑该色）+ 右侧编码 */}
+            <div className="mt-3 flex items-center gap-4">
+              <ColorRow
+                compact
+                label="左色"
+                color={styleModal.colors.start}
+                active={colorTarget === "start"}
+                onPick={() => setColorTarget("start")}
+                onHex={(hex) =>
+                  setStyleModal({ ...styleModal, colors: { ...styleModal.colors, start: hex } })
+                }
+              />
+              <ColorRow
+                compact
+                label="右色"
+                color={styleModal.colors.end}
+                active={colorTarget === "end"}
+                onPick={() => setColorTarget("end")}
+                onHex={(hex) =>
+                  setStyleModal({ ...styleModal, colors: { ...styleModal.colors, end: hex } })
+                }
+              />
+            </div>
+
+            {/* 颜色选择面板：二维取色（横向色相 × 纵向明暗），编辑当前选中的色位 */}
+            <div className="mt-3">
+              <ColorBoard
+                value={styleModal.colors[colorTarget]}
+                onChange={(hex) =>
+                  setStyleModal({
+                    ...styleModal,
+                    colors: { ...styleModal.colors, [colorTarget]: hex },
+                  })
+                }
+              />
+            </div>
+
+            {/* 昵称文字颜色（单一颜色）：位于颜色选择面板下方 */}
+            <div className="mt-3">
+              <ColorRow
+                label="昵称文字颜色"
+                color={styleModal.colors.name}
+                active={colorTarget === "name"}
+                onPick={() => setColorTarget("name")}
+                onHex={(hex) =>
+                  setStyleModal({ ...styleModal, colors: { ...styleModal.colors, name: hex } })
+                }
+              />
+            </div>
+
+            <div className="mt-4 flex items-center gap-2">
+              {/* 恢复默认：还原系统默认配色（红黄渐变 + 白色昵称） */}
+              <button
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-black/45 transition hover:bg-black/5 hover:text-black/70"
+                onClick={() =>
+                  setStyleModal({ ...styleModal, colors: { ...DEFAULT_ENTRY_COLORS } })
+                }
+              >
+                恢复默认
+              </button>
+              <div className="flex flex-1 items-center justify-end gap-2">
+                <button
+                  className="rounded-lg bg-black/5 px-4 py-1.5 text-xs font-medium text-black/60 transition hover:bg-black/10"
+                  onClick={() => setStyleModal(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs font-medium text-white shadow transition hover:opacity-90"
+                  onClick={saveStyleModal}
+                >
+                  确定
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -78,8 +78,8 @@ type User = {
   platform?: string;
   /** 设备记录列表（按最近使用排序） */
   devices?: UserDevice[];
-  /** 是否为主播：复用本地 noRevenue 标记（无收益=非主播）；undefined/false=主播 */
-  noRevenue?: boolean;
+  /** 是否为主播（三态）：streamer=有收益记录 / non-streamer=已确认无收益 / unknown/undefined=未判定 */
+  streamerStatus?: "streamer" | "non-streamer" | "unknown";
 };
 
 /** 平台代号 → 中文名 */
@@ -1428,9 +1428,11 @@ export default function AdminPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start gap-1.5">
                       <span className="text-sm font-medium min-w-0 break-all leading-snug">{user.uname}</span>
-                      {user.noRevenue
+                      {user.streamerStatus === "streamer"
+                        ? <span className="text-[10px] px-1.5 rounded bg-[#e54d4c]/10 text-[#e54d4c] shrink-0">主播</span>
+                        : user.streamerStatus === "non-streamer"
                         ? <span className="text-[10px] px-1.5 rounded bg-black/5 text-black/40 shrink-0">非主播</span>
-                        : <span className="text-[10px] px-1.5 rounded bg-[#e54d4c]/10 text-[#e54d4c] shrink-0">主播</span>}
+                        : <span className="text-[10px] px-1.5 rounded bg-black/5 text-black/25 shrink-0">未判定</span>}
                       {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
                       {user.platform && (
                         <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">

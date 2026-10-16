@@ -56,17 +56,8 @@ function safeStartPos(el?: HTMLVideoElement | null, fallback = 0): number {
     return fallback;
   }
 }
-// #region debug-point Z:reporter
-const __dbg: { t: number; lastBlack: boolean; lastBAt: number } = { t: 0, lastBlack: false, lastBAt: 0 };
-function __dbgR(loc: string, msg: string, d: Record<string, unknown>, min = 250) {
-  const now = performance.now();
-  if (now - __dbg.t < min) return;
-  __dbg.t = now;
-  try {
-    fetch("http://127.0.0.1:51999/event", { method: "POST", body: JSON.stringify({ sessionId: "gift-replay-blackscreen", runId: "map-hold", hypothesisId: String(d.h ?? "?"), location: loc, msg: "[DEBUG] " + msg, data: d, ts: Date.now() }) }).catch(() => {});
-  } catch { /* ignore */ }
-}
-function __blackAt(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): number {
+/** 采样画布上一小块区域的最大通道值（用于"画布中心是否仍为黑"的判定，如录制起点对齐检查） */
+function sampleMaxChannel(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): number {
   try {
     const id = ctx.getImageData(x, y, s, s).data;
     let max = 0;
@@ -77,7 +68,6 @@ function __blackAt(ctx: CanvasRenderingContext2D, x: number, y: number, s: numbe
     return max;
   } catch { return -1; }
 }
-// #endregion
 const CANVAS_W = 720; // 画布固定 720×1280
 const CANVAS_H = 1280;
 // 竖屏判定阈值（与模拟器一致）：高/宽 > 1.2 视为竖屏，铺满整个画布
@@ -373,7 +363,8 @@ function drawEffect(
     composeFx(fx, params);
   }
 
-  // 定位输出：有合成结果用结果画布；否则（首次合成未完成/无 rVFC 同步路径）直接画视频帧兜底
+  // 定位输出：只画"已合成好 alpha"的结果画布。合成未完成时宁可不画，也不退化为
+  // 直接画原始视频帧——特效视频为 RGB+alpha 双区编码，原始整帧看起来就是"撕裂"画面。
   const work = fxResultMap.get(fx);
   if (work && fxReadySet.has(fx)) {
     const scale = destW / outW;
@@ -383,8 +374,6 @@ function drawEffect(
     const x = (destW - effW) / 2;
     const y = (destH - effH) / 2;
     ctx.drawImage(work, x, y, effW, effH);
-  } else {
-    ctx.drawImage(fx, 0, 0, destW, destH);
   }
 }
 
@@ -860,11 +849,9 @@ function MergedPlayer({
   const bumpChrome = () => {
     chromeVersionRef.current++;
   };
-  // 跨 run seek 遮黑：seek 到下一 run 首帧解码前，画布会 clearRect 成黑底（录制时进文件即黑屏）。
-  // 快照上一帧并用它在过渡期冻结，把"黑屏"变成"冻结上一帧"。
-  const freezeCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // 干净的过渡基底：仅含"背景+视频画面"（不含礼物动画/送礼横幅）。跨 run 冻结过渡时贴它，
-  // 避免把上一 run 残留的礼物动画帧一起冻结造成"撕裂/残影"，也避免与新 run 动画叠加成鬼影。
+  // 干净的"过渡/兜底基底"：仅含"背景+视频画面"（不含礼物动画/送礼横幅）。
+  // 跨 run 冻结过渡与"视频未就绪"兜底都贴它，避免把上一段残留的礼物动画帧一起冻结
+  // 造成"撕裂/残影"，也避免与新一段动画叠加成鬼影。
   const transBaseRef = useRef<HTMLCanvasElement | null>(null);
   const transFreezingRef = useRef(false);
   const transUntilRef = useRef(0);
@@ -1176,6 +1163,12 @@ function MergedPlayer({
       if (!c || !v || !c.effectVideoUrl) return;
       if (v.getAttribute("data-src") !== c.effectVideoUrl) {
         v.setAttribute("data-src", c.effectVideoUrl);
+        // 换源时清除上一段特效的合成结果/裁剪参数/就绪标记：
+        // 结果画布按元素缓存，若不清理，重新加载后首帧会复用到"上一段特效的陈旧合成帧"，
+        // 在切片跳转瞬间闪出一帧错误的礼物特效（撕裂/鬼影）。
+        fxReadySet.delete(v);
+        fxResultMap.delete(v);
+        fxParamsMap.delete(v);
         v.src = c.effectVideoUrl;
         v.load();
       }
@@ -1330,17 +1323,14 @@ function MergedPlayer({
             if (live.currentTime >= runEnd - 0.05 && live.currentTime < runEnd + 0.6) {
               const nextStart = plan.runs[curRi + 1].segStart * SEG_SECONDS;
               console.warn(`[GiftReplay][hls] 跨 run 拼接(${live.currentTime.toFixed(1)}→${nextStart.toFixed(1)})`);
-              // seek 前不用再快照：freezeCanvasRef 已由每帧末尾的 hold-frame 保留上一张完整合成帧，
-              // 直接复用即可避免此帧顶部 clearRect 造成的黑帧快照
+              // seek 前不必再快照：transBaseRef 由每帧的正常绘制留存"背景+视频"干净帧，
+              // 过渡期直接贴它，既避免此帧顶部 clearRect 造成的黑帧，也不会带出上一段的礼物特效残影。
               transUntilRef.current = nextStart;
               transFreezingRef.current = true;
               try { live.currentTime = nextStart; } catch { /* ignore */ }
               try { hlsRef.current?.startLoad(); } catch { /* ignore */ }
               watchLastT = nextStart;
               watchLastMove = performance.now();
-              // #region debug-point A:cross-run-seek
-              __dbgR("GiftReplay:seek", "cross-run seek", { h: "A", from: live.currentTime, to: nextStart, curRi, runs: plan.runs.length, saving: savingRef.current }, 0);
-              // #endregion
             }
           }
         }
@@ -1437,12 +1427,8 @@ function MergedPlayer({
       if (transFreezingRef.current) {
         // 跨 run 过渡期：直到 seek 结束、时间到达目标且视频已解码出可绘制帧(readyState>=2/videoReady)
         // 才恢复正常绘制。关键：settled 必须要求 videoReady，否则 seek 刚结束时 readyState 常消退到 1
-        // （仅 metadata、无当前帧），此时 drawFrame 被跳过→画布黑，且该黑帧还会被 hold-frame 写进
-        // freezeCanvasRef 污染后续过渡遮罩。要求 videoReady 后，过渡期间始终粘贴上一张好帧。
+        // （仅 metadata、无当前帧），此时 drawFrame 被跳过→画布黑。要求 videoReady 后，过渡期间始终贴干净基底。
         const settled = !live.seeking && videoReady && live.currentTime >= transUntilRef.current - 0.05;
-        // #region debug-point B:transition-draw
-        __dbgR("GiftReplay:trans", "transition-draw", { h: "B", settled, seeking: live.seeking, ready: live.readyState, vw: live.videoWidth, ct: Math.round(live.currentTime * 100) / 100, until: Math.round(transUntilRef.current * 100) / 100, black: __blackAt(ctx, CANVAS_W / 2 - 6, CANVAS_H / 2 - 6, 12) }, 120);
-        // #endregion
         if (settled) {
           transFreezingRef.current = false;
           drawFrame(live, live.videoWidth, live.videoHeight, CANVAS_H * 0.2);
@@ -1451,9 +1437,6 @@ function MergedPlayer({
           // 冻结造成撕裂残影，也避免与新 run 动画叠成鬼影。chrome 由下方共享逻辑补画。
           const tb = transBaseRef.current;
           if (tb) ctx.drawImage(tb, 0, 0);
-          // #region debug-point G:freeze-content
-          __dbgR("GiftReplay:freeze", "freeze-drawn", { h: "G", fw: tb?.width, fh: tb?.height, fcBlack: tb ? __blackAt(tb.getContext("2d")!, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16) : -1, canvasBlack: __blackAt(ctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16), ready: live.readyState, seeking: live.seeking, ct: Math.round(live.currentTime * 100) / 100, until: Math.round(transUntilRef.current * 100) / 100 }, 0);
-          // #endregion
         }
       } else if (videoReady) {
         // 直播画面定位：竖屏铺满画布，横屏宽度填满高度等比（参考模拟器 LiveStreamBackground）
@@ -1465,10 +1448,12 @@ function MergedPlayer({
         if (tb.width !== CANVAS_W || tb.height !== CANVAS_H) { tb.width = CANVAS_W; tb.height = CANVAS_H; }
         tb.getContext("2d")?.drawImage(canvas, 0, 0);
       } else {
-        // 视频未就绪（run 内片段交接/解码间隙，videoReady 短暂为 false）：
-        // 贴上一张好帧兜底，避免黑闪，而不是留下黑底。
-        const fc = freezeCanvasRef.current;
-        if (fc) ctx.drawImage(fc, 0, 0);
+        // 视频未就绪（run 内片段交接/解码间隙、切片跳转边缘 videoReady 短暂为 false）：
+        // 贴"干净过渡基底"（背景+视频，不含礼物特效/横幅）兜底，避免黑闪，也避免把上一段
+        // 残留的礼物动画帧冻结上去——那正是"切片跳转瞬间闪现撕裂/残影礼物特效"的根因。
+        // 统一用这份干净基底，任何冻结/兜底路径都不会带出陈旧的特效帧。
+        const tb = transBaseRef.current;
+        if (tb) ctx.drawImage(tb, 0, 0);
       }
 
       // 礼物特效叠加：礼物在 animStart 处出现（run 内按排队规则）。
@@ -1495,7 +1480,13 @@ function MergedPlayer({
                   try { fxV.currentTime = t; } catch { /* ignore */ }
                 }
               }
-              drawEffect(ctx, fxV, c.effectConfig, CANVAS_W, CANVAS_H);
+              // 仅在特效视频"已定位到动画时刻"时才叠加：既不在 seek 中（seeking），
+              // 也有可绘制帧（readyState>=2），且其播放头已对齐目标时刻 t。
+              // 切片跳转/刚进入新动画时，特效视频会被 seek 到新时刻；seek 未完成前
+              // 元素仍呈现上一位置的陈旧帧（特效视频为 RGB+alpha 双区编码，陈旧/半解码帧
+              // 看起来就是"撕裂"），因此 seek 期间不绘制，等定位完成再出现，杜绝撕裂闪现。
+              const fxSettled = !fxV.seeking && fxV.readyState >= 2 && Math.abs(fxV.currentTime - t) <= 0.2;
+              if (fxSettled) drawEffect(ctx, fxV, c.effectConfig, CANVAS_W, CANVAS_H);
             }
           }
         }
@@ -1570,33 +1561,6 @@ function MergedPlayer({
         ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
         ctx.globalAlpha = 1;
       }
-
-      // #region debug-point Z:hold-frame
-      // 每帧末尾把"完整合成帧"（视频+特效+banner+chrome）复制到 freezeCanvasRef 留存。
-      // 跨 run seek 时的过渡遮罩直接复用这份"上一张好帧"，避免 seek 当帧顶部已被 clearRect、
-      // drawFrame 尚未执行时快照 canvasRef 得到黑帧 → 过渡期再也不闪黑。
-      // 仅在"视频已就绪(videoReady)"的帧才留存，否则黑/未出帧的画面不会污染 freezeCanvasRef，
-      // 保证过渡期粘贴的永远是最近一张可用的好帧。
-      if (!transFreezingRef.current && videoReady) {
-        if (!freezeCanvasRef.current) freezeCanvasRef.current = document.createElement("canvas");
-        const hf = freezeCanvasRef.current;
-        if (hf.width !== CANVAS_W || hf.height !== CANVAS_H) { hf.width = CANVAS_W; hf.height = CANVAS_H; }
-        hf.getContext("2d")?.drawImage(canvas, 0, 0);
-      }
-      // #endregion
-
-      // #region debug-point F:composite-black
-      {
-        const bmax = __blackAt(ctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16);
-        const isBlack = bmax <= 20;
-        const now2 = performance.now();
-        if (isBlack !== __dbg.lastBlack || now2 - __dbg.lastBAt > 2500) {
-          __dbg.lastBlack = isBlack;
-          __dbg.lastBAt = now2;
-          __dbgR("GiftReplay:frame", isBlack ? "BLACK" : "frame", { h: "F", black: isBlack, bmax, trans: transFreezingRef.current, ready: live.readyState, vw: live.videoWidth, ct: Math.round(live.currentTime * 10) / 10, saving: savingRef.current }, 0);
-        }
-      }
-      // #endregion
     };
     drawLoop();
 
@@ -1663,10 +1627,6 @@ function MergedPlayer({
     setSaving(true);
     savingRef.current = true; // 同步置位：录制期间禁用循环回绕，避免录到下一遍开头
     const wasPlaying = !live.paused;
-    // #region debug-point C:save-start
-    const _enterT = performance.now();
-    __dbgR("doSave:start", "rec-start enter", { h: "C", playing: !live.paused, ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState, vw: live.videoWidth, totalSec }, 0);
-    // #endregion
     let dataDirAbs = ""; // 应用沙盒数据目录（移动端边录边写的落盘目录）
     let abortPath = ""; // 出错时待清理的本地半成品文件
     try {
@@ -1675,9 +1635,6 @@ function MergedPlayer({
       try { live.currentTime = safeStartPos(live, 0); } catch { /* ignore */ }
       if (live.paused) await live.play().catch(() => {});
       setPlaying(true);
-      // #region debug-point C:after-seek
-      __dbgR("doSave:seeked", "after seek+play", { h: "C", ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState, vw: live.videoWidth, enterToSeekMs: Math.round(performance.now() - _enterT) }, 0);
-      // #endregion
       // 等待"录制起点"真正对齐：要求 readyState>=2（已解码当前帧）、画布中心非黑，
       // **且播放头确已越过起始缓冲停滞区(currentTime>=0.5)**。
       // 实测证据：seek 到 0 后首帧 ~80ms 即 ready(ct≈0.06)，但随后首 run 分段缓冲会让播放头
@@ -1688,17 +1645,13 @@ function MergedPlayer({
       const t0 = performance.now();
       const _cctx = canvasRef.current?.getContext("2d");
       while (performance.now() - t0 < 15000) {
-        const bm = _cctx ? __blackAt(_cctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16) : 0;
+        const bm = _cctx ? sampleMaxChannel(_cctx, CANVAS_W / 2 - 8, CANVAS_H / 2 - 8, 16) : 0;
         if (live.videoWidth > 0 && live.readyState >= 2 && live.currentTime >= 0.5 && bm > 20) break;
         await new Promise((r) => requestAnimationFrame(r));
       }
       // 再等两帧让 drawLoop 把视频首帧画到画布后再开始录制
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
-
-      // #region debug-point C:first-frame-ready
-      __dbgR("doSave:firstframe", "first frame ready", { h: "C", ms: Math.round(performance.now() - t0), ct: Math.round(live.currentTime * 100) / 100, ready: live.readyState }, 0);
-      // #endregion
 
       // 目标码率：固定值（已改为分块落盘保存，不再需按"整段 mp4 内存预算"反推码率）。
       // 移动端逐 chunk 落盘、不整段进 JS/IPC；桌面端仍全量 Blob 累积，超长视频内存占用随体积增长，
@@ -1743,17 +1696,8 @@ function MergedPlayer({
       let chunkFailed = false;
       let bytesWritten = 0;
       const chunks: Blob[] = [];
-      // #region debug-point D:first-chunk
-      let firstChunkT = 0;
-      // #endregion
       rec.ondataavailable = (e) => {
-        // #region debug-point D:every-chunk
-        { const _el = performance.now() - recStartedAt; if (_el < 6000) __dbgR("doSave:chunkall", "chunk", { h: "D", el: Math.round(_el / 100) / 10, size: e.data ? e.data.size : -1, ct: Math.round(live.currentTime * 10) / 10 }, 0); }
-        // #endregion
         if (!e.data || e.data.size === 0) return;
-        // #region debug-point D:first-chunk
-        if (!firstChunkT) { firstChunkT = performance.now(); __dbgR("doSave:chunk", "first chunk", { h: "D", msFromStart: Math.round(performance.now() - recStartedAt), size: e.data.size }, 0); }
-        // #endregion
         if (isMobile) {
           const data = e.data;
           if (data && typeof data.arrayBuffer === "function") {
@@ -1777,10 +1721,6 @@ function MergedPlayer({
       recRef.current = rec;
       rec.start(500);
       recStartAtRef.current = performance.now();
-      // #region debug-point D:rec-start
-      const recStartedAt = performance.now();
-      __dbgR("doSave:recstart", "recorder started", { h: "D", msFromEnter: Math.round(performance.now() - _enterT) }, 0);
-      // #endregion
       // 注意：stopped 必须在 rec.start() 之后创建——start 前 state 还是 "inactive"，
       // 若提前创建，下方"state===inactive 立即 resolve"的兜底会秒过，导致录到空结果。
       const stopped = new Promise<void>((resolve) => {
@@ -2455,7 +2395,7 @@ export default function GiftReplayPanel({
             onClick={() => setSelectedGiftKeys(new Set())}
             className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-red-500 hover:bg-red-600 transition"
           >
-            清除选择({selectedGiftKeys.size})
+            清除({selectedGiftKeys.size})
           </button>
         )}
 

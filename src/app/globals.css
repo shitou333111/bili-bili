@@ -604,44 +604,9 @@ body {
   }
 }
 
-/* ===== 入场特效 · badge 边界柔化（配合 EntryBadgeRadial 使用）=====
-   问题：不透明胶囊底与外侧辉光在边界处强度跳变，形成一圈可辨认的硬轮廓线；
-         单纯加大辉光无法消除（辉光都画在硬边背后，边界跳变仍在）。
-   手段：① 把胶囊底色从 badge 本体移到 ::before，只对 ::before 做 filter:blur ——
-           底色边缘由实色平滑羽化到透明；头像/昵称留在本体，保持完全清晰
-           （若直接对 .badge 做 mask/blur 会把内容一起淡掉）。
-         ② ::after 再叠一层更淡、更大模糊的长尾，与近场衔接成连续的向外淡出。
-   层数：柔化后底色自身已是一条羽化渐变，原本三层硬边辉光失去意义（贴边层的
-         blur 比 ::before 还小会被完全盖住、外两层与 ::after 重叠），故已从组件中
-         移除，由这两个伪元素替代（比三层辉光更省，且无硬边）。
-   性能：blur 只在首次光栅化时算一次，揭示动画期间只动 transform/opacity，不逐帧重绘。
-   注意：此处红橙黄渐变须与 EntryBadge.tsx 的 BADGE_GRADIENT 保持一致。 */
-.entry-badge-feather {
-  background: none;
-}
-.entry-badge-feather::before {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  z-index: -1;
-  border-radius: 999px;
-  background: linear-gradient(90deg, hsl(0, 90%, 60%), hsl(30, 90%, 60%), hsl(60, 90%, 60%));
-  filter: blur(14px);
-}
-.entry-badge-feather::after {
-  content: "";
-  position: absolute;
-  inset: -12px;
-  z-index: -1;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    hsla(0, 90%, 60%, 0.55),
-    hsla(30, 90%, 60%, 0.55),
-    hsla(60, 90%, 60%, 0.55)
-  );
-  filter: blur(30px);
-}
+/* ===== 入场特效 · badge 边界柔化 =====
+   底色由 EntryBadgeRadial 组件内的两个模糊填充层（真实 DOM 元素、内联渐变、z-index:-1）
+   绘制：blur 只作用于底色，头像/昵称保持清晰；色值随 props 直接更新，无需 CSS 类/变量。 */
 
 /* ===== 入场动画（anime 模块 VideoOverlay）：开场椭圆渐显 + 结尾闭合显示头像昵称 =====
    移植自测试页 ghost 变体。生产画布拉满视频画面（容器盒即视频盒，几何全部按盒尺寸缩放，
