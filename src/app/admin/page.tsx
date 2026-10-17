@@ -263,8 +263,8 @@ export default function AdminPage() {
   const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
   const [lotteryDenomInput, setLotteryDenomInput] = useState("20");
   const [lotterySavingConfig, setLotterySavingConfig] = useState(false);
-  // 抽奖活动开关：false 时 APP 内抽奖页可打开但不可抽奖
-  const [lotteryEnabled, setLotteryEnabled] = useState(true);
+  // 抽奖状态三态：all=全部开放（帮助页入口可见）；paused=已暂停；anchor=仅主播（帮助页入口隐藏，仅主播页入口保留）
+  const [lotteryMode, setLotteryMode] = useState<"all" | "paused" | "anchor">("all");
   const [lotteryToggling, setLotteryToggling] = useState(false);
   const [lotteryGrantingMid, setLotteryGrantingMid] = useState<number | null>(null);
 
@@ -564,8 +564,8 @@ export default function AdminPage() {
           setLotteryOddsDenom(data.data.config.oddsDenom);
           setLotteryDenomInput(String(data.data.config.oddsDenom));
         }
-        if (data.code === 0 && typeof data.data?.config?.enabled === "boolean") {
-          setLotteryEnabled(data.data.config.enabled);
+        if (data.code === 0 && data.data?.config?.mode) {
+          setLotteryMode(data.data.config.mode);
         }
       } catch { /* 抽奖记录加载失败不影响其他模块 */ }
     })();
@@ -599,18 +599,20 @@ export default function AdminPage() {
     }
   };
 
-  /** 开启/关闭抽奖活动：关闭时 APP 内抽奖页可打开但不可抽奖 */
-  const toggleLotteryEnabled = async () => {
+  /** 抽奖状态三态点击循环：全部开放 → 已暂停 → 仅主播 → 全部开放 */
+  const LOTTERY_MODE_CYCLE: Array<"all" | "paused" | "anchor"> = ["all", "paused", "anchor"];
+  const cycleLotteryMode = async () => {
+    const next = LOTTERY_MODE_CYCLE[(LOTTERY_MODE_CYCLE.indexOf(lotteryMode) + 1) % LOTTERY_MODE_CYCLE.length];
     setLotteryToggling(true);
     try {
       const res = await adminFetch(serverApiUrl("/api/admin/lottery/config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !lotteryEnabled }),
+        body: JSON.stringify({ mode: next }),
       });
       const data = await res.json();
-      if (data.code === 0 && typeof data.data?.config?.enabled === "boolean") {
-        setLotteryEnabled(data.data.config.enabled);
+      if (data.code === 0 && data.data?.config?.mode) {
+        setLotteryMode(data.data.config.mode);
       } else {
         window.alert(data.message || "操作失败");
       }
@@ -2434,15 +2436,24 @@ export default function AdminPage() {
               {lotterySavingConfig ? "保存中…" : "保存概率"}
             </button>
             <button
-              onClick={toggleLotteryEnabled}
+              onClick={cycleLotteryMode}
               disabled={lotteryToggling}
+              title="点击循环切换状态：全部开放 → 已暂停 → 仅主播"
               className={`flex-shrink-0 rounded px-3 py-1 text-[11px] font-medium border transition ${
-                lotteryEnabled
+                lotteryMode === "all"
                   ? "border-green-200 bg-green-50 text-green-600 hover:bg-green-100"
-                  : "border-[#e74c3c]/40 bg-[#fdf0ef] text-[#e74c3c] hover:bg-[#fde3e0]"
+                  : lotteryMode === "paused"
+                    ? "border-[#e74c3c]/40 bg-[#fdf0ef] text-[#e74c3c] hover:bg-[#fde3e0]"
+                    : "border-[#00a1d6]/40 bg-[#eef7fc] text-[#0088b8] hover:bg-[#e0f1fa]"
               } disabled:opacity-50`}
             >
-              {lotteryToggling ? "切换中…" : lotteryEnabled ? "● 抽奖中" : "■ 已暂停"}
+              {lotteryToggling
+                ? "切换中…"
+                : lotteryMode === "all"
+                  ? "● 抽奖中"
+                  : lotteryMode === "paused"
+                    ? "■ 已暂停"
+                    : "◆ 仅主播"}
             </button>
           </div>
 

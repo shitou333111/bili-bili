@@ -32,11 +32,22 @@ export type LotteryRecord = {
   rewardGranted: boolean; // 奖品是否已发放（admin 标记，避免重复发放）
 };
 
-/** 服务器端抽奖配置（概率分母 + 活动开关） */
+/**
+ * 抽奖状态三态（admin 按钮点击循环）：
+ * - all：全部开放，抽奖可进行，帮助页入口可见；
+ * - paused：已暂停，抽奖不可进行（页面可打开但不可抽奖）；
+ * - anchor：仅主播，帮助页入口隐藏（不显示），只保留「主播」页入口，仍可正常抽奖。
+ */
+export type LotteryMode = "all" | "paused" | "anchor";
+
+/** 三态取值顺序（与 admin 按钮点击循环顺序一致） */
+export const LOTTERY_MODES: readonly LotteryMode[] = ["all", "paused", "anchor"];
+
+/** 服务器端抽奖配置（概率分母 + 状态） */
 export type LotteryConfig = {
   oddsDenom: number;
-  /** 活动开关：false 时抽奖暂停（APP 内可打开抽奖页但不可抽奖，admin 可恢复） */
-  enabled: boolean;
+  /** 抽奖状态三态（可见范围 + 是否可抽） */
+  mode: LotteryMode;
 };
 
 /** "1/n" 文案 */
@@ -87,7 +98,14 @@ async function writeLotteryRecords(records: LotteryRecord[]) {
   await fs.writeFile(LOTTERY_FILE, JSON.stringify(records, null, 2), "utf-8");
 }
 
-/** 读取服务器当前抽奖配置（无配置时默认：1/20、开启） */
+/** 归一化抽奖状态：优先取合法 mode；否则兼容旧 enabled 布尔（false→paused，true→all）；默认 all */
+function normalizeMode(mode: unknown, legacyEnabled: unknown): LotteryMode {
+  if (mode === "all" || mode === "paused" || mode === "anchor") return mode;
+  if (legacyEnabled === false) return "paused";
+  return "all";
+}
+
+/** 读取服务器当前抽奖配置（无配置时默认：1/20、全部开放） */
 export async function readLotteryConfig(): Promise<LotteryConfig> {
   await ensureDir();
   try {
@@ -97,21 +115,21 @@ export async function readLotteryConfig(): Promise<LotteryConfig> {
     if (Number.isInteger(denom) && denom >= 2) {
       return {
         oddsDenom: denom,
-        enabled: parsed?.enabled !== false,
+        mode: normalizeMode(parsed?.mode, parsed?.enabled),
       };
     }
   } catch {
     // 无配置或格式错误 → 默认
   }
-  return { oddsDenom: DEFAULT_ODDS_DENOM, enabled: true };
+  return { oddsDenom: DEFAULT_ODDS_DENOM, mode: "all" };
 }
 
 /**
  * 更新服务器抽奖配置（admin 调用）：
  * - oddsDenom：概率分母（格式 "1/n"，n≥2 整数），改后所有平台立即生效；
- * - enabled：活动开关，false 时抽奖暂停。
+ * - mode：抽奖状态三态（all/paused/anchor）。
  */
-export async function updateLotteryConfig(partial: { oddsDenom?: number; enabled?: boolean }): Promise<LotteryConfig> {
+export async function updateLotteryConfig(partial: { oddsDenom?: number; mode?: LotteryMode }): Promise<LotteryConfig> {
   const current = await readLotteryConfig();
   const next: LotteryConfig = { ...current };
   if (partial.oddsDenom !== undefined) {
@@ -121,8 +139,11 @@ export async function updateLotteryConfig(partial: { oddsDenom?: number; enabled
     }
     next.oddsDenom = denom;
   }
-  if (partial.enabled !== undefined) {
-    next.enabled = !!partial.enabled;
+  if (partial.mode !== undefined) {
+    if (!LOTTERY_MODES.includes(partial.mode)) {
+      throw new Error("抽奖状态不合法");
+    }
+    next.mode = partial.mode;
   }
   await ensureDir();
   await fs.writeFile(LOTTERY_CONFIG_FILE, JSON.stringify(next, null, 2), "utf-8");
@@ -138,7 +159,7 @@ export async function getUserLotteryRecord(mid: number): Promise<LotteryRecord |
 /**
  * 执行抽奖：按服务器当前概率判定（1/n），奖品为一个月舰长。
  * 同一 mid 只能抽取一次，重复抽取直接返回已有记录。
- * 活动暂停（enabled=false）时抛错，前端展示"抽奖活动当前已暂停"。
+ * 活动暂停（mode=paused）时抛错，前端展示"抽奖活动当前已暂停"。
  * 记录会保存抽奖当时的概率，供长期查看。
  */
 export async function drawLottery(mid: number, uname: string): Promise<{ record: LotteryRecord; alreadyDrawn: boolean }> {
@@ -149,7 +170,7 @@ export async function drawLottery(mid: number, uname: string): Promise<{ record:
       return { record: existing, alreadyDrawn: true };
     }
     const cfg = await readLotteryConfig();
-    if (!cfg.enabled) {
+    if (cfg.mode === "paused") {
       throw new Error("抽奖活动当前已暂停");
     }
     const won = Math.floor(Math.random() * cfg.oddsDenom) === 0;

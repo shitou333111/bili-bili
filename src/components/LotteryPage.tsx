@@ -34,8 +34,8 @@ export default function LotteryPage({
 }) {
   const [record, setRecord] = useState<LotteryRecord | null>(null);
   const [oddsDenom, setOddsDenom] = useState(20);
-  // 活动开关：false 时抽奖暂停（可打开页面查看，但不可抽奖）
-  const [enabled, setEnabled] = useState(true);
+  // 抽奖状态三态：all=全部开放；paused=已暂停（可打开页面但不可抽奖）；anchor=仅主播
+  const [mode, setMode] = useState<"all" | "paused" | "anchor">("all");
   const [loading, setLoading] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [error, setError] = useState("");
@@ -51,11 +51,15 @@ export default function LotteryPage({
     try {
       const data = await serverFetch<{
         code: number;
-        data?: { drawn: boolean; record: LotteryRecord | null; config?: { oddsDenom: number; enabled: boolean } };
+        data?: {
+          drawn: boolean;
+          record: LotteryRecord | null;
+          config?: { oddsDenom: number; mode: "all" | "paused" | "anchor" };
+        };
       }>(`/api/lottery/records?mid=${encodeURIComponent(String(mid))}`);
       if (data.code === 0 && data.data) {
         if (data.data.config?.oddsDenom) setOddsDenom(data.data.config.oddsDenom);
-        if (typeof data.data.config?.enabled === "boolean") setEnabled(data.data.config.enabled);
+        if (data.data.config?.mode) setMode(data.data.config.mode);
         if (data.data.record) setRecord(data.data.record);
       }
     } catch {
@@ -68,6 +72,9 @@ export default function LotteryPage({
   useEffect(() => {
     loadRecord();
   }, [loadRecord]);
+
+  // 是否允许抽奖：仅 paused 状态禁止（anchor 状态仍可抽，只是帮助页入口隐藏）
+  const enabled = mode !== "paused";
 
   const handleDraw = async () => {
     if (drawing || record || isServerAccount) return;

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readLotteryConfig, updateLotteryConfig } from "@/lib/lottery";
+import { readLotteryConfig, updateLotteryConfig, LOTTERY_MODES, type LotteryMode } from "@/lib/lottery";
 
 export const dynamic = "force-dynamic";
 
-/** 管理后台：读取当前抽奖配置（概率 + 活动开关） */
+/** 管理后台：读取当前抽奖配置（概率 + 状态三态） */
 export async function GET(request: Request) {
   if (!(await validateAdminSession(getAdminSid(request)))) {
     return NextResponse.json({ code: 403, message: "forbidden" }, { status: 403 });
@@ -16,14 +16,14 @@ export async function GET(request: Request) {
 /**
  * 管理后台：更新抽奖配置
  * - oddsDenom：概率分母（格式 "1/n"，n 为 ≥2 的整数），改后所有平台立即生效；
- * - enabled：活动开关（false 时抽奖暂停，APP 内抽奖页可打开但不可用）。
+ * - mode：抽奖状态三态（all=全部开放 / paused=已暂停 / anchor=仅主播）。
  */
 export async function POST(request: Request) {
   if (!(await validateAdminSession(getAdminSid(request)))) {
     return NextResponse.json({ code: 403, message: "forbidden" }, { status: 403 });
   }
   const body = await request.json().catch(() => null);
-  const partial: { oddsDenom?: number; enabled?: boolean } = {};
+  const partial: { oddsDenom?: number; mode?: LotteryMode } = {};
   if (body?.oddsDenom !== undefined) {
     const denom = Number(body.oddsDenom);
     if (!Number.isInteger(denom) || denom < 2) {
@@ -31,10 +31,13 @@ export async function POST(request: Request) {
     }
     partial.oddsDenom = denom;
   }
-  if (typeof body?.enabled === "boolean") {
-    partial.enabled = body.enabled;
+  if (body?.mode !== undefined) {
+    if (typeof body.mode !== "string" || !LOTTERY_MODES.includes(body.mode as LotteryMode)) {
+      return NextResponse.json({ code: -1, message: "抽奖状态不合法" }, { status: 400 });
+    }
+    partial.mode = body.mode as LotteryMode;
   }
-  if (partial.oddsDenom === undefined && partial.enabled === undefined) {
+  if (partial.oddsDenom === undefined && partial.mode === undefined) {
     return NextResponse.json({ code: -1, message: "没有可更新的配置项" }, { status: 400 });
   }
   const config = await updateLotteryConfig(partial);
