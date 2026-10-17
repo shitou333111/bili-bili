@@ -34,7 +34,14 @@ export interface MovableRect {
 }
 
 /** 可编辑布局的元素 ID */
-export type LayoutElementId = "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner";
+export type LayoutElementId =
+  | "gift"
+  | "giftSeparate"
+  | "giftEffect"
+  | "entry"
+  | "anime"
+  | "banner"
+  | "giftFlip";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
@@ -45,6 +52,8 @@ export interface DisplayLayout {
   entry: Record<ScreenOrientation, MovableRect>;
   anime: Record<ScreenOrientation, MovableRect>;
   banner: Record<ScreenOrientation, MovableRect>;
+  /** 礼物翻卡/礼物抽奖：3D 轮转卡片面板 */
+  giftFlip: Record<ScreenOrientation, MovableRect>;
 }
 
 /** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用）。
@@ -85,6 +94,11 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
     // 即保存绝对坐标，此后按保存的 x/y/scale 自由摆放（不再强制居中）。
     landscape: { x: 0, y: 30, scale: 1 },
     portrait: { x: 0, y: 30, scale: 1 },
+  },
+  giftFlip: {
+    // 礼物翻卡/抽奖：默认置于画布中部偏上、水平居中；舞台基准尺寸 900×560，加粗横幅的外边距
+    landscape: { x: Math.round((1920 - 900) / 2), y: 210, scale: 1 },
+    portrait: { x: Math.round((1080 - 900) / 2), y: 520, scale: 1 },
   },
 };
 
@@ -142,6 +156,57 @@ export interface BannerConfig {
   enabled: boolean;
   /** 横幅按钮文字（最多 30 个字；输入中不实时同步，失焦才更新到画布） */
   text: string;
+}
+
+/** 礼物翻卡/抽奖 · 单个选项：文字 + 可选图片（data URL） */
+export interface GiftFlipOption {
+  /** 选项文字（最多 10 个字） */
+  text: string;
+  /** 该选项的图片（data URL；空 = 该卡片使用纯色底） */
+  image: string;
+}
+
+/** 选项数量上下限（面板据此限制增删） */
+export const GIFT_FLIP_MIN_OPTIONS = 4;
+export const GIFT_FLIP_MAX_OPTIONS = 20;
+/** 选项文字最大字数 */
+export const GIFT_FLIP_MAX_TEXT_LEN = 10;
+
+/** 礼物翻卡动画分镜阶段（画布/面板预览共用；idle = 待机 3D 轮转）。
+ *  spin：旋转到目标卡 → flash：目标卡闪烁 → pop：卡牌放大飘到画布中心（露卡背）
+ *  → flip：翻面揭晓 → hold：停留展示 → restore：收起复位。 */
+export type GiftFlipPhase = "idle" | "spin" | "flash" | "pop" | "flip" | "hold" | "restore";
+
+/** 默认选项模板（6 项，含 3 奖励 3 惩罚，主播可在面板中自由改写/增删） */
+export const DEFAULT_GIFT_FLIP_OPTIONS: GiftFlipOption[] = [
+  { text: "奖励一", image: "" },
+  { text: "奖励二", image: "" },
+  { text: "奖励三", image: "" },
+  { text: "惩罚一", image: "" },
+  { text: "惩罚二", image: "" },
+  { text: "惩罚三", image: "" },
+];
+
+/** 礼物翻卡/礼物抽奖模块配置 */
+export interface GiftFlipConfig {
+  /** 模块总开关：关闭后画布不显示轮盘，收到触发礼物也不翻卡 */
+  enabled: boolean;
+  /** 触发礼物 gift_id（0 = 未设置） */
+  giftId: number;
+  /** 触发礼物名称 */
+  giftName: string;
+  /** 触发礼物图标 URL（选中后替换轮盘中心的图片） */
+  giftImg: string;
+  /** 触发所需礼物数量（每位粉丝独立累计，累计满一次即为其触发一张翻卡） */
+  giftCount: number;
+  /** 选项列表（GIFT_FLIP_MIN_OPTIONS ~ GIFT_FLIP_MAX_OPTIONS 项） */
+  options: GiftFlipOption[];
+  /** 待机（未触发）时是否在卡片上显示选项文字：开启=文字叠加在图片/纯色卡片上；
+   *  关闭=待机只显示图片/纯色卡片（翻牌揭晓时无论开关都会显示文字）。默认关闭。 */
+  showText: boolean;
+  /** 图片与选项固定：开启=图片/纯色卡与文字选项一一对应且每局不变；
+   *  关闭=每局随机洗牌打乱图片与选项的对应关系。默认开启。 */
+  lockMapping: boolean;
 }
 
 /** 入场冷却时长选项（B 站对同一用户的重复入场本身有去重/冷却，"bilibili" = 本地不额外冷却） */
@@ -245,6 +310,8 @@ export interface DisplayConfig {
   giftEffect: GiftEffectConfig;
   /** 模块5 · 横幅（画布顶部横幅按钮 + 撒花庆祝，放在入场动画模块下面） */
   banner: BannerConfig;
+  /** 模块6 · 礼物翻卡/礼物抽奖（3D 轮转卡片，送礼达标触发翻卡） */
+  giftFlip: GiftFlipConfig;
   /** 入场筛选 */
   entryFilter: EntryFilter;
   /** 入场冷却时长（同一用户距上次触发不足该间隔时不再触发入场特效） */
@@ -291,6 +358,8 @@ export type DisplayFlags = {
   giftEffect: boolean;
   /** 横幅模块开关（从 DisplayConfig.banner.enabled 派生） */
   banner: boolean;
+  /** 礼物翻卡/抽奖模块开关（从 DisplayConfig.giftFlip.enabled 派生） */
+  giftFlip: boolean;
 };
 
 /** 默认展示配置 */
@@ -310,6 +379,16 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   banner: {
     enabled: false,
     text: "欢迎来到直播间",
+  },
+  giftFlip: {
+    enabled: false,
+    giftId: 0,
+    giftName: "",
+    giftImg: "",
+    giftCount: 1,
+    options: DEFAULT_GIFT_FLIP_OPTIONS,
+    showText: false,
+    lockMapping: true,
   },
   entryFilter: {
     zongdu: false,
@@ -431,4 +510,14 @@ export type DisplayEvent =
       /** 配套 JSON 配置（缺失时退化为整段绘制） */
       config: GiftEffectFrameConfig | null;
     }
-  | { type: "gift"; gifts: DisplayGiftItem[]; arrived?: DisplayGiftArrival };
+  | { type: "gift"; gifts: DisplayGiftItem[]; arrived?: DisplayGiftArrival }
+  | {
+      /** 礼物翻卡：触发一次翻卡动画，选中 optionIndex（选项配置由 init/配置消息下发） */
+      type: "giftFlip";
+      /** 本次翻卡的序号（画布回执 giftFlipDone 时回传，避免多端重复回执被重复记账） */
+      seq: number;
+      /** 本次翻卡归属的粉丝（送礼达标的观众） */
+      fan: { uid: number; uname: string; face: string };
+      /** 命中的选项下标（0 起） */
+      optionIndex: number;
+    };

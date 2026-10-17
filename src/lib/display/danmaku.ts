@@ -18,6 +18,7 @@ import {
   type EntryColors,
   type EntryParticleMode,
   type GiftEffectFrameConfig,
+  type GiftFlipConfig,
   type GiftBarWidth,
   type GiftHighlight,
   type LayoutElementId,
@@ -37,6 +38,16 @@ import {
   tryHandleBlindBoxQuery,
 } from "./gift-db";
 import {
+  accumulateGiftFlip,
+  listFanRecords,
+  loadGiftFlipDb,
+  markFlipPlayed,
+  pickNextFan,
+  recordManualTrigger,
+  resetGiftFlipDb,
+  type GiftFlipFanRecord,
+} from "./gift-flip";
+import {
   ensureGiftCatalogLoaded,
   getGiftImg,
   getGiftImgByName,
@@ -49,7 +60,7 @@ import { getVersionDisplay } from "@/lib/updater";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
-  type: "ready" | "saveLayout" | "orientation" | "log";
+  type: "ready" | "saveLayout" | "orientation" | "log" | "giftFlipDone";
   mode?: "edit" | "source";
   id?: LayoutElementId;
   orientation?: ScreenOrientation;
@@ -57,6 +68,10 @@ interface ServerMessage {
   v?: ScreenOrientation;
   level?: string;
   text?: string;
+  /** giftFlipDone：本次翻卡的序号 / 归属粉丝 uid / 命中的选项下标（主进程据此记账） */
+  seq?: number;
+  uid?: number;
+  optionIndex?: number;
 }
 
 /** 入场动画样本（编辑模式常驻预览用） */
@@ -654,6 +669,16 @@ class DisplayDanmakuService {
   private entryEmitAt = new Map<number, { anime: number; entry: number }>();
   /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
   private wsConnectedAt = 0;
+  // ---- 礼物翻卡/抽奖 调度 ----
+  /** 是否有一张翻卡正在画布播放（播放中不再下发新的，待画布回执 giftFlipDone 后继续调度） */
+  private giftFlipBusy = false;
+  /** 当前正在播放的翻卡（含序号；画布中途重连/刷新时重发，回执按序号校验防重复记账） */
+  private giftFlipCurrent: { seq: number; fan: { uid: number; uname: string; face: string }; optionIndex: number } | null =
+    null;
+  /** 翻卡事件序号（自增） */
+  private giftFlipSeq = 0;
+  /** 「手动触发」待播队列（主播面板点击）：优先于普通待翻队列，当前这张播完立刻插入下一位 */
+  private giftFlipManualQueue: { uid: number; uname: string; face: string }[] = [];
   // ---- 调试日志 ----
   private debugListeners = new Set<(e: DanmuDebugEvent) => void>();
   private debugEvents: DanmuDebugEvent[] = [];
@@ -828,6 +853,22 @@ class DisplayDanmakuService {
     try {
       if (msg.type === "ready") {
         await this.broadcastInit();
+        // 画布刷新/重连时若正有一张翻卡在播，重发该事件让新画布续播（否则动画丢失、卡在 busy）
+        if (this.giftFlipBusy && this.giftFlipCurrent) {
+          const c = this.giftFlipCurrent;
+          await this.emitTo({ type: "giftFlip", seq: c.seq, fan: c.fan, optionIndex: c.optionIndex });
+        }
+      } else if (msg.type === "giftFlipDone") {
+        // 画布播完一张翻卡：按序号校验（多端/陈旧回执只接受当前这一张）→ 记账 → 继续调度下一张
+        const cur = this.giftFlipCurrent;
+        const seq = Math.floor(Number(msg.seq) || 0);
+        const uid = Math.floor(Number(msg.uid) || 0);
+        const optionIndex = Math.max(0, Math.floor(Number(msg.optionIndex) || 0));
+        if (!this.giftFlipBusy || !cur || seq !== cur.seq) return;
+        this.giftFlipBusy = false;
+        this.giftFlipCurrent = null;
+        if (uid > 0) await markFlipPlayed(this.mid, uid, optionIndex);
+        await this.scheduleGiftFlip(this.mid);
       } else if (msg.type === "saveLayout") {
         const { id, orientation, rect } = msg;
         if (!id || !orientation || !rect) return;
@@ -901,6 +942,7 @@ class DisplayDanmakuService {
       entryParticleMode: cfg.entryParticleMode,
       entryColors: cfg.entryColors,
       giftHighlight: this.giftHighlight,
+      giftFlip: cfg.giftFlip,
       flags: {
         master: displayMaster(cfg),
         entry: cfg.entry,
@@ -908,15 +950,22 @@ class DisplayDanmakuService {
         anime: cfg.anime,
         giftEffect: !!cfg.giftEffect?.enabled,
         banner: !!cfg.banner?.enabled,
+        giftFlip: !!cfg.giftFlip?.enabled,
       },
     });
   }
 
-  /** 广播当前各模块开关状态（master/entry/gift/anime/giftEffect/banner）到浏览器源，画布据此即时
+  /** 广播当前各模块开关状态（master/entry/gift/anime/giftEffect/banner/giftFlip）到浏览器源，画布据此即时
    *  显隐元素。在面板切换各模块开关后调用（配置已落盘），浏览器源无需重连即可响应。
    *  master 为派生值：任一画布显示子模块开启即为 true。 */
   async broadcastFlags(): Promise<void> {
     const cfg = await loadDisplayConfig(this.mid);
+    // 模块关闭时释放"播放中"状态：否则画布不再渲染、永远不回执，busy 卡死导致重新开启后无法翻卡
+    if (!cfg.giftFlip?.enabled) {
+      this.giftFlipBusy = false;
+      this.giftFlipCurrent = null;
+      this.giftFlipManualQueue = [];
+    }
     await this.broadcast({
       type: "flags",
       flags: {
@@ -926,8 +975,48 @@ class DisplayDanmakuService {
         anime: cfg.anime,
         giftEffect: !!cfg.giftEffect?.enabled,
         banner: !!cfg.banner?.enabled,
+        giftFlip: !!cfg.giftFlip?.enabled,
       },
     });
+  }
+
+  /** 广播礼物翻卡模块配置到画布（面板改动选项/礼物/文字开关后调用，配置已落盘）。 */
+  async broadcastGiftFlipConfig(v: GiftFlipConfig): Promise<void> {
+    await this.broadcast({ type: "giftFlipConfig", v });
+  }
+
+  /** 面板「重置」：清空全部翻卡记录（触发次数/已翻次数/选项结果），并复位调度状态。 */
+  async resetGiftFlip(): Promise<void> {
+    if (this.mid) await resetGiftFlipDb(this.mid);
+    this.giftFlipBusy = false;
+    this.giftFlipCurrent = null;
+    this.giftFlipManualQueue = [];
+    await this.broadcast({ type: "giftFlipReset" });
+  }
+
+  /** 读取当前翻卡记录（面板展示用；按首次触发时间升序）。 */
+  async getGiftFlipRecords(): Promise<GiftFlipFanRecord[]> {
+    if (!this.mid) return [];
+    return listFanRecords(await loadGiftFlipDb(this.mid));
+  }
+
+  /**
+   * 面板「手动触发」：无视送礼规则，为主播账号（uid=mid）直接排一次抽卡。
+   *  - 记一条记录（uname=「主播手动抽卡」、face=主播头像）→ 出现在记录列表；
+   *  - 推入手动优先队列：若当前正有翻卡播放，则等它结束（giftFlipDone 后续排）再立即插入这一张。
+   */
+  async manualTriggerGiftFlip(fan: { uid: number; uname: string; face: string }): Promise<void> {
+    const mid = this.mid;
+    if (!mid || !this.isNative()) return;
+    const config = await loadDisplayConfig(mid);
+    const gf = config.giftFlip;
+    if (!gf?.enabled || (gf.options?.length ?? 0) <= 0) return;
+    const uid = Math.floor(fan.uid);
+    if (uid <= 0) return;
+    await recordManualTrigger(mid, { uid, uname: fan.uname, face: fan.face });
+    this.giftFlipManualQueue.push({ uid, uname: fan.uname, face: fan.face });
+    this.pushDebug("giftFlip", "手动触发", { uid });
+    await this.scheduleGiftFlip(mid);
   }
 
   /** 广播横幅按钮最新文字到画布（面板输入框失焦后调用，配置已落盘）。 */
@@ -1644,6 +1733,10 @@ class DisplayDanmakuService {
       await this.emitGiftEffect(giftId, d.giftName || "");
     }
 
+    // 礼物翻卡/抽奖：该礼物恰为触发礼物时，为送礼粉丝独立累计，达标即调度一张翻卡
+    // （独立于"收到的礼物展示"开关，放在其提前 return 之前）
+    await this.maybeTriggerGiftFlip(mid, config, { uid, uname, face }, Number(d.num) || 1);
+
     if (!config.gift) return;
 
     // 从礼物逐条记录聚合最近一周达标清单（单价 > 阈值；阈值 0 = 不限制）
@@ -1682,6 +1775,63 @@ class DisplayDanmakuService {
       list: qualifying.map((q) => ({ name: q.giftName, count: q.count })),
     });
     this.emitTo({ type: "gift", gifts: qualifying });
+  }
+
+  /**
+   * 礼物翻卡：收到触发礼物时为该粉丝独立累计，达标即尝试调度一张翻卡。
+   * 配置未开启 / 未设触发礼物 / 非送礼粉丝 → 直接跳过。
+   */
+  private async maybeTriggerGiftFlip(
+    mid: number,
+    config: DisplayConfig,
+    fan: { uid: number; uname: string; face: string },
+    num: number,
+  ): Promise<void> {
+    const gf = config.giftFlip;
+    if (!gf?.enabled || gf.giftId <= 0) return;
+    const uid = Math.floor(fan.uid);
+    if (uid <= 0) return;
+    const { added } = await accumulateGiftFlip(mid, gf.giftCount, { ...fan, uid }, num);
+    if (added <= 0) return;
+    this.pushDebug("giftFlip", "累计达标", { uid, uname: fan.uname, added });
+    await this.scheduleGiftFlip(mid);
+  }
+
+  /**
+   * 调度下一张翻卡：空闲时取「待翻队列」中该优先的粉丝，等概率随机选中一个选项后下发画布；
+   * 播放中（busy）不重复下发，待画布回执 giftFlipDone 后由 handleServerMessage 再调用本方法续排。
+   */
+  private async scheduleGiftFlip(mid: number): Promise<void> {
+    if (!mid || this.giftFlipBusy || !this.isNative()) return;
+    const config = await loadDisplayConfig(mid);
+    const gf = config.giftFlip;
+    if (!gf?.enabled) return;
+    const count = gf.options?.length ?? 0;
+    if (count <= 0) return;
+    // 手动触发优先：主播点击后即便队列里已有其他待翻粉丝，也先翻这一张
+    const manual = this.giftFlipManualQueue.shift();
+    let fan: { uid: number; uname: string; face: string };
+    let remaining = 1;
+    if (manual) {
+      fan = manual;
+    } else {
+      const db = await loadGiftFlipDb(mid);
+      const next = pickNextFan(db);
+      if (!next) return; // 待翻队列为空 → 恢复待机
+      fan = { uid: next.uid, uname: next.uname, face: next.face };
+      remaining = next.triggered - next.played;
+    }
+    const optionIndex = Math.floor(Math.random() * count); // 等概率随机
+    const seq = ++this.giftFlipSeq;
+    this.giftFlipBusy = true;
+    this.giftFlipCurrent = { seq, fan, optionIndex };
+    this.pushDebug("giftFlip", "emit", {
+      uid: fan.uid,
+      uname: fan.uname,
+      optionIndex,
+      remaining,
+    });
+    await this.emitTo({ type: "giftFlip", seq, fan, optionIndex });
   }
 
   private matchesEntryFilter(config: DisplayConfig, guardType: number, medalLevel: number): boolean {

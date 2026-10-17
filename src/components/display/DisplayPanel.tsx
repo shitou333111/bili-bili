@@ -10,12 +10,22 @@
  * 附加"弹幕互动"模块：向直播间按间隔循环发送自定义弹幕（不参与派生，自己独立工作）。
  * 所有配置持久化到 <dataDir>/uid_<mid>/display-config.json（按账号分开）。
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_ENTRY_COLORS,
   GIFT_BAR_SLOTS,
+  GIFT_FLIP_MAX_OPTIONS,
+  GIFT_FLIP_MAX_TEXT_LEN,
+  GIFT_FLIP_MIN_OPTIONS,
   scBackgroundColor,
   type AnimeOpacity,
   type DisplayConfig,
@@ -26,9 +36,13 @@ import {
   type EntryCooldownOption,
   type EntryParticleMode,
   type GiftBarWidth,
+  type GiftFlipConfig,
+  type GiftFlipOption,
+  type GiftFlipPhase,
   type GiftHighlight,
   type ScreenOrientation,
 } from "@/lib/display/types";
+import { type GiftFlipFanRecord } from "@/lib/display/gift-flip";
 import {
   displayMaster,
   displayNeedsService,
@@ -60,6 +74,9 @@ import { type ToastKind } from "@/lib/toast";
 import DisplayEditModal from "./DisplayEditModal";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import ColorBoard from "./ColorBoard";
+import GiftSearchInput, { type GiftPick } from "./GiftSearchInput";
+import GiftFlipCarousel, { GIFT_FLIP_STAGE } from "./GiftFlipCarousel";
+import GiftFlipReveal, { type GiftFlipActive } from "./GiftFlipReveal";
 
 /** 「设置样式」模态框内的实时预览用演示用户（真实 EntryBadge，跑完整粒子聚散循环） */
 const COLOR_PREVIEW_USER: DisplayEntryPayload = {
@@ -197,6 +214,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 interface RoomInfo {
   roomId: number;
   uname: string;
+  /** 主播头像 URL（手动触发抽卡的 badge 用它显示主播头像） */
+  face: string;
   /** 开播状态：0=未开播 1=直播中 2=轮播中 */
   liveStatus: number;
 }
@@ -222,6 +241,7 @@ export async function resolveRoomInfo(mid: number): Promise<RoomInfo> {
   return {
     roomId,
     uname: info?.uname || "",
+    face: info?.face || "",
     // 开播状态必须用 live_status（1=直播中）；room_status 仅表示直播间是否存在，恒为 1
     liveStatus: Number(info?.live_status) || 0,
   };
@@ -441,6 +461,100 @@ function ModuleTitle({
       {onToggle && (
         <Switch checked={!!checked} disabled={disabled} onToggle={onToggle} onColor={onColor} />
       )}
+    </div>
+  );
+}
+
+/** 礼物翻卡 · 单个选项行：序号 + 文字输入（≤10 字，本地态防 IME 打断）+ 图片上传/清除 + 删除。
+ *  文字在失焦 / 回车时提交（与横幅输入框同一策略：输入过程中不落盘、不打断合成）。 */
+function FlipOptionRow({
+  index,
+  option,
+  canRemove,
+  onCommitText,
+  onUpload,
+  onClearImage,
+  onRemove,
+}: {
+  index: number;
+  option: GiftFlipOption;
+  canRemove: boolean;
+  onCommitText: (text: string) => void;
+  onUpload: () => void;
+  onClearImage: () => void;
+  onRemove: () => void;
+}) {
+  const [text, setText] = useState(option.text);
+  const composingRef = useRef(false);
+  useEffect(() => {
+    if (!composingRef.current) setText(option.text);
+  }, [option.text]);
+  const commit = useCallback(() => {
+    const t = text.slice(0, GIFT_FLIP_MAX_TEXT_LEN);
+    setText(t);
+    if (t !== option.text) onCommitText(t);
+  }, [text, option.text, onCommitText]);
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="w-4 shrink-0 text-center text-[11px] text-black/35">{index + 1}</span>
+      {option.image ? (
+        <img src={option.image} alt="" className="h-7 w-7 shrink-0 rounded-md object-cover" />
+      ) : (
+        <span className="h-7 w-7 shrink-0 rounded-md border border-black/10 bg-white/60" />
+      )}
+      <input
+        type="text"
+        value={text}
+        placeholder={`选项 ${index + 1}`}
+        onChange={(e) => {
+          const native = e.nativeEvent as Event & { isComposing?: boolean };
+          const composing = !!native.isComposing || composingRef.current;
+          setText(composing ? e.target.value : e.target.value.slice(0, GIFT_FLIP_MAX_TEXT_LEN));
+        }}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(e) => {
+          composingRef.current = false;
+          setText(e.currentTarget.value.slice(0, GIFT_FLIP_MAX_TEXT_LEN));
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+          if (e.key === "Enter") {
+            commit();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        className={`${inputBase} min-w-0 flex-1 py-1 text-xs`}
+      />
+      <button
+        type="button"
+        onClick={onUpload}
+        title="为该选项上传图片（作为卡片封面）"
+        className="shrink-0 rounded-md bg-white/80 px-1.5 py-1 text-[11px] text-black/60 transition hover:bg-white"
+      >
+        图片
+      </button>
+      {option.image && (
+        <button
+          type="button"
+          onClick={onClearImage}
+          title="清除该选项的图片（回退为纯色卡片）"
+          className="shrink-0 rounded-md bg-white/80 px-1.5 py-1 text-[11px] text-black/45 transition hover:bg-white"
+        >
+          清除
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={!canRemove}
+        title={canRemove ? "删除该选项" : `至少保留 ${GIFT_FLIP_MIN_OPTIONS} 个选项`}
+        className="shrink-0 rounded-md bg-white/80 px-1.5 py-1 text-[11px] text-rose-500 transition hover:bg-white disabled:cursor-not-allowed disabled:text-black/25"
+      >
+        删
+      </button>
     </div>
   );
 }
@@ -709,6 +823,154 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     },
     [update, syncService, config.blindBoxQuery],
   );
+
+  // ==================== 礼物翻卡 / 礼物抽奖 ====================
+  // 触发记录（每位粉丝的触发次数 / 已翻次数 / 每次命中的选项），面板展示用
+  const [flipRecords, setFlipRecords] = useState<GiftFlipFanRecord[]>([]);
+  // 「重置」二次确认（避免误点清空全部记录）
+  const [flipResetArmed, setFlipResetArmed] = useState(false);
+  // 选项图片上传：隐藏的 file input + 当前上传目标（-1 = 统一封面，应用到全部选项）
+  const flipFileRef = useRef<HTMLInputElement | null>(null);
+  const flipFileTargetRef = useRef<number>(-1);
+  // 预览舞台内的翻卡阶段/揭晓数据（由预览用的 GiftFlipCarousel 上报，供舞台中心渲染揭晓卡）
+  const [flipPreviewPhase, setFlipPreviewPhase] = useState<GiftFlipPhase>("idle");
+  const [flipPreviewActive, setFlipPreviewActive] = useState<GiftFlipActive | null>(null);
+  // 每条粉丝记录：清单（逐次结果）/ 汇总（各选项中奖次数）视图切换（按 uid）
+  const [flipSummary, setFlipSummary] = useState<Set<number>>(new Set());
+  const onFlipPreviewPhase = useCallback(
+    (phase: GiftFlipPhase, active: GiftFlipActive | null) => {
+      setFlipPreviewPhase(phase);
+      setFlipPreviewActive(active);
+    },
+    [],
+  );
+
+  /** 切换某条记录的「清单 / 汇总」视图 */
+  const toggleFlipSummary = useCallback((uid: number) => {
+    setFlipSummary((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  }, []);
+
+  const refreshFlipRecords = useCallback(async () => {
+    try {
+      setFlipRecords(await displayDanmaku.getGiftFlipRecords());
+    } catch {
+      /* 读取失败不影响面板其他功能 */
+    }
+  }, []);
+  useEffect(() => {
+    if (isDanmakuPart) return;
+    void refreshFlipRecords();
+    const t = setInterval(() => void refreshFlipRecords(), 5000);
+    return () => clearInterval(t);
+  }, [isDanmakuPart, refreshFlipRecords]);
+  useEffect(() => {
+    if (!flipResetArmed) return;
+    const t = setTimeout(() => setFlipResetArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [flipResetArmed]);
+
+  // 改动任一礼物翻卡配置：落盘后即时广播给画布（无需重连即可刷新选项/礼物/文字开关）
+  const updateGiftFlip = useCallback(
+    async (patch: Partial<GiftFlipConfig>) => {
+      const next = await update({ giftFlip: { ...config.giftFlip, ...patch } });
+      void displayDanmaku.broadcastGiftFlipConfig(next.giftFlip);
+    },
+    [update, config.giftFlip],
+  );
+  const setFlipOptions = useCallback(
+    (options: GiftFlipOption[]) => {
+      void updateGiftFlip({ options: options.slice(0, GIFT_FLIP_MAX_OPTIONS) });
+    },
+    [updateGiftFlip],
+  );
+  const setFlipOptionText = useCallback(
+    (i: number, text: string) => {
+      setFlipOptions(
+        config.giftFlip.options.map((o, idx) =>
+          idx === i ? { ...o, text: text.slice(0, GIFT_FLIP_MAX_TEXT_LEN) } : o,
+        ),
+      );
+    },
+    [config.giftFlip.options, setFlipOptions],
+  );
+  const setFlipOptionImage = useCallback(
+    (i: number, image: string) => {
+      setFlipOptions(config.giftFlip.options.map((o, idx) => (idx === i ? { ...o, image } : o)));
+    },
+    [config.giftFlip.options, setFlipOptions],
+  );
+  const addFlipOption = useCallback(() => {
+    const len = config.giftFlip.options.length;
+    if (len >= GIFT_FLIP_MAX_OPTIONS) return;
+    setFlipOptions([...config.giftFlip.options, { text: `选项${len + 1}`, image: "" }]);
+  }, [config.giftFlip.options, setFlipOptions]);
+  const removeFlipOption = useCallback(
+    (i: number) => {
+      if (config.giftFlip.options.length <= GIFT_FLIP_MIN_OPTIONS) return;
+      setFlipOptions(config.giftFlip.options.filter((_, idx) => idx !== i));
+    },
+    [config.giftFlip.options, setFlipOptions],
+  );
+  const pickFlipImage = useCallback((target: number) => {
+    flipFileTargetRef.current = target;
+    flipFileRef.current?.click();
+  }, []);
+  const onFlipFileChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      const target = flipFileTargetRef.current;
+      flipFileTargetRef.current = -1;
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        if (!dataUrl.startsWith("data:image/")) return; // 仅接受图片（内嵌为 data URL 进配置）
+        if (target < 0) {
+          setFlipOptions(config.giftFlip.options.map((o) => ({ ...o, image: dataUrl })));
+        } else {
+          setFlipOptionImage(target, dataUrl);
+        }
+      };
+      reader.readAsDataURL(file);
+    },
+    [config.giftFlip.options, setFlipOptions, setFlipOptionImage],
+  );
+  const applyFlipGift = useCallback(
+    (g: GiftPick) => {
+      void updateGiftFlip({ giftId: g.id, giftName: g.name, giftImg: g.img });
+    },
+    [updateGiftFlip],
+  );
+  const resetFlipRecords = useCallback(async () => {
+    setFlipResetArmed(false);
+    await displayDanmaku.resetGiftFlip();
+    await refreshFlipRecords();
+  }, [refreshFlipRecords]);
+
+  // 「手动触发」：无视送礼规则直接触发一次抽卡。先取主播头像（失败也照常触发），写入记录并
+  // 推入主服务的「手动队列」——当前若正在抽卡，本次结束后立即插入下一张。
+  const manualFlip = useCallback(async () => {
+    if (!mid) return;
+    try {
+      let face = "";
+      try {
+        face = (await resolveRoomInfo(mid)).face;
+      } catch {
+        /* 头像获取失败也允许触发（badge 退化为占位头像） */
+      }
+      await displayDanmaku.manualTriggerGiftFlip({ uid: mid, uname: "主播手动抽卡", face });
+      await refreshFlipRecords();
+    } catch (e) {
+      // 兜底：任何异常都要在这里消化，避免 unhandled rejection 触发 dev 错误浮层
+      toast(`手动触发失败：${(e as Error)?.message || String(e)}`, "error");
+    }
+  }, [mid, refreshFlipRecords, toast]);
 
   // 横屏 / 竖屏切换：持久化朝向并广播给已连接的浏览器源画布（canvas 收到 orientation
   // 消息后切换 1080x1920 / 1920x1080）。浏览器源随时可再加，无需先开监听服务。
@@ -2121,6 +2383,288 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           {/* <p className="mt-1.5 text-[11px] text-black/40">
             输入完成后才会把文字更新到画布，输入过程中画布保持原内容。
           </p> */}
+        </Card>
+      </section>
+
+      {/* 礼物翻卡 / 礼物抽奖：画布上的 3D 轮转卡片面板（可移动/缩放），送指定礼物达标随机翻一张 */}
+      <section className="mt-4">
+        <ModuleTitle
+          title="礼物翻卡 / 礼物抽奖"
+          onColor="bg-teal-500"
+          checked={config.giftFlip.enabled}
+          onToggle={(v) => void toggleModule({ giftFlip: { ...config.giftFlip, enabled: v } })}
+        />
+        <Card bg="bg-teal-200" border="border-teal-400">
+          <p className="text-xs text-black/50 leading-relaxed">
+            显示一个持续 3D 轮转的卡片阵列，在「编辑布局」里可以移动/缩放。观众送出指定礼物到设定数量即触发一次抽卡，也可以点击手动触发抽奖。
+            <b className="text-black/70">每位粉丝单独累计</b>，多个粉丝触发时，<b className="text-black/70">未抽过卡者优先，然后按时间轮流排队</b>，所有用户的抽卡记录都显示在下方列表，供最后核对。
+            每个选项可以设置礼品/奖励/惩罚等，可以统一或者单独设置卡牌封面，可以选择显示或隐藏卡牌内容。这个功能适合日常送礼互动，以及庆会送礼自动抽奖。
+          </p>
+
+          {/* 触发礼物：输入搜索选择（复用后台同款下拉）+ 触发数量 */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-xs text-black/55">触发礼物</span>
+            <div className="w-[150px] shrink-0">
+              <GiftSearchInput
+                giftName={config.giftFlip.giftName}
+                onPick={applyFlipGift}
+                placeholder="输入礼物名称搜索"
+              />
+            </div>
+            {config.giftFlip.giftImg ? (
+              <img src={config.giftFlip.giftImg} alt="" className="h-8 w-8 shrink-0 rounded-md" />
+            ) : null}
+            <label className="flex shrink-0 items-center gap-1.5">
+              <span className="text-xs text-black/55">数量</span>
+              <input
+                type="number"
+                min={1}
+                value={config.giftFlip.giftCount}
+                onChange={(e) => {
+                  const n = Math.max(1, Math.min(99999, Math.floor(Number(e.target.value) || 1)));
+                  void updateGiftFlip({ giftCount: n });
+                }}
+                className={`${inputFlat} ${noSpin} w-[54px] text-center`}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void manualFlip()}
+              disabled={!config.giftFlip.enabled}
+              className={`${btnPrimary} ml-auto shrink-0`}
+              title="无视送礼规则，直接触发一次抽卡（当前若正在抽卡，则本次结束后立即插一张）"
+            >
+              手动触发
+            </button>
+          </div>
+
+          {/* 选项工具行：选项数「N(4~20)」→ 加号(添加) → 统一封面(扁胶囊) → 两个复选框(显示文字 / 绑定图片) */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-black/40">
+              {config.giftFlip.options.length}({GIFT_FLIP_MIN_OPTIONS}~{GIFT_FLIP_MAX_OPTIONS})
+            </span>
+            <button
+              type="button"
+              onClick={addFlipOption}
+              disabled={config.giftFlip.options.length >= GIFT_FLIP_MAX_OPTIONS}
+              title="添加一个选项"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/80 text-sm leading-none text-black/70 shadow-sm transition hover:bg-white active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ＋
+            </button>
+            <button
+              type="button"
+              onClick={() => pickFlipImage(-1)}
+              title="上传一张图片作为所有选项的统一封面"
+              className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-medium text-black/70 shadow-sm transition hover:bg-white active:scale-[0.98]"
+            >
+              选择统一封面
+            </button>
+            <label
+              className="ml-auto flex cursor-pointer items-center gap-1"
+              title="待机时在卡面显示选项文字（翻牌揭晓时始终显示）"
+            >
+              <input
+                type="checkbox"
+                checked={config.giftFlip.showText}
+                onChange={(e) => void updateGiftFlip({ showText: e.target.checked })}
+                className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-teal-500"
+              />
+              <span className="text-[11px] text-black/55">显示卡牌内容</span>
+            </label>
+            <label
+              className="flex cursor-pointer items-center gap-1"
+              title="开启：图片/纯色卡与文字选项一一对应且每局不变；关闭：每局随机洗牌打乱对应关系"
+            >
+              <input
+                type="checkbox"
+                checked={config.giftFlip.lockMapping}
+                onChange={(e) => void updateGiftFlip({ lockMapping: e.target.checked })}
+                className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-teal-500"
+              />
+              <span className="text-[11px] text-black/55">绑定选项和图片</span>
+            </label>
+          </div>
+
+          {/* 选项编辑列表（每个选项：文字 ≤10 字 + 可选图片） */}
+          <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto rounded-xl bg-white/40 p-2">
+            {config.giftFlip.options.map((opt, i) => (
+              <FlipOptionRow
+                key={`${i}-${opt.text}`}
+                index={i}
+                option={opt}
+                canRemove={config.giftFlip.options.length > GIFT_FLIP_MIN_OPTIONS}
+                onCommitText={(text) => setFlipOptionText(i, text)}
+                onUpload={() => pickFlipImage(i)}
+                onClearImage={() => setFlipOptionImage(i, "")}
+                onRemove={() => removeFlipOption(i)}
+              />
+            ))}
+          </div>
+          <input
+            ref={flipFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onFlipFileChange}
+          />
+
+          {/* 卡片内实时预览：真实翻卡实现，按间隔自动试翻（揭晓卡同样渲染在预览舞台中心） */}
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="text-xs text-black/55">实时预览</span>
+            <span className="text-[11px] text-black/35">（自动试翻，与画布效果一致）</span>
+          </div>
+          <div
+            className="relative mt-1 overflow-hidden rounded-xl bg-[#14141c] shadow-inner"
+            style={{ width: GIFT_FLIP_STAGE.w / 2, height: GIFT_FLIP_STAGE.h / 2 }}
+          >
+            <div
+              style={{
+                transform: "scale(0.5)",
+                transformOrigin: "top left",
+                position: "relative",
+                width: GIFT_FLIP_STAGE.w,
+                height: GIFT_FLIP_STAGE.h,
+              }}
+            >
+              <GiftFlipCarousel
+                options={config.giftFlip.options}
+                giftImg={config.giftFlip.giftImg}
+                giftCount={config.giftFlip.giftCount}
+                showText={config.giftFlip.showText}
+                lockMapping={config.giftFlip.lockMapping}
+                onPhase={onFlipPreviewPhase}
+                demoIntervalMs={9000}
+              />
+              <GiftFlipReveal
+                phase={flipPreviewPhase}
+                active={flipPreviewActive}
+                options={config.giftFlip.options}
+              />
+            </div>
+          </div>
+
+          {/* 触发记录：每位粉丝的触发/已翻/待翻次数与每次命中的选项（重点记录，不可丢） */}
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-xs text-black/55">触发记录</span>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => void refreshFlipRecords()} className={btnGhost}>
+                刷新
+              </button>
+              {flipResetArmed ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void resetFlipRecords()}
+                    className="inline-flex items-center justify-center rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-rose-600 active:scale-[0.98]"
+                  >
+                    确认重置
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFlipResetArmed(false)}
+                    className={btnGhost}
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setFlipResetArmed(true)}
+                  title="清空所有粉丝的触发/已翻/选项记录并复位排队（不可恢复）"
+                  className="inline-flex items-center justify-center rounded-lg bg-white/80 px-3 py-1.5 text-xs font-bold text-rose-500 shadow-sm transition hover:bg-white active:scale-[0.98]"
+                >
+                  重置
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="mt-1.5 max-h-56 space-y-1 overflow-y-auto rounded-xl bg-white/40 p-2">
+            {flipRecords.length === 0 ? (
+              <div className="px-1 py-3 text-center text-[11px] text-black/35">暂无触发记录</div>
+            ) : (
+              flipRecords.map((f) => {
+                const remaining = Math.max(0, f.triggered - f.played);
+                return (
+                  <div key={f.uid} className="flex items-start gap-2 rounded-lg bg-white/70 px-2 py-1.5">
+                    {f.face ? (
+                      <img src={f.face} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
+                    ) : (
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black/10 text-[11px] font-bold text-black/55">
+                        {(f.uname || "?").slice(0, 1)}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+                        <span className="truncate font-medium text-black/75">
+                          {f.uname || `uid:${f.uid}`}
+                        </span>
+                        <span className="shrink-0 text-black/40">
+                          触发 <b className="text-black/75">{f.triggered}</b> 次
+                        </span>
+                        <span className="shrink-0 text-black/40">
+                          已翻 <b className="text-black/75">{f.played}</b> 次
+                        </span>
+                        <span className="shrink-0 text-black/40">
+                          待翻{" "}
+                          <b className={remaining > 0 ? "text-rose-500" : "text-black/75"}>
+                            {remaining}
+                          </b>{" "}
+                          次
+                        </span>
+                        {f.pending > 0 && (
+                          <span className="shrink-0 text-black/35">
+                            单次进度 {f.pending}/{config.giftFlip.giftCount}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggleFlipSummary(f.uid)}
+                          className="ml-auto shrink-0 rounded bg-black/10 px-1.5 py-0.5 text-[10px] font-medium text-black/65 transition hover:bg-black/15 active:scale-[0.97]"
+                          title="切换「清单（逐次） / 汇总（各选项中奖次数）」视图"
+                        >
+                          {flipSummary.has(f.uid) ? "清单" : "汇总"}
+                        </button>
+                      </div>
+                      {flipSummary.has(f.uid) ? (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {config.giftFlip.options.map((opt, oi) => {
+                            const hit = f.results.filter((r) => r.optionIndex === oi).length;
+                            return (
+                              <span
+                                key={oi}
+                                className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                  hit > 0 ? "bg-teal-500/15 text-black/70" : "bg-black/5 text-black/35"
+                                }`}
+                              >
+                                {opt.text || `选项${oi + 1}`} ×{hit}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        f.results.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {f.results.map((r, i) => (
+                              <span
+                                key={i}
+                                className="rounded bg-black/10 px-1.5 py-0.5 text-[10px] text-black/65"
+                              >
+                                {i + 1}.{" "}
+                                {config.giftFlip.options[r.optionIndex]?.text ||
+                                  `选项${r.optionIndex + 1}`}
+                              </span>
+                            ))}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </Card>
       </section>
       </>)}

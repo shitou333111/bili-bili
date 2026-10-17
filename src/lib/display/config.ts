@@ -8,12 +8,17 @@
 import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GIFT_FLIP_OPTIONS,
+  GIFT_FLIP_MAX_OPTIONS,
+  GIFT_FLIP_MAX_TEXT_LEN,
+  GIFT_FLIP_MIN_OPTIONS,
   isAnimeOpacity,
   isGiftBarWidth,
   isHexColor,
   type DisplayConfig,
   type DisplayLayout,
   type EntryAnimeConfig,
+  type GiftFlipOption,
   type MovableRect,
   type ScreenOrientation,
 } from "./types";
@@ -37,7 +42,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner" | "giftFlip", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -52,6 +57,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
     entry: norm("entry", r.entry),
     anime: norm("anime", r.anime),
     banner: norm("banner", (r as any).banner),
+    giftFlip: norm("giftFlip", (r as any).giftFlip),
   };
 }
 /** 把片段秒数规整为非负有限数（0 = 未设置/从头/播到尾），非法值归 0。 */
@@ -83,11 +89,18 @@ export function resolveAnimeSegment(
 
 /**
  * 派生"总开关"：面板已无独立总开关，任一**画布显示子模块**（收到的礼物展示 / 礼物特效 /
- * 入场提示 / 入场动画 / 横幅）开启即视为开启（画布正常渲染），全部关闭即视为关闭（画布空白）。
+ * 入场提示 / 入场动画 / 横幅 / 礼物翻卡）开启即视为开启（画布正常渲染），全部关闭即视为关闭（画布空白）。
  * 注意：盲盒盈亏·弹幕查询与弹幕互动不参与触发（它们不显示在画布上）。
  */
 export function displayMaster(cfg: DisplayConfig): boolean {
-  return !!(cfg.gift || cfg.giftEffect?.enabled || cfg.entry || cfg.anime || cfg.banner?.enabled);
+  return !!(
+    cfg.gift ||
+    cfg.giftEffect?.enabled ||
+    cfg.entry ||
+    cfg.anime ||
+    cfg.banner?.enabled ||
+    cfg.giftFlip?.enabled
+  );
 }
 
 /**
@@ -120,6 +133,23 @@ function normalizeEntryLastSeen(raw: unknown): Record<string, number> {
   return out;
 }
 
+/** 规整礼物翻卡选项：文字截断到 10 字；图片仅接受 data:image/* 的 data URL（非 data URL 一律
+ *  丢弃，避免外部链接/注入）；数量裁剪到 [MIN, MAX]，不足用默认模板补齐、超出截断。 */
+function normalizeGiftFlipOptions(raw: unknown): GiftFlipOption[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const out: GiftFlipOption[] = list.map((o) => {
+    const item = (o ?? {}) as Partial<GiftFlipOption>;
+    const text = (typeof item.text === "string" ? item.text : "").slice(0, GIFT_FLIP_MAX_TEXT_LEN);
+    const img = typeof item.image === "string" ? item.image : "";
+    return { text, image: img.startsWith("data:image/") ? img : "" };
+  });
+  if (out.length === 0) return DEFAULT_GIFT_FLIP_OPTIONS.map((o) => ({ ...o }));
+  while (out.length < GIFT_FLIP_MIN_OPTIONS) {
+    out.push({ text: DEFAULT_GIFT_FLIP_OPTIONS[out.length % DEFAULT_GIFT_FLIP_OPTIONS.length].text, image: "" });
+  }
+  return out.slice(0, GIFT_FLIP_MAX_OPTIONS);
+}
+
 /** 解析一个可能残缺的配置对象，用默认值补齐缺失字段（向前兼容）。 */
 export function normalizeConfig(raw: unknown): DisplayConfig {
   const d = DEFAULT_DISPLAY_CONFIG;
@@ -145,6 +175,28 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       enabled: !!r.banner?.enabled,
       // 按钮文字限制 30 个字以内：超出截断，缺失用默认文案
       text: (typeof r.banner?.text === "string" ? r.banner.text : d.banner.text).slice(0, 30),
+    },
+    giftFlip: {
+      enabled: !!r.giftFlip?.enabled,
+      // 触发礼物：gift_id 非负整数，非法回退 0（未设置）
+      giftId:
+        Number.isFinite(Number(r.giftFlip?.giftId)) && Number(r.giftFlip?.giftId) > 0
+          ? Math.floor(Number(r.giftFlip?.giftId))
+          : 0,
+      giftName: typeof r.giftFlip?.giftName === "string" ? r.giftFlip.giftName.slice(0, 40) : "",
+      giftImg: typeof r.giftFlip?.giftImg === "string" ? r.giftFlip.giftImg : "",
+      // 触发数量：≥1 的整数（非法/缺失回退默认 1）
+      giftCount:
+        Number.isFinite(Number(r.giftFlip?.giftCount)) && Number(r.giftFlip?.giftCount) >= 1
+          ? Math.min(99999, Math.floor(Number(r.giftFlip?.giftCount)))
+          : d.giftFlip.giftCount,
+      options: normalizeGiftFlipOptions(r.giftFlip?.options),
+      // 待机显示选项文字：字段缺失（旧配置/首次）回退默认（不显示）
+      showText:
+        r.giftFlip?.showText === undefined ? d.giftFlip.showText : !!r.giftFlip.showText,
+      // 图片与选项固定：字段缺失（旧配置/首次）回退默认（固定对应）
+      lockMapping:
+        r.giftFlip?.lockMapping === undefined ? d.giftFlip.lockMapping : !!r.giftFlip.lockMapping,
     },
     entryFilter: {
       zongdu: !!r.entryFilter?.zongdu,

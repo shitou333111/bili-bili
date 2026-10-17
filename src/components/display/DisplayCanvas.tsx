@@ -28,6 +28,8 @@ import {
   type EntryColors,
   type EntryParticleMode,
   type GiftBarWidth,
+  type GiftFlipConfig,
+  type GiftFlipPhase,
   type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
@@ -46,6 +48,8 @@ import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
 import MovableBox from "./MovableBox";
 import BannerButton from "./BannerButton";
+import GiftFlipCarousel from "./GiftFlipCarousel";
+import GiftFlipReveal, { type GiftFlipActive } from "./GiftFlipReveal";
 
 type AnimeEvent = Extract<DisplayEvent, { type: "anime" }>;
 type GiftEffectEvent = Extract<DisplayEvent, { type: "giftEffect" }>;
@@ -162,6 +166,8 @@ type ServerMsg =
       entryColors: EntryColors;
       /** 礼物突出显示选择（giftId → 选中 uid 列表；点击 badge 时广播同步） */
       giftHighlight: GiftHighlight;
+      /** 礼物翻卡/抽奖模块配置（选项/触发礼物/是否显示文字） */
+      giftFlip: GiftFlipConfig;
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
@@ -176,6 +182,8 @@ type ServerMsg =
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "entryColors"; v: EntryColors }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
+  | { type: "giftFlipConfig"; v: GiftFlipConfig }
+  | { type: "giftFlipReset" }
   | { type: "celebrate" };
 
 /**
@@ -329,6 +337,15 @@ export default function DisplayCanvas() {
   const [entryColors, setEntryColors] = useState<EntryColors>(DEFAULT_ENTRY_COLORS);
   // 礼物突出显示选择（init/giftHighlight 消息下发）：giftId → 选中展示的 uid 列表（顺序=循环顺序）
   const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>({});
+  // 礼物翻卡/抽奖模块配置（init/giftFlipConfig 消息下发）
+  const [giftFlipCfg, setGiftFlipCfg] = useState<GiftFlipConfig>(DEFAULT_DISPLAY_CONFIG.giftFlip);
+  // 待播放的一次翻卡（event:giftFlip 下发；播完回执 giftFlipDone 并清空）
+  const [flipPlay, setFlipPlay] = useState<
+    ({ fan: { uid: number; uname: string; face: string }; optionIndex: number } & { seq: number }) | null
+  >(null);
+  // 翻卡分镜阶段 + 揭晓卡数据（由 GiftFlipCarousel 的 onPhase 上报；供画布根层居中渲染揭晓卡）
+  const [flipPhase, setFlipPhase] = useState<GiftFlipPhase>("idle");
+  const [flipActive, setFlipActive] = useState<GiftFlipActive | null>(null);
   // 朝向：由 init/orientation 消息驱动
   const [orientation, setOrientation] = useState<ScreenOrientation>("landscape");
   // 编辑模式（?mode=edit）：三个元素常驻，可拖/可缩放
@@ -341,6 +358,7 @@ export default function DisplayCanvas() {
     anime: true,
     giftEffect: true,
     banner: true,
+    giftFlip: true,
   });
   // flags 的最新 ref（供 applyEvent 读取，避免闭包过期）
   const flagsRef = useRef(flags);
@@ -433,6 +451,7 @@ export default function DisplayCanvas() {
         setGiftHighlight(
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
         );
+        setGiftFlipCfg(msg.giftFlip ?? DEFAULT_DISPLAY_CONFIG.giftFlip);
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -461,6 +480,10 @@ export default function DisplayCanvas() {
         setEntryColors(pickEntryColors(msg.v));
       } else if (msg.type === "giftHighlight") {
         setGiftHighlight(msg.giftHighlight ?? {});
+      } else if (msg.type === "giftFlipConfig") {
+        setGiftFlipCfg(msg.v ?? DEFAULT_DISPLAY_CONFIG.giftFlip);
+      } else if (msg.type === "giftFlipReset") {
+        // 面板「重置」：仅清空面板侧记录；画布侧待播/播放中的翻卡不作处理（主进程已复位调度）
       } else if (msg.type === "celebrate") {
         // 面板"撒花"按钮：模块开关关闭时不播放
         if (flagsRef.current.banner) startPartyRef.current();
@@ -503,6 +526,25 @@ export default function DisplayCanvas() {
     },
     [send, orientation],
   );
+
+  // 礼物翻卡：一次翻卡动画播完 → 回执主进程（带序号，防多端重复记账）并清空待播
+  const flipRef = useRef<typeof flipPlay>(null);
+  useEffect(() => {
+    flipRef.current = flipPlay;
+  }, [flipPlay]);
+  const onFlipDone = useCallback(() => {
+    const p = flipRef.current;
+    if (p) {
+      send({ type: "giftFlipDone", seq: p.seq, uid: p.fan.uid, optionIndex: p.optionIndex });
+    }
+    setFlipPlay(null);
+  }, [send]);
+
+  // 翻卡分镜阶段上报 → 驱动画布根层的居中揭晓卡（无论阵列在画布何处，揭晓都在画布中心）
+  const onFlipPhase = useCallback((phase: GiftFlipPhase, active: GiftFlipActive | null) => {
+    setFlipPhase(phase);
+    setFlipActive(active);
+  }, []);
 
   // —— 撒花（纸屑 + 飘带，一次性庆祝）—— 严格参照 scripts/banner-sample.html 的 party()：
   // 纸屑循环 7s（每 150ms 一发）+ 飘带循环 4s（每 250ms 一发）；期间防重入（面板重复
@@ -722,6 +764,10 @@ export default function DisplayCanvas() {
         giftEffectQueueRef.current = [...q, p];
         setGiftEffectWaiting(giftEffectQueueRef.current.length);
       }
+    } else if (p.type === "giftFlip") {
+      // 礼物翻卡模块关闭：忽略事件（主进程在关闭时已停止下发并复位调度，不会卡住）
+      if (!flagsRef.current.giftFlip) return;
+      setFlipPlay({ seq: p.seq, fan: p.fan, optionIndex: p.optionIndex });
     }
   }, []);
 
@@ -751,6 +797,11 @@ export default function DisplayCanvas() {
       setGiftEffectWaiting(0);
       setGiftEffect(null);
       setGiftEffectMeasured(null);
+    }
+    if (!flags.giftFlip) {
+      setFlipPlay(null);
+      setFlipActive(null);
+      setFlipPhase("idle");
     }
   }, [flags]);
 
@@ -1170,6 +1221,32 @@ export default function DisplayCanvas() {
           />
         </MovableBox>
       )}
+
+      {/* 礼物翻卡/礼物抽奖：3D 轮转卡片常驻（待机匀速自转；收到触发礼物达标时翻卡）。
+          位置/缩放在「编辑布局」中调整；编辑模式同样渲染真实轮转以便摆放。 */}
+      {flags.giftFlip && (
+        <MovableBox
+          id="giftFlip"
+          rect={layouts.giftFlip[orientation]}
+          onCommit={commitLayout("giftFlip")}
+          editable={isEdit}
+        >
+          <GiftFlipCarousel
+            options={giftFlipCfg.options}
+            giftImg={giftFlipCfg.giftImg}
+            giftCount={giftFlipCfg.giftCount}
+            showText={giftFlipCfg.showText}
+            lockMapping={giftFlipCfg.lockMapping}
+            play={flipPlay}
+            onDone={onFlipDone}
+            onPhase={onFlipPhase}
+          />
+        </MovableBox>
+      )}
+
+      {/* 翻卡揭晓：独立于可移动阵列，铺满整块画布并居中，保证无论阵列放在画布何处/多小，
+          选中的卡片都能在画布中心放大展示（含 pop/flip/hold/restore 过渡动画）。 */}
+      {flags.giftFlip && <GiftFlipReveal phase={flipPhase} active={flipActive} options={giftFlipCfg.options} />}
 
       {/* 入场提示：编辑模式常驻循环；否则当前有入场才显示 */}
       {flags.entry && (isEdit || currentEntry) && (
