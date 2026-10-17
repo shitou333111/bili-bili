@@ -2389,7 +2389,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       {/* 礼物翻卡 / 礼物抽奖：画布上的 3D 轮转卡片面板（可移动/缩放），送指定礼物达标随机翻一张 */}
       <section className="mt-4">
         <ModuleTitle
-          title="礼物翻卡 / 礼物抽奖"
+          title="礼物抽卡 / 礼物抽奖"
           onColor="bg-teal-500"
           checked={config.giftFlip.enabled}
           onToggle={(v) => void toggleModule({ giftFlip: { ...config.giftFlip, enabled: v } })}

@@ -3,10 +3,10 @@
 /**
  * 礼物搜索输入框（展示面板用）—— 输入名称 → 下拉匹配候选 → 点击选中返回 {id,name,img}。
  *
- * 候选来源 = 当前直播间的礼物列表（roomGiftList 的 gold_list，即直播间「礼物」选项卡），
- * 而非全量礼物目录：只显示该列表中的礼物（列表条目仅含 gift_id，名称/图标按 id 从本地
- * 礼物目录回查）。聚焦且未输入时展示几个常用默认候选（心动盲盒 / 幸运盲盒 / 情书 /
- * 告白花束 / 星愿水晶球），同样只能取自该列表。
+ * 候选来源 = 当前直播间的礼物列表（roomGiftList 的 gold_list，即直播间「礼物」选项卡）
+ *  + 盲盒爆出礼物（不在直播间列表中，按 id 从全量礼物目录回查），列表条目仅含 gift_id，
+ * 名称/图标一律按 id 从本地礼物目录回查。聚焦且未输入时展示几个常用默认候选
+ * （心动盲盒 / 绮彩权杖 / 幸运盲盒 / 梦雾纸签 / 情书 / 告白花束 / 星愿水晶球）。
  * 选中后由父级写入 giftId / giftName / giftImg；未点选直接失焦则回退到当前已选礼物。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -17,8 +17,24 @@ import {
   getRoomGiftData,
 } from "@/lib/gift-catalog-client";
 
-/** 默认候选礼物名（聚焦空输入时展示；在直播间礼物列表中按名称精确匹配取 id/img） */
-const DEFAULT_CANDIDATES = ["心动盲盒", "幸运盲盒", "情书", "告白花束", "星愿水晶球"];
+/** 默认候选礼物名（聚焦空输入时展示；在候选集中按名称精确匹配取 id/img）。
+ *  「绮彩权杖」紧随「心动盲盒」、「梦雾纸签」紧随「幸运盲盒」——即这两款盲盒的爆出礼物。 */
+const DEFAULT_CANDIDATES = [
+  "心动盲盒",
+  "绮彩权杖",
+  "幸运盲盒",
+  "梦雾纸签",
+  "情书",
+  "告白花束",
+  "星愿水晶球",
+];
+
+/** 盲盒爆出的礼物（不在直播间礼物列表中，故需单独按 id 从全量礼物目录回查名称/图标并并入候选）。
+ *  来源：public/gift-blindbox.json 两款盲盒的 rewards。 */
+const BLINDBOX_GIFT_IDS = [
+  32132, 35451, 32282, 32281, 32128, 32126, 32125, // 心动盲盒奖励
+  35211, 35210, 35209, 35208, 35311, 35207, // 幸运盲盒奖励
+];
 
 /** 一条候选：id + 名称 + 图标（id=0 表示直播间列表中未找到同名礼物，仅展示不可触发） */
 export interface GiftPick {
@@ -32,8 +48,8 @@ const inputBase =
   "w-full rounded-lg bg-white/70 px-2.5 py-0.5 text-sm text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#1f1c17]/15";
 
 /**
- * 当前直播间礼物列表的候选集：取 roomGiftList 的 gold_list 顺序（gift_id），
- * 按 id 从本地礼物目录回查名称与图标（列表条目本身不含名称/图标）。
+ * 候选集：当前直播间礼物列表（roomGiftList 的 gold_list 顺序，gift_id）+ 盲盒爆出礼物，
+ * 均按 id 从本地全量礼物目录回查名称与图标（列表条目本身不含名称/图标）。
  */
 function roomPicks(): GiftPick[] {
   const byId = new Map<number, { name: string; img: string }>();
@@ -42,16 +58,19 @@ function roomPicks(): GiftPick[] {
       byId.set(g.id, { name: g.name, img: g.img_basic || g.webp || g.gif || "" });
     }
   }
-  const ids = getRoomGiftData()?.room_gift_list?.gold_list?.map((g) => g.gift_id) ?? [];
   const out: GiftPick[] = [];
   const seen = new Set<number>();
-  for (const id of ids) {
-    if (!id || seen.has(id)) continue;
+  const add = (id: number) => {
+    if (!id || seen.has(id)) return;
     const hit = byId.get(id);
-    if (!hit) continue; // 目录中无该 id 的名称/图标则跳过
+    if (!hit) return; // 目录中无该 id 的名称/图标则跳过
     seen.add(id);
     out.push({ id, name: hit.name, img: hit.img });
-  }
+  };
+  const ids = getRoomGiftData()?.room_gift_list?.gold_list?.map((g) => g.gift_id) ?? [];
+  for (const id of ids) add(id);
+  // 盲盒爆出礼物不在直播间礼物列表中，单独按 id 从全量目录补充进可搜索候选
+  for (const id of BLINDBOX_GIFT_IDS) add(id);
   return out;
 }
 

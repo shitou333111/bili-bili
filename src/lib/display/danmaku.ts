@@ -1735,7 +1735,7 @@ class DisplayDanmakuService {
 
     // 礼物翻卡/抽奖：该礼物恰为触发礼物时，为送礼粉丝独立累计，达标即调度一张翻卡
     // （独立于"收到的礼物展示"开关，放在其提前 return 之前）
-    await this.maybeTriggerGiftFlip(mid, config, { uid, uname, face }, Number(d.num) || 1);
+    await this.maybeTriggerGiftFlip(mid, config, giftId, { uid, uname, face }, Number(d.num) || 1);
 
     if (!config.gift) return;
 
@@ -1778,17 +1778,20 @@ class DisplayDanmakuService {
   }
 
   /**
-   * 礼物翻卡：收到触发礼物时为该粉丝独立累计，达标即尝试调度一张翻卡。
-   * 配置未开启 / 未设触发礼物 / 非送礼粉丝 → 直接跳过。
+   * 礼物翻卡：收到**触发礼物**时为该粉丝独立累计，达标即尝试调度一张翻卡。
+   * 配置未开启 / 未设触发礼物 / 本次礼物并非该触发礼物 / 非送礼粉丝 → 直接跳过。
    */
   private async maybeTriggerGiftFlip(
     mid: number,
     config: DisplayConfig,
+    giftId: number,
     fan: { uid: number; uname: string; face: string },
     num: number,
   ): Promise<void> {
     const gf = config.giftFlip;
     if (!gf?.enabled || gf.giftId <= 0) return;
+    // 只对配置的触发礼物累计：否则任意礼物都会触发（回归 bug 根因）
+    if (Math.floor(giftId) !== gf.giftId) return;
     const uid = Math.floor(fan.uid);
     if (uid <= 0) return;
     const { added } = await accumulateGiftFlip(mid, gf.giftCount, { ...fan, uid }, num);
