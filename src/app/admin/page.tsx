@@ -270,6 +270,19 @@ export default function AdminPage() {
   // 全局访问开关：disabled=true 时切断所有客户端对 /api/* 的访问（放行 /api/admin/*），用于出 BUG 时紧急止损
   const [globalSwitchDisabled, setGlobalSwitchDisabled] = useState(false);
   const [globalSwitchToggling, setGlobalSwitchToggling] = useState(false);
+  // 主播信息查询：输入 UID，一次并行调用直播间状态 + 昵称两个公开接口，整合去重后统一展示
+  const [anchorUid, setAnchorUid] = useState("");
+  const [anchorQuerying, setAnchorQuerying] = useState(false);
+  const [anchorResult, setAnchorResult] = useState<{
+    uid: number;
+    uname: string;
+    face: string;
+    roomId: number; // 两个接口都返回房间号（roomid / room_id），去重后只取一个
+    roomStatus: number | null; // 0=无房 / 1=有房（接口失败时为 null，不展示该徽章）
+    live_status: number;
+    title: string;
+  } | null>(null);
+  const [anchorError, setAnchorError] = useState("");
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -653,6 +666,51 @@ export default function AdminPage() {
       window.alert("网络错误，操作失败");
     } finally {
       setGlobalSwitchToggling(false);
+    }
+  };
+
+  /**
+   * 按 UID 查询主播信息：并行请求两个公开接口并整合去重。
+   * - GET /api/medical/room-id?mid=<uid>   → roomid + roomStatus（0=无房 / 1=有房，即"是否为主播"的依据）
+   * - GET /api/tools/streamer-info?uid=<uid> → 昵称/头像/房间号/开播状态/标题
+   * 房间号两边都有，去重只展示一个；两个都失败才报错，单边失败用另一边结果兜底。
+   */
+  const queryAnchorInfo = async () => {
+    const uid = Number(anchorUid.trim());
+    if (!uid || uid <= 0) {
+      setAnchorError("请输入正确的 UID");
+      setAnchorResult(null);
+      return;
+    }
+    setAnchorQuerying(true);
+    setAnchorError("");
+    setAnchorResult(null);
+    try {
+      const [roomRes, infoRes] = await Promise.all([
+        adminFetch(serverApiUrl(`/api/medical/room-id?mid=${uid}`), { cache: "no-store" }),
+        adminFetch(serverApiUrl(`/api/tools/streamer-info?uid=${uid}`), { cache: "no-store" }),
+      ]);
+      const [roomData, infoData] = await Promise.all([roomRes.json(), infoRes.json()]);
+      const roomOk = roomData.code === 0;
+      const infoOk = infoData.code === 0;
+      if (!roomOk && !infoOk) {
+        setAnchorError(roomData.message || infoData.message || "查询失败");
+        return;
+      }
+      setAnchorResult({
+        uid: infoOk ? infoData.data?.uid ?? uid : uid,
+        uname: infoOk ? infoData.data?.uname ?? "" : "",
+        face: infoOk ? infoData.data?.face ?? "" : "",
+        // 去重：优先用昵称接口的 room_id，缺失时回落到直播间状态接口的 roomid
+        roomId: (infoOk ? infoData.data?.room_id : 0) || (roomOk ? roomData.data?.roomid : 0) || 0,
+        roomStatus: roomOk ? roomData.data?.roomStatus ?? 0 : null,
+        live_status: infoOk ? infoData.data?.live_status ?? 0 : 0,
+        title: infoOk ? infoData.data?.title ?? "" : "",
+      });
+    } catch {
+      setAnchorError("网络错误，查询失败");
+    } finally {
+      setAnchorQuerying(false);
     }
   };
 
@@ -1509,6 +1567,67 @@ export default function AdminPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* 主播信息查询（直播间状态 + 昵称两个公开接口并行查询，整合去重展示） */}
+        <div className="rounded-xl border border-black/10 bg-white/80 p-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-bold">主播信息查询</h2>
+            <span className="text-[10px] text-black/35">/api/medical/room-id + /api/tools/streamer-info</span>
+          </div>
+          <p className="text-[10px] text-black/40">
+            输入 UID，一次查询直播间状态（是否为主播）与昵称/头像/开播状态。公开接口，无需登录凭证。
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={anchorUid}
+              onChange={(e) => setAnchorUid(e.target.value.replace(/[^\d]/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && queryAnchorInfo()}
+              placeholder="输入 UID"
+              className="flex-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-xs focus:outline-none focus:border-black/30"
+            />
+            <button
+              onClick={queryAnchorInfo}
+              disabled={anchorQuerying}
+              className="flex-shrink-0 rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50"
+            >
+              {anchorQuerying ? "查询中…" : "查询"}
+            </button>
+          </div>
+          {anchorError && <p className="text-[11px] text-[#e74c3c]">{anchorError}</p>}
+          {anchorResult && (
+            <div className="flex items-center gap-2 rounded-lg border border-black/10 bg-black/[0.02] px-2 py-1.5">
+              {anchorResult.face ? (
+                <img src={fixImageUrl(anchorResult.face)} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
+              ) : (
+                <div className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-medium truncate">{anchorResult.uname || "未获取到昵称"}</span>
+                  {anchorResult.roomStatus !== null && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${
+                        anchorResult.roomStatus === 1 ? "bg-[#e54d4c]/10 text-[#e54d4c]" : "bg-black/5 text-black/40"
+                      }`}
+                    >
+                      {anchorResult.roomStatus === 1 ? "有房 · 主播" : "无房 · 非主播"}
+                    </span>
+                  )}
+                  <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 bg-black/5 text-black/50">
+                    {anchorResult.live_status === 1 ? "直播中" : anchorResult.live_status === 2 ? "轮播" : "未开播"}
+                  </span>
+                </div>
+                <div className="text-[10px] text-black/35 mt-0.5">
+                  UID {anchorResult.uid} · 房间 {anchorResult.roomId || "无"}
+                  {anchorResult.roomStatus !== null && ` · roomStatus=${anchorResult.roomStatus}`}
+                  {anchorResult.title && <span className="truncate"> · {anchorResult.title}</span>}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -2540,6 +2659,39 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        {/* 全局访问开关（kill switch）：左侧按钮一键切断/恢复
+            「所有客户端对服务器 API 的访问」（放行 /api/admin/*，管理后台始终可用），
+            右侧为状态与文字说明。发布后出 BUG 时的紧急止损保底措施。 */}
+        <div className="rounded-xl border border-black/10 bg-white/80 p-2">
+          <div className="flex items-stretch gap-3">
+            <button
+              type="button"
+              onClick={() => toggleGlobalSwitch(!globalSwitchDisabled)}
+              disabled={globalSwitchToggling}
+              className={`flex-shrink-0 h-16 w-16 rounded-full border text-[11px] leading-tight font-medium transition active:scale-95 disabled:opacity-60 ${
+                globalSwitchDisabled
+                  ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
+                  : "border-black/10 bg-white text-black/70 hover:bg-black/5"
+              }`}
+            >
+              {globalSwitchToggling ? "处理中…" : globalSwitchDisabled ? "恢复访问" : "切断访问"}
+            </button>
+            <div className="min-w-0 flex-1 flex flex-col justify-center">
+              <div className="flex items-center gap-1.5 text-xs font-medium">
+                全局访问开关
+                <span className={globalSwitchDisabled ? "text-[#e74c3c]" : "text-[#2ecc71]"}>
+                  {globalSwitchDisabled ? "已切断" : "正常"}
+                </span>
+              </div>
+              <p className="text-[10px] text-black/40 mt-0.5">
+                {globalSwitchDisabled
+                  ? "所有客户端对服务器 API 的访问已切断（管理后台仍可用）。点击按钮恢复。"
+                  : "切断后所有客户端无法访问服务器 API（管理后台仍可用），用于出 BUG 时紧急止损。"}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* 算法参数全屏编辑器：PC 端避开顶部窗口标题栏（DESKTOP_TITLEBAR_H），移动端/浏览器全屏 */}
@@ -2614,28 +2766,6 @@ export default function AdminPage() {
           </div>
         </div>
       )}
-
-      {/* 全局访问开关（kill switch）：独立于各功能模块，用一枚圆形按钮一键切断/恢复
-          「所有客户端对服务器 API 的访问」（放行 /api/admin/*，管理后台始终可用）。
-          这是发布后出现 BUG 时的紧急止损保底措施，故不隶属于抽奖模块。 */}
-      <button
-        type="button"
-        onClick={() => toggleGlobalSwitch(!globalSwitchDisabled)}
-        disabled={globalSwitchToggling}
-        title={
-          globalSwitchDisabled
-            ? "全局访问已切断（仅管理后台可用）· 点击恢复"
-            : "全局访问正常 · 点击切断所有客户端对服务器的访问"
-        }
-        aria-label="全局访问开关"
-        className={`fixed right-5 bottom-5 z-[9998] flex h-14 w-14 items-center justify-center rounded-full border text-2xl shadow-[0_8px_24px_rgba(0,0,0,0.22)] transition active:scale-95 ${
-          globalSwitchDisabled
-            ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
-            : "border-black/10 bg-white text-black/70 hover:bg-black/5"
-        } ${globalSwitchToggling ? "opacity-60" : ""}`}
-      >
-        {globalSwitchToggling ? "…" : globalSwitchDisabled ? "⛔" : "🌐"}
-      </button>
     </div>
   );
 }
