@@ -92,8 +92,14 @@ jobs:
           # 关键：Next.js 16 + Turbopack 的 standalone 产物缺少 .next/server/chunks
           # （SSR chunks），server.js 运行时 require 不到会全站 500（Cannot find module）。
           # 从完整构建输出补入，修复部署后无法加载 SSR chunk 的问题。
-          mkdir -p deploy-dist/.next/server
-          cp -r .next/server/chunks deploy-dist/.next/server/chunks
+          #
+          # 注意：standalone 产物现在自带 .next/server/chunks（Node 运行时 middleware
+          # 的依赖 chunk：middleware.js 会 require ./chunks/*），因此目标目录一定已存在。
+          # 此时 `cp -r src/chunks dst/chunks` 会把内容再嵌套一层（dst/chunks/chunks/...），
+          # SSR chunk 仍找不到 → 所有 API 路由 ChunkLoadError → 全站 500。
+          # 必须用 `chunks/.` 指向「内容」做合并拷贝。
+          mkdir -p deploy-dist/.next/server/chunks
+          cp -r .next/server/chunks/. deploy-dist/.next/server/chunks/
 
           # 复制 public 目录
           if [ -d public ]; then
