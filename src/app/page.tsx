@@ -1616,6 +1616,8 @@ export default function HomePage() {
   const coldStartUpdateCalled = useRef(false);
   /** 原生更新防砖确认弹窗：点击安装前提示失败回退方案 */
   const [showNativeConfirm, setShowNativeConfirm] = useState(false);
+  /** 粉丝牌「一键清理非舰粉丝牌」危险操作确认弹窗（删除大量粉丝牌不可逆，需二次确认） */
+  const [showMedalCleanConfirm, setShowMedalCleanConfirm] = useState(false);
 
   // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
   // 否则服务端渲染(false)与客户端首次渲染(true)不一致会触发 Hydration 报错，
@@ -2682,13 +2684,16 @@ export default function HomePage() {
     });
   }
 
-  async function removeSelectedMedals() {
-    if (medalsSelected.size === 0) return;
+  async function removeSelectedMedals(ids?: number[]) {
+    // ids 可显式传入（如「一键清理非舰粉丝牌」直接给出可删除列表），否则用当前勾选的粉丝牌。
+    // 显式传入避免 setState 后立即调用读到旧 state（闭包过期）导致一次清理无效。
+    const targets = ids ?? Array.from(medalsSelected);
+    if (targets.length === 0) return;
     setMedalsRemoving(true);
     setMedalsMsg("");
     let success = 0;
     let failed = 0;
-    for (const medalId of medalsSelected) {
+    for (const medalId of targets) {
       try {
         const res = await dataFetch("/api/tools/delete-medal", {
           method: "POST",
@@ -2707,7 +2712,7 @@ export default function HomePage() {
         failed++;
       }
     }
-    setMedalsMsg(`已删除 ${success}/${medalsSelected.size}${failed > 0 ? `，失败 ${failed}` : ""}`);
+    setMedalsMsg(`已删除 ${success}/${targets.length}${failed > 0 ? `，失败 ${failed}` : ""}`);
     setMedalsSelected(new Set());
     setMedalsSelectMode(false);
     setMedalsRemoving(false);
@@ -4156,6 +4161,40 @@ export default function HomePage() {
               document.body
             )}
 
+            {/* 粉丝牌「一键清理非舰粉丝牌」危险操作确认弹窗：删除大量粉丝牌不可逆，二次确认 */}
+            {showMedalCleanConfirm && createPortal(
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowMedalCleanConfirm(false)}>
+                <div className="rounded-xl border border-black/10 bg-white p-5 shadow-xl w-[320px] mx-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="mb-4">
+                    <h3 className="text-base font-semibold text-[#e74c3c] text-center">⚠️ 确认清理非舰粉丝牌？</h3>
+                    <p className="mt-3 text-sm text-black/70 leading-relaxed">
+                      此操作会删除你所有舰长以外的粉丝牌，这是个危险操作，谨慎！如果你想删除大量但不是全部的粉丝牌，可以点击“选择”中的全选，然后再剔除想保留的粉丝牌即可
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const deletable = medalsList.filter((i) => i.medal.can_delete).map((i) => i.medal.medal_id);
+                        setMedalsSelected(new Set(deletable));
+                        setShowMedalCleanConfirm(false);
+                        removeSelectedMedals(deletable);
+                      }}
+                      className="flex-1 rounded-lg bg-[#e74c3c] py-2.5 text-sm text-white font-semibold hover:opacity-90 transition"
+                    >
+                      确认清理
+                    </button>
+                    <button
+                      onClick={() => setShowMedalCleanConfirm(false)}
+                      className="flex-1 rounded-lg border border-black/10 py-2.5 text-sm text-black/60 hover:bg-gray-50 transition"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
             {/* 粉丝清理 */}
             {activeModule === "screenshot" && toolsPage === "fans" && (
               <div className="space-y-3">
@@ -4294,7 +4333,7 @@ export default function HomePage() {
                 {/* 操作按钮 */}
                 {medalsList.length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={() => { const deletable = medalsList.filter((i) => i.medal.can_delete); setMedalsSelected(new Set(deletable.map((i) => i.medal.medal_id))); removeSelectedMedals(); }} disabled={medalsRemoving} className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50">
+                    <button onClick={() => setShowMedalCleanConfirm(true)} disabled={medalsRemoving} className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50">
                       一键清理非舰粉丝牌
                     </button>
                     {medalsSelectMode ? (
@@ -4305,7 +4344,7 @@ export default function HomePage() {
                         ) : (
                           <button onClick={() => setMedalsSelected(new Set(medalsList.filter((i) => i.medal.can_delete).map((i) => i.medal.medal_id)))} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs text-black/70 hover:bg-gray-50 transition">全选可删除</button>
                         )}
-                        <button onClick={removeSelectedMedals} disabled={medalsSelected.size === 0 || medalsRemoving} className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50">
+                        <button onClick={() => removeSelectedMedals()} disabled={medalsSelected.size === 0 || medalsRemoving} className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50">
                           {medalsRemoving ? "处理中..." : `移除选中 (${medalsSelected.size})`}
                         </button>
                       </>

@@ -338,7 +338,12 @@ function pbMsg(fields: PbField[], field: number): PbField[] | null {
  *  gift_info=35（内含 img_basic=1）。盲盒一次打包多条 gift_list（爆出礼物逐条）。
  *  输出与 bili-live-listener 的 GiftData 对齐（d.user.uid/uname/face、d.giftId、
  *  d.giftName、d.price、d.num、d.coinType、d.timestamp），并附 d.img 直链图标，
- *  可直接复用 handleGift。data 非 pb 结构（无 data.pb）返回 null，由调用方回退 JSON。 */
+ *  可直接复用 handleGift。data 非 pb 结构（无 data.pb）返回 null，由调用方回退 JSON。
+ *
+ *  【盲盒】盲盒本身不在 gift_list 里：gift_list 是「爆出的礼物」（如送"幸运盲盒"爆出"星光铃铛"），
+ *  盲盒自身信息在顶层 blind_gift=9（探针实测：name=3、price=6；original_gift_id=1 作兜底）。
+ *  因此这里把盲盒的 id/name 一并挂到每条爆出礼物上（blindGiftId/blindGiftName），
+ *  供礼物翻卡按「盲盒本身」而非「爆出礼物」判定触发（详见 maybeTriggerGiftFlip）。 */
 function parseGiftV2Pb(data: any): any[] | null {
   const pbB64 = data?.pb;
   if (typeof pbB64 !== "string" || !pbB64) return null;
@@ -352,6 +357,9 @@ function parseGiftV2Pb(data: any): any[] | null {
   const uid = pbInt(fields, 1);
   const uname = pbStr(fields, 2);
   const face = pbStr(fields, 3);
+  const blind = pbMsg(fields, 9);
+  const blindGiftId = blind ? pbInt(blind, 1) : 0;
+  const blindGiftName = blind ? pbStr(blind, 3) : "";
   const items = fields.filter((f) => f.field === 10 && f.wire === 2);
   if (!items.length) return [];
   const out: any[] = [];
@@ -368,6 +376,9 @@ function parseGiftV2Pb(data: any): any[] | null {
       coinType: pbStr(gf, 8) || "gold",
       timestamp: pbInt(gf, 10),
       img: gi ? pbStr(gi, 1) : "",
+      // 盲盒本身（仅盲盒包带；普通礼物为空/0）：供触发判定匹配「盲盒」而非「爆出礼物」
+      blindGiftId,
+      blindGiftName,
     });
   }
   return out;
@@ -1702,6 +1713,12 @@ class DisplayDanmakuService {
     const payload = raw?.data || {};
     const gi = payload?.gift_info || {};
     const asset = payload?.asset || {};
+    // 盲盒本身：旧协议 JSON 在 raw.data.blind_gift（original_gift_id/original_gift_name）；
+    // 新协议 SEND_GIFT_V2 由 parseGiftV2Pb 从 blind_gift(field 9) 解出并挂到 d.blindGiftId/Name。
+    // 盲盒包的 gift_list 里是「爆出的礼物」，盲盒自身靠这两个字段识别（详见 maybeTriggerGiftFlip）。
+    const blindRaw = payload?.blind_gift || {};
+    const blindGiftId = Number(d.blindGiftId) || Number(blindRaw.original_gift_id) || 0;
+    const blindGiftName = String(d.blindGiftName || blindRaw.original_gift_name || "");
     const rawImg = String(gi.gif || gi.img_basic || asset.gif || asset.img_basic || asset.gift_img || d.img || "");
     // 少数老版本/特殊礼物可能不带 gift_info，回退礼物目录现查（Map 读取，非网络），保证记录图标不空
     const giftImg = rawImg || getGiftImg(giftId);
@@ -1734,8 +1751,15 @@ class DisplayDanmakuService {
     }
 
     // 礼物翻卡/抽奖：该礼物恰为触发礼物时，为送礼粉丝独立累计，达标即调度一张翻卡
-    // （独立于"收到的礼物展示"开关，放在其提前 return 之前）
-    await this.maybeTriggerGiftFlip(mid, config, giftId, { uid, uname, face }, Number(d.num) || 1);
+    // （独立于"收到的礼物展示"开关，放在其提前 return 之前；盲盒按「盲盒本身」判定）
+    await this.maybeTriggerGiftFlip(
+      mid,
+      config,
+      giftId,
+      { uid, uname, face },
+      Number(d.num) || 1,
+      { id: blindGiftId, name: blindGiftName },
+    );
 
     if (!config.gift) return;
 
@@ -1780,6 +1804,10 @@ class DisplayDanmakuService {
   /**
    * 礼物翻卡：收到**触发礼物**时为该粉丝独立累计，达标即尝试调度一张翻卡。
    * 配置未开启 / 未设触发礼物 / 本次礼物并非该触发礼物 / 非送礼粉丝 → 直接跳过。
+   *
+   * 【盲盒】盲盒包的 gift_list 是「爆出的礼物」（如"星光铃铛"），盲盒本身另在 blind_gift 里。
+   * 因此除按爆出礼物 id 判定外，还按**盲盒本身**判定：盲盒 id 命中、或盲盒名称等于配置的
+   * 触发礼物名（gf.giftName）即算触发——否则配了"幸运盲盒"却只会拿到爆出礼物 id，永远不触发。
    */
   private async maybeTriggerGiftFlip(
     mid: number,
@@ -1787,11 +1815,15 @@ class DisplayDanmakuService {
     giftId: number,
     fan: { uid: number; uname: string; face: string },
     num: number,
+    blind: { id: number; name: string } = { id: 0, name: "" },
   ): Promise<void> {
     const gf = config.giftFlip;
     if (!gf?.enabled || gf.giftId <= 0) return;
-    // 只对配置的触发礼物累计：否则任意礼物都会触发（回归 bug 根因）
-    if (Math.floor(giftId) !== gf.giftId) return;
+    // 命中判定：① 礼物/盲盒 id 等于配置触发 id；② 盲盒名称等于配置触发礼物名。
+    // 普通礼物按 ①；盲盒按 ①/②（gift_list 是爆出礼物，靠 blind 信息识别盲盒本身）。
+    const hitById = Math.floor(giftId) === gf.giftId || (blind.id > 0 && Math.floor(blind.id) === gf.giftId);
+    const hitByName = blind.name !== "" && gf.giftName !== "" && blind.name === gf.giftName;
+    if (!hitById && !hitByName) return;
     const uid = Math.floor(fan.uid);
     if (uid <= 0) return;
     const { added } = await accumulateGiftFlip(mid, gf.giftCount, { ...fan, uid }, num);
