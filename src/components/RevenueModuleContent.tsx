@@ -343,6 +343,16 @@ const ANTI_KILL_NEON = ["#ff2d78", "#00d9ff", "#b967ff", "#ff5722", "#ff9800", "
 /** 防氪值满分彩虹渐变 */
 const ANTI_KILL_RAINBOW = "linear-gradient(135deg,#ff2d78 0%,#ff9800 20%,#facc15 40%,#22c55e 60%,#38bdf8 80%,#7c4dff 100%)";
 
+/**
+ * 电池数显示：与「主播」页「总收益」卡片口径一致（AnchorDataModule 的 formatBattery），
+ * 满 10 万以「万」为单位保留 1 位小数，否则显示整数；不使用千分位分隔符。
+ * 注意：入参已是电池数（不再做 hamster/100 换算）。
+ */
+function formatBatteryShort(battery: number): string {
+  if (battery >= 100000) return `${(battery / 10000).toFixed(1)}万`;
+  return String(battery);
+}
+
 /** 防氪值分级：彩虹(满分) / 绿(游刃有余) / 黄(再接再厉) / 红(从头开始) */
 function antiKillTier(value: number): { label: string; color: string } {
   if (value >= 10000) return { label: "已臻化境", color: "rainbow" };
@@ -816,11 +826,11 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                       )}
                     </div>
                   </div>
-                  <div className="mt-1 text-xl font-semibold">{consumptionCoins.toLocaleString()}</div>
+                  <div className="mt-1 text-xl font-semibold">{formatBatteryShort(consumptionCoins)}</div>
                 </div>
                 <div className="rounded-lg border border-black/10 bg-[#fff7ef] p-3">
                   <div className="text-xs text-black/45">消费次数</div>
-                  <div className="mt-1 text-xl font-semibold">{consumptionCount.toLocaleString()}</div>
+                  <div className="mt-1 text-xl font-semibold">{formatBatteryShort(consumptionCount)}</div>
                 </div>
                 <div className="rounded-lg border border-black/10 bg-[#f0f7ee] p-3">
                   <div className="text-xs text-black/45">礼物种类</div>
@@ -1182,7 +1192,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                         : actualDateRange ? `${actualDateRange.start} ~ ${actualDateRange.end}` : "全部时间"}
                     </span>
                     <span className="ml-2 text-xs font-semibold text-black/65">
-                      {giftListSpendingTotal}电池
+                      {formatBatteryShort(giftListSpendingTotal)}电池
                     </span>
                   </h3>
                   {monthGiftSummaryNew.length > 0 && (
@@ -1702,7 +1712,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                       </div>
                       <div className="rounded-lg border border-black/10 bg-[#f5f0f7] p-2 text-center">
                         <div className="text-[10px] text-black/45">总价值(电池)</div>
-                        <div className="text-lg font-semibold">{otherStats.giftStats.totalValue.toLocaleString()}</div>
+                        <div className="text-lg font-semibold">{otherStats.giftStats.totalValue}</div>
                       </div>
                     </div>
                     <div className="overflow-hidden rounded-lg border border-black/10">

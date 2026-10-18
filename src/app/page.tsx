@@ -860,6 +860,8 @@ const LIKE_TOOL: ToolDef = { icon: "/like.png", title: "助力主播 自动点�
 const LOTTERY_TOOL: ToolDef = { icon: "/tianxuan.png", title: "自动抢天选和红包", desc: "指定直播间，自动抢天选福袋和红包", needsLogin: true };
 const FANS_CLEAN_TOOL: ToolDef = { icon: "🧹", title: "粉丝清理", desc: "管理粉丝列表，一键清理非互关粉丝或批量移除指定粉丝", needsLogin: true };
 const MEDAL_CLEAN_TOOL: ToolDef = { icon: "/fans-icon.png", title: "粉丝牌清理", desc: "管理粉丝勋章，批量清理粉丝牌，不用读秒等待", needsLogin: true };
+/** 粉丝牌「按等级选择」全量拉分页的安全上限（接口每页 10 条，即最多 1000 个粉丝牌） */
+const MEDALS_MAX_PAGES = 100;
 const REVIVE_SHOT_TOOL: ToolDef = { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false };
 const MEDICAL_TOOL: ToolDef = { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false };
 const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "每月自动领取年度大会员赠送的5个B币，并全部兑换为直播电池", needsLogin: true };
@@ -1618,6 +1620,8 @@ export default function HomePage() {
   const [showNativeConfirm, setShowNativeConfirm] = useState(false);
   /** 粉丝牌「一键清理非舰粉丝牌」危险操作确认弹窗（删除大量粉丝牌不可逆，需二次确认） */
   const [showMedalCleanConfirm, setShowMedalCleanConfirm] = useState(false);
+  /** 粉丝清理危险操作确认弹窗：''=关闭，"all"=一键清理全部，"nonmutual"=一键清理非互关 */
+  const [fansCleanConfirm, setFansCleanConfirm] = useState<"" | "all" | "nonmutual">("");
 
   // 避免 SSR/客户端不一致：localStorage 只在客户端 useEffect 中读取，
   // 否则服务端渲染(false)与客户端首次渲染(true)不一致会触发 Hydration 报错，
@@ -1757,10 +1761,11 @@ export default function HomePage() {
   const [medalsHasMore, setMedalsHasMore] = useState(false);
   const [medalsTotal, setMedalsTotal] = useState(0);
   const [medalsLoading, setMedalsLoading] = useState(false);
-  const [medalsMsg, setMedalsMsg] = useState("");
   const [medalsRemoving, setMedalsRemoving] = useState(false);
   const [medalsSelectMode, setMedalsSelectMode] = useState(false);
   const [medalsSelected, setMedalsSelected] = useState<Set<number>>(new Set());
+  /** 按等级选择用的输入值（1-99）：选中「低于该等级」的粉丝牌 */
+  const [medalLevelInput, setMedalLevelInput] = useState("");
 
   const [showCastleModal, setShowCastleModal] = useState(false);
   const [selectedCastleStat, setSelectedCastleStat] = useState<CastleStat | null>(null);
@@ -2632,7 +2637,6 @@ export default function HomePage() {
 
   async function loadMedals(page: number, append = false) {
     setMedalsLoading(true);
-    setMedalsMsg("");
     try {
       const res = await dataFetch(`/api/tools/medals?page=${page}`, { cache: "no-store" });
       const data = await res.json();
@@ -2643,10 +2647,10 @@ export default function HomePage() {
         setMedalsHasMore(data.data.page_info?.has_more || false);
         setMedalsTotal(data.data.total_number || 0);
       } else {
-        setMedalsMsg(data.message || "加载失败");
+        showToast(data.message || "加载失败", "error");
       }
     } catch {
-      setMedalsMsg("网络错误");
+      showToast("网络错误", "error");
     } finally {
       setMedalsLoading(false);
     }
@@ -2654,7 +2658,6 @@ export default function HomePage() {
 
   async function deleteMedal(medalId: number) {
     setMedalsRemoving(true);
-    setMedalsMsg("");
     try {
       const res = await dataFetch("/api/tools/delete-medal", {
         method: "POST",
@@ -2666,10 +2669,10 @@ export default function HomePage() {
         setMedalsList((prev) => prev.filter((m) => m.medal.medal_id !== medalId));
         setMedalsTotal((prev) => prev - 1);
       } else {
-        setMedalsMsg(`删除失败: ${data.message}`);
+        showToast(`删除失败: ${data.message}`, "error");
       }
     } catch {
-      setMedalsMsg("网络错误");
+      showToast("网络错误", "error");
     } finally {
       setMedalsRemoving(false);
     }
@@ -2690,7 +2693,6 @@ export default function HomePage() {
     const targets = ids ?? Array.from(medalsSelected);
     if (targets.length === 0) return;
     setMedalsRemoving(true);
-    setMedalsMsg("");
     let success = 0;
     let failed = 0;
     for (const medalId of targets) {
@@ -2712,10 +2714,50 @@ export default function HomePage() {
         failed++;
       }
     }
-    setMedalsMsg(`已删除 ${success}/${targets.length}${failed > 0 ? `，失败 ${failed}` : ""}`);
+    showToast(`已删除 ${success}/${targets.length}${failed > 0 ? `，失败 ${failed}` : ""}`, failed > 0 ? "error" : "info");
     setMedalsSelected(new Set());
     setMedalsSelectMode(false);
     setMedalsRemoving(false);
+  }
+
+  /**
+   * 拉取全部分页的粉丝牌（接口每页 10 条）：用于「按等级选择」需覆盖全部而非仅已加载页。
+   * 循环到 has_more=false 或达到安全上限，结果同时写回 medalsList（列表变为全量、可查看），
+   * 并返回全量数组供调用方立即筛选（避免读到未更新的 state）。
+   */
+  async function loadAllMedals(): Promise<MedalItem[]> {
+    setMedalsLoading(true);
+    let acc: MedalItem[] = [];
+    try {
+      let page = 1;
+      let hasMore = true;
+      while (hasMore && page <= MEDALS_MAX_PAGES) {
+        const res = await dataFetch(`/api/tools/medals?page=${page}`, { cache: "no-store" });
+        const data = await res.json();
+        if (data.code !== 0 || !data.data) break;
+        acc = [...acc, ...(data.data.list || []), ...(data.data.special_list || [])];
+        hasMore = !!data.data.page_info?.has_more;
+        page++;
+      }
+      setMedalsList(acc);
+      setMedalsPage(page - 1);
+      setMedalsHasMore(false);
+      setMedalsTotal(acc.length);
+    } catch {
+      showToast("网络错误", "error");
+    } finally {
+      setMedalsLoading(false);
+    }
+    return acc;
+  }
+
+  /** 按等级选择：选中全部粉丝牌中「可删除且等级 < 输入值」的项（输入需为 1-99 的整数） */
+  async function selectMedalsBelowLevel() {
+    const n = Number(medalLevelInput);
+    if (!Number.isInteger(n) || n < 1 || n > 99) return; // 非法输入直接不执行
+    const all = await loadAllMedals();
+    const ids = all.filter((i) => i.medal.can_delete && i.medal.level < n).map((i) => i.medal.medal_id);
+    setMedalsSelected(new Set(ids));
   }
 
   // ===== 助力主播 自动点赞 =====
@@ -4219,14 +4261,14 @@ export default function HomePage() {
                 {fansList.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() => removeFans(fansList.map((f) => f.mid))}
+                      onClick={() => setFansCleanConfirm("all")}
                       disabled={fansRemoving}
                       className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50"
                     >
                       一键清理全部
                     </button>
                     <button
-                      onClick={() => removeFans(fansList.filter((f) => (f.attribute & 0x02) === 0).map((f) => f.mid))}
+                      onClick={() => setFansCleanConfirm("nonmutual")}
                       disabled={fansRemoving}
                       className="rounded-lg bg-[#e67e22] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50"
                     >
@@ -4253,6 +4295,46 @@ export default function HomePage() {
                       </>
                     )}
                   </div>
+                )}
+
+                {/* 粉丝清理危险操作确认弹窗：清空全部/非互关均不可逆，二次确认 */}
+                {fansCleanConfirm !== "" && createPortal(
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setFansCleanConfirm("")}>
+                    <div className="rounded-xl border border-black/10 bg-white p-5 shadow-xl w-[320px] mx-4" onClick={(e) => e.stopPropagation()}>
+                      <div className="mb-4">
+                        <h3 className="text-base font-semibold text-[#e74c3c] text-center">
+                          {fansCleanConfirm === "all" ? "⚠️ 确认清理全部粉丝？" : "⚠️ 确认清理非互关粉丝？"}
+                        </h3>
+                        <p className="mt-3 text-sm text-black/70 leading-relaxed">
+                          {fansCleanConfirm === "all"
+                            ? "这个操作会删除你的所有粉丝，危险操作，尤其对于主播，谨慎！这个功能通常是消费大哥/大姐清空无关粉丝，或者退网时清空"
+                            : "这个操作会删除你的所有非互关粉丝，危险操作，尤其对于主播，谨慎！这个功能通常是消费大哥/大姐清空无关粉丝"}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            // 确认后按弹窗类型取目标：全部粉丝 / 非互关粉丝（attribute bit1 未置位）
+                            const targets = fansCleanConfirm === "all"
+                              ? fansList.map((f) => f.mid)
+                              : fansList.filter((f) => (f.attribute & 0x02) === 0).map((f) => f.mid);
+                            setFansCleanConfirm("");
+                            removeFans(targets);
+                          }}
+                          className="flex-1 rounded-lg bg-[#e74c3c] py-2.5 text-sm text-white font-semibold hover:opacity-90 transition"
+                        >
+                          确认清理
+                        </button>
+                        <button
+                          onClick={() => setFansCleanConfirm("")}
+                          className="flex-1 rounded-lg border border-black/10 py-2.5 text-sm text-black/60 hover:bg-gray-50 transition"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  </div>,
+                  document.body
                 )}
 
                 {/* 粉丝列表 */}
@@ -4315,14 +4397,13 @@ export default function HomePage() {
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
                 <div className="flex items-center gap-4 py-1">
-                  <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setMedalsList([]); setMedalsMsg(""); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
+                  <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setMedalsList([]); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
                   </button>
                   <span className="text-sm font-semibold">粉丝牌清理</span>
                   {medalsTotal > 0 && <span className="text-xs text-black/40">共 {medalsTotal} 个粉丝牌</span>}
                   <div className="ml-auto flex items-center gap-2">
-                    {medalsMsg && <span className="text-xs text-[#e74c3c]">{medalsMsg}</span>}
                     <button onClick={() => loadMedals(1)} disabled={medalsLoading} className="shrink-0 rounded-full border border-black/15 px-3 py-1 text-xs text-black/60 hover:bg-gray-50 transition disabled:opacity-50">
                       <svg className={`w-3.5 h-3.5 inline-block mr-0.5 ${medalsLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                       {medalsLoading ? "刷新中..." : "刷新"}
@@ -4339,11 +4420,29 @@ export default function HomePage() {
                     {medalsSelectMode ? (
                       <>
                         <button onClick={() => { setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs text-black/70 hover:bg-gray-50 transition">取消</button>
-                        {medalsSelected.size === medalsList.filter((i) => i.medal.can_delete).length ? (
-                          <button onClick={() => setMedalsSelected(new Set())} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs text-black/70 hover:bg-gray-50 transition">取消全选可删除</button>
-                        ) : (
-                          <button onClick={() => setMedalsSelected(new Set(medalsList.filter((i) => i.medal.can_delete).map((i) => i.medal.medal_id)))} className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-xs text-black/70 hover:bg-gray-50 transition">全选可删除</button>
-                        )}
+                        {/* 按等级选择：选中全部（跨分页）中等级低于输入值的可删除粉丝牌 */}
+                        <div className="flex items-center gap-1.5 rounded-lg border border-black/15 bg-white px-2.5 py-1 text-xs text-black/70">
+                          <span>低于</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            inputMode="numeric"
+                            value={medalLevelInput}
+                            onChange={(e) => setMedalLevelInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") selectMedalsBelowLevel(); }}
+                            placeholder="10"
+                            className="w-8 rounded border border-black/10 px-1 py-0.5 text-center text-xs appearance-none [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus:outline-none focus:border-black/30"
+                          />
+                          <span>级</span>
+                          <button
+                            onClick={() => selectMedalsBelowLevel()}
+                            disabled={medalsLoading || medalsRemoving}
+                            className="rounded border border-black/15 px-2 py-0.5 text-xs text-black/70 hover:bg-gray-50 transition disabled:opacity-50"
+                          >
+                            选中
+                          </button>
+                        </div>
                         <button onClick={() => removeSelectedMedals()} disabled={medalsSelected.size === 0 || medalsRemoving} className="rounded-lg bg-[#e74c3c] px-3 py-1.5 text-xs text-white font-medium hover:opacity-90 transition disabled:opacity-50">
                           {medalsRemoving ? "处理中..." : `移除选中 (${medalsSelected.size})`}
                         </button>
@@ -4417,7 +4516,7 @@ export default function HomePage() {
                   medalsLoading ? (
                     <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/45">加载中...</div>
                   ) : (
-                    !medalsMsg && <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/35">点击上方按钮加载粉丝牌列表</div>
+                    <div className="rounded-xl border border-black/10 bg-white/80 p-8 text-center text-sm text-black/35">点击上方按钮加载粉丝牌列表</div>
                   )
                 )}
               </div>

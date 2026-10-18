@@ -95,7 +95,10 @@ export async function readLotteryRecords(): Promise<LotteryRecord[]> {
 
 async function writeLotteryRecords(records: LotteryRecord[]) {
   await ensureDir();
-  await fs.writeFile(LOTTERY_FILE, JSON.stringify(records, null, 2), "utf-8");
+  // 先写临时文件再原子替换：避免 admin 并发读取时读到半截 JSON（解析失败会返回空列表）
+  const tmp = `${LOTTERY_FILE}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(records, null, 2), "utf-8");
+  await fs.rename(tmp, LOTTERY_FILE);
 }
 
 /** 归一化抽奖状态：优先取合法 mode；否则兼容旧 enabled 布尔（false→paused，true→all）；默认 all */

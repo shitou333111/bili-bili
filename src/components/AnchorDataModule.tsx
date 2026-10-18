@@ -116,9 +116,9 @@ function formatCoinsShort(coins: number): string {
 }
 
 function formatBattery(hamster: number): string {
-  // 换算关系：1电池 = 100 Hamster；超过1万以"万"为单位显示1位小数
+  // 换算关系：1电池 = 100 Hamster；满10万以"万"为单位显示1位小数
   const battery = Math.round(hamster / 100);
-  if (battery >= 10000) return `${(battery / 10000).toFixed(1)}万`;
+  if (battery >= 100000) return `${(battery / 10000).toFixed(1)}万`;
   return String(battery);
 }
 

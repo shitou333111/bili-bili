@@ -30,6 +30,20 @@ export type UsersListEntry = {
 
 const MAX_DEVICES = 8;
 
+/**
+ * users-list.json 的读改写并发锁。
+ * 多个用户同时上报设备（/api/user/report）时，每个请求都会「先读整份列表 → 改自己那条 → 写回」，
+ * 若并发执行则后写覆盖先写，会丢掉先写那次新增的用户（表现为 admin 用户列表有时缺人）。
+ * 用 promise 链把写操作串行化（与 session/lottery 的写法一致）。
+ */
+let usersListLock: Promise<void> = Promise.resolve();
+function withUsersListLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = usersListLock;
+  let resolve: () => void;
+  usersListLock = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
 /** 读取 users-list.json（每个用户一条：uid/昵称/最近更新时间） */
 export async function readUsersList(): Promise<UsersListEntry[]> {
   try {
@@ -41,10 +55,12 @@ export async function readUsersList(): Promise<UsersListEntry[]> {
   }
 }
 
-/** 写入 users-list.json */
+/** 写入 users-list.json：先写临时文件再原子替换，避免并发读取读到半截 JSON。 */
 export async function writeUsersList(list: UsersListEntry[]): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(USERS_LIST_FILE, JSON.stringify(list, null, 2), "utf8");
+  const tmp = `${USERS_LIST_FILE}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(list, null, 2), "utf8");
+  await fs.rename(tmp, USERS_LIST_FILE);
 }
 
 /** 合并设备记录：按 platform|brand|os|browser 去重，更新 lastSeen，最新在前，截断到 MAX_DEVICES */
@@ -67,22 +83,24 @@ export async function upsertUserInList(
   uname: string,
   device?: Omit<UserDeviceRecord, "lastSeen">,
 ): Promise<void> {
-  const list = await readUsersList();
-  const idx = list.findIndex((u) => u.mid === mid);
-  const prev = idx >= 0 ? list[idx] : undefined;
-  const now = new Date().toISOString();
-  const entry: UsersListEntry = {
-    mid,
-    uname,
-    updatedAt: now,
-    platform: device?.platform ?? prev?.platform,
-    devices: device
-      ? mergeDevices(prev?.devices, { ...device, lastSeen: now })
-      : prev?.devices,
-  };
-  if (idx >= 0) list[idx] = entry;
-  else list.push(entry);
-  await writeUsersList(list);
+  await withUsersListLock(async () => {
+    const list = await readUsersList();
+    const idx = list.findIndex((u) => u.mid === mid);
+    const prev = idx >= 0 ? list[idx] : undefined;
+    const now = new Date().toISOString();
+    const entry: UsersListEntry = {
+      mid,
+      uname,
+      updatedAt: now,
+      platform: device?.platform ?? prev?.platform,
+      devices: device
+        ? mergeDevices(prev?.devices, { ...device, lastSeen: now })
+        : prev?.devices,
+    };
+    if (idx >= 0) list[idx] = entry;
+    else list.push(entry);
+    await writeUsersList(list);
+  });
 }
 
 /** 获取北京时间字符串 (UTC+8) */

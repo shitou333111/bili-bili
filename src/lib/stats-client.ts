@@ -1888,32 +1888,46 @@ export async function fetchOtherStats(
 
     const luckyGiftIds = new Set([...tianxuanGiftIds, ...redPocketGiftIds]);
 
+    // 天选/红包礼物统计（按**礼物名称**分组）
+    // 同名礼物可能对应多个 gift_id（如「小花花」在天选/红包里存在多个 id），按 id 分组会被拆成多行；
+    // 这里按名称合并为一行：数量与小计相加。单价取该名称下的最高档，保证「天选之子」判定
+    // （是否有单价 ≥ 水晶球 的礼物）与原「按 id 逐一判断」的口径一致。
     const giftMap = new Map<
-      number,
+      string,
       { gift_id: number; gift_name: string; gift_img: string; totalNum: number; totalValue: number; unitPrice: number }
     >();
     for (const r of records) {
       if (r.status_msg === "已退回") continue;
       if (!luckyGiftIds.has(r.gift_id)) continue;
       const coins = Number((r.pay_coin || r.coin || "0").replace(/,/g, "")) || 0;
-      const existing = giftMap.get(r.gift_id);
+      const key = r.gift_name || String(r.gift_id);
+      const unit = r.gift_num > 0 ? Math.round(coins / r.gift_num) : coins;
+      const existing = giftMap.get(key);
       if (existing) {
         existing.totalNum += r.gift_num;
         existing.totalValue += coins;
+        // 单价取最高档；图标与代表 id 跟随最高档那条记录
+        if (unit > existing.unitPrice) {
+          existing.unitPrice = unit;
+          existing.gift_id = r.gift_id;
+          if (r.gift_img) existing.gift_img = r.gift_img;
+        } else if (!existing.gift_img && r.gift_img) {
+          existing.gift_img = r.gift_img;
+        }
       } else {
-        const unitPrice = r.gift_num > 0 ? Math.round(coins / r.gift_num) : coins;
-        giftMap.set(r.gift_id, {
+        giftMap.set(key, {
           gift_id: r.gift_id,
           gift_name: r.gift_name,
           gift_img: r.gift_img || "",
           totalNum: r.gift_num,
           totalValue: coins,
-          unitPrice,
+          unitPrice: unit,
         });
       }
     }
 
-    const gifts = Array.from(giftMap.values()).sort((a, b) => b.totalValue - a.totalValue);
+    // 按**单价从高到低**排序（同单价再按小计降序）
+    const gifts = Array.from(giftMap.values()).sort((a, b) => b.unitPrice - a.unitPrice || b.totalValue - a.totalValue);
     const totalCount = gifts.reduce((sum, g) => sum + g.totalNum, 0);
     const totalValue = gifts.reduce((sum, g) => sum + g.totalValue, 0);
     const hasLuckyTitle = gifts.some((g) => g.unitPrice >= CRYSTAL_BALL_PRICE);
