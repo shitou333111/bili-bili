@@ -531,9 +531,24 @@ async function readSpecialGiftDB(): Promise<SpecialGiftDB> {
   }
 }
 
+/**
+ * special-gift-ids.json 的读改写并发锁。
+ * 天选/红包 ID 是全站共享文件，多个请求同时「读→改→写」会互相覆盖，这里把写操作串行化。
+ */
+let specialGiftLock: Promise<void> = Promise.resolve();
+function withSpecialGiftLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = specialGiftLock;
+  let resolve: () => void;
+  specialGiftLock = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
 async function writeSpecialGiftDB(db: SpecialGiftDB): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(specialGiftDbFile(), JSON.stringify(db, null, 2), "utf8");
+  // 先写临时文件再原子替换，避免并发读取读到半截 JSON
+  const tmp = `${specialGiftDbFile()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(db, null, 2), "utf8");
+  await fs.rename(tmp, specialGiftDbFile());
 }
 
 /**
@@ -541,37 +556,42 @@ async function writeSpecialGiftDB(db: SpecialGiftDB): Promise<void> {
  * 这样可以确保历史天选礼物不会被遗漏
  */
 export async function getAccumulatedTianxuanGiftIds(currentIds: number[]): Promise<number[]> {
-  const db = await readSpecialGiftDB();
-  const historicalIds = db.tianxuan_gift_ids || [];
-  const merged = [...new Set([...historicalIds, ...currentIds])];
-  
-  // 如果有新 ID，更新持久化存储
-  if (currentIds.length > 0) {
-    db.tianxuan_gift_ids = merged;
-    db.last_tianxuan_update = new Date().toISOString();
-    await writeSpecialGiftDB(db);
-  }
-  
-  console.log(`[getAccumulatedTianxuanGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
-  return merged;
+  return withSpecialGiftLock(async () => {
+    const db = await readSpecialGiftDB();
+    const historicalIds = db.tianxuan_gift_ids || [];
+    const merged = [...new Set([...historicalIds, ...currentIds])];
+
+    // 仅当集合确实增长时才写盘：列表稳定后绝大多数请求只读不写，避免每次开页都落盘。
+    if (merged.length > historicalIds.length) {
+      db.tianxuan_gift_ids = merged;
+      db.last_tianxuan_update = new Date().toISOString();
+      await writeSpecialGiftDB(db);
+    }
+
+    console.log(`[getAccumulatedTianxuanGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
+    return merged;
+  });
 }
 
 /**
  * 获取所有红包礼物 ID（全局累积 + 当前 API 返回的合并）
  */
 export async function getAccumulatedRedPocketGiftIds(currentIds: number[]): Promise<number[]> {
-  const db = await readSpecialGiftDB();
-  const historicalIds = db.red_pocket_gift_ids || [];
-  const merged = [...new Set([...historicalIds, ...currentIds])];
+  return withSpecialGiftLock(async () => {
+    const db = await readSpecialGiftDB();
+    const historicalIds = db.red_pocket_gift_ids || [];
+    const merged = [...new Set([...historicalIds, ...currentIds])];
 
-  if (currentIds.length > 0) {
-    db.red_pocket_gift_ids = merged;
-    db.last_red_pocket_update = new Date().toISOString();
-    await writeSpecialGiftDB(db);
-  }
+    // 仅当集合确实增长时才写盘（同上，避免每次开页都落盘）。
+    if (merged.length > historicalIds.length) {
+      db.red_pocket_gift_ids = merged;
+      db.last_red_pocket_update = new Date().toISOString();
+      await writeSpecialGiftDB(db);
+    }
 
-  console.log(`[getAccumulatedRedPocketGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
-  return merged;
+    console.log(`[getAccumulatedRedPocketGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
+    return merged;
+  });
 }
 
 // ====== 翻牌礼物图片缓存（存储在活动信息文件中） ======

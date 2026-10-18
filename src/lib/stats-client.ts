@@ -265,7 +265,8 @@ async function getAccumulatedTianxuanGiftIds(platform: Platform, currentIds: num
   const db = await readSpecialGiftDb(platform);
   const historicalIds = db.tianxuan_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
-  if (currentIds.length > 0) {
+  // 仅当集合确实增长时才写盘：列表稳定后绝大多数请求只读不写，避免每次开页都落盘。
+  if (merged.length > historicalIds.length) {
     db.tianxuan_gift_ids = merged;
     await writeSpecialGiftDb(platform, db);
   }
@@ -276,7 +277,7 @@ async function getAccumulatedRedPocketGiftIds(platform: Platform, currentIds: nu
   const db = await readSpecialGiftDb(platform);
   const historicalIds = db.red_pocket_gift_ids || [];
   const merged = [...new Set([...historicalIds, ...currentIds])];
-  if (currentIds.length > 0) {
+  if (merged.length > historicalIds.length) {
     db.red_pocket_gift_ids = merged;
     await writeSpecialGiftDb(platform, db);
   }
@@ -728,22 +729,37 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
 
 // ==================== B站 API 请求（平台层） ====================
 
+// 天选/红包活动列表在 B站 侧更新极慢，原先每次打开「粉丝/其他」页都会各请求一次 B站。
+// 这里加进程内 TTL 缓存：缓存 1 天，即每天才向上游刷新一次；抓取失败时回退到上次结果。
+const SPECIAL_GIFT_LIST_TTL_MS = 24 * 60 * 60 * 1000;
+
+let tianxuanListCache: { at: number; list: Array<{ id: number; name: string }> } | null = null;
+let redPocketListCache: { at: number; list: Array<{ id: number; name: string }> } | null = null;
+
 async function fetchTianxuanGiftList(platform: Platform, cookie: string): Promise<Array<{ id: number; name: string }>> {
+  if (tianxuanListCache && Date.now() - tianxuanListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
+    return tianxuanListCache.list;
+  }
   try {
     const response = await platform.fetchBilibiliJson<{
       code: number;
       data?: { list?: Array<{ id: number; name: string }> } | null;
     }>({ url: TIANXUAN_CONFIG.url, cookie });
     if (response.code === 0 && response.data?.list) {
-      return response.data.list.map((g) => ({ id: g.id, name: g.name }));
+      const list = response.data.list.map((g) => ({ id: g.id, name: g.name }));
+      if (list.length > 0) tianxuanListCache = { at: Date.now(), list };
+      return list;
     }
-    return [];
+    return tianxuanListCache?.list ?? [];
   } catch {
-    return [];
+    return tianxuanListCache?.list ?? [];
   }
 }
 
 async function fetchRedPocketGiftList(platform: Platform, cookie: string): Promise<Array<{ id: number; name: string }>> {
+  if (redPocketListCache && Date.now() - redPocketListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
+    return redPocketListCache.list;
+  }
   try {
     const url = `${RED_POCKET_CONFIG.url}?room_id=23915535&ruid=488750234&platform=pc&rp_type=1`;
     const response = await platform.fetchBilibiliJson<{
@@ -763,11 +779,13 @@ async function fetchRedPocketGiftList(platform: Platform, cookie: string): Promi
           }
         }
       }
-      return Array.from(giftMap.entries()).map(([id, name]) => ({ id, name }));
+      const list = Array.from(giftMap.entries()).map(([id, name]) => ({ id, name }));
+      if (list.length > 0) redPocketListCache = { at: Date.now(), list };
+      return list;
     }
-    return [];
+    return redPocketListCache?.list ?? [];
   } catch {
-    return [];
+    return redPocketListCache?.list ?? [];
   }
 }
 

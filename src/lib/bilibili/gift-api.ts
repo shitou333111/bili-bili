@@ -241,12 +241,22 @@ export async function fetchBlindBoxDrawStream(
   }
 }
 
+// ====== 天选 / 红包礼物列表缓存 ======
+// 天选/红包活动列表在 B站 侧更新极慢，原先每次打开「粉丝/合成」页都会各请求一次 B站。
+// 这里加进程内 TTL 缓存：缓存 1 天，即每天才向上游刷新一次；抓取失败时回退到上次结果。
+const SPECIAL_GIFT_LIST_TTL_MS = 24 * 60 * 60 * 1000;
+
 // ====== 天选礼物列表 ======
+
+let tianxuanListCache: { at: number; list: TianxuanGift[] } | null = null;
 
 /**
  * 获取天选礼物列表（需要登录态Cookie）
  */
 export async function fetchTianxuanGiftList(cookie: string): Promise<TianxuanGift[]> {
+  if (tianxuanListCache && Date.now() - tianxuanListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
+    return tianxuanListCache.list;
+  }
   try {
     const response = await fetchBilibiliJson<TianxuanGiftPanelResponse>({
       url: TIANXUAN_CONFIG.url,
@@ -261,14 +271,15 @@ export async function fetchTianxuanGiftList(cookie: string): Promise<TianxuanGif
         img: g.img,
         price: g.price,
       }));
+      if (gifts.length > 0) tianxuanListCache = { at: Date.now(), list: gifts };
       console.log(`[fetchTianxuanGiftList] 获取到 ${gifts.length} 个天选礼物:`, gifts.map(g => `id:${g.id} name:${g.name}`));
       return gifts;
     }
 
-    return [];
+    return tianxuanListCache?.list ?? [];
   } catch (error) {
     console.error("[Tianxuan] 获取天选礼物列表失败:", error);
-    return [];
+    return tianxuanListCache?.list ?? [];
   }
 }
 
@@ -279,11 +290,16 @@ export type RedPocketGift = {
   name: string;
 };
 
+let redPocketListCache: { at: number; list: RedPocketGift[] } | null = null;
+
 /**
  * 获取红包礼物列表
  * API 响应结构: data.item[].award_info[].award_id/award_name
  */
 export async function fetchRedPocketGiftList(cookie: string): Promise<RedPocketGift[]> {
+  if (redPocketListCache && Date.now() - redPocketListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
+    return redPocketListCache.list;
+  }
   try {
     const url = `${RED_POCKET_CONFIG.url}?room_id=23915535&ruid=488750234&platform=pc&rp_type=1`;
     const response = await fetchBilibiliJson<{
@@ -315,15 +331,16 @@ export async function fetchRedPocketGiftList(cookie: string): Promise<RedPocketG
         }
       }
       const gifts: RedPocketGift[] = Array.from(giftMap.entries()).map(([id, name]) => ({ id, name }));
+      if (gifts.length > 0) redPocketListCache = { at: Date.now(), list: gifts };
       console.log(`[fetchRedPocketGiftList] 获取到 ${gifts.length} 个红包礼物:`, gifts.map(g => `id:${g.id} name:${g.name}`));
       return gifts;
     }
 
     console.log(`[fetchRedPocketGiftList] API返回无数据, code=${response.code}, message=${response.message}`);
-    return [];
+    return redPocketListCache?.list ?? [];
   } catch (error) {
     console.error("[RedPocket] 获取红包礼物列表失败:", error);
-    return [];
+    return redPocketListCache?.list ?? [];
   }
 }
 

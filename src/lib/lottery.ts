@@ -22,6 +22,13 @@ export const DEFAULT_ODDS_DENOM = 20;
 /** 奖品文案 */
 export const LOTTERY_PRIZE = "一个月舰长";
 
+/**
+ * 「仅主播」状态下，从帮助页入口进入的未抽奖用户看到的提醒文案。
+ * 同时也是服务端拒绝非主播抽奖时的报错信息，保证新旧客户端看到的文字一致。
+ */
+export const LOTTERY_ANCHOR_ONLY_MESSAGE =
+  "由于抽奖人数激增，无法负担，现阶段只对主播开放，入口在「主播-其他」页面中";
+
 export type LotteryRecord = {
   mid: number;
   uname: string;
@@ -36,7 +43,8 @@ export type LotteryRecord = {
  * 抽奖状态三态（admin 按钮点击循环）：
  * - all：全部开放，抽奖可进行，帮助页入口可见；
  * - paused：已暂停，抽奖不可进行（页面可打开但不可抽奖）；
- * - anchor：仅主播，帮助页入口隐藏（不显示），只保留「主播」页入口，仍可正常抽奖。
+ * - anchor：仅主播，帮助页入口不隐藏（仍可打开）：未抽奖用户看到"仅对主播开放"的提醒、不显示抽奖按钮，
+ *   已抽奖用户仍显示原结果；仅「主播-其他」页入口可正常抽奖，服务端只放行带 via="anchor" 的请求。
  */
 export type LotteryMode = "all" | "paused" | "anchor";
 
@@ -48,6 +56,12 @@ export type LotteryConfig = {
   oddsDenom: number;
   /** 抽奖状态三态（可见范围 + 是否可抽） */
   mode: LotteryMode;
+  /**
+   * 兼容旧客户端的派生字段：旧版前端读取 config.enabled 判断能否抽奖。
+   * 仅 mode=all 为 true；paused / anchor 均为 false（让旧客户端正确禁用抽奖）。
+   * 由 mode 派生，不落盘（存储文件只保留 oddsDenom + mode）。
+   */
+  enabled: boolean;
 };
 
 /** "1/n" 文案 */
@@ -116,15 +130,13 @@ export async function readLotteryConfig(): Promise<LotteryConfig> {
     const parsed = JSON.parse(raw);
     const denom = Number(parsed?.oddsDenom);
     if (Number.isInteger(denom) && denom >= 2) {
-      return {
-        oddsDenom: denom,
-        mode: normalizeMode(parsed?.mode, parsed?.enabled),
-      };
+      const mode = normalizeMode(parsed?.mode, parsed?.enabled);
+      return { oddsDenom: denom, mode, enabled: mode === "all" };
     }
   } catch {
     // 无配置或格式错误 → 默认
   }
-  return { oddsDenom: DEFAULT_ODDS_DENOM, mode: "all" };
+  return { oddsDenom: DEFAULT_ODDS_DENOM, mode: "all", enabled: true };
 }
 
 /**
@@ -134,23 +146,25 @@ export async function readLotteryConfig(): Promise<LotteryConfig> {
  */
 export async function updateLotteryConfig(partial: { oddsDenom?: number; mode?: LotteryMode }): Promise<LotteryConfig> {
   const current = await readLotteryConfig();
-  const next: LotteryConfig = { ...current };
+  let oddsDenom = current.oddsDenom;
+  let mode = current.mode;
   if (partial.oddsDenom !== undefined) {
     const denom = Math.floor(Number(partial.oddsDenom));
     if (!Number.isInteger(denom) || denom < 2) {
       throw new Error("概率分母必须是大于等于 2 的整数");
     }
-    next.oddsDenom = denom;
+    oddsDenom = denom;
   }
   if (partial.mode !== undefined) {
     if (!LOTTERY_MODES.includes(partial.mode)) {
       throw new Error("抽奖状态不合法");
     }
-    next.mode = partial.mode;
+    mode = partial.mode;
   }
   await ensureDir();
-  await fs.writeFile(LOTTERY_CONFIG_FILE, JSON.stringify(next, null, 2), "utf-8");
-  return next;
+  // 存储只保留 { oddsDenom, mode }；enabled 为响应派生的兼容字段，不落盘
+  await fs.writeFile(LOTTERY_CONFIG_FILE, JSON.stringify({ oddsDenom, mode }, null, 2), "utf-8");
+  return { oddsDenom, mode, enabled: mode === "all" };
 }
 
 /** 获取某用户（mid）的抽奖记录，未抽过返回 null */
@@ -162,10 +176,17 @@ export async function getUserLotteryRecord(mid: number): Promise<LotteryRecord |
 /**
  * 执行抽奖：按服务器当前概率判定（1/n），奖品为一个月舰长。
  * 同一 mid 只能抽取一次，重复抽取直接返回已有记录。
- * 活动暂停（mode=paused）时抛错，前端展示"抽奖活动当前已暂停"。
- * 记录会保存抽奖当时的概率，供长期查看。
+ * 状态为 paused 时抛错（"抽奖活动当前已暂停"）。
+ * 状态为 anchor（仅主播）时，仅接受来自主播页入口的请求（via==="anchor"）；
+ *   其余请求（含未带标记的旧客户端）一律抛错并返回与前端一致的提醒文案，
+ *   从而保证新旧客户端"都不能抽且看到同一句话"。
+ * @param via 请求来源标记：传 "anchor" 表示从「主播-其他」页入口发起。
  */
-export async function drawLottery(mid: number, uname: string): Promise<{ record: LotteryRecord; alreadyDrawn: boolean }> {
+export async function drawLottery(
+  mid: number,
+  uname: string,
+  via?: string,
+): Promise<{ record: LotteryRecord; alreadyDrawn: boolean }> {
   return withWriteLock(async () => {
     const records = await readLotteryRecords();
     const existing = records.find((r) => r.mid === mid);
@@ -175,6 +196,9 @@ export async function drawLottery(mid: number, uname: string): Promise<{ record:
     const cfg = await readLotteryConfig();
     if (cfg.mode === "paused") {
       throw new Error("抽奖活动当前已暂停");
+    }
+    if (cfg.mode === "anchor" && via !== "anchor") {
+      throw new Error(LOTTERY_ANCHOR_ONLY_MESSAGE);
     }
     const won = Math.floor(Math.random() * cfg.oddsDenom) === 0;
     const record: LotteryRecord = {

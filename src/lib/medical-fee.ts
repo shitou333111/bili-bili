@@ -51,9 +51,21 @@ export async function readGlobalRecords(): Promise<MedicalRecord[]> {
   }
 }
 
+/** medical-fee-records.json 的读改写并发锁：合并是「读全量→去重→写回」，串行化避免并发上传互相覆盖。 */
+let globalRecordsLock: Promise<void> = Promise.resolve();
+function withGlobalRecordsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = globalRecordsLock;
+  let resolve: () => void;
+  globalRecordsLock = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
 async function writeGlobalRecords(records: MedicalRecord[]): Promise<void> {
   await ensureDir(DATA_DIR);
-  await fs.writeFile(GLOBAL_FILE, JSON.stringify({ records }, null, 2), "utf-8");
+  // 先写临时文件再原子替换，避免并发读取读到半截 JSON
+  const tmp = `${GLOBAL_FILE}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ records }, null, 2), "utf-8");
+  await fs.rename(tmp, GLOBAL_FILE);
 }
 
 /** 判断两条记录是否属于同一局：recordId 或 bizSessionId 相同即视为同一局 */
@@ -69,23 +81,25 @@ export function isSameGame(a: MedicalRecord, b: MedicalRecord): boolean {
  */
 export async function mergeGlobalRecords(incoming: MedicalRecord[]): Promise<MedicalRecord[]> {
   if (!incoming || incoming.length === 0) return readGlobalRecords();
-  const existing = await readGlobalRecords();
-  const merged = [...existing];
-  for (const rec of incoming) {
-    const dupIndex = merged.findIndex((e) => isSameGame(e, rec));
-    if (dupIndex >= 0) {
-      // 同一局：统一时间取更早者
-      if (rec.gameTimeTs > 0 && rec.gameTimeTs < merged[dupIndex].gameTimeTs) {
-        merged[dupIndex] = { ...merged[dupIndex], gameTime: rec.gameTime, gameTimeTs: rec.gameTimeTs };
+  return withGlobalRecordsLock(async () => {
+    const existing = await readGlobalRecords();
+    const merged = [...existing];
+    for (const rec of incoming) {
+      const dupIndex = merged.findIndex((e) => isSameGame(e, rec));
+      if (dupIndex >= 0) {
+        // 同一局：统一时间取更早者
+        if (rec.gameTimeTs > 0 && rec.gameTimeTs < merged[dupIndex].gameTimeTs) {
+          merged[dupIndex] = { ...merged[dupIndex], gameTime: rec.gameTime, gameTimeTs: rec.gameTimeTs };
+        }
+        continue;
       }
-      continue;
+      merged.push(rec);
     }
-    merged.push(rec);
-  }
-  // 按时间倒序
-  merged.sort((a, b) => b.gameTimeTs - a.gameTimeTs);
-  await writeGlobalRecords(merged);
-  return merged;
+    // 按时间倒序
+    merged.sort((a, b) => b.gameTimeTs - a.gameTimeTs);
+    await writeGlobalRecords(merged);
+    return merged;
+  });
 }
 
 /** 统计某用户有史以来发放（作为第二名）与收到（作为收医药费）的金额与次数 */

@@ -1002,10 +1002,10 @@ export default function HomePage() {
   const [realActivityModalOpen, setRealActivityModalOpen] = useState(false);
   // 抽奖页面（帮助页入口卡片打开；登录账号可抽，服务器账号置灰）
   const [lotteryOpen, setLotteryOpen] = useState(false);
+  // 打开抽奖页的入口来源（help=帮助页；anchor=「主播-其他」页）：仅主播状态下用于区分显示提醒还是抽奖按钮
+  const [lotteryEntrySource, setLotteryEntrySource] = useState<"help" | "anchor">("help");
   // 服务器当前抽奖概率分母（admin 可改，卡片与抽奖页都显示服务器真实概率；未取到前用默认 20）
   const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
-  // 抽奖状态三态（admin 可改）：all=全部开放；paused=已暂停；anchor=仅主播（帮助页入口隐藏，仅主播页入口保留）
-  const [lotteryMode, setLotteryMode] = useState<"all" | "paused" | "anchor">("all");
   // 黑抽（真实合成活动）页面URL模板：从服务器公开配置读取；为空/未配置时卡片变灰不可点击
   const [realActivityUrl, setRealActivityUrl] = useState<string>("");
   // 饼图选中状态（移动端）：记录选中的扇形(chart+index)与点击位置，只有选中时才显示提示框
@@ -1043,7 +1043,7 @@ export default function HomePage() {
     })();
   }, []);
 
-  // 加载服务器当前抽奖概率与状态（admin 修改后所有平台一致；失败保持默认 20 / all）
+  // 加载服务器当前抽奖概率（admin 修改后所有平台一致；失败保持默认 20）
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -1052,7 +1052,6 @@ export default function HomePage() {
         const data = await res.json();
         if (alive && data.code === 0 && data.data?.config) {
           if (data.data.config.oddsDenom) setLotteryOddsDenom(data.data.config.oddsDenom);
-          if (data.data.config.mode) setLotteryMode(data.data.config.mode);
         }
       } catch {
         // 忽略：抽奖卡片保持默认概率显示
@@ -2995,12 +2994,14 @@ export default function HomePage() {
   const lotteryDisabledText = serverAccount
     ? "服务器账号无登录凭证，无法参与抽奖"
     : "请先登录账号后再参与抽奖";
-  /** 打开抽奖页：帮助页与「主播」页入口共用同一页面与状态（服务器统一配置），只是两个入口 */
-  const openLottery = () => {
+  /** 打开抽奖页：帮助页与「主播」页入口共用同一页面与状态（服务器统一配置），只是两个入口。
+   *  source 区分入口来源：仅主播状态下，帮助页入口的未抽奖用户显示提醒，主播页入口可正常抽奖。 */
+  const openLottery = (source: "help" | "anchor" = "help") => {
     if (lotteryDisabled) {
       showOfflineToast(serverAccount ? "该功能需要登录凭证，服务器账号无法使用" : "请先登录账号");
       return;
     }
+    setLotteryEntrySource(source);
     setLotteryOpen(true);
   };
 
@@ -3022,7 +3023,7 @@ export default function HomePage() {
         oddsDenom={lotteryOddsDenom}
         disabled={lotteryDisabled}
         disabledText={lotteryDisabledText}
-        onClick={openLottery}
+        onClick={() => openLottery("anchor")}
       />
     </>
   );
@@ -3931,16 +3932,14 @@ export default function HomePage() {
                     />
                   );
                 })}
-                {/* 抽奖卡片：登录账号可抽奖（中奖率1/20，奖品为一个月舰长，每人一次）；服务器账号/未登录置灰不可点击。
-                    状态为「仅主播」时该入口隐藏（不显示），仅保留「主播」页入口 */}
-                {lotteryMode !== "anchor" && (
-                  <LotteryEntryCard
-                    oddsDenom={lotteryOddsDenom}
-                    disabled={lotteryDisabled}
-                    disabledText={lotteryDisabledText}
-                    onClick={openLottery}
-                  />
-                )}
+                {/* 抽奖卡片：登录账号可抽奖（中奖率 1/n，奖品为一个月舰长，每人一次）；服务器账号/未登录置灰不可点击。
+                    状态为「仅主播」时该入口不再隐藏：仍可打开，未抽奖用户看到"仅对主播开放"的提醒（见 LotteryPage） */}
+                <LotteryEntryCard
+                  oddsDenom={lotteryOddsDenom}
+                  disabled={lotteryDisabled}
+                  disabledText={lotteryDisabledText}
+                  onClick={() => openLottery("help")}
+                />
                 {/* 主播推荐卡片 */}
                 <RecommendedAnchors />
                 {/* 开机自启动卡片（仅 Windows 桌面展示） */}
@@ -4812,12 +4811,13 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* 抽奖页面：登录账号可抽奖（中奖率1/20，奖品为一个月舰长）；服务器账号入口已置灰，此处兜底 */}
+      {/* 抽奖页面：登录账号可抽奖（中奖率 1/n，奖品为一个月舰长）；服务器账号入口已置灰，此处兜底 */}
       {lotteryOpen && (
         <LotteryPage
           mid={currentAccount?.mid ?? 0}
           uname={currentAccount?.uname ?? ""}
           isServerAccount={serverAccount}
+          entrySource={lotteryEntrySource}
           onBack={() => setLotteryOpen(false)}
         />
       )}

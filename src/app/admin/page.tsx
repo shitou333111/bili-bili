@@ -263,10 +263,13 @@ export default function AdminPage() {
   const [lotteryOddsDenom, setLotteryOddsDenom] = useState(20);
   const [lotteryDenomInput, setLotteryDenomInput] = useState("20");
   const [lotterySavingConfig, setLotterySavingConfig] = useState(false);
-  // 抽奖状态三态：all=全部开放（帮助页入口可见）；paused=已暂停；anchor=仅主播（帮助页入口隐藏，仅主播页入口保留）
+  // 抽奖状态三态：all=全部开放（帮助页入口可见）；paused=已暂停；anchor=仅主播（帮助页入口不隐藏，未抽奖用户显示提醒，仅主播页入口可抽）
   const [lotteryMode, setLotteryMode] = useState<"all" | "paused" | "anchor">("all");
   const [lotteryToggling, setLotteryToggling] = useState(false);
   const [lotteryGrantingMid, setLotteryGrantingMid] = useState<number | null>(null);
+  // 全局访问开关：disabled=true 时切断所有客户端对 /api/* 的访问（放行 /api/admin/*），用于出 BUG 时紧急止损
+  const [globalSwitchDisabled, setGlobalSwitchDisabled] = useState(false);
+  const [globalSwitchToggling, setGlobalSwitchToggling] = useState(false);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -568,6 +571,11 @@ export default function AdminPage() {
           setLotteryMode(data.data.config.mode);
         }
       } catch { /* 抽奖记录加载失败不影响其他模块 */ }
+      try {
+        const res = await adminFetch(serverApiUrl("/api/admin/switch"));
+        const data = await res.json();
+        if (data.code === 0) setGlobalSwitchDisabled(data.data?.disabled === true);
+      } catch { /* 全局开关读取失败不影响其他模块 */ }
     })();
   }, [adminLoggedIn]);
 
@@ -620,6 +628,31 @@ export default function AdminPage() {
       window.alert("网络错误，操作失败");
     } finally {
       setLotteryToggling(false);
+    }
+  };
+
+  /**
+   * 切换全局访问开关（kill switch）：
+   * disabled=true 时切断所有客户端对 /api/* 的访问（放行 /api/admin/*），用于出 BUG 时紧急止损。
+   */
+  const toggleGlobalSwitch = async (disabled: boolean) => {
+    setGlobalSwitchToggling(true);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/switch"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabled }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        setGlobalSwitchDisabled(data.data?.disabled === true);
+      } else {
+        window.alert(data.message || "操作失败");
+      }
+    } catch {
+      window.alert("网络错误，操作失败");
+    } finally {
+      setGlobalSwitchToggling(false);
     }
   };
 
@@ -2581,6 +2614,28 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {/* 全局访问开关（kill switch）：独立于各功能模块，用一枚圆形按钮一键切断/恢复
+          「所有客户端对服务器 API 的访问」（放行 /api/admin/*，管理后台始终可用）。
+          这是发布后出现 BUG 时的紧急止损保底措施，故不隶属于抽奖模块。 */}
+      <button
+        type="button"
+        onClick={() => toggleGlobalSwitch(!globalSwitchDisabled)}
+        disabled={globalSwitchToggling}
+        title={
+          globalSwitchDisabled
+            ? "全局访问已切断（仅管理后台可用）· 点击恢复"
+            : "全局访问正常 · 点击切断所有客户端对服务器的访问"
+        }
+        aria-label="全局访问开关"
+        className={`fixed right-5 bottom-5 z-[9998] flex h-14 w-14 items-center justify-center rounded-full border text-2xl shadow-[0_8px_24px_rgba(0,0,0,0.22)] transition active:scale-95 ${
+          globalSwitchDisabled
+            ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
+            : "border-black/10 bg-white text-black/70 hover:bg-black/5"
+        } ${globalSwitchToggling ? "opacity-60" : ""}`}
+      >
+        {globalSwitchToggling ? "…" : globalSwitchDisabled ? "⛔" : "🌐"}
+      </button>
     </div>
   );
 }

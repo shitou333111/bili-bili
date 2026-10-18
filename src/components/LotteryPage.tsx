@@ -25,11 +25,14 @@ export default function LotteryPage({
   mid,
   uname,
   isServerAccount = false,
+  entrySource = "help",
   onBack,
 }: {
   mid: number;
   uname: string;
   isServerAccount?: boolean;
+  /** 入口来源：help=帮助页；anchor=「主播-其他」页。仅主播状态下，来源为 help 的未抽奖用户显示提醒 */
+  entrySource?: "help" | "anchor";
   onBack: () => void;
 }) {
   const [record, setRecord] = useState<LotteryRecord | null>(null);
@@ -73,8 +76,10 @@ export default function LotteryPage({
     loadRecord();
   }, [loadRecord]);
 
-  // 是否允许抽奖：仅 paused 状态禁止（anchor 状态仍可抽，只是帮助页入口隐藏）
+  // 是否允许抽奖：仅 paused 状态禁止；anchor 状态允许，但从帮助页入口进入时显示提醒而非抽奖按钮
   const enabled = mode !== "paused";
+  // 「仅主播」状态 + 从帮助页进入：未抽奖用户显示提醒（抽奖仅对主播开放）；已抽奖用户仍显示原结果
+  const anchorReminder = mode === "anchor" && entrySource === "help";
 
   const handleDraw = async () => {
     if (drawing || record || isServerAccount) return;
@@ -91,7 +96,7 @@ export default function LotteryPage({
       const [result] = await Promise.all([
         serverPost<{ code: number; data?: { record: LotteryRecord; alreadyDrawn: boolean }; message?: string }>(
           "/api/lottery/draw",
-          { mid, uname },
+          { mid, uname, via: entrySource },
         ),
         new Promise((r) => setTimeout(r, 800)),
       ]);
@@ -186,6 +191,16 @@ export default function LotteryPage({
                   <p className="mt-3 text-[10px] text-black/30">本次抽奖概率 {record.odds}</p>
                 </div>
                 <p className="mt-4 text-center text-xs text-black/30">每个用户只能抽取一次，以上为你的抽奖结果</p>
+              </div>
+            ) : anchorReminder ? (
+              /* 仅主播状态 + 帮助页入口：未抽奖用户显示提醒（抽奖暂只对主播开放） */
+              <div className="mt-8 w-full rounded-2xl border border-black/10 bg-white/80 p-6 text-center shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur">
+                <div className="text-4xl opacity-60">🔒</div>
+                <div className="mt-3 text-sm font-bold text-black/70">抽奖暂时只对主播开放</div>
+                <p className="mt-1.5 text-xs text-black/50 leading-relaxed">
+                  由于抽奖人数激增，无法负担，现阶段只对主播开放<br />
+                  入口在「主播-其他」页面中
+                </p>
               </div>
             ) : enabled ? (
               /* 未抽奖且活动开启：展示规则与抽奖按钮 */
