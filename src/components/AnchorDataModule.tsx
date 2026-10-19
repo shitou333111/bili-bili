@@ -24,6 +24,7 @@ import { saveToMaterialFolder, usesOutputFolder } from "@/lib/output-folder";
 import FolderIconButton from "@/components/FolderIconButton";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
+import ChartFullscreenModal from "@/components/ChartFullscreenModal";
 
 type AnchorGiftRecord = {
   uid: number;
@@ -420,6 +421,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "display" | "gift_screenshot" | "other">("revenue");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  // 月度统计柱状图全屏模态框
+  const [monthlyChartFullscreen, setMonthlyChartFullscreen] = useState(false);
   const [selectedFan, setSelectedFan] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
   // 活动素材下载：正在下载的素材索引 / 移动端保存失败时的预览（供长按保存）
@@ -1094,26 +1097,45 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       <h3 className="text-sm font-semibold tracking-tight text-center mb-1">日期统计</h3>
                       {monthlyData.length > 0 && (() => {
                         const barWidth = 10;
-                        const minWidth = Math.max(monthlyData.length * (barWidth + 4) + 20, 100);
                         const shouldSkipLabels = monthlyData.length > 8;
-                        // 月度柱自定义形状：空数据月画统一高度的红柱（红边框 + 半透明红填充），
-                        // 有数据月沿用原配色（选中月高亮蓝）。
+                        // 月度柱自定义形状：空数据月画统一高度的红柱（红边框 + 半透明红填充，选中后填充更红），
+                        // 有数据月默认灰色、选中月黑色。
+                        // 每根柱附一个与 hover 高亮列完全一致的透明热区（完整 category band 宽 × 绘图区全高），
+                        // 仅扩大点击命中范围（矮柱也能整列点中），视觉显示仍由下方柱体本身决定。
                         const EMPTY_BAR_H = 34;
+                        const EMPTY_FILL = "rgba(239,68,68,0.16)";
+                        const EMPTY_FILL_ACTIVE = "rgba(239,68,68,0.45)";
                         const renderMonthBar = (p: any) => {
                           const x = Number(p.x ?? 0);
                           const y = Number(p.y ?? 0);
                           const w = Number(p.width ?? 0);
                           const h = Number(p.height ?? 0);
+                          const bottom = y + h; // value=0 → h=0 → bottom 即零轴
+                          const vb = p.parentViewBox;
+                          // 热区宽度 = hover cursor 的 band 宽（绘图区宽 / 月份总数），以柱中心对齐
+                          const count = monthlyData.length;
+                          const bandW = vb && typeof vb.width === "number" && count > 0 ? vb.width / count : w;
+                          const bandX = x + w / 2 - bandW / 2;
+                          const plotTop = vb && typeof vb.y === "number" ? vb.y : y;
+                          const plotH = vb && typeof vb.height === "number" ? vb.height : Math.max(bottom - plotTop, 0);
+                          const selected = p.payload?.month === selectedMonth;
+                          let visual;
                           if (p.payload?.empty) {
-                            const bottom = y + h; // value=0 → h=0 → bottom 即零轴
-                            return (
+                            visual = (
                               <rect x={x} y={bottom - EMPTY_BAR_H} width={w} height={EMPTY_BAR_H} rx={3} ry={3}
-                                fill="rgba(239,68,68,0.16)" stroke="#ef4444" strokeWidth={1} />
+                                fill={selected ? EMPTY_FILL_ACTIVE : EMPTY_FILL} stroke="#ef4444" strokeWidth={1} />
                             );
+                          } else if (h) {
+                            visual = <rect x={x} y={y} width={w} height={h} rx={3} ry={3} fill={selected ? "#1f1c17" : "#9ca3af"} />;
+                          } else {
+                            visual = <rect x={x} y={y} width={w} height={0} />;
                           }
-                          const fill = p.payload?.month === selectedMonth ? "#2563eb" : "#1f1c17";
-                          if (!h) return <rect x={x} y={y} width={w} height={0} />;
-                          return <rect x={x} y={y} width={w} height={h} rx={3} ry={3} fill={fill} />;
+                          return (
+                            <g>
+                              <rect x={bandX} y={plotTop} width={bandW} height={plotH} fill="rgba(0,0,0,0)" />
+                              {visual}
+                            </g>
+                          );
                         };
 
                         function formatHamsterForTooltip(value: number) {
@@ -1122,12 +1144,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
                           return `${battery % 1 === 0 ? battery : battery.toFixed(1)} 电池`;
                         }
 
-                        return (
-                          <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none">
-                            <div className="text-[10px] text-black/45">月度统计</div>
+                        // 同一张月度图：内联小图 / 全屏模态框大图共用（仅高度与柱宽不同）
+                        const renderMonthlyChart = (height: number, chartBarWidth: number) => {
+                          const minWidth = Math.max(monthlyData.length * (chartBarWidth + 6) + 20, 100);
+                          return (
                             <div className="overflow-x-auto" style={{ scrollbarWidth: "thin" }}>
                               <div style={{ width: "100%", minWidth: `${minWidth}px` }}>
-                                <ResponsiveContainer width="100%" height={170} minWidth={0}>
+                                <ResponsiveContainer width="100%" height={height} minWidth={0}>
                                   <BarChart data={monthlyData} margin={{ top: 16, right: 2, left: 2, bottom: 2 }}>
                                     <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
                                     <Tooltip
@@ -1146,7 +1169,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                         );
                                       }}
                                     />
-                                    <Bar dataKey="hamster" barSize={barWidth} cursor="pointer" isAnimationActive={false}
+                                    <Bar dataKey="hamster" barSize={chartBarWidth} isAnimationActive={false}
                                       shape={renderMonthBar}
                                       onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                       label={(props: any) => {
@@ -1162,6 +1185,27 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                 </ResponsiveContainer>
                               </div>
                             </div>
+                          );
+                        };
+
+                        return (
+                          <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none">
+                            <div className="flex items-start justify-between">
+                              <div className="text-[10px] text-black/45">月度统计</div>
+                              <button
+                                onClick={() => setMonthlyChartFullscreen(true)}
+                                title="全屏查看"
+                                className="flex h-6 w-6 items-center justify-center rounded-md border border-black/10 text-black/40 transition hover:border-black/25 hover:bg-black/5 hover:text-black/70"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                  <path d="M6 2H2v4M10 2h4v4M14 10v4h-4M6 14H2v-4" />
+                                </svg>
+                              </button>
+                            </div>
+                            {renderMonthlyChart(170, barWidth)}
+                            <ChartFullscreenModal open={monthlyChartFullscreen} onClose={() => setMonthlyChartFullscreen(false)} title="月度统计"
+                              render={(h: number) => renderMonthlyChart(h, barWidth)}
+                            />
                           </div>
                         );
                       })()}

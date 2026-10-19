@@ -864,7 +864,7 @@ const MEDAL_CLEAN_TOOL: ToolDef = { icon: "/fans-icon.png", title: "粉丝牌清
 const MEDALS_MAX_PAGES = 100;
 const REVIVE_SHOT_TOOL: ToolDef = { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false };
 const MEDICAL_TOOL: ToolDef = { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false };
-const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "领取年度大会员每月赠送的5个B币，可分别开启自动领取与自动兑换电池，注意兑换是全部B币，包括充值的", needsLogin: true };
+const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "领取年度大会员每月赠送的5个B币，可分别开启自动领取与自动兑换电池。注意，兑换是全部B币，包括充值的", needsLogin: true };
 
 /** 年度大会员 B币 工具的本机配置（按 mid 持久化）：自动领取/自动兑换开关、最近一次兑换月份 */
 const YEAR_VIP_CFG_PREFIX = "year-vip-bcoin:";
@@ -3086,6 +3086,22 @@ export default function HomePage() {
     }
   }, [currentAccount, reloadServerData, refreshData, checkHasLiveRoom]);
 
+  /** 从账号列表移除：仅删除登录态会话，不删用户数据；重新扫码登录即可恢复 */
+  async function removeAccountFromList(sid: string) {
+    try {
+      const res = await dataFetch(`/api/auth/accounts?sid=${encodeURIComponent(sid)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.code === 0) {
+        const next = accounts.filter((a) => a.sid !== sid);
+        setAccounts(next);
+        // 写穿浏览器缓存，避免下次启动短暂显示已删除账号
+        cacheSet(cacheKeys.accounts, next);
+      }
+    } catch (error) {
+      console.error("Failed to remove account:", error);
+    }
+  }
+
   async function switchAccount(sid: string) {
     try {
       const res = await dataFetch("/api/auth/switch", {
@@ -4242,20 +4258,33 @@ export default function HomePage() {
                         .map((acc) => {
                         const isSelected = acc.sid === currentAccount?.sid;
                         return (
-                          <button
+                          <div
                             key={acc.sid}
-                            onClick={() => switchAccount(acc.sid)}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-sm transition ${
-                              isSelected ? "bg-[#1f1c17] text-white" : "hover:bg-black/5 text-black"
+                            className={`w-full flex items-center gap-1 rounded-lg transition ${
+                              isSelected ? "bg-[#1f1c17] text-white" : "hover:bg-black/5"
                             }`}
                           >
-                            {acc.face ? (
-                              <img src={fixImageUrl(acc.face)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
-                            ) : (
-                              <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">{acc.uname.slice(0, 1)}</span>
-                            )}
-                            <span className="truncate flex-1">{acc.uname}</span>
-                          </button>
+                            <button
+                              onClick={() => switchAccount(acc.sid)}
+                              className={`flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left text-sm ${isSelected ? "text-white" : "text-black"}`}
+                            >
+                              {acc.face ? (
+                                <img src={fixImageUrl(acc.face)} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                              ) : (
+                                <span className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center text-xs flex-shrink-0">{acc.uname.slice(0, 1)}</span>
+                              )}
+                              <span className="truncate flex-1">{acc.uname}</span>
+                            </button>
+                            <button
+                              onClick={() => removeAccountFromList(acc.sid)}
+                              title="从列表中删除（不会删除该账号数据，重新扫码登录即可恢复）"
+                              className={`mr-1.5 flex-shrink-0 rounded p-1.5 transition hover:bg-black/5 hover:text-[#e74c3c] ${isSelected ? "text-white/50" : "text-black/30"}`}
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
                         );
                       })}
                     </div>

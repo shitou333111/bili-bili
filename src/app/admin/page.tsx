@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { serverApiUrl, serverPost, isTauri, pageUrl } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
 import { dataFetch } from "@/lib/client-fetch";
@@ -204,6 +204,48 @@ async function adminFetch(url: string, options: RequestInit = {}): Promise<Respo
   return fetch(url, { ...options, headers, credentials: "include" });
 }
 
+/** 配置管理子模块卡片：独立卡片 + 可折叠标题栏 + 标题栏右侧“保存配置”按钮 */
+function ConfigCard({
+  title,
+  collapsed,
+  onToggle,
+  onSave,
+  saved,
+  children,
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  onSave: () => void;
+  saved: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-black/10 bg-white/70 p-2 space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 items-center gap-1.5 text-xs font-semibold hover:text-black/80 transition"
+        >
+          <svg className={`w-3 h-3 shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+          <span className="truncate">{title}</span>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {saved && <span className="text-[10px] text-[#2ecc71]">已保存 ✓</span>}
+          <button
+            onClick={onSave}
+            className="rounded-lg bg-[#1f1c17] px-3 py-1 text-[11px] text-white font-medium hover:opacity-90 transition"
+          >
+            保存配置
+          </button>
+        </div>
+      </div>
+      {!collapsed && <div className="space-y-1.5">{children}</div>}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
   // 首次进入时静默校验/自动登录，期间不渲染登录框，避免“弹出后自动消失”的闪烁
@@ -222,6 +264,12 @@ export default function AdminPage() {
   const [addingAnchor, setAddingAnchor] = useState(false);
   // 用户搜索
   const [userSearch, setUserSearch] = useState("");
+  // 用户列表惰性渲染：先渲染前 50 条，滚动到底部再追加（避免上万用户时页面卡顿）
+  const [userVisible, setUserVisible] = useState(50);
+  useEffect(() => {
+    // 搜索条件变化时重置可见数量
+    setUserVisible(50);
+  }, [userSearch]);
   // 从服务器拉取账号数据时的阻塞遮罩
   const [serverLoading, setServerLoading] = useState(false);
   // 礼物目录（用于盲盒按名称搜索：gift_id -> { name, img }）
@@ -240,13 +288,17 @@ export default function AdminPage() {
   const [fetchingBoxInfo, setFetchingBoxInfo] = useState<number | null>(null);
   // 合成产物名称搜索建议（当前展开的产品行）
   const [productSearch, setProductSearch] = useState<{ act: number; product: number } | null>(null);
-  // 配置模块折叠状态：盲盒配置 / 模拟器活动配置 / 合成活动盈亏配置 默认折叠
+  // 配置模块折叠状态：盲盒配置 / 模拟器活动配置 / 合成活动盈亏配置 / 常见问题 / 素材 默认折叠
   const [blindBoxCollapsed, setBlindBoxCollapsed] = useState(true);
   const [simulatorCollapsed, setSimulatorCollapsed] = useState(true);
   const [synthesisCollapsed, setSynthesisCollapsed] = useState(true);
-  // 帮助页常见问题 / 主播活动素材：默认折叠
   const [faqCollapsed, setFaqCollapsed] = useState(true);
   const [materialsCollapsed, setMaterialsCollapsed] = useState(true);
+  // 公告 / 微信群二维码 / 黑抽 / 推荐主播：保持原有默认展开状态
+  const [announcementCollapsed, setAnnouncementCollapsed] = useState(false);
+  const [wechatQrCollapsed, setWechatQrCollapsed] = useState(false);
+  const [blackdrawCollapsed, setBlackdrawCollapsed] = useState(false);
+  const [recommendedCollapsed, setRecommendedCollapsed] = useState(false);
   // 素材本地文件上传中的条目（null = 无上传中；text 显示进度文案）
   const [materialUploading, setMaterialUploading] = useState<{ idx: number; text: string } | null>(null);
   // 帮助页微信群二维码上传进度（null = 未上传中）
@@ -1476,14 +1528,31 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="admin-root min-h-screen bg-[#faf9f6] py-2 px-2 overflow-x-hidden" style={{ paddingTop: "var(--safe-top, 0px)" }}>
+    <div className="admin-root min-h-screen bg-[#faf9f6] py-2 px-2 overflow-x-hidden" style={{ paddingTop: "calc(var(--safe-top, 0px) + 8px)" }}>
       <SafeAreaStyler />
       <WindowTitleBar />
       <div className="max-w-3xl mx-auto space-y-2">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold">管理后台</h1>
-          <a href="/" className="text-xs text-black/40 hover:text-black/70 transition">← 返回首页</a>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold">管理后台</h1>
+            <button
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-1 text-xs text-black/50 transition hover:border-black/25 hover:text-black/80"
+              title="刷新页面"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 8a6 6 0 1 1-1.76-4.24M14 2v4h-4" />
+              </svg>
+              刷新
+            </button>
+          </div>
+          <a
+            href="/"
+            className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-black/50 transition hover:border-black/25 hover:text-black/80"
+          >
+            返回首页
+          </a>
         </div>
 
         {/* 数据加载失败提示 */}
@@ -1514,8 +1583,17 @@ export default function AdminPage() {
           {filteredUsers.length === 0 ? (
             <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
-            <div className="space-y-1 max-h-80 overflow-y-auto">
-              {filteredUsers.map((user) => (
+            <div
+              className="space-y-1 max-h-80 overflow-y-auto"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                // 滚动接近底部时再渲染 50 条
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
+                  setUserVisible((v) => (v < filteredUsers.length ? Math.min(v + 50, filteredUsers.length) : v));
+                }
+              }}
+            >
+              {filteredUsers.slice(0, userVisible).map((user) => (
                 <div key={user.mid} className={`flex items-center gap-2 rounded-lg border p-1.5 ${user.isCurrent ? "border-[#00a1d6] bg-[#eef3fb]" : "border-black/10"}`}>
                   {user.face ? <img src={fixImageUrl(user.face)} alt="" className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" /> : <div className="w-8 h-8 rounded-full flex-shrink-0 bg-black/5" />}
                   <div className="flex-1 min-w-0">
@@ -1567,6 +1645,11 @@ export default function AdminPage() {
                   </div>
                 </div>
               ))}
+              {filteredUsers.length > userVisible && (
+                <p className="py-1 text-center text-[10px] text-black/35">
+                  已显示 {userVisible} / {filteredUsers.length}，继续向下滚动加载更多
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1632,25 +1715,21 @@ export default function AdminPage() {
           )}
         </div>
 
-        {/* Config */}
+        {/* Config：每个配置模块为独立可折叠卡片，卡片标题栏右侧带各自的“保存配置”按钮 */}
         {config && (
-          <div className="rounded-xl border border-black/10 bg-white/80 p-2 space-y-1.5">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold">配置管理</h2>
-              <div className="flex items-center gap-2">
-                {configSaved && <span className="text-xs text-[#2ecc71]">已保存 ✓</span>}
-                <button
-                  onClick={handleSaveConfig}
-                  className="rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs text-white font-medium hover:opacity-90 transition"
-                >
-                  保存配置
-                </button>
-              </div>
             </div>
 
             {/* 帮助页公告 */}
-            <div className="space-y-1">
-              <h3 className="text-xs font-semibold">帮助页公告</h3>
+            <ConfigCard
+              title="帮助页公告"
+              collapsed={announcementCollapsed}
+              onToggle={() => setAnnouncementCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
               <p className="text-[10px] text-black/40">显示在“帮助”页面最上方的公告内容，留空则不显示公告卡片。支持换行。</p>
               <textarea
                 value={config.announcement ?? ""}
@@ -1659,22 +1738,16 @@ export default function AdminPage() {
                 rows={3}
                 className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
               />
-            </div>
+            </ConfigCard>
 
             {/* 帮助页常见问题（可折叠，默认折叠） */}
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => setFaqCollapsed((v) => !v)}
-                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
-              >
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-3 h-3 transition-transform ${faqCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
-                  帮助页常见问题
-                </span>
-                <span className="text-[10px] font-normal text-black/35">{faqCollapsed ? "展开" : "折叠"}</span>
-              </button>
-              {!faqCollapsed && (<>
+            <ConfigCard
+              title="帮助页常见问题"
+              collapsed={faqCollapsed}
+              onToggle={() => setFaqCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
               <p className="text-[10px] text-black/40">显示在“帮助”页面“开机自启动”下方的“常见问题”卡片，每个问题为可展开折叠项（默认折叠）。全部留空则不显示该卡片。</p>
               <div className="flex justify-end">
                 <button
@@ -1725,13 +1798,17 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
-              </>)}
-            </div>
+            </ConfigCard>
 
             {/* 帮助页微信群二维码（扫码反馈） */}
-            <div className="space-y-1">
-              <h3 className="text-xs font-semibold">帮助页微信群二维码</h3>
-              <p className="text-[10px] text-black/40">“帮助”页面反馈卡片的微信群二维码图片，点“上传本地文件”上传到服务器（上传后需点右上角“保存配置”）。留空则显示默认二维码。</p>
+            <ConfigCard
+              title="帮助页微信群二维码"
+              collapsed={wechatQrCollapsed}
+              onToggle={() => setWechatQrCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <p className="text-[10px] text-black/40">“帮助”页面反馈卡片的微信群二维码图片，点“上传本地文件”上传到服务器（上传后需点卡片右上角“保存配置”）。留空则显示默认二维码。</p>
               <div className="flex items-center gap-2">
                 {(config.wechat_qr_url ?? "").trim() === "" ? (
                   <div className="w-20 h-20 rounded border border-dashed border-black/15 shrink-0 flex items-center justify-center text-[10px] text-black/30">未配置</div>
@@ -1774,23 +1851,17 @@ export default function AdminPage() {
                   </label>
                 </div>
               </div>
-            </div>
+            </ConfigCard>
 
             {/* 主播活动素材上传（可折叠，默认折叠） */}
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => setMaterialsCollapsed((v) => !v)}
-                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
-              >
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-3 h-3 transition-transform ${materialsCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
-                  主播活动素材上传
-                </span>
-                <span className="text-[10px] font-normal text-black/35">{materialsCollapsed ? "展开" : "折叠"}</span>
-              </button>
-              {!materialsCollapsed && (<>
-              <p className="text-[10px] text-black/40">显示在“主播”页面“其他”tab 顶部的“活动素材下载”卡片，每个素材含名称与图片链接（gif 或静态图片）。链接可直接粘贴远程地址，也可点“上传本地文件”上传到服务器（上传后需点右上角“保存配置”）。全部留空则不显示该卡片。</p>
+            <ConfigCard
+              title="主播活动素材上传"
+              collapsed={materialsCollapsed}
+              onToggle={() => setMaterialsCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <p className="text-[10px] text-black/40">显示在“主播”页面“其他”tab 顶部的“活动素材下载”卡片，每个素材含名称与图片链接（gif 或静态图片）。链接可直接粘贴远程地址，也可点“上传本地文件”上传到服务器（上传后需点卡片右上角“保存配置”）。全部留空则不显示该卡片。</p>
               <div className="flex justify-end">
                 <button
                   onClick={() => setConfig({ ...config, anchor_activity_materials: [{ name: "", url: "" }, ...(config.anchor_activity_materials ?? [])] })}
@@ -1856,25 +1927,16 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
-              </>)}
-            </div>
-
-            <hr className="border-t-2 border-black/30" />
+            </ConfigCard>
 
             {/* Blind boxes */}
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => setBlindBoxCollapsed((v) => !v)}
-                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
-              >
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-3 h-3 transition-transform ${blindBoxCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
-                  盲盒配置
-                </span>
-                <span className="text-[10px] font-normal text-black/35">{blindBoxCollapsed ? "展开" : "折叠"}</span>
-              </button>
-              {!blindBoxCollapsed && (<>
+            <ConfigCard
+              title="盲盒配置"
+              collapsed={blindBoxCollapsed}
+              onToggle={() => setBlindBoxCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-[10px] text-black/40">☑盈亏 = 纳入“全部盲盒”下拉框，弹幕查询盈亏涵盖该盲盒；☑卡片 = 单独作为一个盲盒卡片显示（需先勾「盈亏」）</p>
                 <button onClick={addBlindBox} className="text-xs text-[#00a1d6] hover:underline shrink-0">+ 添加盲盒</button>
@@ -2150,186 +2212,16 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
-              </>)}
-            </div>
-
-            <hr className="border-t-2 border-black/30" />
-
-            {/* 黑抽（真实合成活动）URL 配置 */}
-            <div className="space-y-1">
-              <h3 className="text-xs font-semibold">黑抽（真实合成活动）页面 URL</h3>
-              <p className="text-[10px] text-black/40">
-                填写 B站 真实合成活动页面 URL 模板，使用 {'{room_id}'} 和 {'{uid}'} 作为占位符（{'{room_id}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{room_id}'}&uid={'{uid}'}#/play?config_id=...
-              </p>
-              <textarea
-                value={config.real_activity_url}
-                onChange={(e) => setConfig({ ...config, real_activity_url: toActivityUrlTemplate(e.target.value) })}
-                placeholder="粘贴活动 URL 模板"
-                rows={Math.max(1, Math.ceil((config.real_activity_url?.length ?? 0) / 80))}
-                className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
-              />
-              {config.real_activity_url && (
-                <p className="text-[10px] text-[#2ecc71]">✓ 已配置，黑抽入口可用</p>
-              )}
-              {!config.real_activity_url && (
-                <p className="text-[10px] text-black/40">⚠ 未配置，首页"黑抽"卡片将变灰不可点击</p>
-              )}
-            </div>
-
-            <hr className="border-t-2 border-black/30" />
-
-            {/* 模拟器活动配置（玩法可热更新） */}
-            <div className="space-y-1">
-              <button
-                onClick={() => setSimulatorCollapsed((v) => !v)}
-                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
-              >
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-3 h-3 transition-transform ${simulatorCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
-                  模拟器活动配置（玩法可热更新）
-                </span>
-                <span className="text-[10px] font-normal text-black/35">{simulatorCollapsed ? "展开" : "折叠"}</span>
-              </button>
-              {!simulatorCollapsed && (<>
-              <div className="flex items-center justify-between">
-                <button onClick={addSimulatorActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
-              </div>
-              <p className="text-[10px] text-black/40">
-                模拟器页面活动入口：每个活动配置真实 H5 链接 + 选择背后玩法算法类型。算法类型对应 mock-shim.js 里的一套 mock 算法；
-                新活动若属于已有算法类型，只需新增配置并选择对应类型即可，无需改代码；全新玩法需实现算法后通过前端热更新推送（无需原生包更新）。
-                所有活动都会列出，勾选前面的复选框即在模拟器显示入口卡片；全部未勾选则模拟器不显示活动入口。
-              </p>
-              <div className="space-y-1.5">
-                {config.simulator_activities.map((act, i) => (
-                  <div key={i} className={`rounded-lg border border-black/10 p-1.5 space-y-1 ${!act.enabled ? "opacity-50" : ""}`}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <input
-                        type="checkbox"
-                        checked={act.enabled}
-                        onChange={(e) => updateSimulatorActivity(i, "enabled", e.target.checked)}
-                        className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
-                        title="勾选为展示活动"
-                      />
-                      <input
-                        type="text"
-                        value={act.title}
-                        onChange={(e) => updateSimulatorActivity(i, "title", e.target.value)}
-                        placeholder="活动名称（如：玲珑宝斋）"
-                        className="flex-1 min-w-[120px] rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
-                      />
-                      <select
-                        value={act.algorithmType}
-                        onChange={(e) => updateSimulatorActivity(i, "algorithmType", e.target.value)}
-                        className="rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30 shrink-0"
-                        title="选择玩法算法类型"
-                      >
-                        {Object.entries(ALGORITHM_REGISTRY).map(([key, def]) => (
-                          <option key={key} value={key}>{def.label}</option>
-                        ))}
-                      </select>
-                      <button onClick={() => removeSimulatorActivity(i)} className="text-xs text-[#e74c3c] hover:underline ml-auto">删除</button>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="block">
-                        <span className="text-[10px] text-black/50">活动 ID（唯一，如 fans-autumn-2026）</span>
-                        <input
-                          type="text"
-                          value={act.id}
-                          onChange={(e) => updateSimulatorActivity(i, "id", e.target.value)}
-                          placeholder="fans-autumn-2026"
-                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-[10px] text-black/50">入口卡片图片 URL</span>
-                        <input
-                          type="text"
-                          value={act.entryImage}
-                          onChange={(e) => updateSimulatorActivity(i, "entryImage", e.target.value)}
-                          placeholder="https://..."
-                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-[10px] text-black/50">活动页面 URL 模板（{'{room_id}'}=直播间号、{'{uid}'}=主播UID，打开时替换）</span>
-                        <input
-                          type="text"
-                          value={act.urlTemplate}
-                          onChange={(e) => updateSimulatorActivity(i, "urlTemplate", e.target.value)}
-                          placeholder="https://live.bilibili.com/activity/...?room_id={room_id}&uid={uid}#/play?..."
-                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
-                        />
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-1 text-[10px] text-black/50">
-                          <span>roomId</span>
-                          <input
-                            type="number"
-                            value={act.roomId || ""}
-                            onChange={(e) => updateSimulatorActivity(i, "roomId", Number(e.target.value))}
-                            placeholder="0"
-                            className="w-24 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
-                          />
-                        </label>
-                        <label className="flex items-center gap-1 text-[10px] text-black/50">
-                          <span>uid</span>
-                          <input
-                            type="number"
-                            value={act.uid || ""}
-                            onChange={(e) => updateSimulatorActivity(i, "uid", Number(e.target.value))}
-                            placeholder="0"
-                            className="w-28 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
-                          />
-                        </label>
-                        <span className="text-[10px] text-black/30 ml-auto">运行时会被当前主播信息覆盖</span>
-                      </div>
-                      <label className="block">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] text-black/50">算法参数（JSON，可选；覆盖算法默认值，如 {"{"}"draw_price":3000{"}"}）</span>
-                          <button
-                            type="button"
-                            onClick={() => openParamsEditor(i)}
-                            className="text-[10px] text-[#00a1d6] hover:underline shrink-0"
-                          >
-                            全屏编辑
-                          </button>
-                        </div>
-                        <textarea
-                          value={act.algorithmParams}
-                          onChange={(e) => updateSimulatorActivity(i, "algorithmParams", e.target.value)}
-                          rows={6}
-                          placeholder="{ }"
-                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-black/30 resize-y"
-                        />
-                      </label>
-                      {ALGORITHM_REGISTRY[act.algorithmType]?.description && (
-                        <p className="text-[10px] text-black/30">{ALGORITHM_REGISTRY[act.algorithmType].description}</p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {config.simulator_activities.length === 0 && (
-                  <p className="text-[10px] text-black/30">暂无活动配置，点击"+ 添加活动"新增</p>
-                )}
-              </div>
-              </>)}
-            </div>
-
-            <hr className="border-t-2 border-black/30" />
+            </ConfigCard>
 
             {/* Synthesis activities */}
-            <div className="space-y-1">
-              <button
-                onClick={() => setSynthesisCollapsed((v) => !v)}
-                className="flex items-center justify-between w-full text-xs font-semibold hover:text-black/80 transition"
-              >
-                <span className="flex items-center gap-1.5">
-                  <svg className={`w-3 h-3 transition-transform ${synthesisCollapsed ? "" : "rotate-90"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
-                  合成活动盈亏配置
-                </span>
-                <span className="text-[10px] font-normal text-black/35">{synthesisCollapsed ? "展开" : "折叠"}</span>
-              </button>
-              {!synthesisCollapsed && (<>
+            <ConfigCard
+              title="合成活动盈亏配置"
+              collapsed={synthesisCollapsed}
+              onToggle={() => setSynthesisCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
               <div className="flex items-center justify-between">
                 <button onClick={addActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
               </div>
@@ -2467,16 +2359,173 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
-              </>)}
-            </div>
+            </ConfigCard>
 
-            <hr className="border-t-2 border-black/30" />
+            {/* 模拟器活动配置（玩法可热更新） */}
+            <ConfigCard
+              title="模拟器活动配置（玩法可热更新）"
+              collapsed={simulatorCollapsed}
+              onToggle={() => setSimulatorCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <div className="flex items-center justify-between">
+                <button onClick={addSimulatorActivity} className="text-xs text-[#00a1d6] hover:underline">+ 添加活动</button>
+              </div>
+              <p className="text-[10px] text-black/40">
+                模拟器页面活动入口：每个活动配置真实 H5 链接 + 选择背后玩法算法类型。算法类型对应 mock-shim.js 里的一套 mock 算法；
+                新活动若属于已有算法类型，只需新增配置并选择对应类型即可，无需改代码；全新玩法需实现算法后通过前端热更新推送（无需原生包更新）。
+                所有活动都会列出，勾选前面的复选框即在模拟器显示入口卡片；全部未勾选则模拟器不显示活动入口。
+              </p>
+              <div className="space-y-1.5">
+                {config.simulator_activities.map((act, i) => (
+                  <div key={i} className={`rounded-lg border border-black/10 p-1.5 space-y-1 ${!act.enabled ? "opacity-50" : ""}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <input
+                        type="checkbox"
+                        checked={act.enabled}
+                        onChange={(e) => updateSimulatorActivity(i, "enabled", e.target.checked)}
+                        className="w-3.5 h-3.5 accent-[#00a1d6] shrink-0"
+                        title="勾选为展示活动"
+                      />
+                      <input
+                        type="text"
+                        value={act.title}
+                        onChange={(e) => updateSimulatorActivity(i, "title", e.target.value)}
+                        placeholder="活动名称（如：玲珑宝斋）"
+                        className="flex-1 min-w-[120px] rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <select
+                        value={act.algorithmType}
+                        onChange={(e) => updateSimulatorActivity(i, "algorithmType", e.target.value)}
+                        className="rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30 shrink-0"
+                        title="选择玩法算法类型"
+                      >
+                        {Object.entries(ALGORITHM_REGISTRY).map(([key, def]) => (
+                          <option key={key} value={key}>{def.label}</option>
+                        ))}
+                      </select>
+                      <button onClick={() => removeSimulatorActivity(i)} className="text-xs text-[#e74c3c] hover:underline ml-auto">删除</button>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">活动 ID（唯一，如 fans-autumn-2026）</span>
+                        <input
+                          type="text"
+                          value={act.id}
+                          onChange={(e) => updateSimulatorActivity(i, "id", e.target.value)}
+                          placeholder="fans-autumn-2026"
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">入口卡片图片 URL</span>
+                        <input
+                          type="text"
+                          value={act.entryImage}
+                          onChange={(e) => updateSimulatorActivity(i, "entryImage", e.target.value)}
+                          placeholder="https://..."
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-black/50">活动页面 URL 模板（{'{room_id}'}=直播间号、{'{uid}'}=主播UID，打开时替换）</span>
+                        <input
+                          type="text"
+                          value={act.urlTemplate}
+                          onChange={(e) => updateSimulatorActivity(i, "urlTemplate", e.target.value)}
+                          placeholder="https://live.bilibili.com/activity/...?room_id={room_id}&uid={uid}#/play?..."
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                        />
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 text-[10px] text-black/50">
+                          <span>roomId</span>
+                          <input
+                            type="number"
+                            value={act.roomId || ""}
+                            onChange={(e) => updateSimulatorActivity(i, "roomId", Number(e.target.value))}
+                            placeholder="0"
+                            className="w-24 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1 text-[10px] text-black/50">
+                          <span>uid</span>
+                          <input
+                            type="number"
+                            value={act.uid || ""}
+                            onChange={(e) => updateSimulatorActivity(i, "uid", Number(e.target.value))}
+                            placeholder="0"
+                            className="w-28 rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                          />
+                        </label>
+                        <span className="text-[10px] text-black/30 ml-auto">运行时会被当前主播信息覆盖</span>
+                      </div>
+                      <label className="block">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-black/50">算法参数（JSON，可选；覆盖算法默认值，如 {"{"}"draw_price":3000{"}"}）</span>
+                          <button
+                            type="button"
+                            onClick={() => openParamsEditor(i)}
+                            className="text-[10px] text-[#00a1d6] hover:underline shrink-0"
+                          >
+                            全屏编辑
+                          </button>
+                        </div>
+                        <textarea
+                          value={act.algorithmParams}
+                          onChange={(e) => updateSimulatorActivity(i, "algorithmParams", e.target.value)}
+                          rows={6}
+                          placeholder="{ }"
+                          className="w-full rounded border border-black/10 px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-black/30 resize-y"
+                        />
+                      </label>
+                      {ALGORITHM_REGISTRY[act.algorithmType]?.description && (
+                        <p className="text-[10px] text-black/30">{ALGORITHM_REGISTRY[act.algorithmType].description}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {config.simulator_activities.length === 0 && (
+                  <p className="text-[10px] text-black/30">暂无活动配置，点击"+ 添加活动"新增</p>
+                )}
+              </div>
+            </ConfigCard>
+
+            {/* 黑抽（真实合成活动）URL 配置 */}
+            <ConfigCard
+              title="黑抽（真实合成活动）页面 URL"
+              collapsed={blackdrawCollapsed}
+              onToggle={() => setBlackdrawCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <p className="text-[10px] text-black/40">
+                填写 B站 真实合成活动页面 URL 模板，使用 {'{room_id}'} 和 {'{uid}'} 作为占位符（{'{room_id}'}=直播间号、{'{uid}'}=用户UID）；留空则"黑抽"卡片变灰不可点击。例如：https://live.bilibili.com/activity/...?room_id={'{room_id}'}&uid={'{uid}'}#/play?config_id=...
+              </p>
+              <textarea
+                value={config.real_activity_url}
+                onChange={(e) => setConfig({ ...config, real_activity_url: toActivityUrlTemplate(e.target.value) })}
+                placeholder="粘贴活动 URL 模板"
+                rows={Math.max(1, Math.ceil((config.real_activity_url?.length ?? 0) / 80))}
+                className="w-full resize-y rounded border border-black/10 px-2 py-1.5 text-xs focus:outline-none focus:border-black/30"
+              />
+              {config.real_activity_url && (
+                <p className="text-[10px] text-[#2ecc71]">✓ 已配置，黑抽入口可用</p>
+              )}
+              {!config.real_activity_url && (
+                <p className="text-[10px] text-black/40">⚠ 未配置，首页"黑抽"卡片将变灰不可点击</p>
+              )}
+            </ConfigCard>
 
             {/* 推荐主播管理 */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold">推荐主播配置</h3>
-              </div>
+            <ConfigCard
+              title="推荐主播配置"
+              collapsed={recommendedCollapsed}
+              onToggle={() => setRecommendedCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
               <p className="text-[10px] text-black/40">勾选 = 在帮助页「主播推荐」卡片中显示；顺序决定页面展示顺序</p>
               {/* 添加主播 */}
               <div className="flex items-center gap-2">
@@ -2553,7 +2602,7 @@ export default function AdminPage() {
                     ))
                 )}
               </div>
-            </div>
+            </ConfigCard>
           </div>
         )}
 
@@ -2611,48 +2660,42 @@ export default function AdminPage() {
 
           {lotteryRecords.length === 0 ? (
             <p className="text-xs text-black/30 py-3 text-center">暂无抽奖记录</p>
+          ) : lotteryRecords.every((rec) => !rec.won) ? (
+            <p className="text-xs text-black/30 py-3 text-center">暂无中奖记录</p>
           ) : (
             <div className="space-y-1.5 max-h-72 overflow-y-auto">
-              {lotteryRecords.map((rec) => (
+              {/* 只渲染中奖记录（未中奖记录量大时避免渲染卡顿，头部统计仍显示完整数量） */}
+              {lotteryRecords.filter((rec) => rec.won).map((rec) => (
                 <div
                   key={`${rec.mid}_${rec.drawnAt}`}
-                  className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${
-                    rec.won
-                      ? "border-[#f59e0b]/40 bg-gradient-to-r from-[#fef3c7]/70 to-[#fde68a]/50"
-                      : "border-black/10"
-                  }`}
+                  className="flex items-center gap-2 rounded-lg border px-2 py-1 border-[#f59e0b]/40 bg-gradient-to-r from-[#fef3c7]/70 to-[#fde68a]/50"
                 >
-                  <span className="text-base flex-shrink-0">{rec.won ? "🎉" : "🎟️"}</span>
+                  <span className="text-base flex-shrink-0">🎉</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium truncate">
                       {rec.uname || "未知用户"}
-                      {rec.won && (
-                        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#f59e0b] text-white text-[10px] font-semibold align-middle">中奖</span>
-                      )}
                     </div>
-                    <div className="text-[10px] text-black/35 mt-0.5">UID {rec.mid} · 概率 {rec.odds}</div>
+                    <div className="text-[10px] text-black/35 mt-0.5">UID {rec.mid}</div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <div className={`text-[10px] font-medium ${rec.won ? "text-[#b45309]" : "text-black/40"}`}>
-                      {rec.won ? `获得${rec.prize}` : "未中奖"}
+                    <div className="text-[10px] font-medium text-[#b45309]">
+                      概率 {rec.odds} · {rec.prize.replace("一个月", "")}
                     </div>
                     <div className="text-[10px] text-black/30 mt-0.5">{new Date(rec.drawnAt).toLocaleString("zh-CN")}</div>
                   </div>
-                  {/* 发放状态：仅中奖记录，标记后不可重复发放 */}
-                  {rec.won && (
-                    rec.rewardGranted ? (
-                      <span className="flex-shrink-0 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600">
-                        已发放
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => grantLotteryReward(rec.mid)}
-                        disabled={lotteryGrantingMid === rec.mid}
-                        className="flex-shrink-0 rounded-full border border-[#f59e0b]/50 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-[#b45309] hover:bg-amber-100 disabled:opacity-50"
-                      >
-                        {lotteryGrantingMid === rec.mid ? "标记中…" : "标记已发放"}
-                      </button>
-                    )
+                  {/* 发放状态：中奖记录标记后不可重复发放 */}
+                  {rec.rewardGranted ? (
+                    <span className="flex-shrink-0 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600">
+                      已发放
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => grantLotteryReward(rec.mid)}
+                      disabled={lotteryGrantingMid === rec.mid}
+                      className="flex-shrink-0 rounded-full border border-[#f59e0b]/50 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-[#b45309] hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      {lotteryGrantingMid === rec.mid ? "标记中…" : "未发放"}
+                    </button>
                   )}
                 </div>
               ))}
@@ -2663,7 +2706,7 @@ export default function AdminPage() {
         {/* 全局访问开关（kill switch）：左侧按钮一键切断/恢复
             「所有客户端对服务器 API 的访问」（放行 /api/admin/*，管理后台始终可用），
             右侧为状态与文字说明。发布后出 BUG 时的紧急止损保底措施。 */}
-        <div className="rounded-xl border border-black/10 bg-white/80 p-2">
+        <div className="mb-8 rounded-xl border border-black/10 bg-white/80 p-2">
           <div className="flex items-stretch gap-3">
             <button
               type="button"

@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG } from "@/lib/layout";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
+import ChartFullscreenModal from "@/components/ChartFullscreenModal";
 import PieTooltip from "@/components/PieTooltip";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
@@ -652,6 +653,8 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   // 点击页面其他区域自动消失（无定时自动关闭）
   const [showAntiKillDesc, setShowAntiKillDesc] = React.useState(false);
   const [showAntiKillStats, setShowAntiKillStats] = React.useState(false);
+  // 月度统计柱状图全屏模态框
+  const [monthlyChartFullscreen, setMonthlyChartFullscreen] = React.useState(false);
   const antiKillDescRef = React.useRef<HTMLDivElement>(null);
   const antiKillStatsRef = React.useRef<HTMLDivElement>(null);
   const antiKillHintBtnRef = React.useRef<HTMLButtonElement>(null);
@@ -882,18 +885,58 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   {/* Monthly bar chart */}
                   {monthlyData.length > 0 && (() => {
                     const barWidth = 10;
-                    const minWidth = Math.max(monthlyData.length * (barWidth + 4) + 20, 100);
                     const shouldSkipLabels = monthlyData.length > 8;
+                    // 月度柱自定义形状：默认灰色、选中月黑色。
+                    // 每根柱附一个与 hover 高亮列完全一致的透明热区（完整 category band 宽 × 绘图区全高），
+                    // 仅扩大点击命中范围（矮柱也能整列点中），柱体本身保持原有的顶部圆角显示效果。
+                    const renderMonthBar = (p: any) => {
+                      const x = Number(p.x ?? 0);
+                      const y = Number(p.y ?? 0);
+                      const w = Number(p.width ?? 0);
+                      const h = Number(p.height ?? 0);
+                      const vb = p.parentViewBox;
+                      // 热区宽度 = hover cursor 的 band 宽（绘图区宽 / 月份总数），以柱中心对齐
+                      const count = monthlyData.length;
+                      const bandW = vb && typeof vb.width === "number" && count > 0 ? vb.width / count : w;
+                      const bandX = x + w / 2 - bandW / 2;
+                      const plotTop = vb && typeof vb.y === "number" ? vb.y : y;
+                      const plotH = vb && typeof vb.height === "number" ? vb.height : Math.max(y + h - plotTop, 0);
+                      const fill = p.payload?.month === selectedMonth ? "#1f1c17" : "#9ca3af";
+                      const r = Math.min(3, w / 2, h);
+                      const d =
+                        h > 0 && r > 0
+                          ? `M${x},${y + r}A${r},${r} 0 0 1 ${x + r},${y}L${x + w - r},${y}A${r},${r} 0 0 1 ${x + w},${y + r}L${x + w},${y + h}L${x},${y + h}Z`
+                          : "";
+                      return (
+                        <g>
+                          <rect x={bandX} y={plotTop} width={bandW} height={plotH} fill="rgba(0,0,0,0)" />
+                          {d && <path d={d} fill={fill} />}
+                        </g>
+                      );
+                    };
 
-                    return (
-                      <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none">
-                        <div className="text-[10px] text-black/45">月度统计</div>
+                    // 同一张月度图：内联小图 / 全屏模态框大图共用（仅高度与柱宽不同）
+                    const renderMonthlyChart = (height: number, chartBarWidth: number) => {
+                      const minWidth = Math.max(monthlyData.length * (chartBarWidth + 6) + 20, 100);
+                      return (
                         <div className="overflow-x-auto" style={{ scrollbarWidth: "thin" }}>
                           <div style={{ width: "100%", minWidth: `${minWidth}px` }}>
-                            <ResponsiveContainer width="100%" height={170} minWidth={0}>
+                            <ResponsiveContainer width="100%" height={height} minWidth={0}>
                               <BarChart data={monthlyData} margin={{ top: 16, right: 2, left: 2, bottom: 2 }}>
                                 <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
-                                <Bar dataKey="coins" radius={[3, 3, 0, 0]} barSize={barWidth} isAnimationActive={false} activeBar={false}
+                                <Tooltip
+                                  content={({ active, label, payload }: any) => {
+                                    if (!(active && payload && payload.length)) return null;
+                                    return (
+                                      <div style={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff", padding: "8px 12px", fontSize: "12px" }}>
+                                        <p style={{ margin: 0, fontWeight: 500 }}>{monthLabel(String(label))}</p>
+                                        <p style={{ margin: "4px 0 0 0", color: "#1f1c17" }}>{formatBatteryShort(Number(payload[0].value))} 电池</p>
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <Bar dataKey="coins" barSize={chartBarWidth} isAnimationActive={false} activeBar={false}
+                                  shape={renderMonthBar}
                                   onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                   label={(props: any) => {
                                     const { x, y, width, value, index } = props;
@@ -903,15 +946,32 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                                     const text = value >= 10000 ? `${(value / 10000).toFixed(1)}万` : value;
                                     return <text x={x + width / 2} y={y - 4} textAnchor="middle" fontSize={9} fill="#888">{text}</text>;
                                   }}
-                                >
-                                  {monthlyData.map((entry) => (
-                                    <Cell key={entry.month} fill={entry.month === selectedMonth ? "#2563eb" : "#1f1c17"} />
-                                  ))}
-                                </Bar>
+                                />
                               </BarChart>
                             </ResponsiveContainer>
                           </div>
                         </div>
+                      );
+                    };
+
+                    return (
+                      <div className="outline-none [&_*]:outline-none [&_*]:focus:outline-none">
+                        <div className="flex items-start justify-between">
+                          <div className="text-[10px] text-black/45">月度统计</div>
+                          <button
+                            onClick={() => setMonthlyChartFullscreen(true)}
+                            title="全屏查看"
+                            className="flex h-6 w-6 items-center justify-center rounded-md border border-black/10 text-black/40 transition hover:border-black/25 hover:bg-black/5 hover:text-black/70"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                              <path d="M6 2H2v4M10 2h4v4M14 10v4h-4M6 14H2v-4" />
+                            </svg>
+                          </button>
+                        </div>
+                        {renderMonthlyChart(170, barWidth)}
+                        <ChartFullscreenModal open={monthlyChartFullscreen} onClose={() => setMonthlyChartFullscreen(false)} title="月度统计"
+                          render={(h: number) => renderMonthlyChart(h, barWidth)}
+                        />
                       </div>
                     );
                   })()}

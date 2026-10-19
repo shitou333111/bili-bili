@@ -260,6 +260,30 @@ body {
   animation: progress-slide 1.4s infinite ease-in-out;
 }
 
+/* 「一键添加浏览器源」未添加时的红色提醒：
+   波纹边框从按钮向外扩散并消失（两道错峰循环）。
+   用 inset 从 0 → -6px 扩边：左右上下为同一扩散距离（scale 缩放会按按钮长宽比
+   放大 → 左右幅度远大于上下，故弃用 scale）；6px 为收敛后的提醒幅度。 */
+@keyframes source-alert-ripple {
+  0% { inset: 0; opacity: 0.9; }
+  70% { opacity: 0.12; }
+  100% { inset: -8px; opacity: 0; }
+}
+@keyframes source-alert-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  55% { box-shadow: 0 0 6px 2px rgba(239, 68, 68, 0.75); }
+}
+.source-alert-ripple {
+  animation: source-alert-ripple 1.8s ease-out infinite;
+  pointer-events: none;
+}
+.source-alert-btn {
+  animation: source-alert-glow 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .source-alert-ripple, .source-alert-btn { animation: none; }
+}
+
 /* 防氪记录圆形按钮：湖面波浪水平平移（宽 200%，平移 -50% 无缝循环） */
 @keyframes anti-kill-wave-x {
   from { transform: translateX(0); }

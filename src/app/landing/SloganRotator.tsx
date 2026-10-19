@@ -55,7 +55,7 @@ function applyAutoplayDelay(swiper: SwiperType) {
 
 export default function SloganRotator() {
   return (
-    <div className="mt-8 w-full sm:mt-12">
+    <div className="mx-auto mt-8 w-full max-w-4xl sm:mt-12">
       <Swiper
         modules={[Autoplay]}
         speed={SPEED_MS}

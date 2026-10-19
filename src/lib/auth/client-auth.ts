@@ -228,6 +228,24 @@ export async function clientGetAccounts(platform: Platform): Promise<{
   };
 }
 
+/**
+ * 从账号列表删除一个会话（仅移除登录态，uid_<mid> 用户数据保持不变）。
+ * 用户重新扫码登录后按 mid 新建会话，即可快速恢复使用。
+ */
+export async function clientRemoveAccount(platform: Platform, sid: string): Promise<{ code: number; message?: string }> {
+  const state = await platform.getSessionState();
+  if (!state.sessions.some((s) => s.sid === sid)) {
+    return { code: 1, message: "会话不存在" };
+  }
+  await platform.setSessionState({
+    ...state,
+    sessions: state.sessions.filter((s) => s.sid !== sid),
+    // 防御：若误删当前会话，清空 currentSid 避免悬空指向
+    currentSid: state.currentSid === sid ? null : state.currentSid,
+  });
+  return { code: 0 };
+}
+
 // ==================== 登录状态 ====================
 
 export async function clientGetStatus(platform: Platform): Promise<{

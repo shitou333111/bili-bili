@@ -1574,17 +1574,26 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 <p className="min-w-0 flex-1 text-xs text-black/45 leading-relaxed">
                   使用前提是在直播姬中添加本浏览器源
                 </p>
-                <button
-                  onClick={() => void handleAddSource()}
-                  disabled={sourceAdding || sourceAdded}
-                  className="shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-white shadow-sm transition active:scale-[0.97]"
-                  style={{
-                    background: sourceAdded ? "#22c55e" : "#ef4444",
-                    cursor: sourceAdding || sourceAdded ? "default" : "pointer",
-                  }}
-                >
-                  {sourceAdding ? "添加中…" : sourceAdded ? "浏览器源已经添加" : "一键添加浏览器源"}
-                </button>
+                {/* 未添加时：红色 + 两道错峰波纹向外扩散 + 光晕闪烁，强化提醒 */}
+                <span className="relative inline-flex shrink-0">
+                  {!(sourceAdded || sourceAdding) && (
+                    <>
+                      <span aria-hidden className="source-alert-ripple absolute inset-0 rounded-full border-2 border-[#ef4444]" />
+                      <span aria-hidden className="source-alert-ripple absolute inset-0 rounded-full border-2 border-[#ef4444] [animation-delay:0.9s]" />
+                    </>
+                  )}
+                  <button
+                    onClick={() => void handleAddSource()}
+                    disabled={sourceAdding || sourceAdded}
+                    className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-white shadow-sm transition active:scale-[0.97] ${!(sourceAdded || sourceAdding) ? "source-alert-btn" : ""}`}
+                    style={{
+                      background: sourceAdded ? "#22c55e" : "#ef4444",
+                      cursor: sourceAdding || sourceAdded ? "default" : "pointer",
+                    }}
+                  >
+                    {sourceAdding ? "添加中…" : sourceAdded ? "浏览器源已经添加" : "一键添加浏览器源"}
+                  </button>
+                </span>
               </div>
               {/* 手动添加引导：默认折叠（含浏览器源地址与手动步骤） */}
               <button

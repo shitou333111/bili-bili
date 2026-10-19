@@ -74,6 +74,10 @@ async function dispatchNative(
 
   switch (pathname) {
     case "/api/auth/accounts": {
+      if (method === "DELETE") {
+        const { clientRemoveAccount } = await import("./auth/client-auth");
+        return jsonResponse(await clientRemoveAccount(platform, query.get("sid") ?? ""));
+      }
       const { clientGetAccounts } = await import("./auth/client-auth");
       return jsonResponse(await clientGetAccounts(platform));
     }

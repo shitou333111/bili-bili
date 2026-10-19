@@ -76,7 +76,9 @@ export default function LandingPage() {
           本页是官网首页（bili-bili.icu 内部改写到 /landing），App 内已不再内嵌进入，
           因此不渲染页面内返回条。 */}
       <WindowTitleBar />
-      <div className="content-wrapper px-5 pb-16 pt-6 sm:px-8 sm:pt-10">
+      {/* 注意：这里不能用 content-wrapper（其 max-width 跟随 APP 内容宽度 page_max_width，
+          会把官网限成 APP 窄栏）。各 section 自带 mx-auto max-w-*，外层保持全宽自适应。 */}
+      <div className="w-full px-5 pb-16 pt-6 sm:px-8 sm:pt-10">
         {/* ============ Hero ============ */}
         <section className="flex flex-col items-center pt-4 text-center sm:pt-6">
           {/* 图标 + 标题同一行 */}
@@ -109,8 +111,8 @@ export default function LandingPage() {
             >
               app.bili-bili.icu
             </a>
-            <div className="space-y-1.5 text-center text-[13px] leading-6 text-[#6b6b6b]">
-              <p>推荐第二种方式，下面下载安装使用，体验更好。</p>
+            <div className="space-y-1.5 text-center text-[16px] leading-6 text-[#6b6b6b]">
+              <p>推荐第二种方式，下载安装使用，体验好更安全。</p>
               <p>主播功能必须下载安装客户端使用，推荐电脑版。</p>
             </div>
           </div>
@@ -118,7 +120,7 @@ export default function LandingPage() {
 
         {/* ============ 下载安装包（在使用指南上方） ============ */}
         <section id="download" className="mx-auto mt-12 max-w-4xl scroll-mt-8 sm:mt-16">
-          <h2 className="text-center text-2xl font-semibold sm:text-3xl">选择你的设备下载使用</h2>
+          <h2 className="text-center text-2xl font-semibold sm:text-3xl">第二种：选择你的设备下载使用</h2>
           <DownloadSection />
         </section>
 
@@ -140,7 +142,7 @@ export default function LandingPage() {
 
         {/* ============ Footer ============ */}
         <footer className="mx-auto mt-16 max-w-3xl border-t border-[#e7e7e7] pt-8 text-center sm:mt-20">
-          <p className="mt-4 text-xs text-[#b0b0b0]">B瓜 · 非官方工具，与哔哩哔哩官方无关</p>
+          <p className="mt-4 text-xs text-[#b0b0b0]">B瓜 · 非官方工具，如有侵权，微信联系 MRI_QA</p>
         </footer>
       </div>
     </main>
