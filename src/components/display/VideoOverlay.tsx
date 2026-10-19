@@ -109,6 +109,8 @@ export default function VideoOverlay({
   loop = false,
   onVideoSize,
   opacity = "medium",
+  muted = true,
+  onMutedChange,
 }: {
   anime: Extract<DisplayEvent, { type: "anime" }>;
   onEnd: () => void;
@@ -118,12 +120,13 @@ export default function VideoOverlay({
   onVideoSize?: (w: number, h: number) => void;
   /** 整体透明度档位：按椭圆区域径向分布（圆心最实、越往周边越透明），可透出下层直播画面 */
   opacity?: AnimeOpacity;
+  /** 静音状态（受控）：默认静音以兼容浏览器/CEF 无声自动播放限制；与面板「声音」开关共享同一状态 */
+  muted?: boolean;
+  /** 点击右下角声音按钮时回调：父级更新状态并同步各端（画布/面板/主进程） */
+  onMutedChange?: (muted: boolean) => void;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  // 静音状态：默认 muted 以兼容浏览器/CEEF 的无声自动播放限制（autoplay 默认被静音或被拒绝）。
-  // 用户可点右下角声音按钮解除静音——声音在 Live 直播姬 CEF 中自动播放常无声音，需交互兜底。
-  const [muted, setMuted] = useState(true);
   // 结尾闭合是否已启动（驱动 --anime-curtain 的 close 动画一次性开始）
   const [closing, setClosing] = useState(false);
   // 舞台实际盒宽（px）：用于把测试页的 px 几何换算成与视频显示宽成比例的 --u
@@ -464,18 +467,17 @@ export default function VideoOverlay({
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()} // 编辑模式下不触发外层拖动，仅切换声音
-          onClick={() =>
-            setMuted((m) => {
-              const next = !m;
-              if (!next) videoRef.current?.play?.().catch(() => {});
-              return next;
-            })
-          }
+          onClick={() => {
+            const next = !muted;
+            // 解除静音瞬间触发 play()：浏览器自动播放策略要求用户交互后才能带声播放
+            if (!next) videoRef.current?.play?.().catch(() => {});
+            onMutedChange?.(next);
+          }}
           title={muted ? "开启声音" : "关闭声音"}
-          className="absolute right-4 bottom-4 z-[2] w-16 h-16 rounded-full bg-black/40 text-white text-[28px]
+          className="absolute right-4 bottom-4 z-[2] w-20 h-20 rounded-full bg-black/40 text-white
             flex items-center justify-center pointer-events-auto opacity-40 hover:opacity-90 transition-opacity"
         >
-          <VolumeIcon muted={muted} className="w-8 h-8" />
+          <VolumeIcon muted={muted} className="w-10 h-10" />
         </button>
       )}
     </div>

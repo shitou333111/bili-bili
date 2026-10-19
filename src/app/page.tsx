@@ -13,7 +13,7 @@ import { cacheGet, cacheSet, cacheClearMid, cacheKeys } from "@/lib/idb-cache";
 import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "@/lib/blind-box-calc";
 import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
-import { getBlindBoxCardBg, HISTORICAL_PNL_BG, PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
+import { getBlindBoxCardBg, HISTORICAL_PNL_BG } from "@/lib/layout";
 import { getPlatform } from "@/lib/platform";
 import { refreshGiftData } from "@/lib/gift-local-store";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
@@ -864,7 +864,41 @@ const MEDAL_CLEAN_TOOL: ToolDef = { icon: "/fans-icon.png", title: "粉丝牌清
 const MEDALS_MAX_PAGES = 100;
 const REVIVE_SHOT_TOOL: ToolDef = { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false };
 const MEDICAL_TOOL: ToolDef = { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false };
-const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "每月自动领取年度大会员赠送的5个B币，并全部兑换为直播电池", needsLogin: true };
+const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "领取年度大会员每月赠送的5个B币，可分别开启自动领取与自动兑换电池，注意兑换是全部B币，包括充值的", needsLogin: true };
+
+/** 年度大会员 B币 工具的本机配置（按 mid 持久化）：自动领取/自动兑换开关、最近一次兑换月份 */
+const YEAR_VIP_CFG_PREFIX = "year-vip-bcoin:";
+/** 当前月份键（YYYYMM），用于标记本月度是否已兑换（跨月自动重置） */
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function loadYearVipConfig(mid: number): { autoClaim: boolean; autoExchange: boolean; exchangeMonth: string } {
+  try {
+    const raw = localStorage.getItem(`${YEAR_VIP_CFG_PREFIX}${mid}`);
+    if (raw) {
+      const o = JSON.parse(raw) as { autoClaim?: boolean; autoExchange?: boolean; exchangeMonth?: string };
+      return {
+        autoClaim: o.autoClaim !== false,
+        autoExchange: o.autoExchange === true,
+        exchangeMonth: typeof o.exchangeMonth === "string" ? o.exchangeMonth : "",
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return { autoClaim: true, autoExchange: false, exchangeMonth: "" };
+}
+function saveYearVipConfig(
+  mid: number,
+  patch: { autoClaim?: boolean; autoExchange?: boolean; exchangeMonth?: string },
+): void {
+  try {
+    localStorage.setItem(`${YEAR_VIP_CFG_PREFIX}${mid}`, JSON.stringify({ ...loadYearVipConfig(mid), ...patch }));
+  } catch {
+    // ignore
+  }
+}
 /** 帮助页「工具」区保留的卡片 */
 const HELP_TOOLS: ToolDef[] = [LIKE_TOOL, LOTTERY_TOOL];
 /** 移到「粉丝」页「其他」tab（天选红包卡片上方）的卡片 */
@@ -1182,10 +1216,17 @@ export default function HomePage() {
   const [fansSelected, setFansSelected] = useState<Set<number>>(new Set());
   const [fansRemoving, setFansRemoving] = useState(false);
   const [fansMsg, setFansMsg] = useState("");
-  // 年度大会员领取B币并兑换电池：卡片状态
-  // unknown=待检查/未领取可点击 claimable=可兑换 claimed=本月度已兑换 not_annual=非年度大会员
+  // 年度大会员领取B币并兑换电池：领取步骤状态
+  // unknown=待检查/暂不可领 claimable=可领取 claimed=本月度已领取 not_annual=非年度大会员
   const [yearVipStatus, setYearVipStatus] = useState<"unknown" | "claimable" | "claimed" | "not_annual">("unknown");
-  // 冷启动自动领取成功后弹出的提醒内容（空表示不弹）
+  // 是否为年度（及以上）大会员（由接口返回，决定「兑换」按钮是否可用）
+  const [yearVipAnnual, setYearVipAnnual] = useState(false);
+  // 兑换步骤：本月度是否已兑换（按 mid 持久化，跨月自动重置）
+  const [yearVipExchanged, setYearVipExchanged] = useState(false);
+  // 自动化开关：默认自动领取、不自动兑换；「自动兑换」仅在勾选「自动领取」后可点击
+  const [yearVipAutoClaim, setYearVipAutoClaim] = useState(true);
+  const [yearVipAutoExchange, setYearVipAutoExchange] = useState(false);
+  // 冷启动自动执行成功后弹出的提醒内容（空表示不弹）
   const [yearVipAutoNotice, setYearVipAutoNotice] = useState("");
   const yearVipAutoRanRef = useRef<number | null>(null);
   // 助力主播 自动点赞：关注主播列表 + 每日点赞状态（每账号每天最多 5 位主播/5000 赞）
@@ -1215,8 +1256,24 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAccount?.mid]);
 
-  // 冷启动自动检查年度大会员 B币 权益：仅本机登录的客户端执行；
-  // 若本月可领取则自动领取并兑换为电池，成功后弹提醒框；无可领取则不弹。
+  // 切换账号时载入本机保存的自动领取/兑换配置，并按当前月份判断「本月度是否已兑换」
+  useEffect(() => {
+    const mid = currentAccount?.mid;
+    if (!mid) {
+      setYearVipAutoClaim(true);
+      setYearVipAutoExchange(false);
+      setYearVipExchanged(false);
+      setYearVipAnnual(false);
+      return;
+    }
+    const cfg = loadYearVipConfig(mid);
+    setYearVipAutoClaim(cfg.autoClaim);
+    setYearVipAutoExchange(cfg.autoExchange);
+    setYearVipExchanged(cfg.exchangeMonth === currentMonthKey());
+  }, [currentAccount?.mid]);
+
+  // 冷启动自动检查年度大会员 B币 权益：仅本机登录的客户端执行。
+  // 按本机配置依次自动领取（autoClaim）与自动兑换（autoExchange）；两者皆关时仅查询状态、无副作用。
   useEffect(() => {
     const mid = currentAccount?.mid;
     if (!mid || yearVipAutoRanRef.current === mid) return;
@@ -1226,7 +1283,8 @@ export default function HomePage() {
         const platform = await getPlatform().catch(() => null);
         if (!platform || !platform.isNative) return; // 仅客户端自动执行
         yearVipAutoRanRef.current = mid;
-        await runYearVipBCoin(true);
+        const cfg = loadYearVipConfig(mid);
+        await runYearVipAuto(cfg.autoClaim, cfg.autoExchange);
       })
       .catch(() => {});
   }, [currentAccount?.mid, currentAccount?.source]);
@@ -1851,14 +1909,23 @@ export default function HomePage() {
     else { openScreenshotPage(); }
   };
 
-  /** 年度大会员B币卡片：左侧圆形按钮文案（分两行）与可点击状态 */
+  /** 年度大会员B币卡片：状态派生（左=领取，右=兑换） */
   const yearVipDisabled = isToolDisabled(YEAR_VIP_TOOL);
-  const yearVipClickable = !yearVipDisabled && (yearVipStatus === "unknown" || yearVipStatus === "claimable");
-  const yearVipBtnText: [string, string] =
+  // 左键：仅负责「领取」，三态（非年度大会员 / 点击领取 / 本月度已领取）
+  const yearVipClaimClickable = !yearVipDisabled && (yearVipStatus === "unknown" || yearVipStatus === "claimable");
+  const yearVipClaimText: [string, string] =
     yearVipStatus === "not_annual" ? ["非年度", "大会员"]
-    : yearVipStatus === "claimed" ? ["本月度", "已兑换"]
-    : ["点击", "兑换"];
-  const yearVipBtnClass = yearVipClickable
+    : yearVipStatus === "claimed" ? ["本月度", "已领取"]
+    : ["点击", "领取"];
+  const yearVipClaimClass = yearVipClaimClickable
+    ? "bg-[#00a1d6] text-white hover:opacity-90 active:scale-95"
+    : "bg-black/5 text-black/40 cursor-default";
+  // 右键：仅负责「兑换」，两态（全部B币换成电池 / 本月度已兑换）
+  const yearVipExchangeClickable = !yearVipDisabled && yearVipAnnual && !yearVipExchanged;
+  const yearVipExchangeText: [string, string] = yearVipExchanged
+    ? ["本月度", "已兑换"]
+    : ["全部B币", "换成电池"];
+  const yearVipExchangeClass = yearVipExchangeClickable
     ? "bg-[#00a1d6] text-white hover:opacity-90 active:scale-95"
     : "bg-black/5 text-black/40 cursor-default";
 
@@ -1875,24 +1942,60 @@ export default function HomePage() {
           onClick={() => runTool(tool)}
         />
       ))}
-      {/* 年度大会员领取B币并换成电池：仅左侧圆形按钮可点，卡片本身不可点击 */}
+      {/* 年度大会员领取B币并换成电池：左侧圆形按钮负责「领取」、右侧负责「兑换」，各自下方带自动化复选框 */}
       <div className={`w-full rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur ${yearVipDisabled ? "border-black/5 bg-gray-100/70 opacity-60" : "border-black/10 bg-white/80"}`}>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => { if (yearVipClickable) runYearVipBCoin(false); }}
-            disabled={!yearVipClickable}
-            className={`h-14 w-14 flex-shrink-0 rounded-full flex flex-col items-center justify-center text-[11px] font-semibold leading-tight transition ${yearVipBtnClass}`}
-          >
-            <span>{yearVipBtnText[0]}</span>
-            <span>{yearVipBtnText[1]}</span>
-          </button>
-          <div className="min-w-0">
-            <h3 className="text-base font-bold">{YEAR_VIP_TOOL.title}</h3>
+          {/* 第一步：领取 */}
+          <div className="flex flex-shrink-0 flex-col items-center gap-1.5">
+            <button
+              onClick={() => { if (yearVipClaimClickable) claimYearVip(false); }}
+              disabled={!yearVipClaimClickable}
+              className={`h-14 w-14 flex flex-col items-center justify-center rounded-full text-[11px] font-semibold leading-tight transition ${yearVipClaimClass}`}
+            >
+              <span>{yearVipClaimText[0]}</span>
+              <span>{yearVipClaimText[1]}</span>
+            </button>
+            <label className={`flex items-center gap-1 text-[10px] ${yearVipDisabled ? "text-black/30" : "cursor-pointer text-black/55"}`}>
+              <input
+                type="checkbox"
+                checked={yearVipAutoClaim}
+                disabled={yearVipDisabled}
+                onChange={(e) => toggleYearVipAutoClaim(e.target.checked)}
+                className="h-3 w-3 accent-[#00a1d6]"
+              />
+              <span>自动领取</span>
+            </label>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-base font-bold">{YEAR_VIP_TOOL.title}</h3>
+              {yearVipDisabled && (
+                <svg className="w-4 h-4 flex-shrink-0 text-black/30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+              )}
+            </div>
             <p className="mt-0.5 text-xs text-black/45">{YEAR_VIP_TOOL.desc}</p>
           </div>
-          {yearVipDisabled && (
-            <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
-          )}
+          {/* 第二步：兑换 */}
+          <div className="flex flex-shrink-0 flex-col items-center gap-1.5">
+            <button
+              onClick={() => { if (yearVipExchangeClickable) exchangeYearVip(false); }}
+              disabled={!yearVipExchangeClickable}
+              className={`h-14 w-14 flex flex-col items-center justify-center rounded-full text-[11px] font-semibold leading-tight transition ${yearVipExchangeClass}`}
+            >
+              <span>{yearVipExchangeText[0]}</span>
+              <span>{yearVipExchangeText[1]}</span>
+            </button>
+            <label className={`flex items-center gap-1 text-[10px] ${!yearVipAutoClaim || yearVipDisabled ? "text-black/30" : "cursor-pointer text-black/55"}`}>
+              <input
+                type="checkbox"
+                checked={yearVipAutoExchange}
+                disabled={!yearVipAutoClaim || yearVipDisabled}
+                onChange={(e) => toggleYearVipAutoExchange(e.target.checked)}
+                className="h-3 w-3 accent-[#00a1d6]"
+              />
+              <span>自动兑换</span>
+            </label>
+          </div>
         </div>
       </div>
       {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟；服务器账号无登录凭证不可用 */}
@@ -1932,11 +2035,6 @@ export default function HomePage() {
       </button>
     </>
   );
-
-  // 注入页面最大宽度 CSS 变量（layout.ts 的 PAGE_MAX_WIDTH_NUM 是单一源头）
-  useEffect(() => {
-    document.documentElement.style.setProperty("--page-max-width", `${PAGE_MAX_WIDTH_NUM}px`);
-  }, []);
 
   // 本地优先：返回用户先快速显示本地缓存，再后台同步 B站；首次使用直接扫码登录
   const initOnceRef = useRef(false);
@@ -2524,31 +2622,104 @@ export default function HomePage() {
   openAnchorBubbleChartRef.current = openAnchorBubbleChart;
   const openAnchorBubbleChartStable = useCallback(() => openAnchorBubbleChartRef.current(), []);
 
-  /**
-   * 年度大会员领取B币并兑换电池（冷启动自动与卡片按钮手动共用），并同步卡片状态。
-   * auto=true 时静默执行，仅在确实领取/兑换成功时弹出提醒；无领取则什么都不做。
-   */
-  async function runYearVipBCoin(auto = false) {
+  /** 年度大会员 B币：仅查询领取状态与钱包余额（无副作用），并同步卡片 */
+  async function loadYearVipStatus() {
     try {
-      const res = await dataFetch("/api/tools/year-vip-bcoin", { method: "POST", cache: "no-store" });
+      const res = await dataFetch("/api/tools/year-vip-bcoin?action=status", { cache: "no-store" });
       const data = await res.json();
-      const msg: string = data?.message || (data?.code === 0 ? "完成" : "操作失败");
       const d = data?.data;
       if (data?.code === 0 && d) {
-        // 同步卡片状态
-        if (d.isYearVip === false) setYearVipStatus("not_annual");
-        else if (d.claimed || d.exchanged || d.alreadyClaimed) setYearVipStatus("claimed");
-        else setYearVipStatus("claimable");
-        if (d.claimed || d.exchanged) setYearVipAutoNotice(msg);
-        else if (!auto) showToast(msg, "info");
+        setYearVipAnnual(d.isYearVip !== false);
+        setYearVipStatus(
+          d.isYearVip === false ? "not_annual" : d.alreadyClaimed ? "claimed" : d.claimable ? "claimable" : "unknown",
+        );
       } else {
-        if (!auto) showToast(msg, "error");
         setYearVipStatus(d?.isYearVip === false ? "not_annual" : "unknown");
       }
     } catch {
-      if (!auto) showToast("网络错误", "error");
       setYearVipStatus("unknown");
     }
+  }
+
+  /** 第一步：领取本月赠送的 B币（自动与手动共用，不再顺带兑换） */
+  async function claimYearVip(auto = false) {
+    try {
+      const res = await dataFetch("/api/tools/year-vip-bcoin?action=claim", { method: "POST", cache: "no-store" });
+      const data = await res.json();
+      const msg: string = data?.message || "";
+      const d = data?.data;
+      if (data?.code === 0 && d) {
+        setYearVipAnnual(d.isYearVip !== false);
+        setYearVipStatus(
+          d.isYearVip === false ? "not_annual" : d.claimed || d.alreadyClaimed ? "claimed" : "unknown",
+        );
+        if (d.claimed) {
+          if (auto) setYearVipAutoNotice(msg);
+          else showToast(msg);
+        } else if (!auto) {
+          showToast(msg);
+        }
+        return d.claimed;
+      }
+      if (!auto) showToast(msg || "领取失败", "error");
+      return false;
+    } catch {
+      if (!auto) showToast("网络错误", "error");
+      return false;
+    }
+  }
+
+  /** 第二步：把钱包内全部 B币 兑换为电池（自动与手动共用）；成功后标记本月度已兑换 */
+  async function exchangeYearVip(auto = false) {
+    try {
+      const res = await dataFetch("/api/tools/year-vip-bcoin?action=exchange", { method: "POST", cache: "no-store" });
+      const data = await res.json();
+      const msg: string = data?.message || "";
+      const d = data?.data;
+      if (data?.code === 0 && d) {
+        setYearVipAnnual(d.isYearVip !== false);
+        if (d.exchanged) {
+          setYearVipExchanged(true);
+          const mid = currentAccount?.mid;
+          if (mid) saveYearVipConfig(mid, { exchangeMonth: currentMonthKey() });
+          if (auto) setYearVipAutoNotice(msg);
+          else showToast(msg);
+        } else if (!auto) {
+          showToast(msg);
+        }
+        return d.exchanged;
+      }
+      if (!auto) showToast(msg || "兑换失败", "error");
+      return false;
+    } catch {
+      if (!auto) showToast("网络错误", "error");
+      return false;
+    }
+  }
+
+  /** 冷启动自动流程：按本机配置依次自动领取、自动兑换；两者皆关时仅查询状态、无副作用 */
+  async function runYearVipAuto(autoClaim: boolean, autoExchange: boolean) {
+    if (!autoClaim && !autoExchange) {
+      await loadYearVipStatus();
+      return;
+    }
+    if (autoClaim) await claimYearVip(true);
+    if (autoExchange) await exchangeYearVip(true);
+  }
+
+  /** 复选框「自动领取」：取消时同步取消「自动兑换」并持久化 */
+  function toggleYearVipAutoClaim(v: boolean) {
+    setYearVipAutoClaim(v);
+    if (!v) setYearVipAutoExchange(false);
+    const mid = currentAccount?.mid;
+    if (mid) saveYearVipConfig(mid, { autoClaim: v, autoExchange: v ? yearVipAutoExchange : false });
+  }
+
+  /** 复选框「自动兑换」：持久化 */
+  function toggleYearVipAutoExchange(v: boolean) {
+    setYearVipAutoExchange(v);
+    const mid = currentAccount?.mid;
+    if (mid) saveYearVipConfig(mid, { autoExchange: v });
   }
 
   async function loadFans(pn: number, append = false) {
@@ -3621,12 +3792,24 @@ export default function HomePage() {
                   className="mx-auto h-16 w-16 rounded-[18px]"
                 />
                 <h2 className="mt-4 text-xl font-semibold text-[#1f1c17]">主播功能</h2>
-                <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-black/60">
-                  这些功能要在客户端使用，下载安装软件后即可解锁。
-                  <br />
-                  如果你现在用的就是客户端，那么当前账号没有被识别为主播，点击[帮助]中的[重建数据]。
-                  如果你是粉丝，可以推荐爱播安装。
-                </p>
+                <ul className="mx-auto mt-3 max-w-md space-y-2 text-left text-sm leading-relaxed text-black/60">
+                  <li className="flex gap-2.5">
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
+                    <span>这些功能需要客户端，下载安装后即可解锁。</span>
+                  </li>
+                  <li className="flex gap-2.5">
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
+                    <span>
+                      如果现在用的就是客户端，但不是主播，可以推荐爱播安装。
+                    </span>
+                  </li>
+                  <li className="flex gap-2.5">
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
+                    <span>
+                      如果现在用的就是客户端，并且当前账号也是主播，说明没有被正确识别，点击[帮助]中的[重建数据]，或者进群反馈。
+                    </span>
+                  </li>
+                </ul>
               </div>
               {/* 功能亮点：卡片网格 */}
               <div className="grid grid-cols-1 gap-3 px-4 pb-2 pt-1 sm:grid-cols-2 sm:px-6">
@@ -4798,7 +4981,7 @@ export default function HomePage() {
           <div className="w-full max-w-sm rounded-2xl bg-white/95 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.25)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3">
               <span className="text-3xl">🎁</span>
-              <h3 className="text-base font-bold text-black/85">年度大会员 B币 已自动兑换</h3>
+              <h3 className="text-base font-bold text-black/85">年度大会员 B币 已自动处理</h3>
             </div>
             <p className="mt-3 text-sm text-black/60 leading-relaxed">{yearVipAutoNotice}</p>
             <button

@@ -224,6 +224,8 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
     // 入场动画整体透明度档位（opaque/light/medium/heavy）：非法值（含旧配置的边缘羽化字段）回退默认
     animeOpacity: isAnimeOpacity(r.animeOpacity) ? r.animeOpacity : d.animeOpacity,
+    // 入场动画声音开关：字段缺失（旧配置/首次）回退默认（静音 true）
+    animeMuted: r.animeMuted === undefined ? d.animeMuted : !!r.animeMuted,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&

@@ -702,6 +702,15 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     return unsub;
   }, [isDanmakuPart]);
 
+  // 画布预览右下角静音按钮切换时，同步面板「声音」开关状态（同一状态，两端一致）
+  useEffect(() => {
+    if (isDanmakuPart) return; // 「声音」开关在画布分区
+    const unsub = displayDanmaku.subscribeAnimeMuted((v) =>
+      setConfig((c) => ({ ...c, animeMuted: v })),
+    );
+    return unsub;
+  }, [isDanmakuPart]);
+
   const update = useCallback(
     async (patch: Partial<DisplayConfig>): Promise<DisplayConfig> => {
       // 以主进程侧最新配置（含浏览器源/编辑 iframe 经 saveLayout 刚保存的布局）为基准合并，
@@ -2276,6 +2285,21 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   </button>
                 );
               })}
+            </div>
+            {/* 声音开关：默认静音（兼容浏览器/CEF 无声自动播放）；打开=有声音。
+                与画布预览右下角静音按钮共享同一状态（画布切换会同步此开关）。 */}
+            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+              <p className="text-xs text-black/45">声音</p>
+              <Switch
+                size="sm"
+                onColor="bg-violet-500"
+                checked={!config.animeMuted}
+                onToggle={(on) =>
+                  void update({ animeMuted: !on }).then((next) =>
+                    displayDanmaku.broadcastAnimeMuted(next.animeMuted),
+                  )
+                }
+              />
             </div>
           </div>
           {/* 视频整体透明度：按椭圆区域径向分布（中心最实、越往周边越透明），透出下层直播画面。

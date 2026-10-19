@@ -745,9 +745,31 @@ const AnchorDataModule = memo(function AnchorDataModule({
       existing.count += 1;
       map.set(key, existing);
     }
-    return Array.from(map.entries())
-      .map(([month, v]) => ({ month, hamster: v.hamster, count: v.count }))
-      .sort((a, b) => a.month.localeCompare(b.month));
+    if (map.size === 0) return [] as Array<{ month: string; hamster: number; count: number; empty: boolean }>;
+    // 横轴范围 = 首个有数据月份 → 当前月份；其间的无数据月份补成空柱（红色）显示，
+    // 首个有数据月份之前的空月不显示（不是"最开始最久远的无数据月份"）。
+    const startKey = Array.from(map.keys()).sort()[0];
+    const now = new Date();
+    const endKey = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const out: Array<{ month: string; hamster: number; count: number; empty: boolean }> = [];
+    let y = Number(startKey.slice(0, 4));
+    let m = Number(startKey.slice(4, 6));
+    const endY = Number(endKey.slice(0, 4));
+    const endM = Number(endKey.slice(4, 6));
+    while (y < endY || (y === endY && m <= endM)) {
+      const key = `${y}${String(m).padStart(2, "0")}`;
+      const v = map.get(key);
+      out.push(
+        v
+          ? { month: key, hamster: v.hamster, count: v.count, empty: false }
+          : { month: key, hamster: 0, count: 0, empty: true },
+      );
+      if (++m > 12) {
+        m = 1;
+        y += 1;
+      }
+    }
+    return out;
   })() : [];
 
   const monthRecords = selectedMonth && stats
@@ -1074,6 +1096,25 @@ const AnchorDataModule = memo(function AnchorDataModule({
                         const barWidth = 10;
                         const minWidth = Math.max(monthlyData.length * (barWidth + 4) + 20, 100);
                         const shouldSkipLabels = monthlyData.length > 8;
+                        // 月度柱自定义形状：空数据月画统一高度的红柱（红边框 + 半透明红填充），
+                        // 有数据月沿用原配色（选中月高亮蓝）。
+                        const EMPTY_BAR_H = 34;
+                        const renderMonthBar = (p: any) => {
+                          const x = Number(p.x ?? 0);
+                          const y = Number(p.y ?? 0);
+                          const w = Number(p.width ?? 0);
+                          const h = Number(p.height ?? 0);
+                          if (p.payload?.empty) {
+                            const bottom = y + h; // value=0 → h=0 → bottom 即零轴
+                            return (
+                              <rect x={x} y={bottom - EMPTY_BAR_H} width={w} height={EMPTY_BAR_H} rx={3} ry={3}
+                                fill="rgba(239,68,68,0.16)" stroke="#ef4444" strokeWidth={1} />
+                            );
+                          }
+                          const fill = p.payload?.month === selectedMonth ? "#2563eb" : "#1f1c17";
+                          if (!h) return <rect x={x} y={y} width={w} height={0} />;
+                          return <rect x={x} y={y} width={w} height={h} rx={3} ry={3} fill={fill} />;
+                        };
 
                         function formatHamsterForTooltip(value: number) {
                           const battery = value / 100;
@@ -1091,18 +1132,22 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                     <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 10, fill: "#888" }} axisLine={{ stroke: "#e5e0d8" }} tickLine={false} />
                                     <Tooltip
                                       content={({ active, label, payload }: any) => {
-                                        if (active && payload && payload.length) {
-                                          return (
-                                            <div style={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff", padding: "8px 12px", fontSize: "12px" }}>
-                                              <p style={{ margin: 0, fontWeight: 500 }}>{monthLabel(String(label))}</p>
+                                        if (!(active && payload && payload.length)) return null;
+                                        const entry = monthlyData.find((e) => e.month === String(label));
+                                        return (
+                                          <div style={{ borderRadius: "12px", border: "1px solid #e5e0d8", background: "#fff", padding: "8px 12px", fontSize: "12px" }}>
+                                            <p style={{ margin: 0, fontWeight: 500 }}>{monthLabel(String(label))}</p>
+                                            {entry?.empty ? (
+                                              <p style={{ margin: "4px 0 0 0", color: "#ef4444" }}>无数据</p>
+                                            ) : (
                                               <p style={{ margin: "4px 0 0 0", color: "#1f1c17" }}>{formatHamsterForTooltip(Number(payload[0].value))}</p>
-                                            </div>
-                                          );
-                                        }
-                                        return null;
+                                            )}
+                                          </div>
+                                        );
                                       }}
                                     />
-                                    <Bar dataKey="hamster" radius={[3, 3, 0, 0]} barSize={barWidth} cursor="pointer" isAnimationActive={false}
+                                    <Bar dataKey="hamster" barSize={barWidth} cursor="pointer" isAnimationActive={false}
+                                      shape={renderMonthBar}
                                       onClick={(data: any) => { if (data?.month) { setSelectedMonth(data.month === selectedMonth ? null : data.month); setSelectedDay(null); } }}
                                       label={(props: any) => {
                                         const { x, y, width, value, index } = props;
@@ -1112,11 +1157,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                         const text = rmb >= 10000 ? `${(rmb / 10000).toFixed(1)}万` : (rmb % 1 === 0 ? rmb : rmb.toFixed(1));
                                         return <text x={x + width / 2} y={y - 4} textAnchor="middle" fontSize={9} fill="#888">{text}</text>;
                                       }}
-                                    >
-                                      {monthlyData.map((entry) => (
-                                        <Cell key={entry.month} fill={entry.month === selectedMonth ? "#2563eb" : "#1f1c17"} />
-                                      ))}
-                                    </Bar>
+                                    />
                                   </BarChart>
                                 </ResponsiveContainer>
                               </div>

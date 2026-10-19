@@ -60,12 +60,14 @@ import { getVersionDisplay } from "@/lib/updater";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
-  type: "ready" | "saveLayout" | "orientation" | "log" | "giftFlipDone";
+  type: "ready" | "saveLayout" | "orientation" | "log" | "giftFlipDone" | "animeMuted";
   mode?: "edit" | "source";
   id?: LayoutElementId;
   orientation?: ScreenOrientation;
   rect?: MovableRect;
   v?: ScreenOrientation;
+  /** animeMuted：画布切换静音按钮后的最新状态（true=静音，false=有声音） */
+  muted?: boolean;
   level?: string;
   text?: string;
   /** giftFlipDone：本次翻卡的序号 / 归属粉丝 uid / 命中的选项下标（主进程据此记账） */
@@ -698,6 +700,8 @@ class DisplayDanmakuService {
   private debugPersistTimer: ReturnType<typeof setTimeout> | null = null;
   /** 调试日志写盘串行链：保证任意时刻只有一个写操作在进行，避免并发写触发底层存储冲突 */
   private debugPersistChain: Promise<void> = Promise.resolve();
+  /** 「入场动画声音」变更订阅者（面板订阅，画布侧点击静音按钮时同步面板「声音」开关状态） */
+  private animeMutedListeners = new Set<(v: boolean) => void>();
 
   subscribe(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
@@ -711,6 +715,12 @@ class DisplayDanmakuService {
   subscribeDebug(listener: (e: DanmuDebugEvent) => void): () => void {
     this.debugListeners.add(listener);
     return () => this.debugListeners.delete(listener);
+  }
+
+  /** 订阅「入场动画声音」变更（画布侧切换静音时通知面板同步开关状态）；返回取消函数。 */
+  subscribeAnimeMuted(listener: (v: boolean) => void): () => void {
+    this.animeMutedListeners.add(listener);
+    return () => this.animeMutedListeners.delete(listener);
   }
 
   /** 获取已缓冲的调试事件（最近 20 条，供面板展示）。 */
@@ -896,6 +906,13 @@ class DisplayDanmakuService {
         this.broadcast({ type: "orientation", v });
         // 朝向切换 → 重发 init 更新入场动画样本（横/竖屏视频源不同），否则视频不随朝向切换。
         await this.broadcastInit();
+      } else if (msg.type === "animeMuted") {
+        // 画布预览右下角静音按钮切换：持久化 + 广播给所有端，并通知面板同步「声音」开关
+        const v = !!msg.muted;
+        const cfg = await loadDisplayConfig(this.mid);
+        await saveDisplayConfig(this.mid, { ...cfg, animeMuted: v });
+        this.broadcast({ type: "animeMuted", v });
+        this.animeMutedListeners.forEach((l) => l(v));
       } else if (msg.type === "log") {
         const fn = msg.level === "error" ? console.error : console.log;
         fn(`[画布]${msg.text}`);
@@ -947,6 +964,7 @@ class DisplayDanmakuService {
       animeSample,
       bannerText: cfg.banner?.text ?? "",
       animeOpacity: cfg.animeOpacity,
+      animeMuted: cfg.animeMuted,
       giftBarOrientation: cfg.giftBarOrientation,
       giftBarWidth: cfg.giftBarWidth,
       giftSeparateBar: cfg.giftSeparateBar,
@@ -1038,6 +1056,11 @@ class DisplayDanmakuService {
   /** 广播入场动画整体透明度档位到画布（面板切换后调用，配置已落盘）。 */
   async broadcastAnimeOpacity(opacity: AnimeOpacity): Promise<void> {
     await this.broadcast({ type: "animeOpacity", v: opacity });
+  }
+
+  /** 广播入场动画声音开关到画布（面板切换后调用，配置已落盘；true=静音）。 */
+  async broadcastAnimeMuted(muted: boolean): Promise<void> {
+    await this.broadcast({ type: "animeMuted", v: muted });
   }
 
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */

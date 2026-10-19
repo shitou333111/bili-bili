@@ -31,7 +31,7 @@ const files = [
   path.join(__dirname, "..", "node_modules", "react-particle-effect-button", "dist", "index.js"),
 ];
 
-/** 每个补丁：名字 / 哨兵(判断是否已应用) / 原文本(原始库) / 新文本(最终) */
+/** 每个补丁：名字 / 哨兵(判断是否已应用，string 或 string[] 任一命中即跳过) / 原文本(原始库) / 新文本(最终) */
 const PATCHES = [
   {
     name: "1 生命周期：componentWillReceiveProps → componentDidUpdate + 卸载清理",
@@ -111,7 +111,12 @@ const PATCHES = [
   },
   {
     name: "4 色调调整：粒子颜色按位置映射红橙黄（hue 0~60）",
-    marker: "'hsl(' + Math.round(60 * _rel) + ',90%,60%)'",
+    // 双哨兵：补丁 4 只应用过、补丁 25 尚未执行时命中第二个；补丁 25 重写 _renderParticles
+    // 后（old/now 文本都被吸收进 25 的 old）命中第一个，避免重复执行时误报"未匹配"。
+    marker: [
+      "var _pad25 = this.props.canvasPadding * (this._visualScale || 1);",
+      "var _pad = this.props.canvasPadding * (this._visualScale || 1);",
+    ],
     old: `      this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
       this._ctx.fillStyle = this._ctx.strokeStyle = color;
 
@@ -229,7 +234,12 @@ const PATCHES = [
   },
   {
     name: "9f 视觉缩放：色调映射起点（canvasPadding）等比放大",
-    marker: "var _pad = this.props.canvasPadding * (this._visualScale || 1);",
+    // 本补丁的 old 文本只可能由补丁 4 的 now 产生（原库 render 里本无 _pad），且补丁 25
+    // 重写后变量名变为 _pad25 → 双哨兵覆盖"4 已应用/25 已应用"两种终态，避免误报。
+    marker: [
+      "var _pad25 = this.props.canvasPadding * (this._visualScale || 1);",
+      "var _pad = this.props.canvasPadding * (this._visualScale || 1);",
+    ],
     old: `          var _pad = this.props.canvasPadding;`,
     now: `          var _pad = this.props.canvasPadding * (this._visualScale || 1);`,
   },
@@ -683,7 +693,8 @@ const PATCHES = [
 ];
 
 function applyReplace(name, marker, old, now, src) {
-  if (src.includes(marker)) {
+  const markers = Array.isArray(marker) ? marker : [marker];
+  if (markers.some((m) => src.includes(m))) {
     return { src, applied: false, skip: true };
   }
   if (!src.includes(old)) {

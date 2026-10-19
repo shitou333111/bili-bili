@@ -154,6 +154,8 @@ type ServerMsg =
       bannerText: string;
       /** 入场动画整体透明度档位（轻 / 中 / 重，按椭圆区域径向分布） */
       animeOpacity: AnimeOpacity;
+      /** 入场动画声音开关（true=静音，false=有声音）；与画布预览静音按钮共享状态 */
+      animeMuted: boolean;
       /** 礼物展示条方向（横条/竖条） */
       giftBarOrientation: "horizontal" | "vertical";
       /** 礼物展示条宽度档位（短 3 位 / 中 4 位 / 长 5 位） */
@@ -176,6 +178,7 @@ type ServerMsg =
   | { type: "flags"; flags: DisplayFlags }
   | { type: "bannerText"; text: string }
   | { type: "animeOpacity"; v: AnimeOpacity }
+  | { type: "animeMuted"; v: boolean }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "giftBarWidth"; v: GiftBarWidth }
   | { type: "giftSeparateBar"; v: boolean }
@@ -319,6 +322,8 @@ export default function DisplayCanvas() {
   const [animeOpacity, setAnimeOpacity] = useState<AnimeOpacity>(
     DEFAULT_DISPLAY_CONFIG.animeOpacity,
   );
+  // 入场动画声音开关（init/animeMuted 消息下发，true=静音）：面板「声音」开关与画布静音按钮共享
+  const [animeMuted, setAnimeMuted] = useState<boolean>(DEFAULT_DISPLAY_CONFIG.animeMuted);
   // 礼物展示条方向（init/giftBarOrientation 消息下发）
   const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
     DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
@@ -441,6 +446,7 @@ export default function DisplayCanvas() {
         setAnimeOpacity(
           isAnimeOpacity(msg.animeOpacity) ? msg.animeOpacity : DEFAULT_DISPLAY_CONFIG.animeOpacity,
         );
+        setAnimeMuted(!!msg.animeMuted);
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
         );
@@ -468,6 +474,8 @@ export default function DisplayCanvas() {
         setBannerText(msg.text ?? "");
       } else if (msg.type === "animeOpacity") {
         setAnimeOpacity(isAnimeOpacity(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity);
+      } else if (msg.type === "animeMuted") {
+        setAnimeMuted(!!msg.v);
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
       } else if (msg.type === "giftBarWidth") {
@@ -525,6 +533,15 @@ export default function DisplayCanvas() {
       send({ type: "saveLayout", id, orientation, rect });
     },
     [send, orientation],
+  );
+
+  // 入场动画静音按钮切换：本地即时更新（画布/面板同步）+ 上行主进程（持久化 + 广播其余端）
+  const onAnimeMutedChange = useCallback(
+    (muted: boolean) => {
+      setAnimeMuted(muted);
+      send({ type: "animeMuted", muted });
+    },
+    [send],
   );
 
   // 礼物翻卡：一次翻卡动画播完 → 回执主进程（带序号，防多端重复记账）并清空待播
@@ -1070,6 +1087,8 @@ export default function DisplayCanvas() {
                 onEnd={onAnimeEnd}
                 onVideoSize={onAnimeVideoSize}
                 opacity={animeOpacity}
+                muted={animeMuted}
+                onMutedChange={onAnimeMutedChange}
               />
             )}
             {isEdit && (
@@ -1081,6 +1100,8 @@ export default function DisplayCanvas() {
                     loop
                     onVideoSize={onAnimeVideoSize}
                     opacity={animeOpacity}
+                    muted={animeMuted}
+                    onMutedChange={onAnimeMutedChange}
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center">

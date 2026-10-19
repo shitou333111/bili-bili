@@ -418,7 +418,7 @@ async function fetchGiftStreamPage(
       const listLen = result.data?.list?.length ?? 0;
       const totalPage = result.data?.total_page ?? -1;
       const totalCount = result.data?.total_count ?? -1;
-      console.log(`[AnchorGifts][API] 响应 page=0: code=${result.code} message="${result.message}" total_page=${totalPage} total_count=${totalCount} list_len=${listLen} total_hamster=${result.data?.total_hamster ?? "?"}`);
+      console.log(`[AnchorGifts][API] 响应 page=0: code=${result.code} ready=${result.data?.ready ?? -1} message="${result.message}" total_page=${totalPage} total_count=${totalCount} list_len=${listLen} total_hamster=${result.data?.total_hamster ?? "?"}`);
     }
     return result;
   }
@@ -445,6 +445,11 @@ function concurrencyForRate(rate: number): number {
   return Math.min(6, Math.max(1, Math.round(rate)));
 }
 const MONTH_CONCURRENCY = concurrencyForRate(TARGET_RATE);
+
+/** 首探专用的保守速率上限（req/s），与客户端 PROBE_MAX_RATE 一致，理由见客户端同名注释。 */
+const PROBE_MAX_RATE = 2;
+/** 本轮临时速率覆盖（首探期间压低，探测结束恢复）：null = 使用 TARGET_RATE。 */
+let _rateOverride: number | null = null;
 
 /** 单轮"未知月份"（该月拉取失败）上限：达到即保守中断本轮并保持
  *  end_date = 本次扫描起点（绝不推进）。低于上限时不再中断整轮，而是把未知月份计入
@@ -482,7 +487,7 @@ let _pacerNextAt = 0;
 function paceRequest(): Promise<void> {
   const now = Date.now();
   const at = Math.max(_pacerNextAt, now);
-  _pacerNextAt = at + 1000 / TARGET_RATE;
+  _pacerNextAt = at + 1000 / (_rateOverride ?? TARGET_RATE);
   const wait = at - now;
   return wait > 0 ? new Promise((r) => setTimeout(r, wait)) : Promise.resolve();
 }
@@ -635,10 +640,16 @@ function generateMonthChunks(begin: string, end: string): Array<{ start: string;
 }
 
 /**
- * 单次 page0 探测（仅网络层重试，不做伪空重试）：用于"首探"，
+ * 单次 page0 探测（仅网络层重试 + 未就绪伪空重试，不做深度伪空重试）：用于"首探"，
  * 只需快速判断该月有没有数据，不翻页。
- * failed=true 表示未得到可信结论（网络/限流持续失败），调用方必须保守处理（不得据此判空）。
- * 成功时一并带回 page0 原始响应，供后续正式翻页直接复用，避免对同一批月份重复请求。
+ * failed=true 表示未得到可信结论（网络/限流持续失败，或 ready=0 未就绪伪空重试耗尽），
+ * 调用方必须保守处理（不得据此判空）。
+ * 成功时一并带回 page0 原始响应，供后续正式翻页直接复用，避免对同一批月份重复请求
+ * （注意：ready≠1 的伪空响应不缓存复用，避免翻页阶段沿用未就绪的伪空）。
+ *
+ * 关键语义（实测确认）：total_page=0 只有在 data.ready=1（B站已算完该时间段）时才是可信空；
+ * ready≠1 时的 total_page=0 是冷缓存/懒计算的"未就绪伪空"，同一请求稍后重放即可拿到
+ * ready=1 + 真实数据 —— 绝不可当空，否则会把真实主播误判为 noRevenue。
  */
 async function probeMonthOnce(
   cookie: string,
@@ -656,15 +667,28 @@ async function probeMonthOnce(
     try {
       const result = await fetchGiftStreamPage(cookie, csrf, 0, begin, end, buvidCookie);
       if (result.code === 0) {
-        return { hasData: (result.data?.total_page ?? 0) > 0, failed: false, credentialExpired: false, firstPage: result };
+        const totalPage = result.data?.total_page ?? 0;
+        if (totalPage > 0) {
+          return { hasData: true, failed: false, credentialExpired: false, firstPage: result };
+        }
+        // total_page=0 只有 ready=1（B站已算完该时间段）才是可信空；
+        // ready≠1 的 total_page=0 是未就绪伪空 → 退避后重试，绝不当空
+        if (result.data?.ready === 1) {
+          return { hasData: false, failed: false, credentialExpired: false, firstPage: result };
+        }
+        failInfo = "ready=0 未就绪伪空（total_page=0 但数据未就绪）";
+        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+        continue;
       }
       // B站凭证失效：交由上层立即返回 needs-relogin
       if (result.code === -101 || result.code === 3 || (result.message && result.message.includes("未登录"))) {
         return { hasData: false, failed: false, credentialExpired: true };
       }
-      // 1301000：数据已过期（超出 B站 3 年保留期）→ 视为无数据
+      // 1301000 实测语义是"参数/时间窗错误"（如超过 31 天窗口），并非"数据已过期"或风控
+      // 异常——按"未得到结论"处理，绝不可当作可信空（否则会让首探得出"全部无数据"的
+      // 错误结论并永久写 noRevenue）。交上层重试/翻页阶段复查。
       if (result.code === 1301000) {
-        return { hasData: false, failed: false, credentialExpired: false, firstPage: result };
+        return { hasData: false, failed: true, credentialExpired: false, firstPage: result, failInfo: "code=1301000 参数/时间窗错误" };
       }
       failInfo = `code=${result.code} ${result.message ?? ""}`.trim();
       await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
@@ -678,6 +702,39 @@ async function probeMonthOnce(
     }
   }
   return { hasData: false, failed: true, credentialExpired: false, failInfo };
+}
+
+/**
+ * noRevenue 短路前的"抽样二次确认"（与客户端 anchor-gifts-client 一致）。
+ * B站冷缓存/未就绪窗口会把有数据的月份静默返回 code=0 ready=0 total_page=0（未就绪伪空），
+ * 也可能返回 1301000（实测语义为参数/时间窗错误）——一次性并发首探最容易撞上。若据此永久写
+ * noRevenue，真实主播会被误判为无收益、且此后所有拉取都被跳过。这里对最近几个月各重探一次
+ * （空则隔一个伪空间隔再探），只有确认为"干净空"（code=0 且 ready=1 且 total_page=0）才认定
+ * 真无收益；一旦恢复出数据、未就绪（ready≠1）、命中异常 code、探测失败，都放弃短路。
+ */
+async function confirmProbeNoRevenue(
+  cookie: string,
+  csrf: string,
+  buvidCookie: string,
+  samples: Array<{ start: string; end: string }>,
+): Promise<{ confirmed: boolean; credentialExpired: boolean }> {
+  for (const sample of samples) {
+    // 每个样本最多探 3 次：首次 + 按伪空间隔递增（5s/15s）复查，给未就绪数据留恢复时间
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      if (_quotaHitThisRun) return { confirmed: false, credentialExpired: false };
+      const r = await probeMonthOnce(cookie, csrf, buvidCookie, sample.start, sample.end);
+      if (r.credentialExpired) return { confirmed: false, credentialExpired: true };
+      if (r.failed) return { confirmed: false, credentialExpired: false }; // 含 ready=0 未就绪重试耗尽
+      if (r.hasData) return { confirmed: false, credentialExpired: false }; // 恢复出数据 → 非无收益
+      // "空"结论必须是干净空：code=0 且 ready=1（B站已算完）且 total_page=0。
+      // 缺 firstPage、异常 code、ready≠1（未就绪伪空）一律不算干净空 → 放弃短路
+      if (!r.firstPage || r.firstPage.code !== 0 || r.firstPage.data?.ready !== 1) {
+        return { confirmed: false, credentialExpired: false };
+      }
+      if (attempt < 2) await new Promise((res) => setTimeout(res, EMPTY_RETRY_INTERVAL_MS[attempt]));
+    }
+  }
+  return { confirmed: true, credentialExpired: false };
 }
 
 // ==================== GET Handler ====================
@@ -750,6 +807,10 @@ export async function GET(request: Request) {
     let fetchedNewPages = 0;
     // 本次探测是否判定该账号无收益（置位后随响应带回，前端据此立即隐藏主播页）
     let markedNoRevenue = false;
+    // 本轮结束时生效的 noRevenue 结论：以本轮首探结果覆盖历史标记。
+    // 作用是自愈——历史版本曾把软限流伪空误写成 noRevenue=true，probe 重探发现
+    // 数据后由本轮结论清除该标记，避免真实主播被永久跳过收益拉取。
+    let effectiveNoRevenue = meta?.noRevenue ?? false;
     // 本轮是否撞到 412 限流而提前收尾、以及未抓完的月份数：带回前端用于
     // "已抓 X 条，还剩 N 个月份待补，请稍后刷新续拉"的提示
     let quotaExhausted = false;
@@ -771,8 +832,9 @@ export async function GET(request: Request) {
     const probedFirstPage = new Map<string, BiliGiftStreamResponse>();
 
     /** 获取指定月份(payload按整个自然月)内的所有记录，自动翻页。
-     *  retryEmpty=false 时跳过伪空重试（由调用方按 shouldRetryEmptyMonth 决定），
-     *  page0 返回 total_page=0 直接按空月份返回——开播前/停播后的大段空白不值得逐月复查。 */
+     *  retryEmpty=false 时跳过可信空（ready=1 且 total_page=0）的伪空复查（由调用方按
+     *  shouldRetryEmptyMonth 决定）；但 ready≠1 的未就绪伪空一律必须复查，
+     *  复查后仍未就绪则抛 MonthFetchError（绝不当空）。 */
     async function fetchRange(begin: string, end: string, existingKeyCounter?: Map<string, number>, buvidCookie?: string, allowEarlyStop = true, cachedFirstPage?: BiliGiftStreamResponse, retryEmpty = true): Promise<{ records: GiftRecord[]; pages: number; ready?: number; empty?: boolean }> {
       const records: GiftRecord[] = [];
 
@@ -784,9 +846,9 @@ export async function GET(request: Request) {
           try {
             const result = await fetchGiftStreamPage(biliCookie, csrf, page, begin, end, buvidCookie);
             if (result.code === 0) return result;
-            // code=1301000: "不支持查询三年前的数据"——该月数据已过期，跳过（不重试）
+            // code=1301000 实测语义是"参数/时间窗错误"（如超过 31 天窗口），并非"数据已过期"——直接返回，不重试
             if (result.code === 1301000) {
-              console.log(`[AnchorGifts] ${begin}~${end} 第${page}页 code=1301000（数据已过期超过3年），跳过该月`);
+              console.log(`[AnchorGifts] ${begin}~${end} 第${page}页 code=1301000 参数/时间窗错误，跳过该月`);
               return result;
             }
             // 其他API错误：指数退避（减半基础，避免等待过久）
@@ -808,7 +870,7 @@ export async function GET(request: Request) {
         return null;
       }
 
-      // 第0页：total_page 有意义，total_page=0 表示该月无数据
+      // 第0页：total_page 有意义，total_page=0 需结合 ready 区分"可信空"与"未就绪伪空"（见下）
       // page=0 使用更多重试次数（5次），避免因网络波动丢失整个月份
       // 探测阶段（首探/历史尽头探测）已拿到该月 page0 时直接复用，跳过请求与重试，避免重复请求
       let firstPage = cachedFirstPage ?? await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
@@ -816,36 +878,44 @@ export async function GET(request: Request) {
         throw new MonthFetchError(begin, end, "第0页获取失败（已重试），终止以避免数据缺失");
       }
 
-      // code=1301000: "不支持查询三年前的数据"——该月已过期，跳过
+      // code=1301000（参数/时间窗错误，如超过 31 天窗口）：按既有行为跳过该月
       if (firstPage.code === 1301000) {
-        console.log(`[AnchorGifts] ${begin}~${end} code=1301000 message="${firstPage.message}"（数据已过期），跳过该月`);
+        console.log(`[AnchorGifts] ${begin}~${end} code=1301000 message="${firstPage.message}"（参数/时间窗错误），跳过该月`);
         return { records, pages: 0 };
       }
 
       let totalPages = firstPage.data?.total_page ?? 0;
       const totalHamster = firstPage.data?.total_hamster ?? 0;
 
-      // total_page=0 不一定代表该月无数据：B站 在软限流或被冷缓存命中时，
-      // 会静默返回 code=0/total_page=0（假空），并非错误、也不会重试。
-      // 这里按递增间隔再做几次 page0 探测：恢复出数据 → 视为假空，继续翻页；
-      // 仍为 0 → 判定为"可疑空月份"（empty=true，交给上层用 empty_counts 决定是否补拉）。
-      if (totalPages === 0) {
-        if (retryEmpty) {
-          for (const delay of EMPTY_RETRY_INTERVAL_MS) {
-            await new Promise(r => setTimeout(r, delay));
-            const retried = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
-            if (retried && retried.code === 0 && (retried.data?.total_page ?? 0) > 0) {
-              firstPage = retried;
-              totalPages = firstPage.data?.total_page ?? 0;
+      // total_page=0 不一定代表该月无数据（实测确认）：
+      // - ready≠1（未就绪伪空）：冷缓存/懒计算，同一请求稍后重放即可拿到真实数据 → 必须复查，绝不可当空；
+      // - ready=1 且 total_page=0 才是可信空，仅在 retryEmpty（值得怀疑的月份）做兜底复查，
+      //   开播前/停播后的大段空白不值得逐月白等。
+      if (totalPages === 0 && (retryEmpty || firstPage.data?.ready !== 1)) {
+        for (const delay of EMPTY_RETRY_INTERVAL_MS) {
+          await new Promise(r => setTimeout(r, delay));
+          const retried = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
+          // 恢复判据：要么恢复出数据，要么给出 ready=1 的可信空结论（未就绪伪空不算结论，继续等）
+          if (retried && retried.code === 0 && ((retried.data?.total_page ?? 0) > 0 || retried.data?.ready === 1)) {
+            firstPage = retried;
+            totalPages = firstPage.data?.total_page ?? 0;
+            if (totalPages > 0) {
               console.log(`[AnchorGifts] ${begin}~${end} 伪空重试恢复：total_page=${totalPages} total_hamster=${firstPage.data?.total_hamster ?? "?"}，继续`);
-              break;
             }
+            break;
           }
         }
-        if (totalPages === 0) {
-          console.log(`[AnchorGifts] ${begin}~${end} 空月份：${retryEmpty ? "重试后仍 total_page=0" : "未复查（不在伪空重试范围内）"}（标记 empty，交由上层判定）`);
+      }
+      if (totalPages === 0) {
+        if (firstPage.data?.ready === 1) {
+          // ready=1 的可信空：这才可以判定"可疑空月份"（empty=true，交给上层用 empty_counts 决定是否补拉）
+          console.log(`[AnchorGifts] ${begin}~${end} 空月份：${retryEmpty ? "复查后仍 total_page=0 且 ready=1" : "ready=1 可信空（不在伪空复查范围内）"}（标记 empty，交由上层判定）`);
           return { records: [], pages: 0, ready: firstPage.data?.ready, empty: true };
         }
+        // 复查后数据仍未就绪（ready≠1）：没有任何可信结论，绝不可当空。
+        // 抛 MonthFetchError（非 partial）→ 上层记 unknownStarts / empty_counts 钉住 end_date，下轮补拉。
+        console.warn(`[AnchorGifts] ${begin}~${end} ready=0 未就绪伪空：复查后数据仍未就绪，本轮不判空，留待下轮补拉`);
+        throw new MonthFetchError(begin, end, "ready=0 未就绪伪空（复查后数据仍未就绪）");
       }
 
       const listLen = firstPage.data?.list?.length ?? 0;
@@ -1015,9 +1085,11 @@ export async function GET(request: Request) {
       console.log(`[AnchorGifts] ${fast ? "fast" : "离线"}模式，使用本地缓存 ${existingRecords.length} 条记录`);
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
       fetchedNewPages = 0;
-    } else if (meta?.noRevenue) {
+    } else if (meta?.noRevenue && !probe) {
       // 首次登录全量探测已确认无收益（noRevenue）：视为无直播间/非持续开播主播，跳过整个收益拉取。
       // 与冷启动、绿色刷新一致：不再重复探测，仅使用本地已有（通常为空）记录计算统计。
+      // probe=true（扫码登录/保底重探）时不跳过：历史误判的 noRevenue 需要借重探自愈，
+      // 若重探发现数据，下方收尾会以本轮结论覆盖清除该标记。
       console.log(`[AnchorGifts] ${validSession.mid} 已标记无收益，跳过收益记录拉取（仅用本地 ${existingRecords.length} 条记录）`);
       allRecords = existingRecords.sort((a, b) => b.time.localeCompare(a.time));
       fetchedNewPages = 0;
@@ -1068,16 +1140,25 @@ export async function GET(request: Request) {
       // 全部月份均无数据 → 该账号无收益：置 noRevenue 并保存后立即终止，不再扫描历史月份。
       // 注意：仅"零记录"账号适用（有记录的账号即使近期无数据也不得判无收益）。
       if (probe && existingRecords.length === 0) {
-        console.log(`[AnchorGifts] ${validSession.mid} 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}）`);
-        const { results: probeResults } = await runWithConcurrency(
-          chunks,
-          MONTH_CONCURRENCY,
-          (c) => probeMonthOnce(biliCookie, csrf, buvidCookie, c.start, c.end),
-        );
+        // 首探固定"串行 + 压低速率"（与客户端一致）：一次探完全部月份是本轮请求最密集的时段，
+        // 且跑在最前面——连发极易踩中 B站 软限流（各月份被静默返回伪空），整轮"是否有收益"
+        // 的结论就会是错的并被永久写成 noRevenue。探测结束即恢复原速率，不影响后续翻页。
+        console.log(`[AnchorGifts] ${validSession.mid} 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}）（串行 · ${PROBE_MAX_RATE}req/s）`);
+        _rateOverride = PROBE_MAX_RATE;
+        let probeResults: Array<Awaited<ReturnType<typeof probeMonthOnce>>>;
+        try {
+          probeResults = (await runWithConcurrency(
+            chunks,
+            1,
+            (c) => probeMonthOnce(biliCookie, csrf, buvidCookie, c.start, c.end),
+          )).results;
+        } finally {
+          _rateOverride = null;
+        }
         probeResults.forEach((r, i) => {
           if (r.firstPage) probedFirstPage.set(chunks[i].start, r.firstPage);
           // 三态区分：探测失败 / 凭证失效 = 未知（既不算有数据、也绝不算空），该月会被翻页阶段重试；
-          // 只有"拿到可信响应且 total_page=0"才是空月份。
+          // 只有"拿到可信响应（code=0 且 ready=1）且 total_page=0"才是空月份。
           if (r.failed || r.credentialExpired) recordMonth(chunks[i].start, "unknown");
           else if (r.hasData) recordMonth(chunks[i].start, "data");
           else recordMonth(chunks[i].start, "empty");
@@ -1093,17 +1174,33 @@ export async function GET(request: Request) {
           );
         }
         if (probeFailedList.length === 0 && probeResults.every((r) => !r.hasData)) {
-          markedNoRevenue = true;
-          skipFetch = true;
-          await saveRecordsWithMeta(validSession.mid, validSession.uname, [], {
-            total_page: meta?.total_page ?? 0,
-            end_date: yesterdayStr,
-            last_fetch: getBeijingTime(),
-            empty_counts: {},
-            noRevenue: true,
-          });
-          console.log(`[AnchorGifts] ${validSession.mid} 首探短路：全部 ${chunks.length} 个月均无数据，标记 noRevenue 并终止扫描`);
+          // 不直接判无收益：B站冷缓存/未就绪窗口会把有数据的月份静默返回
+          // code=0 ready=0 total_page=0（未就绪伪空），也可能返回 1301000（参数/时间窗错误）。
+          // 若据此永久写 noRevenue，真实主播会被误判为无收益、且此后所有拉取都被跳过（不可逆）。
+          // 先抽样最近几个月二次确认（见 confirmProbeNoRevenue），确认仍为 ready=1 的干净空才标记。
+          const confirmSamples = chunks.slice(-Math.min(3, chunks.length));
+          const confirm = await confirmProbeNoRevenue(biliCookie, csrf, buvidCookie, confirmSamples);
+          if (confirm.credentialExpired) {
+            return NextResponse.json({ code: 0, message: "needs-relogin", data: null }, { status: 200 });
+          }
+          if (confirm.confirmed) {
+            markedNoRevenue = true;
+            skipFetch = true;
+            await saveRecordsWithMeta(validSession.mid, validSession.uname, [], {
+              total_page: meta?.total_page ?? 0,
+              end_date: yesterdayStr,
+              last_fetch: getBeijingTime(),
+              empty_counts: {},
+              noRevenue: true,
+            });
+            console.log(`[AnchorGifts] ${validSession.mid} 首探短路：抽样二次确认全部 ${chunks.length} 个月均无数据，标记 noRevenue 并终止扫描`);
+          } else {
+            console.log(`[AnchorGifts] ${validSession.mid} 首探虽全部为空，但抽样二次确认未通过（疑似未就绪伪空/异常 code），不判无收益，继续全量抓取`);
+          }
         }
+        // 首探给出了结论（无论是否标记 noRevenue），以本轮结论覆盖历史标记：
+        // 发现数据 → 清除历史误判的 noRevenue；确认无收益 → 保持/置位。
+        effectiveNoRevenue = markedNoRevenue;
       }
 
       // 执行顺序：从旧到新。数据起止范围已由首探实测确定，不再需要"从新到旧 + 连续空月份
@@ -1294,7 +1391,7 @@ export async function GET(request: Request) {
           end_date: startDate,
           last_fetch: getBeijingTime(),
           empty_counts: abortedEmptyCounts,
-          noRevenue: meta?.noRevenue ?? false,
+          noRevenue: effectiveNoRevenue,
           scan_from: meta?.scan_from,
         });
         console.log(`[AnchorGifts] 保守中断: end_date 保持 ${startDate}（不推进），${fetchedNewPages} 页, 新增 ${hasNewRecords ? "有" : "无"}, 总计 ${allRecords.length} 条${firstError ? `（${firstError.message}）` : ""}`);
@@ -1309,7 +1406,7 @@ export async function GET(request: Request) {
           end_date: nextEndDate,
           last_fetch: getBeijingTime(),
           empty_counts: nextEmptyCounts,
-          noRevenue: meta?.noRevenue ?? false,
+          noRevenue: effectiveNoRevenue,
           scan_from: meta?.scan_from ?? (coveredFullHistory ? startDate : undefined),
         });
         if (suspiciousEmptyStarts.length > 0) {
@@ -1779,8 +1876,8 @@ export async function GET(request: Request) {
       records: filteredRecords,
       filter: { dateRange: dateRangeFilter, fan: fanFilter },
       metadata: meta,
-      // 本次已判定无收益（或此前已标记）：供前端立即隐藏主播页
-      noRevenue: markedNoRevenue || meta?.noRevenue === true,
+      // 本次已判定无收益（或此前已标记、且本轮未推翻）：供前端立即隐藏主播页
+      noRevenue: effectiveNoRevenue,
       fetchedNewPages: fetchedNewPages,
       yesterdayAvailable,
       // 本次 412 退避重试后仍被拦截而收尾，前端提示用户稍后手动刷新。
