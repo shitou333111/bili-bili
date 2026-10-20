@@ -844,7 +844,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   onClick={openAnchorBubbleChart}
                 >
                   <div className="text-xs text-black/45">
-                    主播数
+                    主播数（点击看图）
                   </div>
                   <div className="mt-1 text-xl font-semibold">{overviewAnchors.length}</div>
                 </div>

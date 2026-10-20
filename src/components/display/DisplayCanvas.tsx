@@ -355,6 +355,13 @@ export default function DisplayCanvas() {
   const [orientation, setOrientation] = useState<ScreenOrientation>("landscape");
   // 编辑模式（?mode=edit）：三个元素常驻，可拖/可缩放
   const [isEdit, setIsEdit] = useState(false);
+  // 编辑模式当前选中的元素（点击即选中）：选中项虚线框变红 + 轻微辉光，突出正在操作的元素
+  const [selectedElement, setSelectedElement] = useState<string | null>(null);
+  /** MovableBox 选中态 props：非编辑模式不参与选中（源模式无虚线框） */
+  const selectProps = (id: string) => ({
+    selected: isEdit && selectedElement === id,
+    onSelect: () => setSelectedElement(id),
+  });
   // 各模块显示开关（主进程广播）：总开关关闭 → 浏览器源整体不渲染；各模块开关关闭 → 隐藏对应元素
   const [flags, setFlags] = useState<DisplayFlags>({
     master: true,
@@ -1079,6 +1086,7 @@ export default function DisplayCanvas() {
           onCommit={commitLayout("anime")}
           editable={isEdit}
           zIndex={1}
+          {...selectProps("anime")}
         >
           <div className="relative" style={{ width: animeDisp.w, height: animeDisp.h }}>
             {!isEdit && anime && (
@@ -1105,7 +1113,7 @@ export default function DisplayCanvas() {
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center">
-                    <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-base font-semibold leading-relaxed shadow-sm">
+                    <span className="rounded-xl bg-white/70 px-4 py-2 text-black/55 text-[40px] font-semibold leading-relaxed shadow-sm">
                       入场动画（视频）将覆盖整个画布
                       <br />
                       尚未配置入场动画，前往「入场动画」卡片添加后可预览
@@ -1127,6 +1135,7 @@ export default function DisplayCanvas() {
           onCommit={commitGiftEffectLayout}
           editable={isEdit}
           zIndex={2}
+          {...selectProps("giftEffect")}
         >
           <div className="relative" style={{ width: giftEffectDisp.w, height: giftEffectDisp.h }}>
             {!isEdit && giftEffect && (
@@ -1159,6 +1168,7 @@ export default function DisplayCanvas() {
           rect={layouts.gift[orientation]}
           onCommit={commitLayout("gift")}
           editable={isEdit}
+          {...selectProps("gift")}
         >
           <GiftFlower
             gifts={gifts}
@@ -1179,6 +1189,7 @@ export default function DisplayCanvas() {
           rect={layouts.giftSeparate[orientation]}
           onCommit={commitLayout("giftSeparate")}
           editable={isEdit}
+          {...selectProps("giftSeparate")}
         >
           <GiftFlower
             gifts={gifts}
@@ -1235,6 +1246,7 @@ export default function DisplayCanvas() {
           rect={bannerRect}
           onCommit={commitLayout("banner")}
           editable={isEdit}
+          {...selectProps("banner")}
         >
           <BannerButton
             text={bannerText || "欢迎来到直播间"}
@@ -1251,6 +1263,7 @@ export default function DisplayCanvas() {
           rect={layouts.giftFlip[orientation]}
           onCommit={commitLayout("giftFlip")}
           editable={isEdit}
+          {...selectProps("giftFlip")}
         >
           <GiftFlipCarousel
             options={giftFlipCfg.options}
@@ -1276,6 +1289,7 @@ export default function DisplayCanvas() {
           rect={entryRect}
           onCommit={commitLayout("entry")}
           editable={isEdit}
+          {...selectProps("entry")}
         >
           {isEdit ? (
             <TestEntryLoop

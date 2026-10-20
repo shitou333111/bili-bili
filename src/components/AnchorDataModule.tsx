@@ -1069,7 +1069,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                       onClick={openFanBubbleChart}
                     >
                       <div className="text-xs text-black/45">
-                        送礼粉丝
+                        送礼粉丝（点击看图）
                       </div>
                       <div className="mt-1 text-xl font-semibold">{stats.fanCount}</div>
                     </div>

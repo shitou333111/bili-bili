@@ -27,6 +27,8 @@ export default function MovableBox({
   className = "",
   editable = false,
   zIndex = 3,
+  selected = false,
+  onSelect,
 }: {
   id: string;
   /** 当前位置/缩放（受控，来自主进程下发并随拖动提交更新） */
@@ -39,6 +41,10 @@ export default function MovableBox({
   editable?: boolean;
   /** 层级：同一画布内多个元素重叠时，点击/显示优先上层（入场动画=1，礼物/入场提示=3） */
   zIndex?: number;
+  /** 当前选中（仅编辑模式生效）：虚线边框变红 + 轻微辉光，突出正在操作的元素 */
+  selected?: boolean;
+  /** 点击该元素时回调（父级用于记录选中项） */
+  onSelect?: () => void;
 }) {
   // 拖动中的即时显示值；未拖动态时与受控 rect 保持一致
   const [dragRect, setDragRect] = useState<MovableRect>(rect);
@@ -69,6 +75,8 @@ export default function MovableBox({
   const onPointerDown = (e: PointerEvent<HTMLDivElement>, mode: "move" | "resize") => {
     e.preventDefault();
     e.stopPropagation();
+    // 点到该元素（含手柄）即视为选中：父级据此给红边框 + 辉光
+    if (editable) onSelect?.();
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -135,7 +143,13 @@ export default function MovableBox({
     >
       <div style={{ transform: `scale(${display.scale})`, transformOrigin: "top left", width: "max-content" }}>
         {editable ? (
-          <div className="relative border-4 border-dashed border-black/40 rounded-lg">
+          <div
+            className={`relative rounded-lg border-4 border-dashed transition-colors duration-150 ${
+              selected
+                ? "border-[#ef4444] shadow-[0_0_14px_rgba(239,68,68,0.65)]"
+                : "border-black/40"
+            }`}
+          >
             {children}
             {/* 等比缩放手柄：右下角（仅编辑模式可见） */}
             <div

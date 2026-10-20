@@ -462,8 +462,9 @@ export default function VideoOverlay({
             : "你还没有配置任何入场动画，先在“入场动画”卡片中添加，才能看到动画播放效果"}
         </div>
       )}
-      {/* 声音开关：autoplay 默认静音以兼容无声自动播放；点此可开启/关闭视频声音 */}
-      {anime.videoSrc && !loadError && (
+      {/* 声音开关：autoplay 默认静音以兼容无声自动播放；点此可开启/关闭视频声音。
+          仅编辑布局页（loop 预览模式）渲染——浏览器源里出现会被录进直播画面，禁止显示。 */}
+      {loop && anime.videoSrc && !loadError && (
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()} // 编辑模式下不触发外层拖动，仅切换声音
@@ -474,10 +475,10 @@ export default function VideoOverlay({
             onMutedChange?.(next);
           }}
           title={muted ? "开启声音" : "关闭声音"}
-          className="absolute right-4 bottom-4 z-[2] w-20 h-20 rounded-full bg-black/40 text-white
+          className="absolute right-4 bottom-4 z-[2] w-32 h-32 rounded-full bg-black/40 text-white
             flex items-center justify-center pointer-events-auto opacity-40 hover:opacity-90 transition-opacity"
         >
-          <VolumeIcon muted={muted} className="w-10 h-10" />
+          <VolumeIcon muted={muted} className="w-16 h-16" />
         </button>
       )}
     </div>

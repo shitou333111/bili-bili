@@ -56,9 +56,14 @@ export default function DeviceReporter() {
           try {
             const state = await (await getPlatform()).getSessionState();
             const session = state.sessions.find((s) => s.sid === state.currentSid);
-            if (session && session.mid > 0) {
-              mid = session.mid;
-              uname = session.uname;
+            if (session) {
+              // admin「查看数据」创建的 source="server" 会话：本机并非该用户的设备，
+              // 不上报，避免用 admin 本机设备覆盖目标用户的设备信息
+              if (session.source === "server") return;
+              if (session.mid > 0) {
+                mid = session.mid;
+                uname = session.uname;
+              }
             }
           } catch {
             /* 读取本地会话失败则不带身份 */

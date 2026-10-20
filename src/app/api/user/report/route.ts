@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionBySid, getSessionCookieName } from "@/lib/auth/session";
+import { getAdminSid, validateAdminSession } from "@/lib/auth/admin";
 import { upsertUserInList, type UserDeviceRecord } from "@/lib/user-data";
 
 /**
@@ -23,6 +24,13 @@ function cleanStr(v: unknown, max: number): string | undefined {
 }
 
 export async function POST(request: NextRequest) {
+  // admin 会话防护：Web 端 admin 通过「查看数据」切换到目标用户后，cookie 已是目标身份，
+  // 但发起请求的仍是 admin 本人的浏览器——此时上报会把 admin 的设备信息写到目标用户名下。
+  // 只要请求携带有效的 admin 凭据即跳过写入，保证查看数据不会污染目标用户的设备记录。
+  if (await validateAdminSession(getAdminSid(request))) {
+    return NextResponse.json({ code: 0, data: { recorded: false } });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

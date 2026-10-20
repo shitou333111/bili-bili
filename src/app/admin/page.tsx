@@ -84,21 +84,25 @@ type User = {
 
 /** 平台代号 → 中文名 */
 const PLATFORM_LABEL: Record<string, string> = {
-  web: "Web",
+  web: "web",
   desktop: "电脑",
   android: "安卓",
   ios: "iOS",
 };
 
-/** 设备记录 → 概要文本（如「安卓 · Xiaomi 25102RKBEC · Android 14 · Chrome 146」） */
+/** 设备记录 → 概要文本（如「Xiaomi 25102RKBEC · Android 14 · Chrome」），平台由标签单独展示 */
 function deviceSummary(d: UserDevice): string {
   const parts = [
-    PLATFORM_LABEL[d.platform] ?? d.platform,
     d.brand,
     [d.os, d.osVersion].filter(Boolean).join(" ") || undefined,
-    [d.browser, d.browserVersion].filter(Boolean).join(" ") || undefined,
+    d.browser,
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+/** 最新使用的平台（devices[0] 为最新记录），无信息返回 undefined */
+function latestPlatform(u: User): string | undefined {
+  return u.devices?.[0]?.platform ?? u.platform;
 }
 
 /** 盲盒内礼物明细（含过期盲盒的完整信息，可手动补充奖励礼物） */
@@ -1580,6 +1584,27 @@ export default function AdminPage() {
               className="w-44 rounded-lg border border-black/10 px-2.5 py-1.5 text-xs focus:outline-none focus:border-black/30"
             />
           </div>
+          {(() => {
+            let s = 0, n = 0, u = 0;
+            let dPc = 0, dAndroid = 0, dIos = 0, dWeb = 0, dUnknown = 0;
+            for (const user of filteredUsers) {
+              if (user.streamerStatus === "streamer") s++;
+              else if (user.streamerStatus === "non-streamer") n++;
+              else u++;
+              const p = latestPlatform(user);
+              if (p === "desktop") dPc++;
+              else if (p === "android") dAndroid++;
+              else if (p === "ios") dIos++;
+              else if (p === "web") dWeb++;
+              else dUnknown++;
+            }
+            return (
+              <div className="flex flex-wrap gap-x-6 text-[10px] text-black/45 mb-1.5">
+                <span>主播/非主播/未判定 = {s}/{n}/{u}</span>
+                <span>电脑/安卓/iOS/web/未知 = {dPc}/{dAndroid}/{dIos}/{dWeb}/{dUnknown}</span>
+              </div>
+            );
+          })()}
           {filteredUsers.length === 0 ? (
             <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
@@ -1605,23 +1630,29 @@ export default function AdminPage() {
                         ? <span className="text-[10px] px-1.5 rounded bg-black/5 text-black/40 shrink-0">非主播</span>
                         : <span className="text-[10px] px-1.5 rounded bg-black/5 text-black/25 shrink-0">未判定</span>}
                       {user.isLocal && <span className="text-[10px] px-1.5 rounded bg-[#2ecc71]/10 text-[#2ecc71] shrink-0">本机</span>}
-                      {user.platform && (
-                        <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">
-                          {PLATFORM_LABEL[user.platform] ?? user.platform}
-                        </span>
-                      )}
                     </div>
                     <div className="text-[10px] text-black/30 mt-0.5">UID {user.mid}</div>
                     <div className="text-[10px] text-black/30 mt-0.5">更新: {new Date(user.updatedAt).toLocaleString("zh-CN")}</div>
-                    {user.devices && user.devices.length > 0 && (
-                      <div
-                        className="text-[10px] text-black/40 mt-0.5 truncate"
-                        title={user.devices.map((d) => `${deviceSummary(d)}（${new Date(d.lastSeen).toLocaleString("zh-CN")}）`).join("\n")}
-                      >
-                        设备: {deviceSummary(user.devices[0])}
-                        {user.devices.length > 1 && ` 等${user.devices.length}台`}
-                      </div>
-                    )}
+                    <div
+                      className="text-[10px] text-black/40 mt-0.5 flex items-center gap-1 min-w-0"
+                      title={user.devices && user.devices.length > 0
+                        ? user.devices.map((d) => `${PLATFORM_LABEL[d.platform] ?? d.platform}${deviceSummary(d) ? " · " + deviceSummary(d) : ""}（${new Date(d.lastSeen).toLocaleString("zh-CN")}）`).join("\n")
+                        : undefined}
+                    >
+                      <span className="shrink-0">设备:</span>
+                      <span className="text-[10px] px-1.5 rounded bg-[#00a1d6]/10 text-[#00a1d6] shrink-0">
+                        {(() => {
+                          const p = latestPlatform(user);
+                          return p ? PLATFORM_LABEL[p] ?? p : "未知";
+                        })()}
+                      </span>
+                      {user.devices && user.devices.length > 0 && deviceSummary(user.devices[0]) && (
+                        <span className="truncate">
+                          {deviceSummary(user.devices[0])}
+                          {user.devices.length > 1 && ` 等${user.devices.length}台`}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {user.isLocal ? (

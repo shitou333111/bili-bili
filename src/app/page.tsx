@@ -864,7 +864,7 @@ const MEDAL_CLEAN_TOOL: ToolDef = { icon: "/fans-icon.png", title: "粉丝牌清
 const MEDALS_MAX_PAGES = 100;
 const REVIVE_SHOT_TOOL: ToolDef = { icon: "📸", title: "复活曲截图", desc: "复活曲倒计时投屏 + 自动截图，直播多人局必备工具", needsLogin: false };
 const MEDICAL_TOOL: ToolDef = { icon: "💊", title: "多人接力PK医药费", desc: "多人接力PK结算医药费，自动检测、发收与归档", needsLogin: false };
-const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领取B币并换成电池", desc: "领取年度大会员每月赠送的5个B币，可分别开启自动领取与自动兑换电池。注意，兑换是全部B币，包括充值的", needsLogin: true };
+const YEAR_VIP_TOOL: ToolDef = { icon: "🎁", title: "年度大会员领B币换电池", desc: "领取年度会员每月赠送的5个B币，可分别开启自动领取与自动兑换。注意，兑换的是全部B币余额", needsLogin: true };
 
 /** 年度大会员 B币 工具的本机配置（按 mid 持久化）：自动领取/自动兑换开关、最近一次兑换月份 */
 const YEAR_VIP_CFG_PREFIX = "year-vip-bcoin:";
@@ -1859,8 +1859,9 @@ export default function HomePage() {
   const ANCHOR_PROMO_FEATURES: Array<{ title: string; desc: string }> = [
     { title: "主播收益统计", desc: "每天、每月收到哪位粉丝的哪些礼物，多维度详细统计" },
     { title: "粉丝盲盒盈亏", desc: "查询粉丝最近 3 年的盲盒盈亏记录，粉丝可在直播间发弹幕互动查询" },
-    { title: "大礼物录屏截图", desc: "大礼物模拟录屏、大礼物自动截图，精彩时刻不错过" },
-    { title: "进场特效动画", desc: "粉丝进场特效、进场动画，直播间更有氛围" },
+    { title: "大礼物补图录屏", desc: "大礼物补图片、模拟录屏、完整录屏，精彩时刻不错过" },
+    { title: "进场特效动画", desc: "粉丝进场特效、进场动画，让直播间更特别" },
+    { title: "直播间互动工具", desc: "礼物特效、送礼抽卡等小工具，直播间更有氛围" },
   ];
   // "主播"页面是否显示下载引导提示：WEB 端恒显示；客户端等直播间检测完成后、无直播间时显示
   const showAnchorPromo = isWeb || (liveRoomChecked && !hasLiveRoom);
@@ -1872,7 +1873,7 @@ export default function HomePage() {
     "自动抢天选和红包",
     "粉丝清理",
     "粉丝牌清理",
-    "年度大会员领取B币并换成电池",
+    "年度大会员领B币换电池",
     "多人接力PK医药费",
   ]);
   // 默认隐藏的帮助页工具卡片：与"管理后台"入口同一触发方式（连击版本卡片 10 次），
@@ -3808,24 +3809,27 @@ export default function HomePage() {
                   className="mx-auto h-16 w-16 rounded-[18px]"
                 />
                 <h2 className="mt-4 text-xl font-semibold text-[#1f1c17]">主播功能</h2>
-                <ul className="mx-auto mt-3 max-w-md space-y-2 text-left text-sm leading-relaxed text-black/60">
-                  <li className="flex gap-2.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
-                    <span>这些功能需要客户端，下载安装后即可解锁。</span>
-                  </li>
-                  <li className="flex gap-2.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
-                    <span>
-                      如果现在用的就是客户端，但不是主播，可以推荐爱播安装。
-                    </span>
-                  </li>
-                  <li className="flex gap-2.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
-                    <span>
-                      如果现在用的就是客户端，并且当前账号也是主播，说明没有被正确识别，点击[帮助]中的[重建数据]，或者进群反馈。
-                    </span>
-                  </li>
-                </ul>
+                {/* WEB 端：仅保留第一条提示，且不用无序列表格式（纯文本段落） */}
+                {isWeb ? (
+                  <p className="mx-auto mt-3 max-w-md text-left text-sm leading-relaxed text-black/60">
+                    这些功能需要客户端，下载后即可解锁，单文件免安装。
+                  </p>
+                ) : (
+                  <ul className="mx-auto mt-3 max-w-md space-y-2 text-left text-sm leading-relaxed text-black/60">
+                    <li className="flex gap-2.5">
+                      <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
+                      <span>
+                        主播功能只有主播账号可以使用，可以推荐爱播安装。
+                      </span>
+                    </li>
+                    <li className="flex gap-2.5">
+                      <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-black/30" />
+                      <span>
+                        如果当前账号是主播，说明没有被正确识别，点击[帮助]中的[重建数据]，或者进群反馈。
+                      </span>
+                    </li>
+                  </ul>
+                )}
               </div>
               {/* 功能亮点：卡片网格 */}
               <div className="grid grid-cols-1 gap-3 px-4 pb-2 pt-1 sm:grid-cols-2 sm:px-6">
@@ -3836,28 +3840,30 @@ export default function HomePage() {
                   </div>
                 ))}
               </div>
-              {/* 行动按钮：下载客户端 + 网站首页
+              {/* 行动按钮：下载客户端 + 网站首页（仅 WEB 端显示；客户端内非主播账号不显示）
                   必须用主域名绝对地址 + 新窗口：本应用跑在 app.bili-bili.icu 子域名下，
                   相对路径 /landing 会在应用内（子域名/客户端本地页）打开，而不是真正的官网。
                   绝对地址在 Tauri 里由 ExternalLinkHandler 交给系统浏览器打开。 */}
-              <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-6">
-                <a
-                  href="https://bili-bili.icu/#download"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex w-full max-w-xs items-center justify-center rounded-full bg-[#1f1c17] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
-                >
-                  下载客户端（免费）
-                </a>
-                <a
-                  href="https://bili-bili.icu/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-black/45 underline-offset-2 transition hover:text-black/75 hover:underline"
-                >
-                  访问网站首页
-                </a>
-              </div>
+              {isWeb && (
+                <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-6">
+                  <a
+                    href="https://bili-bili.icu/#download"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex w-full max-w-xs items-center justify-center rounded-full bg-[#1f1c17] px-6 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                  >
+                    下载客户端（免费）
+                  </a>
+                  <a
+                    href="https://bili-bili.icu/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-black/45 underline-offset-2 transition hover:text-black/75 hover:underline"
+                  >
+                    访问网站首页
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -4143,37 +4149,10 @@ export default function HomePage() {
                 <RecommendedAnchors />
                 {/* 开机自启动卡片（仅 Windows 桌面展示） */}
                 <AutostartCard />
-                {/* 常见问题卡片（管理员在 admin 页编辑；无内容则不显示） */}
-                {helpFaq.length > 0 && (
-                  <div className="rounded-xl border border-black/10 bg-white/80 px-3 py-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-                    <h3 className="text-base font-bold mb-3">常见问题</h3>
-                    <div className="space-y-2">
-                      {helpFaq.map((item, i) => {
-                        const open = openFaq === i;
-                        return (
-                          <div key={i} className="rounded-lg border border-black/10 overflow-hidden">
-                            <button
-                              onClick={() => setOpenFaq(open ? null : i)}
-                              className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition hover:bg-black/[0.03]"
-                            >
-                              <span className="min-w-0 flex-1 text-sm font-medium text-black/80">{item.q}</span>
-                              <svg className={`w-4 h-4 shrink-0 text-black/30 transition-transform duration-200 ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                            </button>
-                            <div className={`grid transition-all duration-200 ${open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
-                              <div className="overflow-hidden">
-                                <p className="px-3 pb-3 text-xs leading-relaxed text-black/60 whitespace-pre-wrap">{item.a}</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {/* 反馈卡片 */}
+                {/* 反馈卡片（微信群二维码，位于常见问题上方） */}
                 <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">
-                    有问题，反馈BUG，提需求，扫码加入微信群
+                    有问题，反馈BUG，提需求，扫码加入微信群。但请先看下面的常见问题，能解决大部分的疑问。
                   </p>
                   <button
                     type="button"
@@ -4192,6 +4171,34 @@ export default function HomePage() {
                     />
                   </button>
                 </div>
+                {/* 常见问题卡片（管理员在 admin 页编辑；无内容则不显示）
+                    选项卡式：问题行之间无间距，仅用横线分隔，节省空间 */}
+                {helpFaq.length > 0 && (
+                  <div className="rounded-xl border border-black/10 bg-white/80 px-3 py-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                    <h3 className="text-base font-bold mb-3">常见问题</h3>
+                    <div className="divide-y divide-black/10 border-y border-black/10">
+                      {helpFaq.map((item, i) => {
+                        const open = openFaq === i;
+                        return (
+                          <div key={i}>
+                            <button
+                              onClick={() => setOpenFaq(open ? null : i)}
+                              className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition hover:bg-black/[0.03]"
+                            >
+                              <span className="min-w-0 flex-1 text-sm font-medium text-black/80">{item.q}</span>
+                              <svg className={`w-4 h-4 shrink-0 text-black/30 transition-transform duration-200 ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                            </button>
+                            <div className={`grid transition-all duration-200 ${open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
+                              <div className="overflow-hidden">
+                                <p className="px-3 pb-3 text-xs leading-relaxed text-black/60 whitespace-pre-wrap">{item.a}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {/* 微信群二维码放大弹窗（点击遮罩关闭） */}
                 {wechatQrZoom &&
                   createPortal(
