@@ -326,6 +326,10 @@ export interface DisplayConfig {
    *  除「不透明」外按椭圆区域径向分布，中心最实、越往周边越透明，可透出下层直播画面；
    *  闭幕黑幕形状不变、整体均匀套用该档位的中心不透明度） */
   animeOpacity: AnimeOpacity;
+  /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+  animeFeatherH: number;
+  /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+  animeFeatherV: number;
   /** 入场动画声音开关：true=有声音（解除静音），false=静音；默认静音（兼容浏览器/CEF 无声自动播放限制）。
    *  面板「声音」开关与画布预览右下角静音按钮共享同一状态。 */
   animeMuted: boolean;
@@ -404,6 +408,8 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   animeCooldown: "bilibili",
   animeLastSeen: {},
   animeOpacity: "light", // 整体透明度默认「轻」
+  animeFeatherH: 0, // 左右边缘羽化默认关闭
+  animeFeatherV: 5, // 上下边缘羽化默认强度（0=关闭）
   animeMuted: true, // 入场动画默认静音（兼容浏览器/CEF 无声自动播放限制）
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）

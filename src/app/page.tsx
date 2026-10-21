@@ -415,13 +415,14 @@ function GiftSaveModal({
           <div className="bg-white px-4 py-4">
             <div className="grid grid-cols-3 gap-x-2 gap-y-2">
               {gifts.slice(0, 59).map((g) => (
-                <div key={g.uid} className="flex items-center justify-center gap-1 text-sm py-0.5">
+                // 左对齐（不加 justify-center）：图标固定在单元格左侧，各行列图标垂直对齐（与主播页礼物清单一致）
+                <div key={g.uid} className="flex items-center gap-1.5 text-sm py-0.5">
                   {g.gift_img ? <img src={fixImageUrl(g.gift_img)} alt="" className="w-7 h-7 rounded flex-shrink-0" crossOrigin="anonymous" /> : <span className="text-[12px] text-black/50 truncate max-w-[55px] flex-shrink-0">{g.gift_name}</span>}
                   <span className="truncate text-black/70 text-sm">×{g.count}</span>
                 </div>
               ))}
               {gifts.length > 59 && (
-                <div className="flex items-center justify-center gap-1 text-sm py-0.5">
+                <div className="flex items-center gap-1.5 text-sm py-0.5">
                   <span className="truncate text-black/40 text-sm">...</span>
                 </div>
               )}
@@ -705,141 +706,108 @@ function CertificationModal({
   );
 }
 
-function CastleStatModal({
-  castleStat,
+// 主播城堡清单弹窗：点击心动盲盒礼品明细中的"主播清单"徽标打开。
+// 样式参照主播页"粉丝城堡清单"（castle-modal-* 动画类全局共享）；
+// 粉丝页城堡数据只有 日期+数量（无具体时刻），展开列为 序号/日期/周几/数量。
+const CASTLE_WEEKDAY_CN = ["日", "一", "二", "三", "四", "五", "六"];
+function CastleAnchorListModal({
+  castleStats,
   castleGift,
+  faces,
   onClose,
 }: {
-  castleStat: CastleStat;
+  castleStats: CastleStat[];
   castleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
+  faces: Record<number, string>;
   onClose: () => void;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const totalDays = castleStat.dates.length;
-  const totalCastles = castleStat.totalCount;
-
-  const displayDates = (() => {
-    if (totalDays <= 10) {
-      return castleStat.dates;
-    }
-    const first = castleStat.dates[castleStat.dates.length - 1];
-    const last = castleStat.dates[0];
-    const middle = [...castleStat.dates.slice(1, -1)]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 8)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    return [first, ...middle, last];
-  })();
-
-  useEffect(() => {
-    generateImage();
-  }, []);
-
-  async function generateImage() {
-    setLoading(true);
-    if (!cardRef.current) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const dataUrl = await toPng(cardRef.current, {
-        backgroundColor: "#fff",
-        pixelRatio: 2,
-        filter: (node: HTMLElement) => !node.classList?.contains("save-exclude"),
-      });
-      setGeneratedImage(dataUrl);
-    } catch (err) {
-      console.error("生成图片失败:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function downloadImage() {
-    if (!generatedImage) return;
-    const res = await saveMobileOrDownload(generatedImage, `castle_stat_${castleStat.rname}_${Date.now()}.png`);
-    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
-  }
-
-  const maxDayCount = Math.max(...castleStat.dates.map((d) => d.count));
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [closing, setClosing] = useState(false);
+  const toggle = (ruid: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(ruid)) next.delete(ruid);
+      else next.add(ruid);
+      return next;
+    });
+  };
+  const close = () => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(onClose, 180);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
-      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
-        <div ref={cardRef} className="rounded-xl overflow-hidden shadow-2xl">
-          <div className="bg-gradient-to-br from-[#2d2a24] via-[#3d3a34] to-[#4d4a44] px-6 pt-8 pb-6 text-white">
-            <div className="flex items-center justify-center gap-14 mb-2">
-              <span className="text-xl font-bold text-yellow-400">{castleStat.rname}</span>
-              <div className="flex items-center gap-1.5">
-                {castleGift?.gift_img && (
-                  <img src={fixImageUrl(castleGift.gift_img)} alt="" className="w-6 h-6 rounded" />
-                )}
-                <span className="text-xl font-bold">×{totalCastles}</span>
-              </div>
-            </div>
-            {totalDays > 10 && (
-              <div className="text-center text-sm text-white/60">共 {totalDays} 个日子送出城堡，最高记录单日 {maxDayCount} 堡</div>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm castle-modal-backdrop ${closing ? "closing" : ""}`}
+      onClick={close}
+    >
+      <div
+        className={`w-[88%] max-w-sm h-auto max-h-[78vh] my-8 flex flex-col rounded-2xl bg-white shadow-xl overflow-hidden castle-modal-panel ${closing ? "closing" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-black/10 flex items-center justify-between">
+          <div className="font-bold text-base flex items-center gap-2">
+            {castleGift?.gift_img && (
+              <img src={fixImageUrl(castleGift.gift_img)} alt="" className="w-5 h-5 rounded" />
             )}
+            主播城堡清单
           </div>
-          <div className="bg-white px-6 py-5">
-            <div className="space-y-2">
-              {displayDates.map((item, index) => (
-                <div key={index} className="flex items-center justify-center gap-24 py-2 border-b border-black/5 last:border-0">
-                  <div className="flex items-center gap-2">
-                    {castleGift?.gift_img && (
-                      <img src={fixImageUrl(castleGift.gift_img)} alt="" className="w-5 h-5 rounded" />
-                    )}
-                    <span className="text-base font-medium text-black/80">×{item.count}</span>
-                  </div>
-                  <span className="text-sm text-black/60">{item.date.replace(/-/g, ".")}</span>
-                </div>
-              ))}
-              {totalDays > 10 && (
-                <div className="text-center text-xs text-black/30 py-1">......</div>
-              )}
-            </div>
-          </div>
+          <button onClick={close} className="w-7 h-7 rounded-full bg-black/5 hover:bg-black/10 text-black/60 text-lg leading-none flex items-center justify-center">✕</button>
         </div>
-      </div>
-
-      <div className="relative mx-4 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-        {/* 加载状态 */}
-        {loading && (
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-white text-sm">生成图片中...</p>
-          </div>
-        )}
-
-        {/* 图片内容 */}
-        {!loading && generatedImage && (
-          <>
-            {/* 上方提示 */}
-            {isMobileDevice() && (
-              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
-            )}
-
-            <img src={generatedImage} alt="城堡统计" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
-
-            {/* 下方按钮区域 */}
-            <div className="flex gap-2.5 mt-3 justify-center">
-              {!isMobileDevice() && (
-                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  下载图片
-                </button>
-              )}
-              <button onClick={onClose} className="modal-action-btn modal-action-light">
-                关闭
-              </button>
-            </div>
-          </>
-        )}
+        <div className="overflow-y-auto">
+          {castleStats.length === 0 ? (
+            <div className="p-6 text-center text-sm text-black/40">暂无城堡记录</div>
+          ) : (
+            castleStats.map((castle) => {
+              const isOpen = expanded.has(castle.ruid);
+              return (
+                <div key={castle.ruid} className="border-b border-black/5">
+                  <button
+                    onClick={() => toggle(castle.ruid)}
+                    className="w-full px-4 py-2.5 flex items-center gap-2 hover:bg-black/[0.03] transition"
+                  >
+                    <span className={`text-[10px] text-black/50 transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
+                    {faces[castle.ruid] ? (
+                      <img src={fixImageUrl(faces[castle.ruid])} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-black/10 flex-shrink-0" />
+                    )}
+                    <span className="flex-1 text-left text-sm font-medium truncate">{castle.rname}</span>
+                    <span className="text-xs font-medium text-black/75">{castle.totalCount}个</span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-6 pb-3">
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="text-black/45 text-left">
+                            <th className="py-1 pr-2 w-[12%]">序号</th>
+                            <th className="py-1 pr-2 w-[34%]">日期</th>
+                            <th className="py-1 pr-2 w-[22%]">周几</th>
+                            <th className="py-1 w-[32%]">数量</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {castle.dates.map((d, i) => {
+                            const weekday = CASTLE_WEEKDAY_CN[new Date(d.date.replace(/-/g, "/")).getDay()] ?? "";
+                            return (
+                              <tr key={i} className="border-t border-black/5">
+                                <td className="py-1.5 pr-2 text-black/50">{i + 1}</td>
+                                <td className="py-1.5 pr-2">{d.date.replace(/-/g, ".")}</td>
+                                <td className="py-1.5 pr-2 text-black/65">{weekday}</td>
+                                <td className="py-1.5">{d.count}个</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1013,6 +981,8 @@ export default function HomePage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [overviewAnchor, setOverviewAnchor] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
+  // 礼物清单搜索：选中的礼物名称（null=未选中，按月份/主播筛选显示）
+  const [giftSearchName, setGiftSearchName] = useState<string | null>(null);
   // 首次获取消费/收益记录时的进度提示（text: 说明文字, ratio: 0~1 可选）
   const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number; anchorGift?: boolean } | null>(null);
   const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
@@ -1825,7 +1795,7 @@ export default function HomePage() {
   const [medalLevelInput, setMedalLevelInput] = useState("");
 
   const [showCastleModal, setShowCastleModal] = useState(false);
-  const [selectedCastleStat, setSelectedCastleStat] = useState<CastleStat | null>(null);
+  const [castleAnchorStats, setCastleAnchorStats] = useState<CastleStat[] | null>(null);
   const [selectedCastleGift, setSelectedCastleGift] = useState<{ gift_id: number; gift_name: string; gift_img: string; price: number } | null>(null);
   const [showHistoricalDebug, setShowHistoricalDebug] = useState(false);
   const [apiLoggedIn, setApiLoggedIn] = useState(false);
@@ -3239,7 +3209,7 @@ export default function HomePage() {
     overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
     maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
     consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
-    monthGiftSummaryNew, actualDateRange, giftListSpendingTotal,
+    monthGiftSummaryNew, actualDateRange, giftListSpendingTotal, giftSearchCandidates,
   } = useMemo(() => {
   const filteredOverviewRecords = snapshot ? (overviewAnchor
     ? snapshot.records.filter((r) => {
@@ -3446,7 +3416,28 @@ export default function HomePage() {
   // displayCoins：用于清单展示的礼物价值（包裹道具=礼物本身价值，其他=实际花费）
   // coins：用于标题栏动态花费汇总的实际消费（包裹道具=0，其他=实际花费）
   // 验证：全部时间全部主播时，coins 汇总 = 顶部"消费电池"总数
-  const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
+  const rawRecords = giftSearchName
+    ? (snapshot ? snapshot.records.filter(r => r.status_msg !== "已退回" && r.gift_name === giftSearchName) : [])
+    : selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredOverviewRecords);
+  // 礼物搜索候选：全部时间全部主播的消费记录礼物名（排除已退回与合成材料），按数量降序
+  const giftSearchCandidates = (() => {
+    if (!snapshot) return [] as Array<{ name: string; img: string; count: number }>;
+    const tianxuanGiftIds = new Set((synthesisStats?.tianxuanGifts ?? []).map(g => g.id));
+    const redPocketGiftIds = new Set((synthesisStats?.redPocketGifts ?? []).map(g => g.id));
+    const map = new Map<string, { name: string; img: string; count: number }>();
+    for (const r of snapshot.records) {
+      if (r.status_msg === "已退回") continue;
+      if (r.gift_id === 1 && r.gift_name !== "礼物天选" && !tianxuanGiftIds.has(r.gift_id) && !redPocketGiftIds.has(r.gift_id)) continue;
+      const existing = map.get(r.gift_name);
+      if (existing) {
+        existing.count += r.gift_num;
+        if (!existing.img && r.gift_img) existing.img = fixImageUrl(r.gift_img);
+      } else {
+        map.set(r.gift_name, { name: r.gift_name, img: fixImageUrl(r.gift_img) ?? "", count: r.gift_num });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  })();
   // 标题栏动态花费汇总（全部实际消费，不含包裹道具，不受清单显示过滤影响）
   const giftListSpendingTotal = rawRecords
     .filter(r => r.bag_desc !== "包裹道具")
@@ -3496,9 +3487,9 @@ export default function HomePage() {
       overviewAnchors, periodAnchors, monthRecords, dayRecords, dailyData,
       maxDayCoins, calendarData, monthGiftSummary, giftTypeCount,
       consumptionCoins, consumptionCount, earnedGiftRecords, earnedGiftCount, earnedGiftTypes,
-      monthGiftSummaryNew, actualDateRange, giftListSpendingTotal,
+      monthGiftSummaryNew, actualDateRange, giftListSpendingTotal, giftSearchCandidates,
     };
-  }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount, synthesisStats]);
+  }, [snapshot, overviewAnchor, selectedMonth, selectedDay, currentAccount, synthesisStats, giftSearchName]);
 
   // 底部托盘导航：切换页面
   function handleDockChange(tab: DockTabKey) {
@@ -3743,6 +3734,9 @@ export default function HomePage() {
           pieTipPos={pieTipPos}
           monthGiftSummaryNew={monthGiftSummaryNew}
           giftListSpendingTotal={giftListSpendingTotal}
+          giftSearchCandidates={giftSearchCandidates}
+          giftSearchName={giftSearchName}
+          setGiftSearchName={setGiftSearchName}
           actualDateRange={actualDateRange}
           showGiftSaveModal={showGiftSaveModal}
           blindBoxStats={blindBoxStats}
@@ -3750,7 +3744,6 @@ export default function HomePage() {
           certifications={certifications}
           showCertModal={showCertModal}
           certModalIndex={certModalIndex}
-          selectedCastleStat={selectedCastleStat}
           selectedCastleGift={selectedCastleGift}
           showCastleModal={showCastleModal}
           synthesisStats={synthesisStats}
@@ -3774,7 +3767,7 @@ export default function HomePage() {
           setShowGiftSaveModal={setShowGiftSaveModal}
           setShowCertModal={setShowCertModal}
           setCertModalIndex={setCertModalIndex}
-          setSelectedCastleStat={setSelectedCastleStat}
+          setCastleAnchorStats={setCastleAnchorStats}
           setSelectedCastleGift={setSelectedCastleGift}
           setShowCastleModal={setShowCastleModal}
           setShowHistoricalDebug={setShowHistoricalDebug}
@@ -4953,14 +4946,14 @@ export default function HomePage() {
         <GiftSaveModal
           gifts={monthGiftSummaryNew}
           userName={currentAccount?.uname ?? currentAccount?.mid?.toString() ?? "未知用户"}
-          dateRange={selectedMonth
+          dateRange={giftSearchName ? "全部" : selectedMonth
             ? `${selectedMonth.slice(0, 4)}.${selectedMonth.slice(4, 6)}${selectedDay !== null ? `.${selectedDay}` : ""}`
             : "全部"}
-          anchorName={overviewAnchor ? (overviewAnchors.find((a) => a.ruid === Number(overviewAnchor))?.rname ?? "") : "全部主播"}
+          anchorName={giftSearchName ? "全部主播" : overviewAnchor ? (overviewAnchors.find((a) => a.ruid === Number(overviewAnchor))?.rname ?? "") : "全部主播"}
           anchorCount={overviewAnchors.length}
-          selectedMonth={selectedMonth}
-          selectedDay={selectedDay}
-          actualDateRange={actualDateRange}
+          selectedMonth={giftSearchName ? null : selectedMonth}
+          selectedDay={giftSearchName ? null : selectedDay}
+          actualDateRange={giftSearchName ? null : actualDateRange}
           onClose={() => setShowGiftSaveModal(false)}
         />
       )}
@@ -4976,11 +4969,12 @@ export default function HomePage() {
         />
       )}
 
-      {/* 城堡统计弹窗 */}
-      {showCastleModal && selectedCastleStat && (
-        <CastleStatModal
-          castleStat={selectedCastleStat}
+      {/* 主播城堡清单弹窗（粉丝页"心动盲盒"礼品明细中的"主播清单"入口） */}
+      {showCastleModal && castleAnchorStats && (
+        <CastleAnchorListModal
+          castleStats={castleAnchorStats}
           castleGift={selectedCastleGift}
+          faces={anchorFaces}
           onClose={() => setShowCastleModal(false)}
         />
       )}

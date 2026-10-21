@@ -964,6 +964,8 @@ class DisplayDanmakuService {
       animeSample,
       bannerText: cfg.banner?.text ?? "",
       animeOpacity: cfg.animeOpacity,
+      animeFeatherH: cfg.animeFeatherH,
+      animeFeatherV: cfg.animeFeatherV,
       animeMuted: cfg.animeMuted,
       giftBarOrientation: cfg.giftBarOrientation,
       giftBarWidth: cfg.giftBarWidth,
@@ -1056,6 +1058,11 @@ class DisplayDanmakuService {
   /** 广播入场动画整体透明度档位到画布（面板切换后调用，配置已落盘）。 */
   async broadcastAnimeOpacity(opacity: AnimeOpacity): Promise<void> {
     await this.broadcast({ type: "animeOpacity", v: opacity });
+  }
+
+  /** 广播入场动画视频边缘羽化强度到画布（面板修改后调用，配置已落盘；0=关闭，1-40 = 每侧渐变宽度百分比）。 */
+  async broadcastAnimeFeather(h: number, v: number): Promise<void> {
+    await this.broadcast({ type: "animeFeather", h, v });
   }
 
   /** 广播入场动画声音开关到画布（面板切换后调用，配置已落盘；true=静音）。 */

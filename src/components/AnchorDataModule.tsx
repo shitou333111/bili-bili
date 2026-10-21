@@ -425,6 +425,10 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [monthlyChartFullscreen, setMonthlyChartFullscreen] = useState(false);
   const [selectedFan, setSelectedFan] = useState<string>("");
   const [showGiftSaveModal, setShowGiftSaveModal] = useState(false);
+  // 礼物清单搜索：选中的礼物名称（null=未选中，按粉丝/月份/日期筛选显示）
+  const [giftSearchName, setGiftSearchName] = useState<string | null>(null);
+  const [giftSearchText, setGiftSearchText] = useState("");
+  const [giftSearchOpen, setGiftSearchOpen] = useState(false);
   // 活动素材下载：正在下载的素材索引 / 移动端保存失败时的预览（供长按保存）
   const [downloadingMaterial, setDownloadingMaterial] = useState<number | null>(null);
   const [materialPreview, setMaterialPreview] = useState<{ url: string; name: string } | null>(null);
@@ -857,9 +861,27 @@ const AnchorDataModule = memo(function AnchorDataModule({
       .sort((a, b) => b.hamster - a.hamster);
   })() : [];
 
+  // 礼物搜索候选：全部时间全部粉丝的收到礼物名（按数量降序），图标用 giftSummary 目录 + 本地名称回退
+  const giftSearchCandidates = stats ? (() => {
+    const imgMap = new Map(stats.giftSummary.map(g => [g.gift_id, g.img]));
+    const map = new Map<string, { name: string; img: string; count: number }>();
+    for (const r of stats.records) {
+      const existing = map.get(r.name);
+      if (existing) {
+        existing.count += r.num;
+      } else {
+        map.set(r.name, { name: r.name, img: imgMap.get(r.gift_id) || getGiftImgByName(r.name) || "", count: r.num });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  })() : [] as Array<{ name: string; img: string; count: number }>;
+
   const giftSummaryFiltered = (() => {
     if (!stats) return [];
-    const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
+    // 选中礼物后按名称过滤全部记录（全时间全粉丝，忽略粉丝/月份/日期筛选）
+    const rawRecords = giftSearchName
+      ? stats.records.filter((r) => r.name === giftSearchName)
+      : selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
     // stats.giftSummary 中的 img 已从本地 gift-list.json 获取（getGiftImg()），直接作为主数据源；
     // 旧 ID 记录在汇总中查不到图标时按名称回退本地目录
     const imgMap = new Map(stats.giftSummary.map(g => [g.gift_id, g.img]));
@@ -871,7 +893,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   // 礼物清单对应的日期范围字符串（基于实际记录）
   const giftListDateStr = (() => {
     if (!stats) return "";
-    const rawRecords = selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
+    const rawRecords = giftSearchName
+      ? stats.records.filter((r) => r.name === giftSearchName)
+      : selectedDay !== null ? dayRecords : (selectedMonth ? monthRecords : filteredRecords);
     if (rawRecords.length === 0) return "";
     const dates = rawRecords.map(r => r.time.slice(0, 10));
     const min = dates.reduce((a, b) => a < b ? a : b);
@@ -880,10 +904,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
     return min === max ? fmt(min) : `${fmt(min)}-${fmt(max)}`;
   })();
 
-  // 礼物清单对应的粉丝名
-  const giftListFanName = selectedFan
-    ? (allFans.find((f) => f.uid === Number(selectedFan))?.uname ?? "")
-    : "";
+  // 礼物清单对应的粉丝名（搜索选中礼物时显示礼物名，弹窗标题随之变化）
+  const giftListFanName = giftSearchName
+    ? giftSearchName
+    : selectedFan
+      ? (allFans.find((f) => f.uid === Number(selectedFan))?.uname ?? "")
+      : "";
 
   const pieColors = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#e11d48", "#0284c7", "#b91c1c", "#047857", "#b45309", "#6d28d9"];
 
@@ -1447,16 +1473,78 @@ const AnchorDataModule = memo(function AnchorDataModule({
                   <hr className="border-t border-black/10 my-2" />
 
                   <div>
+                    {/* 礼物搜索：输入过滤收到的礼物名，候选动态下拉，点击选中后清单按礼物显示全部时间全部粉丝 */}
+                    <div className="relative mb-2">
+                      <div className="flex items-center gap-1.5 rounded-lg border border-black/10 bg-black/[0.03] px-2.5 py-1.5 focus-within:border-black/25 transition-colors">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 shrink-0 text-black/35">
+                          <circle cx="11" cy="11" r="7" />
+                          <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+                        </svg>
+                        <input
+                          value={giftSearchName ?? giftSearchText}
+                          onChange={(e) => {
+                            if (giftSearchName) setGiftSearchName(null);
+                            setGiftSearchText(e.target.value);
+                            setGiftSearchOpen(true);
+                          }}
+                          onFocus={() => setGiftSearchOpen(true)}
+                          onBlur={() => window.setTimeout(() => setGiftSearchOpen(false), 120)}
+                          placeholder="搜索礼物名称（全部时间、全部粉丝）"
+                          className="flex-1 bg-transparent text-xs outline-none placeholder:text-black/35"
+                        />
+                        {giftSearchName && (
+                          <button
+                            onClick={() => setGiftSearchName(null)}
+                            title="清除礼物筛选"
+                            className="shrink-0 text-black/40 hover:text-black/70 transition-colors"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5" strokeLinecap="round">
+                              <path d="M18 6 6 18M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {giftSearchOpen && giftSearchText.trim() !== "" && (
+                        <div className="absolute left-0 right-0 top-full mt-1 z-50 max-h-56 overflow-y-auto rounded-lg border border-black/10 bg-white shadow-lg">
+                          {(() => {
+                            const q = giftSearchText.trim();
+                            const matches = giftSearchCandidates.filter((c) => c.name.includes(q)).slice(0, 30);
+                            return matches.length > 0 ? (
+                              matches.map((m) => (
+                                <button
+                                  key={m.name}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setGiftSearchName(m.name);
+                                    setGiftSearchText("");
+                                    setGiftSearchOpen(false);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                                >
+                                  {m.img && <img src={m.img} alt="" className="w-4 h-4 rounded shrink-0" />}
+                                  <span className="flex-1 truncate">{m.name}</span>
+                                  <span className="shrink-0 text-black/40">{m.count}</span>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-xs text-black/45">无匹配礼物</div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-sm font-semibold tracking-tight flex items-center gap-1">
                         礼物清单
                         <span className="ml-2 text-xs font-normal text-black/45">
-                          {selectedFan ? (allFans.find((f) => f.uid === Number(selectedFan))?.uname ?? "") : "全部粉丝"}
+                          {giftSearchName ? "全部粉丝" : selectedFan ? (allFans.find((f) => f.uid === Number(selectedFan))?.uname ?? "") : "全部粉丝"}
                         </span>
                         <span className="ml-2 text-xs font-normal text-black/45">
-                          {selectedMonth
-                            ? `${monthLabel(selectedMonth)}${selectedDay !== null ? `.${selectedDay}日` : ""}`
-                            : stats.dateRange ? `${stats.dateRange.start.replace(/-/g, ".")} - ${stats.dateRange.end.replace(/-/g, ".")}` : "全部时间"}
+                          {giftSearchName
+                            ? "全部时间"
+                            : selectedMonth
+                              ? `${monthLabel(selectedMonth)}${selectedDay !== null ? `.${selectedDay}日` : ""}`
+                              : stats.dateRange ? `${stats.dateRange.start.replace(/-/g, ".")} - ${stats.dateRange.end.replace(/-/g, ".")}` : "全部时间"}
                         </span>
                         <span className="ml-2 text-xs font-semibold text-black/65">
                           {formatBattery(giftSummaryFiltered.reduce((s, g) => s + g.hamster, 0))}电池

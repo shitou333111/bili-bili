@@ -224,6 +224,15 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     animeLastSeen: normalizeEntryLastSeen(r.animeLastSeen),
     // 入场动画整体透明度档位（opaque/light/medium/heavy）：非法值（含旧配置的边缘羽化字段）回退默认
     animeOpacity: isAnimeOpacity(r.animeOpacity) ? r.animeOpacity : d.animeOpacity,
+    // 边缘羽化强度：非法/缺失回退默认，0-40 取整（0=关闭）
+    animeFeatherH:
+      typeof r.animeFeatherH === "number" && Number.isFinite(r.animeFeatherH) && r.animeFeatherH >= 0
+        ? Math.min(40, Math.round(r.animeFeatherH))
+        : d.animeFeatherH,
+    animeFeatherV:
+      typeof r.animeFeatherV === "number" && Number.isFinite(r.animeFeatherV) && r.animeFeatherV >= 0
+        ? Math.min(40, Math.round(r.animeFeatherV))
+        : d.animeFeatherV,
     // 入场动画声音开关：字段缺失（旧配置/首次）回退默认（静音 true）
     animeMuted: r.animeMuted === undefined ? d.animeMuted : !!r.animeMuted,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值

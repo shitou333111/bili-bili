@@ -253,6 +253,9 @@ interface RevenueModuleContentProps {
   pieTipPos: { x: number; y: number };
   monthGiftSummaryNew: Array<{ uid: string; gift_id: number; gift_name: string; gift_img: string; count: number; coins: number; displayCoins: number }>;
   giftListSpendingTotal: number;
+  giftSearchCandidates: Array<{ name: string; img: string; count: number }>;
+  giftSearchName: string | null;
+  setGiftSearchName: (name: string | null) => void;
   actualDateRange: { start: string; end: string } | null;
   showGiftSaveModal: boolean;
   blindBoxStats: BlindBoxStats | null;
@@ -260,7 +263,6 @@ interface RevenueModuleContentProps {
   certifications: Certification[];
   showCertModal: boolean;
   certModalIndex: number;
-  selectedCastleStat: CastleStat | null;
   selectedCastleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
   showCastleModal: boolean;
   synthesisStats: SynthesisStats | null;
@@ -287,7 +289,7 @@ interface RevenueModuleContentProps {
   setShowGiftSaveModal: (show: boolean) => void;
   setShowCertModal: (show: boolean) => void;
   setCertModalIndex: (index: number) => void;
-  setSelectedCastleStat: (stat: CastleStat | null) => void;
+  setCastleAnchorStats: (stats: CastleStat[] | null) => void;
   setSelectedCastleGift: (gift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null) => void;
   setShowCastleModal: (show: boolean) => void;
   setShowHistoricalDebug: (show: boolean) => void;
@@ -607,6 +609,9 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     pieTipPos,
     monthGiftSummaryNew,
     giftListSpendingTotal,
+    giftSearchCandidates,
+    giftSearchName,
+    setGiftSearchName,
     actualDateRange,
     showGiftSaveModal,
     blindBoxStats,
@@ -631,7 +636,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     setShowGiftSaveModal,
     setShowCertModal,
     setCertModalIndex,
-    setSelectedCastleStat,
+    setCastleAnchorStats,
     setSelectedCastleGift,
     setShowCastleModal,
     setShowHistoricalDebug,
@@ -653,6 +658,14 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
   // 点击页面其他区域自动消失（无定时自动关闭）
   const [showAntiKillDesc, setShowAntiKillDesc] = React.useState(false);
   const [showAntiKillStats, setShowAntiKillStats] = React.useState(false);
+  // 礼物清单搜索框：输入文本与候选下拉展开状态
+  const [giftSearchText, setGiftSearchText] = React.useState("");
+  const [giftSearchOpen, setGiftSearchOpen] = React.useState(false);
+  const giftSearchMatches = React.useMemo(() => {
+    const q = giftSearchText.trim();
+    if (!q) return [];
+    return giftSearchCandidates.filter((c) => c.name.includes(q)).slice(0, 30);
+  }, [giftSearchText, giftSearchCandidates]);
   // 月度统计柱状图全屏模态框
   const [monthlyChartFullscreen, setMonthlyChartFullscreen] = React.useState(false);
   const antiKillDescRef = React.useRef<HTMLDivElement>(null);
@@ -1226,6 +1239,62 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
 
               {/* Row 3: Gift list */}
               <div>
+                {/* 礼物搜索：输入过滤消费/收到的礼物名，候选动态下拉，点击选中后清单按礼物显示全部时间全部主播 */}
+                <div className="relative mb-2">
+                  <div className="flex items-center gap-1.5 rounded-lg border border-black/10 bg-black/[0.03] px-2.5 py-1.5 focus-within:border-black/25 transition-colors">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 shrink-0 text-black/35">
+                      <circle cx="11" cy="11" r="7" />
+                      <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={giftSearchName ?? giftSearchText}
+                      onChange={(e) => {
+                        if (giftSearchName) setGiftSearchName(null);
+                        setGiftSearchText(e.target.value);
+                        setGiftSearchOpen(true);
+                      }}
+                      onFocus={() => setGiftSearchOpen(true)}
+                      onBlur={() => window.setTimeout(() => setGiftSearchOpen(false), 120)}
+                      placeholder="搜索礼物名称（全部时间、全部主播）"
+                      className="flex-1 bg-transparent text-xs outline-none placeholder:text-black/35"
+                    />
+                    {giftSearchName && (
+                      <button
+                        onClick={() => setGiftSearchName(null)}
+                        title="清除礼物筛选"
+                        className="shrink-0 text-black/40 hover:text-black/70 transition-colors"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5" strokeLinecap="round">
+                          <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  {giftSearchOpen && giftSearchText.trim() !== "" && (
+                    <div className="absolute left-0 right-0 top-full mt-1 z-50 max-h-56 overflow-y-auto rounded-lg border border-black/10 bg-white shadow-lg">
+                      {giftSearchMatches.length > 0 ? (
+                        giftSearchMatches.map((m) => (
+                          <button
+                            key={m.name}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setGiftSearchName(m.name);
+                              setGiftSearchText("");
+                              setGiftSearchOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-black/5"
+                          >
+                            {m.img && <img src={m.img} alt="" className="w-4 h-4 rounded shrink-0" />}
+                            <span className="flex-1 truncate">{m.name}</span>
+                            <span className="shrink-0 text-black/40">{m.count}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-2 text-xs text-black/45">无匹配礼物</div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold tracking-tight flex items-center gap-1">
                     礼物清单
@@ -1244,12 +1313,14 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                       )}
                     </div>
                     <span className="ml-2 text-xs font-normal text-black/45">
-                      {overviewAnchor ? (overviewAnchors.find((a) => a.ruid === Number(overviewAnchor))?.rname ?? "") : "全部主播"}
+                      {giftSearchName ? "全部主播" : overviewAnchor ? (overviewAnchors.find((a) => a.ruid === Number(overviewAnchor))?.rname ?? "") : "全部主播"}
                     </span>
                     <span className="ml-2 text-xs font-normal text-black/45">
-                      {selectedMonth
-                        ? `${monthLabel(selectedMonth)}${selectedDay !== null ? `.${selectedDay}日` : ""}`
-                        : actualDateRange ? `${actualDateRange.start} ~ ${actualDateRange.end}` : "全部时间"}
+                      {giftSearchName
+                        ? "全部时间"
+                        : selectedMonth
+                          ? `${monthLabel(selectedMonth)}${selectedDay !== null ? `.${selectedDay}日` : ""}`
+                          : actualDateRange ? `${actualDateRange.start} ~ ${actualDateRange.end}` : "全部时间"}
                     </span>
                     <span className="ml-2 text-xs font-semibold text-black/65">
                       {formatBatteryShort(giftListSpendingTotal)}电池
@@ -1404,80 +1475,45 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                               <tbody>
                                 {stat.gifts
                                   .sort((a, b) => b.unitPrice - a.unitPrice)
-                                  .map((gift) => (
-                                    <tr key={`${gift.gift_id}_${gift.gift_name}`} className="border-t border-black/10 bg-white">
-                                      <td className="pl-3 pr-2 py-2">
-                                        <div className="flex items-center gap-2">
-                                          {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
-                                          <span className="font-medium">{gift.gift_name}</span>
-                                        </div>
-                                      </td>
-                                      <td className="px-2 py-2 text-right">{gift.unitPrice}</td>
-                                      <td className="px-2 py-2 text-right">{gift.count}</td>
-                                      <td className="px-2 py-2 text-right">{gift.totalValue}</td>
-                                    </tr>
-                                  ))}
+                                  .map((gift) => {
+                                    // 参照主播页：心动盲盒的城堡礼物行加"主播清单"徽标，点击打开主播城堡清单弹窗
+                                    const castleClickable =
+                                      isXindong &&
+                                      stat.castleStats.length > 0 &&
+                                      !!stat.castleGift &&
+                                      gift.gift_id === stat.castleGift.gift_id &&
+                                      gift.gift_name === stat.castleGift.gift_name;
+                                    return (
+                                      <tr
+                                        key={`${gift.gift_id}_${gift.gift_name}`}
+                                        className={`border-t border-black/10 bg-white ${castleClickable ? "cursor-pointer hover:bg-[#f5f1ea]" : ""}`}
+                                        onClick={
+                                          castleClickable
+                                            ? () => {
+                                                setCastleAnchorStats(stat.castleStats);
+                                                setSelectedCastleGift(stat.castleGift);
+                                                setShowCastleModal(true);
+                                              }
+                                            : undefined
+                                        }
+                                      >
+                                        <td className="pl-3 pr-2 py-2">
+                                          <div className="flex items-center gap-2">
+                                            {gift.gift_img && <img src={fixImageUrl(gift.gift_img)} alt="" className="w-5 h-5 rounded flex-shrink-0" />}
+                                            <span className="font-medium">{gift.gift_name}</span>
+                                            {castleClickable && (
+                                              <span className="text-[10px] text-blue-600/80 border border-blue-600/30 rounded px-1 py-px flex-shrink-0">主播清单</span>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="px-2 py-2 text-right">{gift.unitPrice}</td>
+                                        <td className="px-2 py-2 text-right">{gift.count}</td>
+                                        <td className="px-2 py-2 text-right">{gift.totalValue}</td>
+                                      </tr>
+                                    );
+                                  })}
                               </tbody>
                             </table>
-                          </div>
-                        )}
-
-                        {/* 城堡统计（仅心动盲盒） */}
-                        {isXindong && stat.castleStats.length > 0 && (
-                          <div className="mt-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              {stat.castleGift?.gift_img && (
-                                <img src={fixImageUrl(stat.castleGift.gift_img)} alt="" className="w-6 h-6 rounded" />
-                              )}
-                              <span className="text-sm font-semibold text-black/70">城堡统计</span>
-                            </div>
-                            <div className="overflow-hidden rounded-lg border border-black/10">
-                              <table className="w-full border-collapse text-left text-sm">
-                                <thead className="bg-black/5 text-black/60">
-                                  <tr>
-                                    <th className="pl-3 pr-2 py-1.5 font-medium text-xs w-[40%]">主播</th>
-                                    <th className="px-2 py-1.5 font-medium text-xs text-center w-[20%]">数量</th>
-                                    <th className="px-2 py-1.5 font-medium text-xs text-right w-[40%]">日期</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {stat.castleStats.map((castleStat) => (
-                                    <tr
-                                      key={castleStat.ruid}
-                                      className="border-t border-black/10 bg-white cursor-pointer hover:bg-black/5 transition"
-                                      onClick={() => {
-                                        setSelectedCastleStat(castleStat);
-                                        setSelectedCastleGift(stat.castleGift);
-                                        setShowCastleModal(true);
-                                      }}
-                                    >
-                                      <td className="pl-3 pr-2 py-1.5 font-medium text-sm">{castleStat.rname}</td>
-                                      <td className="px-2 py-1.5 text-center text-sm">{castleStat.totalCount}</td>
-                                      <td className="px-2 py-1.5 text-right">
-                                        <div className="flex flex-col items-end">
-                                          {castleStat.dates.length === 1 && (
-                                            <span className="text-xs text-black/50">{castleStat.dates[0].date.replace(/-/g, ".")}</span>
-                                          )}
-                                          {castleStat.dates.length === 2 && (
-                                            <>
-                                              <span className="text-xs text-black/50">{castleStat.dates[1].date.replace(/-/g, ".")}</span>
-                                              <span className="text-xs text-black/50">{castleStat.dates[0].date.replace(/-/g, ".")}</span>
-                                            </>
-                                          )}
-                                          {castleStat.dates.length > 2 && (
-                                            <>
-                                              <span className="text-xs text-black/50">{castleStat.dates[castleStat.dates.length - 1].date.replace(/-/g, ".")}</span>
-                                              <span className="text-[10px] text-black/30">......</span>
-                                              <span className="text-xs text-black/50">{castleStat.dates[0].date.replace(/-/g, ".")}</span>
-                                            </>
-                                          )}
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
                           </div>
                         )}
 

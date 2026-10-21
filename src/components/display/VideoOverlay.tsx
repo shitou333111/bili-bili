@@ -16,10 +16,13 @@
  *  3. 收尾：黑幕+头像+昵称保持 1s，再整体淡出 1s，随后释放画布；loop 预览模式则在
  *     淡出后复位并整段重播（编辑布局页可反复观察完整开合效果）。
  *
- * 整体透明度（取代旧的「视频边缘羽化」）：视频套一层按椭圆区域径向分布的 alpha 遮罩——
+ * 整体透明度：视频套一层按椭圆区域径向分布的 alpha 遮罩——
  * 圆心最实、越往周边 alpha 越小（越透明），下层直播画面可从四周透出；闭幕黑幕形状不变，
  * 整体均匀套用该档位的中心不透明度。档位由面板下发的 opacity prop（轻/中/重）决定，
  * 画布与布局编辑页共用同一份配置。
+ *
+ * 视频边缘羽化（与整体透明度并存）：左右/上下边缘各挂一条线性渐变 mask，与闭合擦除
+ * mask 取交集——四边向内透明过渡，强度由 featherH/featherV 独立控制（0 = 关闭）。
  *
  * 时长按视频实际有效时长 D 动态计算：开场 E = min(2.602s, 0.464D)，
  * 闭合 C = min(3s, D−E)，故闭合完成时刻恒为视频结束时刻；开场/闭合动画时长通过
@@ -109,6 +112,8 @@ export default function VideoOverlay({
   loop = false,
   onVideoSize,
   opacity = "medium",
+  featherH = 0,
+  featherV = 0,
   muted = true,
   onMutedChange,
 }: {
@@ -120,6 +125,10 @@ export default function VideoOverlay({
   onVideoSize?: (w: number, h: number) => void;
   /** 整体透明度档位：按椭圆区域径向分布（圆心最实、越往周边越透明），可透出下层直播画面 */
   opacity?: AnimeOpacity;
+  /** 视频左右边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
+  featherH?: number;
+  /** 视频上下边缘羽化强度：0=关闭，1-40 = 每侧透明渐变宽度百分比 */
+  featherV?: number;
   /** 静音状态（受控）：默认静音以兼容浏览器/CEF 无声自动播放限制；与面板「声音」开关共享同一状态 */
   muted?: boolean;
   /** 点击右下角声音按钮时回调：父级更新状态并同步各端（画布/面板/主进程） */
@@ -283,9 +292,35 @@ export default function VideoOverlay({
   // 结尾闭合擦除 mask：上下各一条随 --anime-curtain 增长的透明带（50% 时在中线相接、全擦净）
   const wipeMask =
     "linear-gradient(to bottom, transparent 0 var(--anime-curtain), #000 var(--anime-curtain) calc(100% - var(--anime-curtain)), transparent calc(100% - var(--anime-curtain)) 100%)";
-  const videoMaskStyle: CSSProperties = { maskImage: wipeMask, WebkitMaskImage: wipeMask };
+  // 边缘羽化：两层线性渐变 mask 取交集 = 四边透明过渡（左右/上下独立强度，0=关闭）。
+  // 纯静态 CSS，由 GPU 合成器光栅化时做 alpha 混合，无逐帧计算；mask 作用于 alpha，
+  // 透明背景不会被染灰。注意不能加在 MovableBox/wrapper 上，否则编辑虚线框、缩放把手、
+  // 声音按钮也会跟着透明——只加在 video 元素上。与包裹层的整体透明度（径向 alphaMask）
+  // 分处两层、各自取交集，两者并存互不干扰。
+  const fh = Math.min(40, Math.max(0, Math.round(featherH)));
+  const fv = Math.min(40, Math.max(0, Math.round(featherV)));
+  const maskLayers = [
+    ...(fx ? [wipeMask] : []),
+    fh > 0
+      ? `linear-gradient(to right, transparent 0%, #000 ${fh}%, #000 ${100 - fh}%, transparent 100%)`
+      : null,
+    fv > 0
+      ? `linear-gradient(to bottom, transparent 0%, #000 ${fv}%, #000 ${100 - fv}%, transparent 100%)`
+      : null,
+  ].filter((s): s is string => Boolean(s));
+  const videoMaskStyle: CSSProperties | undefined =
+    maskLayers.length > 0
+      ? {
+          maskImage: maskLayers.join(", "),
+          WebkitMaskImage: maskLayers.join(", "),
+          // 多层 mask 默认取并集，必须显式取交集才能擦除/羽化同时生效（WebKit 旧前缀值为 source-in）
+          ...(maskLayers.length > 1
+            ? { maskComposite: "intersect", WebkitMaskComposite: "source-in" }
+            : {}),
+        }
+      : undefined;
 
-  // 整体透明度（取代旧的「视频边缘羽化」featherH/featherV）：一条按椭圆区域径向分布的 alpha
+  // 整体透明度：一条按椭圆区域径向分布的 alpha
   // 遮罩——圆心最实、越往周边 alpha 越小 = 越透明，下层直播画面从视频四周透出。纯静态 CSS，
   // 由 GPU 合成器光栅化时做 alpha 混合，无逐帧计算；mask 只作用于 alpha，透明背景不会被染灰。
   // 渐变椭圆取 71%（≈ √2/2）：mask 渐变 stop 的百分比相对「该方向上椭圆边界到圆心的射线长度」

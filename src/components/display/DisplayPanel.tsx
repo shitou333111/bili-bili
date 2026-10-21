@@ -2348,6 +2348,43 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               })}
             </div>
           </div>
+          {/* 视频边缘羽化：静态 mask-image 渐变遮罩让视频画面边缘透明过渡（左右/上下独立设置，0=关闭）。
+              与上方「视频透明度」并存：透明度按椭圆径向分布挂包裹层，羽化挂 video 元素，各自取交集。 */}
+          <div className="mt-3 flex items-center gap-3">
+            <span className="shrink-0 text-xs text-black/50">视频边缘羽化（0 = 关闭）</span>
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs text-black/50">左右</span>
+              <input
+                type="number"
+                min={0}
+                max={40}
+                value={config.animeFeatherH}
+                onChange={(e) => {
+                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                  void update({ animeFeatherH: v }).then((next) =>
+                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                  );
+                }}
+                className={`${inputFlat} ${noSpin} w-16`}
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs text-black/50">上下</span>
+              <input
+                type="number"
+                min={0}
+                max={40}
+                value={config.animeFeatherV}
+                onChange={(e) => {
+                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                  void update({ animeFeatherV: v }).then((next) =>
+                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                  );
+                }}
+                className={`${inputFlat} ${noSpin} w-16`}
+              />
+            </label>
+          </div>
         </Card>
       </section>
 

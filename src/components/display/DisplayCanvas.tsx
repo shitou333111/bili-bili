@@ -154,6 +154,10 @@ type ServerMsg =
       bannerText: string;
       /** 入场动画整体透明度档位（轻 / 中 / 重，按椭圆区域径向分布） */
       animeOpacity: AnimeOpacity;
+      /** 入场动画视频左右边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+      animeFeatherH: number;
+      /** 入场动画视频上下边缘羽化强度（0=关闭，1-40 = 每侧透明渐变宽度百分比） */
+      animeFeatherV: number;
       /** 入场动画声音开关（true=静音，false=有声音）；与画布预览静音按钮共享状态 */
       animeMuted: boolean;
       /** 礼物展示条方向（横条/竖条） */
@@ -178,6 +182,7 @@ type ServerMsg =
   | { type: "flags"; flags: DisplayFlags }
   | { type: "bannerText"; text: string }
   | { type: "animeOpacity"; v: AnimeOpacity }
+  | { type: "animeFeather"; h: number; v: number }
   | { type: "animeMuted"; v: boolean }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "giftBarWidth"; v: GiftBarWidth }
@@ -322,6 +327,13 @@ export default function DisplayCanvas() {
   const [animeOpacity, setAnimeOpacity] = useState<AnimeOpacity>(
     DEFAULT_DISPLAY_CONFIG.animeOpacity,
   );
+  // 入场动画视频边缘羽化强度（init/animeFeather 消息下发；0=关闭，1-40 = 每侧渐变宽度百分比）
+  const [animeFeatherH, setAnimeFeatherH] = useState<number>(
+    DEFAULT_DISPLAY_CONFIG.animeFeatherH,
+  );
+  const [animeFeatherV, setAnimeFeatherV] = useState<number>(
+    DEFAULT_DISPLAY_CONFIG.animeFeatherV,
+  );
   // 入场动画声音开关（init/animeMuted 消息下发，true=静音）：面板「声音」开关与画布静音按钮共享
   const [animeMuted, setAnimeMuted] = useState<boolean>(DEFAULT_DISPLAY_CONFIG.animeMuted);
   // 礼物展示条方向（init/giftBarOrientation 消息下发）
@@ -453,6 +465,16 @@ export default function DisplayCanvas() {
         setAnimeOpacity(
           isAnimeOpacity(msg.animeOpacity) ? msg.animeOpacity : DEFAULT_DISPLAY_CONFIG.animeOpacity,
         );
+        setAnimeFeatherH(
+          Number.isFinite(msg.animeFeatherH)
+            ? Math.min(40, Math.max(0, Math.round(msg.animeFeatherH)))
+            : DEFAULT_DISPLAY_CONFIG.animeFeatherH,
+        );
+        setAnimeFeatherV(
+          Number.isFinite(msg.animeFeatherV)
+            ? Math.min(40, Math.max(0, Math.round(msg.animeFeatherV)))
+            : DEFAULT_DISPLAY_CONFIG.animeFeatherV,
+        );
         setAnimeMuted(!!msg.animeMuted);
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
@@ -481,6 +503,13 @@ export default function DisplayCanvas() {
         setBannerText(msg.text ?? "");
       } else if (msg.type === "animeOpacity") {
         setAnimeOpacity(isAnimeOpacity(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpacity);
+      } else if (msg.type === "animeFeather") {
+        if (Number.isFinite(msg.h)) {
+          setAnimeFeatherH(Math.min(40, Math.max(0, Math.round(msg.h))));
+        }
+        if (Number.isFinite(msg.v)) {
+          setAnimeFeatherV(Math.min(40, Math.max(0, Math.round(msg.v))));
+        }
       } else if (msg.type === "animeMuted") {
         setAnimeMuted(!!msg.v);
       } else if (msg.type === "giftBarOrientation") {
@@ -1095,6 +1124,8 @@ export default function DisplayCanvas() {
                 onEnd={onAnimeEnd}
                 onVideoSize={onAnimeVideoSize}
                 opacity={animeOpacity}
+                featherH={animeFeatherH}
+                featherV={animeFeatherV}
                 muted={animeMuted}
                 onMutedChange={onAnimeMutedChange}
               />
@@ -1108,6 +1139,8 @@ export default function DisplayCanvas() {
                     loop
                     onVideoSize={onAnimeVideoSize}
                     opacity={animeOpacity}
+                    featherH={animeFeatherH}
+                    featherV={animeFeatherV}
                     muted={animeMuted}
                     onMutedChange={onAnimeMutedChange}
                   />
