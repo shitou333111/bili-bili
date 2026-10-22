@@ -106,6 +106,34 @@ jobs:
             cp -r public/. deploy-dist/public/
           fi
 
+      # 冒烟测试：用即将上线的 standalone 产物在 runner 上起服务，验证 PWA 关键路由。
+      # 目的：/sw.js 或 manifest 构建异常（路由被静态化、图标缺失、版本号未注入）时，
+      # 在部署前直接失败，而不是等用户端检测不到更新或出现白屏。
+      - name: Smoke test (standalone)
+        run: |
+          set -e
+          HOSTNAME=127.0.0.1 PORT=3999 node deploy-dist/server.js &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          ready=""
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:3999/; then ready=1; break; fi
+            sleep 1
+          done
+          [ -n "$ready" ] || { echo "standalone server did not start"; exit 1; }
+          # PWA 图标必须随 public 一起部署
+          test -f deploy-dist/public/icon-192.png
+          test -f deploy-dist/public/icon-512.png
+          test -f deploy-dist/public/icon-maskable-512.png
+          test -f deploy-dist/public/apple-touch-icon.png
+          # 清单必须可访问且包含 maskable 图标
+          curl -sf http://127.0.0.1:3999/manifest.webmanifest | grep -q 'maskable'
+          # Service Worker 必须是动态脚本，且包含本次构建序号（证明版本注入生效）
+          curl -sf http://127.0.0.1:3999/sw.js | grep -q "const BUILD_SEQ = \"${NEXT_PUBLIC_BUILD_SEQ}\""
+          curl -sf -D - -o /dev/null http://127.0.0.1:3999/sw.js | grep -qi 'cache-control:.*no-store'
+          # 版本接口必须返回同一构建序号
+          curl -sf http://127.0.0.1:3999/api/pwa/version | grep -q "\"seq\":${NEXT_PUBLIC_BUILD_SEQ}"
+
       - name: Upload dist to server
         id: scp-dist
         uses: appleboy/scp-action@v0.1.7

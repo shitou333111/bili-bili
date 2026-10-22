@@ -131,6 +131,30 @@ server {
     # 允许较大的请求体（应用有 /api/upload 上传接口，默认 1m 会 413）
     client_max_body_size 20m;
 
+    # ---- PWA：压缩（Service Worker / manifest / API JSON 体积小但请求频繁）----
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types text/plain text/css application/javascript application/json application/manifest+json image/svg+xml;
+
+    # ---- PWA：Service Worker 脚本必须永不缓存 ----
+    # 浏览器判定"有新版本"的唯一依据是 sw.js 的字节内容（版本号由构建期注入）。
+    # 一旦 sw.js 被 nginx/CDN/浏览器缓存，用户会永远停留在旧版本，
+    # 点击"检查更新"也检测不到 —— 必须单独关掉缓存。
+    location = /sw.js {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+    }
+
     # ---- 反向代理到 Next.js（pm2 启动的 server.js，监听 127.0.0.1:3000）----
     location / {
         proxy_pass http://127.0.0.1:3000;

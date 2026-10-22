@@ -38,9 +38,14 @@ const nextConfig: NextConfig = {
   experimental: {
     proxyClientMaxBodySize: "100mb",
   },
-  // 服务器端环境变量（Tauri 客户端通过 platform 层获取）
+  // 构建期环境变量（Tauri 客户端通过 platform 层获取）
+  // 必须在这里显式映射：next.config 的 env 会在构建时把值内联进产物，
+  // 而服务端（standalone server.js）运行时拿不到 CI 的环境变量。
+  // PWA 的 /sw.js 与 /api/pwa/version 需要读取构建序号来标识版本，因此必须内联。
   env: {
     NEXT_PUBLIC_SERVER_URL: process.env.NEXT_PUBLIC_SERVER_URL || "",
+    NEXT_PUBLIC_BUILD_SEQ: process.env.NEXT_PUBLIC_BUILD_SEQ || "",
+    NEXT_PUBLIC_BUILD_DATE: process.env.NEXT_PUBLIC_BUILD_DATE || "",
   },
 };
 

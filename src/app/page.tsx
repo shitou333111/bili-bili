@@ -56,6 +56,7 @@ import {
   type UpdateCheckResult,
   type VersionDisplay,
 } from "@/lib/updater";
+import { usePwaUpdate } from "@/lib/use-pwa-update";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
 async function closeApp() {
@@ -1827,6 +1828,10 @@ export default function HomePage() {
     setIsWeb(!("__TAURI_INTERNALS__" in window));
   }, []);
 
+  // WEB 端（PWA）更新：Service Worker 在后台下载新版本，下载完成后弹横幅，由用户点击刷新生效。
+  // 客户端仍走 updater.ts 的热更新/原生更新链路（isWeb=false 时该 hook 不注册任何东西）。
+  const pwa = usePwaUpdate(isWeb === true);
+
   // WEB 端"主播"页面 / 客户端非主播账号显示的引导提示（结构化功能亮点）
   const ANCHOR_PROMO_FEATURES: Array<{ title: string; desc: string }> = [
     { title: "主播收益统计", desc: "每天、每月收到哪位粉丝的哪些礼物，多维度详细统计" },
@@ -1849,7 +1854,7 @@ export default function HomePage() {
     "多人接力PK医药费",
   ]);
   // 默认隐藏的帮助页工具卡片：与"管理后台"入口同一触发方式（连击版本卡片 10 次），
-  // 但无需 admin 密码（非机密信息，只是初始隐藏）。WEB 端版本卡片不显示 → 无法触发，恒隐藏。
+  // 但无需 admin 密码（非机密信息，只是初始隐藏）。
   const HIDDEN_BY_DEFAULT_TOOLS = new Set([
     "助力主播 自动点赞",
     "自动抢天选和红包",
@@ -3519,18 +3524,29 @@ export default function HomePage() {
       ? versionDisplay.native
       : "…";
   // 当前版本完整显示（含日期小版本标记）："V1.2.0-20260816"
-  const updateCurrentFull = versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
+  // WEB 端没有原生版本号，用 CI 构建序号当版本（每次部署单调递增，与 Service Worker 缓存版本一致）
+  const updateCurrentFull = isWeb
+    ? pwa.currentSeq > 0
+      ? `V${pwa.currentSeq}`
+      : "开发版"
+    : versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
   // 最新版本完整显示（与当前版本格式一致：版本号+紧凑日期；热更新带 ota 序号）
   const nativeLatestDate = compactBuildDate(updateResult?.native.date || "");
-  const updateLatestFull = updateResult?.native.available
+  const updateLatestFull = isWeb
+    ? pwa.latestSeq && pwa.latestSeq > pwa.currentSeq
+      ? `V${pwa.latestSeq}`
+      : ""
+    : updateResult?.native.available
     ? `V${updateResult.native.serverVersion || ""}${nativeLatestDate ? `-${nativeLatestDate}` : ""}`
     : updateResult?.hot.available && !updateResult?.hot.shellTooOld
     ? formatHotUpdateVersion(updateResult.hot.version || "")
     : "";
-  const updateHasUpdate = !!(
-    updateResult?.native.available ||
-    (updateResult?.hot.available && !updateResult?.hot.shellTooOld)
-  );
+  const updateHasUpdate = isWeb
+    ? !!(pwa.latestSeq && pwa.latestSeq > pwa.currentSeq)
+    : !!(
+        updateResult?.native.available ||
+        (updateResult?.hot.available && !updateResult?.hot.shellTooOld)
+      );
   const nativeDownloading =
     !!updateResult?.native.available && nativeSilentDownloaded.kind === "downloading";
   const nativeDownloadPct =
@@ -3549,7 +3565,73 @@ export default function HomePage() {
     disabled: boolean;
     note?: string;
   };
-  if (updateResult?.native.available) {
+  if (isWeb) {
+    // PWA：新版本由 Service Worker 在后台下载（install 阶段无进度事件），
+    // 下载完成后必须由用户点击"点击刷新"切换，避免自动刷新打断操作（与客户端热更新一致）
+    const pwaReady = pwa.status === "ready";
+    const pwaDownloading = pwa.status === "downloading";
+    if (pwaReady || pwaDownloading) {
+      updateCard = {
+        bg: "bg-yellow-50/70",
+        border: "border-yellow-200",
+        title: "text-yellow-900",
+        sub: "text-yellow-800/75",
+        button: "bg-[#eab308] hover:bg-[#ca8a04]",
+        label: pwaReady ? "点击刷新" : "下载中",
+        action: pwaReady ? pwa.apply : null,
+        disabled: !pwaReady,
+        note: pwaReady ? "新内容已下载完成，点击立即刷新生效" : "正在后台下载新版本，请稍候…",
+      };
+    } else if (pwa.status === "checking") {
+      updateCard = {
+        bg: "bg-gray-50/70",
+        border: "border-gray-200",
+        title: "text-gray-900",
+        sub: "text-gray-700/75",
+        button: "bg-[#9ca3af] hover:bg-[#6b7280]",
+        label: "正在检查",
+        action: null,
+        disabled: true,
+        note: "正在检查是否有新版本…",
+      };
+    } else if (pwa.status === "error") {
+      updateCard = {
+        bg: "bg-gray-50/70",
+        border: "border-gray-200",
+        title: "text-gray-900",
+        sub: "text-gray-700/75",
+        button: "bg-[#9ca3af] hover:bg-[#6b7280]",
+        label: "点击重试",
+        action: () => { void pwa.check(); },
+        disabled: false,
+        note: pwa.error || "检查失败，请稍后重试",
+      };
+    } else if (pwa.status === "latest") {
+      updateCard = {
+        bg: "bg-green-50/70",
+        border: "border-green-200",
+        title: "text-green-900",
+        sub: "text-green-800/75",
+        button: "bg-[#22c55e] hover:bg-[#16a34a]",
+        label: "已是最新",
+        action: null,
+        disabled: false,
+        note: undefined,
+      };
+    } else {
+      updateCard = {
+        bg: "bg-green-50/70",
+        border: "border-green-200",
+        title: "text-green-900",
+        sub: "text-green-800/75",
+        button: "bg-[#22c55e] hover:bg-[#16a34a]",
+        label: "检查更新",
+        action: () => { void pwa.check(); },
+        disabled: false,
+        note: pwa.supported ? "网页版会自动检查并在后台下载新版本" : undefined,
+      };
+    }
+  } else if (updateResult?.native.available) {
     updateCard = {
       bg: "bg-red-50/70",
       border: "border-red-200",
@@ -3628,10 +3710,10 @@ export default function HomePage() {
       <WindowTitleBar />
       {/* 热更新已就绪提示条：冷启动后台已下载+激活新内容（页面仍是旧资源），点击立即刷新生效。
           不自动刷新，避免打断用户当前操作 */}
-      {hotUpdateReady && (
+      {(hotUpdateReady || (isWeb === true && pwa.status === "ready")) && (
         <div className="px-3 pt-2">
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => (isWeb === true && pwa.status === "ready" ? pwa.apply() : window.location.reload())}
             className="w-full flex items-center gap-2.5 rounded-xl bg-yellow-50 border border-yellow-200 px-3.5 py-2.5 text-center shadow-[0_8px_30px_rgba(202,138,4,0.15)]"
           >
             <span className="flex-1 text-sm font-medium text-yellow-900">新内容已准备就绪，点击立即生效 ↻</span>
@@ -3917,10 +3999,10 @@ export default function HomePage() {
                   </div>
                 )}
                 {/* 更新状态卡片：冷启动自动检查+自动下载，无需手动点击检查。
-                    按钮与卡片颜色随状态变化：绿=已是最新、黄=热更新、红=原生更新、灰=检查失败。
+                    按钮与卡片颜色随状态变化：绿=已是最新、黄=更新就绪、红=原生更新、灰=检查失败。
                     连续点击卡片 10 次触发显示"管理后台"入口（原版本号卡片连击功能迁移至此）。
-                    WEB 端自动更新、无需手动更新版本，直接不显示该卡片 */}
-                {!isWeb && (
+                    WEB 端（PWA）与客户端共用同一张卡片：版本号取 CI 构建序号，
+                    新版本由 Service Worker 后台下载，完成后点击"点击刷新"生效。 */}
                 <div
                   onClick={() => {
                     const next = versionClickCount + 1;
@@ -3976,6 +4058,15 @@ export default function HomePage() {
                       <p className="mt-1 text-[11px] text-red-800/75 text-center">正在后台下载安装包 {nativeDownloadPct}%</p>
                     </div>
                   )}
+                  {/* PWA 新版本后台下载：Service Worker install 无进度事件，用不确定态进度条 */}
+                  {isWeb && pwa.status === "downloading" && (
+                    <div className="mt-3">
+                      <div className="h-1.5 rounded-full bg-yellow-100 overflow-hidden">
+                        <div className="h-full w-1/3 rounded-full bg-[#eab308] progress-indeterminate" />
+                      </div>
+                      <p className="mt-1 text-[11px] text-yellow-800/75 text-center">正在后台下载新版本…</p>
+                    </div>
+                  )}
                   {/* 应用更新下载进度 */}
                   {updateProgress && updateProgress.total > 0 && (
                     <div className="mt-3">
@@ -4015,7 +4106,6 @@ export default function HomePage() {
                     </div>
                   )}
                 </div>
-                )}
 
                 {/* 重建数据库卡片：只在有登录账号时显示；服务器账号无登录凭证不可用 */}
                 {isLoggedIn && (

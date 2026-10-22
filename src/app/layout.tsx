@@ -11,14 +11,40 @@ import DeviceReporter from "@/components/DeviceReporter";
 // 字体改用系统字体栈（不再依赖 next/font/google 构建期从 Google CDN 拉取，
 // 离线/桌面 Tauri 环境更稳定）。见 globals.css 中 --font-sans/--font-mono 的定义。
 
+/** Tauri 静态导出构建：不输出 PWA 清单（客户端不需要 Service Worker） */
+const isTauriBuild = process.env.TAURI_BUILD === "1";
+
 export const metadata: Metadata = {
   title: "B瓜 · B站直播消费数据分析工具",
   description: "B瓜 是专为 Bilibili 直播打造的个人消费数据分析工具。扫码登录即可自动抓取并长期保存你的送礼、盲盒、合成活动等消费记录，多维度统计盈亏，支持 Windows / Android / iOS 客户端使用。",
   referrer: "no-referrer",
-  icons: {
-    icon: "/orig_icon.png",
-    apple: "/orig_icon.png",
-  },
+  // Web 端：可安装 PWA（清单 + iOS 全屏/图标）；Tauri 端保持原样
+  ...(isTauriBuild
+    ? {}
+    : {
+        manifest: "/manifest.webmanifest",
+        appleWebApp: {
+          capable: true,
+          title: "B瓜",
+          statusBarStyle: "black-translucent" as const,
+        },
+        formatDetection: { telephone: false },
+        // Next 16 只把 capable 渲染成标准 mobile-web-app-capable，
+        // 而 iOS Safari 至今仍只认 apple- 前缀这一版，缺了它「添加到主屏幕」不会全屏。
+        other: { "apple-mobile-web-app-capable": "yes" },
+      }),
+  icons: isTauriBuild
+    ? {
+        icon: "/orig_icon.png",
+        apple: "/orig_icon.png",
+      }
+    : {
+        icon: [
+          { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+          { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+        ],
+        apple: "/apple-touch-icon.png",
+      },
 };
 
 export const viewport: Viewport = {
@@ -27,6 +53,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
+  themeColor: "#f5f5f5",
 };
 
 export default function RootLayout({
