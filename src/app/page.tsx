@@ -1595,6 +1595,8 @@ export default function HomePage() {
   // 自定义档位输入框的文本（仅"自定义"被选中时显示）
   const [customRateText, setCustomRateText] = useState("");
   const [rateCustom, setRateCustom] = useState(false);
+  // 抓取速度块默认折叠：点击"重建数据"卡片上半部分展开/收起（重建按钮点击不触发）
+  const [rateExpanded, setRateExpanded] = useState(false);
   // 同步持久化的 B站 抓取速率（冷启动自动刷新也按该值走，见 anchor-gifts-client 的模块级速率）
   useEffect(() => {
     const saved = getFetchRate();
@@ -4018,9 +4020,14 @@ export default function HomePage() {
                 {/* 重建数据库卡片：只在有登录账号时显示；服务器账号无登录凭证不可用 */}
                 {isLoggedIn && (
                   <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
-                    <div className="flex items-center gap-4">
+                    {/* 上半部分点击展开/收起抓取速度块；重建按钮已 stopPropagation 不触发 */}
+                    <div
+                      className={`flex items-center gap-4 ${serverAccount ? "" : "cursor-pointer"}`}
+                      onClick={() => { if (!serverAccount) setRateExpanded((v) => !v); }}
+                    >
                     <button
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         if (serverAccount) {
                           showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
                           return;
@@ -4049,8 +4056,8 @@ export default function HomePage() {
                       <svg className="w-4 h-4 text-black/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
                     )}
                     </div>
-                    {/* 抓取速度：控制从 B站 拉取数据的请求速率（所有更新路径统一生效） */}
-                    {!serverAccount && (
+                    {/* 抓取速度：控制从 B站 拉取数据的请求速率（所有更新路径统一生效）；默认折叠 */}
+                    {!serverAccount && rateExpanded && (
                       <div className="mt-3 border-t border-indigo-200/70 pt-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="shrink-0 text-xs font-semibold text-indigo-900">抓取速度</span>

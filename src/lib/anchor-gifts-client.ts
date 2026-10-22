@@ -1821,7 +1821,8 @@ export async function fetchAnchorGifts(
       const count = blindBoxCountMap.get(blindBoxId);
       const info = allBlindBoxInfo[blindBoxId];
       const boxName = info?.blind_box_name ?? `盲盒_${blindBoxId}`;
-      const boxImg = getGiftImg(blindBoxId) ?? blindBoxConfig.icons[blindBoxId] ?? info?.blind_box_img ?? "";
+      // getGiftImg 查不到时返回空串（非 null），必须用 || 回退，否则 admin 配置的图标永不生效
+      const boxImg = getGiftImg(blindBoxId) || blindBoxConfig.icons[blindBoxId] || info?.blind_box_img || "";
       // 抽数/成本仅计非奖励礼物（奖励礼物成本 0）
       const drawCount = blindBoxCostCountMap.get(blindBoxId) ?? 0;
       const totalHamsterBB = count?.hamster ?? 0;

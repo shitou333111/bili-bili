@@ -1698,8 +1698,8 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           {/* 其他数据 tab */}
           {activeTab === "other" && otherStats && (
             <div className="space-y-4">
-              {/* Card 0: 防氪记录 */}
-              <article className="relative z-10 rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+              {/* Card 0: 防氪记录（不加 z-index：否则与 sticky tab bar 同为 z-10 时，卡片 DOM 靠后会反盖 tab 按钮组） */}
+              <article className="relative rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                 <div className="relative flex items-center gap-2 mb-3">
                   <h3 className="text-base font-bold tracking-tight">防氪记录·理性消费</h3>
                   <button

@@ -518,7 +518,7 @@ const PATCHES = [
         if (p.life < p.death) {
           // 色调调整：按粒子当前绝对水平位置（startX + x，绘制坐标即绝对坐标）映射到
           // 红橙黄暖色相区间（hue 0°~60°，左红右黄），与 badge 渐变 0°→30°→60° 严格对应。
-          // 粒子其余参数/分布/运动/方向/范围/存活帧数保持原始库行为不变。
+          // 粒子其余参数/分布/运动/方向/范围保持原始库行为不变。
           var _pad = this.props.canvasPadding * (this._visualScale || 1);
           var _w = this._rect.width || 1;
           var _rel = Math.max(0, Math.min(1, (p.startX + p.x - _pad) / _w));
