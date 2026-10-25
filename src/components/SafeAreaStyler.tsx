@@ -84,6 +84,18 @@ export default function SafeAreaStyler() {
     doc.style.setProperty("--dock-safe", dockSafe);
     doc.style.setProperty("--activity-top", activityTop);
 
+    // iOS 独立 PWA（主屏 Web App）底部系统条带融合：
+    // iOS 26.1+ 存在 WebKit bug（bugs.webkit.org 301994）——独立 PWA 中系统在 web 渲染层
+    // 之外保留一条底部区域（约 34~62px），由系统绘制、任何 DOM 都无法覆盖，且其颜色取自
+    // 页面背景的缓存（重启 PWA 后才更新）。页面主体是白色内容，#f5f5f5 的系统条就会在
+    // 底部形成一条突兀的"背景横条"。html/body 的 --background 是该处唯一可见的底色，
+    // 因此仅在 iOS 独立 PWA 下把它改成与内容一致的白色，让条带在视觉上融合。
+    // navigator.standalone 是 iOS Safari 专有（true=已"添加到主屏幕"），其他平台不存在，
+    // 浏览器标签页与安卓/桌面均不受影响。
+    if (isIOS && (navigator as Navigator & { standalone?: boolean }).standalone === true) {
+      doc.style.setProperty("--background", "#ffffff");
+    }
+
     // ===== 视口宽度自适应缩放 =====
     // 窗口宽度不足 MIN_WIDTH 时把整份 UI 等比缩小（zoom 是布局级缩放，比 transform:scale
     // 更清晰）。原先写在 page.tsx 里，但它会让整页的 CSS 像素同步变小——包括 html/body 的
