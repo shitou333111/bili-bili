@@ -186,7 +186,11 @@ export async function GET(request: Request) {
     // 历史总盈亏：基于消费记录(pay-records)按主播/直播间独立累计。
     // 消费记录是全量的（覆盖所有合成活动），而页面上方列出的活动只是其中几个，不全，
     // 因此历史统计必须从消费记录计算，而不是由少量活动结果累加得到。
-    historical = calcHistoricalSynthesisProfit(records, tianxuanGiftIds, redPocketGiftIds);
+    // 包裹礼物与活动盈亏口径一致：未送出的合成产物只在包裹里，用全部活动的产物名匹配后补充计入。
+    const allProductNames = Array.from(
+      new Set(effectiveSynthConfig.current_activity.flatMap((a) => a.products || [])),
+    );
+    historical = calcHistoricalSynthesisProfit(records, tianxuanGiftIds, redPocketGiftIds, bagGifts, allProductNames);
 
     // 补偿历史各主播的昵称（优先用付费记录 r_uname，其次 B站API 查询结果）
     if (historical.anchorStats) {

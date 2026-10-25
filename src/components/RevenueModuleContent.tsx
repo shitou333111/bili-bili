@@ -1543,8 +1543,10 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   )}
                 </div>
               ) : (
-                <div className="text-sm text-black/45">
-                  正在加载盲盒统计...
+                <div className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
+                  <div className="text-sm text-black/45">
+                    正在加载盲盒统计...
+                  </div>
                 </div>
               )}
             </>

@@ -105,11 +105,16 @@ export type SynthesisActivityStats = {
  * 逻辑（与之前一致，仅增加按主播维度聚合）：
  * - 花费 = gift_id === 1 的记录总价（合成材料，1电池），排除已退回
  * - 收益 = bag_desc === "包裹道具" 且排除天选礼物和红包礼物的记录总价（合成产物）
+ * - 包裹补充（bagGifts + productNames）：未送出的合成产物只存在于包裹（bag_list），
+ *   不会出现在消费记录里，用所有合成活动的产物名匹配包裹礼物并归属主播后补充计入收益，
+ *   逻辑与 calcPayRecordActivityProfit 的包裹补充一致。
  */
 export function calcHistoricalSynthesisProfit(
   records: RawGiftRecord[],
   tianxuanGiftIds: number[] = [],
   redPocketGiftIds: number[] = [],
+  bagGifts: BagGiftItem[] = [],
+  productNames: string[] = [],
 ): SynthesisProfitResult {
   // 天选和红包可能有重合，取并集
   const excludedGiftIds = new Set([...tianxuanGiftIds, ...redPocketGiftIds]);
@@ -228,16 +233,104 @@ export function calcHistoricalSynthesisProfit(
     if (r.r_uname) cur.rname = cur.rname || r.r_uname;
     anchorMap.set(r.ruid, cur);
   }
+  // ===== 包裹礼物补充（复用 calcPayRecordActivityProfit 的包裹逻辑）=====
+  // 未送出的合成产物只存在于包裹（bag_list），不会出现在消费记录里；
+  // 用所有合成活动的产物名匹配包裹礼物，区分其所属主播后补充计入产出。
+  let bagEarnedCount = 0;
+  if (bagGifts.length > 0 && productNames.length > 0) {
+    // 消费记录假定最新在前，取每条 r_uname 首次出现的 ruid（当前昵称 → 最新 UID 映射）
+    const nameRuids = new Map<string, number>();
+    for (const n of records) {
+      if (n.r_uname && !nameRuids.has(n.r_uname)) nameRuids.set(n.r_uname, n.ruid);
+    }
+    // room_id → ruid 映射（未锁定的当前直播间礼物归属）
+    const roomRuids = new Map<number, number>();
+    for (const r of records) {
+      if (!roomRuids.has(r.room_id)) roomRuids.set(r.room_id, r.ruid);
+    }
+    // 用惰性匹配，允许主播昵称中含“的”（如“不酸甜的柠檬”）
+    const anchorNameMatcher = /该礼物仅限(.+?)的直播间使用/;
+    const inProducts = (giftName: string) => productNames.some((p) => giftName.includes(p));
+
+    for (const g of bagGifts) {
+      // 天选/红包礼物与消费记录口径保持一致，不计入合成产出
+      if (excludedGiftIds.has(g.gift_id)) continue;
+      if (!inProducts(g.gift_name)) continue;
+
+      // 归属主播：未锁定 → 当前直播间（room_id=23915535）；锁定 → 从 locked_text 解析主播名再映射最新 ruid
+      let ruid: number | undefined;
+      if (!g.is_locked) {
+        ruid = roomRuids.get(23915535);
+      } else {
+        const m = g.locked_text.match(anchorNameMatcher);
+        ruid = m ? nameRuids.get(m[1]) : undefined;
+      }
+      if (ruid === undefined) continue; // 无法归属，保守跳过该礼物
+
+      const earned = g.price * g.gift_num;
+      totalEarned += earned;
+      synthesisCount += g.gift_num;
+      bagEarnedCount += g.gift_num;
+
+      const cur = anchorMap.get(ruid) || {
+        ruid,
+        rname: "",
+        count: 0,
+        value: 0,
+        spent: 0,
+        profit: 0,
+      };
+      cur.value += earned;
+      cur.count += g.gift_num;
+      if (!cur.rname) {
+        for (const r of records) {
+          if (r.ruid === ruid && r.r_uname) {
+            cur.rname = r.r_uname;
+            break;
+          }
+        }
+      }
+      anchorMap.set(ruid, cur);
+
+      const existing = giftMap.get(g.gift_id);
+      if (existing) {
+        existing.count += g.gift_num;
+      } else {
+        giftMap.set(g.gift_id, {
+          gift_id: g.gift_id,
+          gift_name: g.gift_name,
+          gift_img: g.img,
+          gift_price: Math.round(g.price),
+          count: g.gift_num,
+        });
+      }
+
+      detailedRecords.push({
+        ruid,
+        rname: cur.rname,
+        gift_name: g.gift_name,
+        gift_price: g.price,
+        gift_img: g.img,
+        spent: 0,
+        profit: earned,
+        synthetic_result: 1,
+        date: "",
+        synthetic_time: 0,
+        gift_id: g.gift_id,
+        gift_num: g.gift_num,
+      });
+    }
+  }
+
   for (const info of anchorMap.values()) {
     info.profit = info.value - info.spent;
   }
   const anchorStats = Array.from(anchorMap.values()).sort((a, b) => b.value - a.value);
-
   const giftList = Array.from(giftMap.values());
 
   console.log(`[calcHistoricalSynthesisProfit] 总记录数: ${records.length}`);
   console.log(`[calcHistoricalSynthesisProfit] 花费记录数: ${spentRecords.length}, 总花费: ${totalSpent}`);
-  console.log(`[calcHistoricalSynthesisProfit] 收益记录数: ${earnedRecords.length}, 总收益: ${totalEarned}`);
+  console.log(`[calcHistoricalSynthesisProfit] 收益记录数: ${earnedRecords.length}, 总收益: ${totalEarned}, 包裹补充产物数: ${bagEarnedCount}`);
   console.log(`[calcHistoricalSynthesisProfit] 礼物种类: ${giftList.length}, 详细记录: ${detailedRecords.length}, 主播数: ${anchorStats.length}`);
 
   return {
