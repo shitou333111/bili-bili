@@ -109,6 +109,10 @@ export default function SafeAreaStyler() {
     // 因此外壳高度以 visualViewport.height 为准，innerHeight 只做兜底。
     // 例外：软键盘弹出时 visualViewport 会缩小而 innerHeight 不变，此时保留 innerHeight，
     //       避免输入时整页被压扁；双指缩放（scale>1）时 visualViewport 同样不能用于布局。
+    // 例外：iOS（含独立 PWA）visualViewport.height 不含 Home Indicator 遮盖的约 34px，
+    //       但本项目 viewport-fit:cover，该区域内容实际完全可见——若按"被遮挡"处理，
+    //       外壳会矮 34px（底部露出页面背景横条），托盘还会被 --view-hidden-bottom
+    //       再抬高 34px。故 iOS 直接信 innerHeight，此实测仅供安卓 edge-to-edge 使用。
     const KEYBOARD_GAP = 150;
     const applyViewport = () => {
       // 先算缩放：下面的高度/避让值都要除以它，换算回"被缩放的 CSS 像素"空间
@@ -117,7 +121,7 @@ export default function SafeAreaStyler() {
       const innerH = window.innerHeight || 0;
       let height = innerH;
       let hiddenBottom = 0;
-      if (vv && vv.height > 0 && vv.scale <= 1.05) {
+      if (!isIOS && vv && vv.height > 0 && vv.scale <= 1.05) {
         // 被遮住的底部高度（layout viewport 底边 - 可视区底边）
         const gap = Math.round(innerH - (vv.offsetTop + vv.height));
         if (gap >= 0 && gap < KEYBOARD_GAP) {
