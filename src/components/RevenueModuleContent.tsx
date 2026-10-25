@@ -757,8 +757,10 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
             服务器账号，无登录凭证，仅可查看，刷新重载
           </div>
         )}
-        {/* L3 Tab bar - segmented control, sticky at top, 整体居中 */}
-          <div className="flex items-center justify-center gap-2.5 px-4 py-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
+        {/* L3 Tab bar - segmented control, sticky at top, 整体居中
+            顶部不再额外留白（pb-2 而非 py-2）：与「帮助」页统一，所有页面的首个内容
+            都距离安全区 12px（父容器 py-3）。 */}
+          <div className="flex items-center justify-center gap-2.5 px-4 pb-2 mb-2 sticky top-0 bg-[#f5f5f5]/95 backdrop-blur z-10">
             {/* 分段按钮组（宽度覆盖页面 80%，更扁；按钮均分） */}
             <div className="flex items-center rounded-full border border-black/10 bg-white/85 p-1 shadow-sm shrink-0 w-[80%] max-w-[800px]">
               {(["overview", "blindbox", "synthesis", "other"] as const).map((tab) => (

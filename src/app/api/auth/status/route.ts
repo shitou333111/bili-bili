@@ -40,6 +40,20 @@ export async function GET(request: Request) {
     );
   }
 
+  // 服务器收集账号（source=server）：本机/本浏览器没有任何 B站 凭证，只用于只读查看。
+  // 不能走 ensureValidCredential（空凭证必然刷新失败 → 被判为"已过期"，
+  // 导致 admin 切过去后首页仍认为未登录）。
+  if (session.source === "server") {
+    return NextResponse.json<ApiResponse<{ loggedIn: true; sid: string; uname: string; mid: number; face?: string }>>(
+      {
+        code: 0,
+        message: "active (server)",
+        data: { loggedIn: true, sid: session.sid, uname: session.uname, mid: session.mid, face: session.face },
+      },
+      { status: 200 },
+    );
+  }
+
   // 验证 B站凭证，失效则尝试刷新
   const credentialResult = await ensureValidCredential(session);
 

@@ -22,6 +22,7 @@
  */
 
 import { isTauri, isTauriProduction, serverFetch, serverApiUrl } from "./server-api";
+import { compactBuildDate } from "./build-info";
 
 /** 构建日期（CI 注入，本地开发取当前日期） */
 const BUILD_DATE = process.env.NEXT_PUBLIC_BUILD_DATE || "开发版";
@@ -106,15 +107,6 @@ export function detectPlatform(): "windows" | "android" | "ios" | "web" {
     if (/win/i.test(ua)) return "windows";
   }
   return "web";
-}
-
-/**
- * 构建日期紧凑显示："20260816-123456" → "20260816"、"2026-08-16" → "20260816"。
- * 无日期信息时原样返回。
- */
-export function compactBuildDate(d: string): string {
-  const m = d.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
-  return m ? `${m[1]}${m[2]}${m[3]}` : d;
 }
 
 /**

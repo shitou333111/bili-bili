@@ -75,10 +75,30 @@ export async function saveImageToAlbum(dataUrl: string, filename: string): Promi
   return "fallback";
 }
 
+/** 判断当前是否为移动端浏览器（Web/PWA，非 Tauri） */
+function isMobileWeb(): boolean {
+  if (typeof window === "undefined" || isTauri()) return false;
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+}
+
+/** dataURL → Blob（同步，用 atob 解码，避免异步丢失用户手势导致 share() 被拒） */
+function dataUrlToBlobSync(dataUrl: string): Blob {
+  const comma = dataUrl.indexOf(",");
+  const meta = comma >= 0 ? dataUrl.slice(0, comma) : "";
+  const body = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  const mime = /data:([^;]+)/.exec(meta)?.[1] || "image/png";
+  const binary = atob(body);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 /**
  * 统一保存/下载入口：
  * - 移动端 Tauri：通过 pldownloader 插件直接保存到系统相册
- * - 桌面/Web：直接 <a download> 下载
+ * - 移动端 Web/PWA：优先 Web Share 分享文件（iOS 分享面板「存储图像」进相册；
+ *   Android 分享面板可存到相册/Files），不可用时退化为 Blob 下载
+ * - 桌面：Blob 下载
  * @returns "ok" 已保存；"fallback" 未保存成功（仅移动端插件不可用时返回，交由调用方引导长按保存）
  */
 export async function saveMobileOrDownload(dataUrl: string, filename: string): Promise<"ok" | "fallback"> {
@@ -88,10 +108,38 @@ export async function saveMobileOrDownload(dataUrl: string, filename: string): P
     // 插件不可用/失败：不显示"已保存"，交由调用方引导长按保存
     return "fallback";
   }
+
+  // Web（含独立 PWA）：同步解码成 Blob 后再触发分享/下载。
+  // 关键：不能用 data: URL 作为 <a download> 的 href —— iOS（尤其独立窗口）不会下载，
+  // 而是把页面导航到一个 data: 页面。
+  const blob = dataUrlToBlobSync(dataUrl);
+  const type = blob.type || detectMime(filename);
+
+  // 1) 移动端优先走系统分享面板（可选"存储图像"直接进相册，最接近客户端体验）
+  if (isMobileWeb() && typeof navigator.canShare === "function" && typeof navigator.share === "function") {
+    try {
+      const file = new File([blob], filename, { type });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        showToast("图片已保存");
+        return "ok";
+      }
+    } catch (err) {
+      // 用户主动取消分享：不算失败，也不再自动下载（避免"点了取消反而下载"）
+      if ((err as DOMException)?.name === "AbortError") return "ok";
+      // 其它错误（不支持文件分享等）：继续走下载兜底
+    }
+  }
+
+  // 2) Blob URL 下载：iOS Safari/PWA 会弹出下载确认，Android 直接下载为文件
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.download = filename;
-  link.href = dataUrl;
+  link.href = url;
+  document.body.appendChild(link);
   link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
   showToast("图片已保存");
   return "ok";
 }

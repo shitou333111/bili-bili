@@ -13,6 +13,8 @@ import {
   GIFT_FLIP_MAX_TEXT_LEN,
   GIFT_FLIP_MIN_OPTIONS,
   isAnimeOpacity,
+  isAnimeEnding,
+  isAnimeOpening,
   isGiftBarWidth,
   isHexColor,
   type DisplayConfig,
@@ -235,6 +237,10 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
         : d.animeFeatherV,
     // 入场动画声音开关：字段缺失（旧配置/首次）回退默认（静音 true）
     animeMuted: r.animeMuted === undefined ? d.animeMuted : !!r.animeMuted,
+    // 结尾的头像昵称显示方式：非法/缺失（含旧配置）回退默认（奇异博士传送门）
+    animeEnding: isAnimeEnding(r.animeEnding) ? r.animeEnding : d.animeEnding,
+    // 开场方式：非法/缺失（含旧配置）回退默认（渐显）
+    animeOpening: isAnimeOpening(r.animeOpening) ? r.animeOpening : d.animeOpening,
     // 阈值允许为 0（0 = 不限制），只有非法/负数才回退默认值
     giftPriceThreshold:
       typeof r.giftPriceThreshold === "number" &&
@@ -248,6 +254,13 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     giftBarWidth: isGiftBarWidth(r.giftBarWidth) ? r.giftBarWidth : d.giftBarWidth,
     // 单独条开关：缺失/非法回退默认（关闭）
     giftSeparateBar: !!r.giftSeparateBar,
+    // badge 透明度：0-100 取整，缺失/非法回退默认 100（原观感）
+    giftBadgeOpacity:
+      typeof r.giftBadgeOpacity === "number" &&
+      Number.isFinite(r.giftBadgeOpacity) &&
+      r.giftBadgeOpacity >= 0
+        ? Math.min(100, Math.round(r.giftBadgeOpacity))
+        : d.giftBadgeOpacity,
     animeList: Array.isArray(r.animeList)
       ? r.animeList.map((a) => {
           // 兼容旧配置字段 videoPath：作为横屏视频迁移

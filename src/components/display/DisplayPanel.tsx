@@ -28,6 +28,8 @@ import {
   GIFT_FLIP_MIN_OPTIONS,
   scBackgroundColor,
   type AnimeOpacity,
+  type AnimeEnding,
+  type AnimeOpening,
   type DisplayConfig,
   type DisplayEntryPayload,
   type DisplayGiftItem,
@@ -1671,15 +1673,29 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           onToggle={(v) => void toggleModule({ gift: v })}
         />
         <Card bg="bg-amber-200" border="border-amber-400">
-          <p className="text-xs text-black/45 leading-relaxed">
-            最近一周收到的礼物，滚动显示，默认不区分谁送的
-          </p>
-          {/* 第二行：方向（横条/竖条）+ 宽度（短/中/长）+ 显示单价大于
+          {/* 第一行：说明文字 + 显示单价大于（从第二行移上来，置于本行右侧） */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p className="text-xs text-black/45 leading-relaxed">
+              最近一周收到的礼物，滚动显示，默认不区分谁送的
+            </p>
+            {/* 单价大于：单位电池（输入框去掉上下箭头，节省空间） */}
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-xs text-black/55">显示单价大于</span>
+              <input
+                type="number"
+                min={0}
+                value={config.giftPriceThreshold}
+                onChange={(e) => updateThreshold(Math.max(0, Number(e.target.value) || 0))}
+                className={`${inputFlat} ${noSpin} w-14 text-center`}
+              />
+            </div>
+          </div>
+          {/* 第二行：方向（横条/竖条）+ 宽度（短/中/长）+ badge 透明度
               三者用 justify-between 均匀分布（等间距），避免挤在一起难以区分 */}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-y-2">
             {/* 方向：横条（礼物从右到左滚）/ 竖条（礼物从下到上滚） */}
             <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-xs text-black/55">方向</span>
+              <span className="shrink-0 text-xs text-black">方向</span>
               <div
                 className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
                 role="radiogroup"
@@ -1717,7 +1733,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
             </div>
             {/* 宽度：短 = 3 个礼物位（默认）/ 中 = 4 / 长 = 5；只改条长，条厚不变，整体缩放仍在画布中调整 */}
             <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-xs text-black/55">宽度</span>
+              <span className="shrink-0 text-xs text-black">宽度</span>
               <div
                 className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/50 p-0.5 shadow-sm"
                 role="radiogroup"
@@ -1755,15 +1771,22 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 })}
               </div>
             </div>
-            {/* 单价大于：与「方向/宽度」同一行末尾；单位电池（输入框去掉上下箭头，节省空间） */}
+            {/* badge 透明度：滑动条 0-100（100 = 原观感），修改后即时广播到画布 */}
             <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-xs text-black/55">显示单价大于</span>
+              <span className="shrink-0 text-xs text-black">透明度</span>
               <input
-                type="number"
+                type="range"
                 min={0}
-                value={config.giftPriceThreshold}
-                onChange={(e) => updateThreshold(Math.max(0, Number(e.target.value) || 0))}
-                className={`${inputFlat} ${noSpin} w-14 text-center`}
+                max={100}
+                step={5}
+                value={config.giftBadgeOpacity}
+                aria-label="badge 透明度"
+                onChange={(e) =>
+                  void update({ giftBadgeOpacity: Number(e.target.value) }).then((next) =>
+                    displayDanmaku.broadcastGiftBadgeOpacity(next.giftBadgeOpacity),
+                  )
+                }
+                className="badge-opacity-slider h-1.5 w-24 cursor-pointer accent-amber-600"
               />
             </div>
           </div>
@@ -2048,7 +2071,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           </div>
           {/* 入场冷却：同一用户距上次触发不足间隔则不再触发（防止频繁进出反复播放） */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <p className="text-xs text-black/45 shrink-0">触发间隔</p>
+            <p className="text-xs text-black shrink-0">触发间隔</p>
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场冷却时长">
               {(
                 [
@@ -2266,7 +2289,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           )}
           {/* 动画冷却：与入场提示同款选项，但独立判定、独立记录（完全对照入场提示逻辑） */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <p className="text-xs text-black/45 shrink-0">触发间隔</p>
+            <p className="text-xs text-black shrink-0">触发间隔</p>
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画冷却时长">
               {(
                 [
@@ -2298,7 +2321,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
             {/* 声音开关：默认静音（兼容浏览器/CEF 无声自动播放）；打开=有声音。
                 与画布预览右下角静音按钮共享同一状态（画布切换会同步此开关）。 */}
             <div className="ml-auto flex items-center gap-1.5 shrink-0">
-              <p className="text-xs text-black/45">声音</p>
+              <p className="text-xs text-black">声音</p>
               <Switch
                 size="sm"
                 onColor="bg-violet-500"
@@ -2311,10 +2334,12 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               />
             </div>
           </div>
-          {/* 视频整体透明度：按椭圆区域径向分布（中心最实、越往周边越透明），透出下层直播画面。
-              同一档位同时作用于闭幕黑幕；画布与布局编辑页共用该配置。 */}
+          {/* 整体透明（按椭圆区域径向分布，中心最实、越往周边越透明，透出下层直播画面。
+              同一档位同时作用于闭幕黑幕；画布与布局编辑页共用该配置。
+              右侧为边缘虚化：静态 mask-image 渐变让视频边缘透明过渡（左右/上下独立，0=关闭），
+              与整体透明并存——透明度挂包裹层，羽化挂 video 元素，各自取交集。 */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <p className="text-xs text-black/45 shrink-0">视频透明度</p>
+            <p className="text-xs text-black shrink-0">整体透明</p>
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="入场动画透明度">
               {(
                 [
@@ -2347,43 +2372,127 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 );
               })}
             </div>
+            <div className="ml-auto flex items-center gap-2 shrink-0">
+              <span className="shrink-0 text-xs text-black">边缘虚化</span>
+              <label className="flex items-center gap-1">
+                <span className="text-xs text-black/50">左右</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={40}
+                  value={config.animeFeatherH}
+                  onChange={(e) => {
+                    const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                    void update({ animeFeatherH: v }).then((next) =>
+                      displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                    );
+                  }}
+                  className={`${inputFlat} ${noSpin} w-10`}
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="text-xs text-black/50">上下</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={40}
+                  value={config.animeFeatherV}
+                  onChange={(e) => {
+                    const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
+                    void update({ animeFeatherV: v }).then((next) =>
+                      displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
+                    );
+                  }}
+                  className={`${inputFlat} ${noSpin} w-10`}
+                />
+              </label>
+            </div>
           </div>
-          {/* 视频边缘羽化：静态 mask-image 渐变遮罩让视频画面边缘透明过渡（左右/上下独立设置，0=关闭）。
-              与上方「视频透明度」并存：透明度按椭圆径向分布挂包裹层，羽化挂 video 元素，各自取交集。 */}
-          <div className="mt-3 flex items-center gap-3">
-            <span className="shrink-0 text-xs text-black/50">视频边缘羽化（0 = 关闭）</span>
-            <label className="flex items-center gap-1.5">
-              <span className="text-xs text-black/50">左右</span>
-              <input
-                type="number"
-                min={0}
-                max={40}
-                value={config.animeFeatherH}
-                onChange={(e) => {
-                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
-                  void update({ animeFeatherH: v }).then((next) =>
-                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
-                  );
-                }}
-                className={`${inputFlat} ${noSpin} w-16`}
-              />
-            </label>
-            <label className="flex items-center gap-1.5">
-              <span className="text-xs text-black/50">上下</span>
-              <input
-                type="number"
-                min={0}
-                max={40}
-                value={config.animeFeatherV}
-                onChange={(e) => {
-                  const v = Math.min(40, Math.max(0, Math.floor(Number(e.target.value) || 0)));
-                  void update({ animeFeatherV: v }).then((next) =>
-                    displayDanmaku.broadcastAnimeFeather(next.animeFeatherH, next.animeFeatherV),
-                  );
-                }}
-                className={`${inputFlat} ${noSpin} w-16`}
-              />
-            </label>
+          {/* 开场：视频开始播放时的显现方式（无 / 渐显 / 椭圆拓展），默认「渐显」。
+              「无」= 视频直接显示；「渐显」= 透明度从中间值渐入，终点遵循整体透明档位；
+              「椭圆拓展」= 中心椭圆向外扩散。切换后实时广播到画布。 */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-black shrink-0">开场</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="开场">
+              {(
+                [
+                  ["none", "无"],
+                  ["fade", "渐显"],
+                  ["ellipse", "椭圆拓展"],
+                ] as Array<[AnimeOpening, string]>
+              ).map(([key, label]) => {
+                const active = config.animeOpening === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      void update({ animeOpening: key }).then((next) =>
+                        displayDanmaku.broadcastAnimeOpening(next.animeOpening),
+                      )
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs transition cursor-pointer ${
+                      active
+                        ? "bg-violet-600 text-white shadow"
+                        : "bg-white/70 text-black/55 hover:bg-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              <span
+                title="敬请期待：后续版本将添加更多开场方式"
+                className="rounded-full px-2.5 py-0.5 text-xs bg-white/40 text-black/30 cursor-not-allowed select-none"
+              >
+                更多
+              </span>
+            </div>
+          </div>
+          {/* 结尾的头像昵称：动画结束时头像+昵称的展示方式（无 / 渐显渐隐 / 奇异博士传送门 / 黑幕闭合）。
+              默认「奇异博士传送门」；切换后实时广播到画布。 */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs text-black shrink-0">结尾的头像昵称</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="结尾的头像昵称">
+              {(
+                [
+                  ["none", "无"],
+                  ["fade", "渐显渐隐"],
+                  ["portal", "传送门"],
+                  ["curtain", "黑幕闭合"],
+                ] as Array<[AnimeEnding, string]>
+              ).map(([key, label]) => {
+                const active = config.animeEnding === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      void update({ animeEnding: key }).then((next) =>
+                        displayDanmaku.broadcastAnimeEnding(next.animeEnding),
+                      )
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs transition cursor-pointer ${
+                      active
+                        ? "bg-violet-600 text-white shadow"
+                        : "bg-white/70 text-black/55 hover:bg-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              <span
+                title="敬请期待：后续版本将添加更多结尾方式"
+                className="rounded-full px-2.5 py-0.5 text-xs bg-white/40 text-black/30 cursor-not-allowed select-none"
+              >
+                更多
+              </span>
+            </div>
           </div>
         </Card>
       </section>

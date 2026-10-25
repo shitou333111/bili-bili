@@ -265,6 +265,26 @@ export function isAnimeOpacity(v: unknown): v is AnimeOpacity {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ANIME_OPACITY_ALPHA, v);
 }
 
+/** 入场动画 · 结尾的头像昵称显示方式：
+ *  none = 无（动画结束不加额外头像和昵称）；fade = 渐显渐隐（头像+昵称同步渐显渐隐）；
+ *  portal = 奇异博士传送门（火圈+头像渐显）；curtain = 黑幕闭合（系统原结尾方式）。 */
+export type AnimeEnding = "none" | "fade" | "portal" | "curtain";
+
+/** 合法结尾方式判定（配置容错与画布消息共用） */
+export function isAnimeEnding(v: unknown): v is AnimeEnding {
+  return v === "none" || v === "fade" || v === "portal" || v === "curtain";
+}
+
+/** 入场动画 · 开场方式：
+ *  none = 无（视频直接显示，无额外开场）；fade = 渐显（透明度从中间值渐变到整体透明档位的最终值）；
+ *  ellipse = 椭圆拓展（视频由中心椭圆向外扩散显现）。 */
+export type AnimeOpening = "none" | "fade" | "ellipse";
+
+/** 合法开场方式判定（配置容错与画布消息共用） */
+export function isAnimeOpening(v: unknown): v is AnimeOpening {
+  return v === "none" || v === "fade" || v === "ellipse";
+}
+
 /** 礼物展示条宽度档位：短 = 3 个礼物位（默认）/ 中 = 4 / 长 = 5。仅改变条长（沿滚动轴），
  *  条厚（垂直方向）不变，整体缩放仍在画布中调整。 */
 export type GiftBarWidth = "short" | "medium" | "long";
@@ -333,6 +353,10 @@ export interface DisplayConfig {
   /** 入场动画声音开关：true=有声音（解除静音），false=静音；默认静音（兼容浏览器/CEF 无声自动播放限制）。
    *  面板「声音」开关与画布预览右下角静音按钮共享同一状态。 */
   animeMuted: boolean;
+  /** 入场动画 · 结尾的头像昵称显示方式（无 / 渐显渐隐 / 奇异博士传送门 / 黑幕闭合），默认传送门 */
+  animeEnding: AnimeEnding;
+  /** 入场动画 · 开场方式（无 / 渐显 / 椭圆拓展），默认渐显 */
+  animeOpening: AnimeOpening;
   /** 礼物单价阈值（元），单价 > 该值的礼物才显示 */
   giftPriceThreshold: number;
   /** 礼物展示条方向：横条（礼物从右到左滚动）/ 竖条（礼物从下到上滚动） */
@@ -342,6 +366,8 @@ export interface DisplayConfig {
   /** 单独条开关：开启后突出显示的礼物在画布上单独占一条（与常规礼物条并存），
    *  关闭时突出显示仍替换常规礼物条内容。 */
   giftSeparateBar: boolean;
+  /** 礼物 badge（展示条毛玻璃底）透明度 0-100（100 = 原观感，0 = 底色/边框/阴影全透明） */
+  giftBadgeOpacity: number;
   /** 高级用户入场动画名单 */
   animeList: EntryAnimeConfig[];
   /** 弹幕互动 */
@@ -411,10 +437,13 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   animeFeatherH: 0, // 左右边缘羽化默认关闭
   animeFeatherV: 5, // 上下边缘羽化默认强度（0=关闭）
   animeMuted: true, // 入场动画默认静音（兼容浏览器/CEF 无声自动播放限制）
+  animeEnding: "portal", // 结尾头像昵称默认「奇异博士传送门」
+  animeOpening: "fade", // 开场方式默认「渐显」
   giftPriceThreshold: 100, // 电池（默认 100 电池）
   giftBarOrientation: "horizontal", // 默认横条（礼物从右到左滚动）
   giftBarWidth: "medium", // 默认中（4 个礼物位）
   giftSeparateBar: false, // 默认关闭：突出显示替换常规礼物条内容
+  giftBadgeOpacity: 100, // 默认 100 = 原观感（底色/边框/阴影不缩放）
   animeList: [],
   layout: DEFAULT_DISPLAY_LAYOUT,
   danmaku: {

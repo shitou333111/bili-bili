@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
-import { BUILD_SEQ } from "@/lib/build-info";
+import { APP_VERSION, BUILD_DATE, BUILD_SEQ, formatVersionLabel } from "@/lib/build-info";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -29,6 +29,11 @@ export async function GET() {
       code: 0,
       data: {
         seq: Number(BUILD_SEQ) || 0,
+        // 供页面直接展示的最新版本（与客户端一致的 V{版本}-{日期} 格式）。
+        // seq 仍是内部唯一标识，用于判断是否需要刷新。
+        label: formatVersionLabel(),
+        version: APP_VERSION,
+        date: BUILD_DATE,
         enabled,
       },
     },

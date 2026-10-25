@@ -696,7 +696,7 @@ export default function MedicalFeeSettlement({ currentUid, currentUname, onBack 
   return (
     <div className="space-y-2">
       {/* 顶部栏 */}
-      <div className="flex items-center gap-4 py-1">
+      <div className="flex items-center gap-4">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95"

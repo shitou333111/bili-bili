@@ -71,7 +71,10 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build
+        run: |
+          # 构建日期（东八区，与客户端包同一格式）：Web 版本显示为 V{版本}-{YYYYMMDD}
+          BUILD_TS="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
+          NEXT_PUBLIC_BUILD_DATE="${BUILD_TS}" npm run build
 
       - name: Prepare deploy artifacts
         run: |
@@ -131,8 +134,9 @@ jobs:
           # Service Worker 必须是动态脚本，且包含本次构建序号（证明版本注入生效）
           curl -sf http://127.0.0.1:3999/sw.js | grep -q "const BUILD_SEQ = \"${NEXT_PUBLIC_BUILD_SEQ}\""
           curl -sf -D - -o /dev/null http://127.0.0.1:3999/sw.js | grep -qi 'cache-control:.*no-store'
-          # 版本接口必须返回同一构建序号
+          # 版本接口必须返回同一构建序号，且带与客户端统一格式的显示版本（V{版本}-{日期}）
           curl -sf http://127.0.0.1:3999/api/pwa/version | grep -q "\"seq\":${NEXT_PUBLIC_BUILD_SEQ}"
+          curl -sf http://127.0.0.1:3999/api/pwa/version | grep -q "\"label\":\"V"
 
       - name: Upload dist to server
         id: scp-dist

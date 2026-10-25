@@ -52,6 +52,15 @@ export default function DisplayEditModal({
     return () => ro.disconnect();
   }, []);
 
+  // 打开期间隐藏底部导航托盘（.bottom-dock-container）。
+  // 托盘是 .page-scroll-area 的兄弟节点且 position:fixed + z-index:9999，而本遮罩（z-50）
+  // 被 .page-scroll-area 的 z-index:0 层叠上下文锁在根层级 0，托盘会浮在遮罩之上，
+  // 在页面底部露出约 63px 未压暗的亮条（能看见下层导航内容）。托盘让位后遮罩可覆盖到底。
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add("display-edit-open");
+    return () => root.classList.remove("display-edit-open");
+  }, []);
   // 顶部胶囊条高度（内容撑开自适应），供画布上边界取「胶囊条 + 10px」
   const pillRef = useRef<HTMLDivElement | null>(null);
   const [pillH, setPillH] = useState(0);
@@ -84,7 +93,11 @@ export default function DisplayEditModal({
   const canvasBottom = DOCK_TOP_PX + 0;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md">
+    // m-0 必须保留：本弹窗内联渲染在 .space-y-8 容器中，Tailwind v4 的 space-y 规则
+    // （:where(.space-y-8>:not(:last-child))）会给非末位子元素加 margin-block-end:2rem(32px)，
+    // 使 fixed inset-0 遮罩按 CSS2.1 §10.6.4 解出 height=视口-32，底部漏光 32px。
+    // 该规则被 :where() 包裹、特异性为 0，m-0 必胜。
+    <div className="fixed inset-0 z-50 m-0 bg-black/60 backdrop-blur-md">
       {/* 顶部悬浮标题栏：标题栏(36px)下方 10px；宽度 w-max 由内容撑开、文字禁止换行，任何情况下不挤压 */}
       <div
         ref={pillRef}

@@ -270,6 +270,9 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   // 用户列表惰性渲染：先渲染前 50 条，滚动到底部再追加（避免上万用户时页面卡顿）
   const [userVisible, setUserVisible] = useState(50);
+  // 用户列表默认不渲染（用户条目过多、头像补齐请求量大，拖慢页面），点“加载”后再显示；
+  // 卡片顶部的统计信息基于已拉取的 users 数据计算，不受影响
+  const [userListLoaded, setUserListLoaded] = useState(false);
   useEffect(() => {
     // 搜索条件变化时重置可见数量
     setUserVisible(50);
@@ -593,7 +596,7 @@ export default function AdminPage() {
   // 服务器收集账号无本地头像，用 B站公开信息接口按 UID 补齐头像（已尝试过的 mid 不再重复请求）
   const avatarAttempted = useRef<Set<number>>(new Set());
   useEffect(() => {
-    if (!adminLoggedIn || users.length === 0) return;
+    if (!adminLoggedIn || !userListLoaded || users.length === 0) return;
     const missing = users.filter((u) => !u.face && u.mid && !avatarAttempted.current.has(u.mid));
     if (missing.length === 0) return;
     missing.forEach((u) => avatarAttempted.current.add(u.mid));
@@ -620,7 +623,7 @@ export default function AdminPage() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminLoggedIn, users]);
+  }, [adminLoggedIn, userListLoaded, users]);
 
   // 加载抽奖记录 + 当前概率配置（管理后台左下角抽奖模块）
   useEffect(() => {
@@ -869,9 +872,40 @@ export default function AdminPage() {
    * 期间显示与首次登录一致的加载遮罩（无法使用月度数据进度条，故为不确定进度条）。
    */
   const loadRemoteAndSwitch = async (user: User) => {
+    const platform = await getPlatform();
+
+    // Web 端：浏览器没有文件系统，数据全部由服务器路由按「当前会话」返回。
+    // 因此不需要（也无法）把用户数据落盘，只要让服务器把当前会话切到该账号即可：
+    //   - 该账号已有服务器会话 → 直接切换；
+    //   - 没有会话（纯服务器收集账号）→ 服务器按 mid 建立一个只读的 server 会话。
+    if (!platform.isNative) {
+      setServerLoading(true);
+      try {
+        const res = await adminFetch(serverApiUrl("/api/admin/impersonate"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sid: user.sid || undefined, mid: user.mid, uname: user.uname, face: user.face }),
+        });
+        const data = await res.json();
+        if (data.code !== 0) {
+          alert("加载失败: " + (data.message || "未知错误"));
+          return;
+        }
+        if (data.data?.sid) {
+          try { localStorage.setItem("bili_live_sid", data.data.sid); } catch { /* ignore */ }
+        }
+        setUsers((prev) => prev.map((u) => ({ ...u, isCurrent: u.mid === user.mid })));
+        window.location.href = pageUrl("/");
+      } catch (err) {
+        alert("加载失败: " + (err instanceof Error ? err.message : "网络错误"));
+      } finally {
+        setServerLoading(false);
+      }
+      return;
+    }
+
     setServerLoading(true);
     try {
-      const platform = await getPlatform();
       // 先从服务器拉取该用户的数据文件
       const res = await adminFetch(serverApiUrl(`/api/upload?mid=${user.mid}&uname=${encodeURIComponent(user.uname)}`));
       const data = await res.json();
@@ -1575,7 +1609,17 @@ export default function AdminPage() {
         {/* Users */}
         <div className="rounded-xl border border-black/10 bg-white/80 p-2">
           <div className="flex items-center justify-between mb-1.5 gap-2">
-            <h2 className="text-sm font-bold">用户列表 ({filteredUsers.length})</h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-bold">用户列表 ({filteredUsers.length})</h2>
+              <button
+                onClick={() => setUserListLoaded(true)}
+                disabled={userListLoaded}
+                className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-[11px] font-medium text-black/55 transition hover:border-black/25 hover:text-black/80 disabled:opacity-45 disabled:hover:border-black/10 disabled:hover:text-black/55"
+                title={userListLoaded ? "用户信息已加载" : "加载并显示用户信息（含头像补齐请求）"}
+              >
+                {userListLoaded ? "已加载" : "加载"}
+              </button>
+            </div>
             <input
               type="text"
               value={userSearch}
@@ -1605,7 +1649,11 @@ export default function AdminPage() {
               </div>
             );
           })()}
-          {filteredUsers.length === 0 ? (
+          {!userListLoaded ? (
+            <p className="text-xs text-black/40 py-1">
+              用户信息未加载{users.length > 0 ? `（共 ${users.length} 条）` : ""}，点击左侧“加载”按钮显示。上方统计信息基于全量数据实时计算。
+            </p>
+          ) : filteredUsers.length === 0 ? (
             <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
             <div

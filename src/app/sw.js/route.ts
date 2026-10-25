@@ -169,7 +169,50 @@ if (!ENABLED) {
 }
 `;
 
+/**
+ * 开发构建用的极简 Service Worker：
+ * 只保留 fetch 事件（Chrome 判定"可安装"的必要条件之一），不做任何缓存，
+ * 避免本地开发时 HMR / 热更新被旧资源干扰。
+ */
+const DEV_SW_TEMPLATE = `/* B瓜 dev Service Worker（不缓存） */
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.filter((k) => k.indexOf("bguagua-") === 0).map((k) => caches.delete(k))
+      );
+      await self.clients.claim();
+    })()
+  );
+});
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type === "SKIP_WAITING") self.skipWaiting();
+  if (data.type === "GET_VERSION" && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ type: "VERSION", seq: 0 });
+  }
+});
+self.addEventListener("fetch", () => {});
+`;
+
 export async function GET() {
+  // 开发构建（本地 localhost 调试）：浏览器只有在「安全上下文 + 注册了带 fetch 处理器的
+  // Service Worker」时才可能触发 beforeinstallprompt。dev 下如果不注册 SW，
+  // 安卓手机上永远拿不到系统安装对话框，无法验证「添加到主屏幕」。
+  // 因此 dev 版本也注册，但不缓存任何资源（避免 HMR / 热更新时命中旧 chunk）。
+  if (process.env.NODE_ENV !== "production") {
+    return new NextResponse(DEV_SW_TEMPLATE, {
+      headers: {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        Pragma: "no-cache",
+        "Service-Worker-Allowed": "/",
+      },
+    });
+  }
+
   // kill switch：运维只需在服务器 .data 下创建 pwa-disable 文件（无需重启/发版）
   let enabled = true;
   try {

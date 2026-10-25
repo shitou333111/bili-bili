@@ -12,6 +12,8 @@ import { getPlatform, type Platform } from "@/lib/platform";
 import {
   ENTRY_COOLDOWN_MS,
   type AnimeOpacity,
+  type AnimeEnding,
+  type AnimeOpening,
   type DisplayConfig,
   type DisplayEvent,
   type DisplayGiftItem,
@@ -967,9 +969,12 @@ class DisplayDanmakuService {
       animeFeatherH: cfg.animeFeatherH,
       animeFeatherV: cfg.animeFeatherV,
       animeMuted: cfg.animeMuted,
+      animeEnding: cfg.animeEnding,
+      animeOpening: cfg.animeOpening,
       giftBarOrientation: cfg.giftBarOrientation,
       giftBarWidth: cfg.giftBarWidth,
       giftSeparateBar: cfg.giftSeparateBar,
+      giftBadgeOpacity: cfg.giftBadgeOpacity,
       entryParticleMode: cfg.entryParticleMode,
       entryColors: cfg.entryColors,
       giftHighlight: this.giftHighlight,
@@ -1070,6 +1075,16 @@ class DisplayDanmakuService {
     await this.broadcast({ type: "animeMuted", v: muted });
   }
 
+  /** 广播入场动画「结尾的头像昵称」方式到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastAnimeEnding(ending: AnimeEnding): Promise<void> {
+    await this.broadcast({ type: "animeEnding", v: ending });
+  }
+
+  /** 广播入场动画「开场」方式到画布（面板切换后调用，配置已落盘）。 */
+  async broadcastAnimeOpening(opening: AnimeOpening): Promise<void> {
+    await this.broadcast({ type: "animeOpening", v: opening });
+  }
+
   /** 广播礼物展示条方向（横条/竖条）到画布（面板切换后调用，配置已落盘）。 */
   async broadcastGiftBarOrientation(v: "horizontal" | "vertical"): Promise<void> {
     await this.broadcast({ type: "giftBarOrientation", v });
@@ -1083,6 +1098,11 @@ class DisplayDanmakuService {
   /** 广播"单独条"开关到画布（面板切换后调用，配置已落盘）。 */
   async broadcastGiftSeparateBar(v: boolean): Promise<void> {
     await this.broadcast({ type: "giftSeparateBar", v });
+  }
+
+  /** 广播 badge 透明度（0-100）到画布（面板滑动后调用，配置已落盘）。 */
+  async broadcastGiftBadgeOpacity(v: number): Promise<void> {
+    await this.broadcast({ type: "giftBadgeOpacity", v });
   }
 
   /** 面板点击礼物/粉丝 badge 后调用：更新会话内的礼物突出显示选择并广播给所有画布。

@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BUILD_SEQ } from "./build-info";
+import { BUILD_SEQ, formatVersionLabel } from "./build-info";
 
 export type PwaUpdateStatus =
   | "idle" // 未检查 / 等待检查
@@ -27,10 +27,14 @@ export interface PwaUpdateController {
   /** 浏览器支持并已成功注册 Service Worker（开发模式 / 非 https 时为 false） */
   supported: boolean;
   status: PwaUpdateStatus;
-  /** 当前页面内置的构建序号（帮助页显示的"当前版本"） */
+  /** 当前页面内置的构建序号（内部比较新旧用，不直接显示） */
   currentSeq: number;
+  /** 当前页面版本（显示用，格式与客户端一致：V{版本}-{日期}） */
+  currentLabel: string;
   /** 服务器最新构建序号（检查成功后才有值） */
   latestSeq: number | null;
+  /** 服务器最新版本（显示用） */
+  latestLabel: string | null;
   error: string;
   /** 手动检查更新 */
   check: () => Promise<void>;
@@ -40,6 +44,8 @@ export interface PwaUpdateController {
 
 /** 页面内置构建序号（CI 注入；本地构建为 0） */
 const CURRENT_SEQ = Number(BUILD_SEQ) || 0;
+/** 页面内置版本显示（与客户端一致：V{版本}-{日期}） */
+const CURRENT_LABEL = formatVersionLabel();
 /** 回到前台时的自动检查间隔（与客户端"回到应用时静默检查"一致） */
 const AUTO_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 /** Service Worker install 没有进度事件，超时即视为下载失败 */
@@ -49,6 +55,7 @@ export function usePwaUpdate(enabled: boolean): PwaUpdateController {
   const [supported, setSupported] = useState(false);
   const [status, setStatus] = useState<PwaUpdateStatus>("idle");
   const [latestSeq, setLatestSeq] = useState<number | null>(null);
+  const [latestLabel, setLatestLabel] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const regRef = useRef<ServiceWorkerRegistration | null>(null);
@@ -128,6 +135,7 @@ export function usePwaUpdate(enabled: boolean): PwaUpdateController {
     setSupported(false);
     setStatus("idle");
     setLatestSeq(null);
+    setLatestLabel(null);
     setError("");
   }, []);
 
@@ -155,6 +163,7 @@ export function usePwaUpdate(enabled: boolean): PwaUpdateController {
 
       const latest = Number(data.seq) || 0;
       setLatestSeq(latest > 0 ? latest : null);
+      setLatestLabel(latest > CURRENT_SEQ ? (data.label || null) : null);
 
       // 是否"需要刷新"只看页面自身内置的构建序号：
       // 若页面已是网络返回的最新 HTML（常见于旧 SW 控制下刚打开的新页面），
@@ -217,8 +226,13 @@ export function usePwaUpdate(enabled: boolean): PwaUpdateController {
     if (!enabled) return;
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;
-    // 仅生产构建启用：dev 模式的 HMR 资源随时变化，SW 缓存会干扰开发
-    if (process.env.NODE_ENV !== "production") return;
+    // 仅生产构建启用（dev 的 HMR 资源随时变化，SW 缓存会干扰开发）。
+    // 例外：localhost / 127.0.0.1 也启用——它们是安全上下文，且安卓浏览器只有在
+    // 注册了带 fetch 处理器的 SW 后才会触发 beforeinstallprompt。
+    // dev 下的 /sw.js 是不缓存的极简版本（见 src/app/sw.js/route.ts），不会干扰 HMR。
+    const host = location.hostname;
+    const isLocalhost = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+    if (process.env.NODE_ENV !== "production" && !isLocalhost) return;
 
     let disposed = false;
     hadControllerRef.current = !!navigator.serviceWorker.controller;
@@ -340,7 +354,9 @@ export function usePwaUpdate(enabled: boolean): PwaUpdateController {
     supported,
     status,
     currentSeq: CURRENT_SEQ,
+    currentLabel: CURRENT_LABEL,
     latestSeq,
+    latestLabel,
     error,
     check,
     apply,

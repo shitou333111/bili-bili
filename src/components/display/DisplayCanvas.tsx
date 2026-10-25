@@ -20,6 +20,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AnimeOpacity,
+  type AnimeEnding,
+  type AnimeOpening,
   type DisplayEvent,
   type DisplayFlags,
   type DisplayGiftItem,
@@ -39,6 +41,8 @@ import {
   DEFAULT_ENTRY_COLORS,
   GIFT_BAR_SLOTS,
   isAnimeOpacity,
+  isAnimeEnding,
+  isAnimeOpening,
   isGiftBarWidth,
   isHexColor,
 } from "@/lib/display/types";
@@ -160,12 +164,18 @@ type ServerMsg =
       animeFeatherV: number;
       /** 入场动画声音开关（true=静音，false=有声音）；与画布预览静音按钮共享状态 */
       animeMuted: boolean;
+      /** 入场动画 · 结尾的头像昵称方式（无/渐显渐隐/奇异博士传送门/黑幕闭合） */
+      animeEnding: AnimeEnding;
+      /** 入场动画 · 开场方式（无/渐显/椭圆拓展） */
+      animeOpening: AnimeOpening;
       /** 礼物展示条方向（横条/竖条） */
       giftBarOrientation: "horizontal" | "vertical";
       /** 礼物展示条宽度档位（短 3 位 / 中 4 位 / 长 5 位） */
       giftBarWidth: GiftBarWidth;
       /** 单独条开关：开启后突出显示礼物单独占一条（与常规礼物条并存） */
       giftSeparateBar: boolean;
+      /** badge 透明度 0-100（100 = 原观感） */
+      giftBadgeOpacity: number;
       /** 入场提示粒子聚散方式（中心聚散/左右聚散） */
       entryParticleMode: EntryParticleMode;
       /** 入场提示配色（badge 渐变 + 粒子同源 + 昵称单色） */
@@ -184,9 +194,12 @@ type ServerMsg =
   | { type: "animeOpacity"; v: AnimeOpacity }
   | { type: "animeFeather"; h: number; v: number }
   | { type: "animeMuted"; v: boolean }
+  | { type: "animeEnding"; v: AnimeEnding }
+  | { type: "animeOpening"; v: AnimeOpening }
   | { type: "giftBarOrientation"; v: "horizontal" | "vertical" }
   | { type: "giftBarWidth"; v: GiftBarWidth }
   | { type: "giftSeparateBar"; v: boolean }
+  | { type: "giftBadgeOpacity"; v: number }
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "entryColors"; v: EntryColors }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
@@ -336,6 +349,10 @@ export default function DisplayCanvas() {
   );
   // 入场动画声音开关（init/animeMuted 消息下发，true=静音）：面板「声音」开关与画布静音按钮共享
   const [animeMuted, setAnimeMuted] = useState<boolean>(DEFAULT_DISPLAY_CONFIG.animeMuted);
+  // 入场动画「结尾的头像昵称」方式（init/animeEnding 消息下发）：none/fade/portal/curtain
+  const [animeEnding, setAnimeEnding] = useState<AnimeEnding>(DEFAULT_DISPLAY_CONFIG.animeEnding);
+  // 入场动画「开场」方式（init/animeOpening 消息下发）：none/fade/ellipse
+  const [animeOpening, setAnimeOpening] = useState<AnimeOpening>(DEFAULT_DISPLAY_CONFIG.animeOpening);
   // 礼物展示条方向（init/giftBarOrientation 消息下发）
   const [giftBarOrientation, setGiftBarOrientation] = useState<"horizontal" | "vertical">(
     DEFAULT_DISPLAY_CONFIG.giftBarOrientation,
@@ -346,6 +363,8 @@ export default function DisplayCanvas() {
   );
   // 单独条开关（init/giftSeparateBar 消息下发）：开启后高亮礼物单独占一条，与常规礼物条并存
   const [giftSeparateBar, setGiftSeparateBar] = useState(false);
+  // badge 透明度（init/giftBadgeOpacity 消息下发）：0-100，100 = 原观感
+  const [giftBadgeOpacity, setGiftBadgeOpacity] = useState(DEFAULT_DISPLAY_CONFIG.giftBadgeOpacity);
   // 入场提示粒子聚散方式（init/entryParticleMode 消息下发）：center=中心聚散(自研) / lr=左右聚散(原库)
   const [entryParticleMode, setEntryParticleMode] = useState<EntryParticleMode>(
     DEFAULT_DISPLAY_CONFIG.entryParticleMode,
@@ -476,11 +495,18 @@ export default function DisplayCanvas() {
             : DEFAULT_DISPLAY_CONFIG.animeFeatherV,
         );
         setAnimeMuted(!!msg.animeMuted);
+        setAnimeEnding(isAnimeEnding(msg.animeEnding) ? msg.animeEnding : DEFAULT_DISPLAY_CONFIG.animeEnding);
+        setAnimeOpening(isAnimeOpening(msg.animeOpening) ? msg.animeOpening : DEFAULT_DISPLAY_CONFIG.animeOpening);
         setGiftBarOrientation(
           msg.giftBarOrientation === "vertical" ? "vertical" : "horizontal",
         );
         setGiftBarWidth(isGiftBarWidth(msg.giftBarWidth) ? msg.giftBarWidth : "short");
         setGiftSeparateBar(!!msg.giftSeparateBar);
+        setGiftBadgeOpacity(
+          Number.isFinite(msg.giftBadgeOpacity)
+            ? Math.min(100, Math.max(0, Math.round(msg.giftBadgeOpacity)))
+            : DEFAULT_DISPLAY_CONFIG.giftBadgeOpacity,
+        );
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
         setEntryColors(pickEntryColors(msg.entryColors));
         setGiftHighlight(
@@ -512,12 +538,20 @@ export default function DisplayCanvas() {
         }
       } else if (msg.type === "animeMuted") {
         setAnimeMuted(!!msg.v);
+      } else if (msg.type === "animeEnding") {
+        setAnimeEnding(isAnimeEnding(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeEnding);
+      } else if (msg.type === "animeOpening") {
+        setAnimeOpening(isAnimeOpening(msg.v) ? msg.v : DEFAULT_DISPLAY_CONFIG.animeOpening);
       } else if (msg.type === "giftBarOrientation") {
         setGiftBarOrientation(msg.v === "vertical" ? "vertical" : "horizontal");
       } else if (msg.type === "giftBarWidth") {
         setGiftBarWidth(isGiftBarWidth(msg.v) ? msg.v : "short");
       } else if (msg.type === "giftSeparateBar") {
         setGiftSeparateBar(!!msg.v);
+      } else if (msg.type === "giftBadgeOpacity") {
+        if (Number.isFinite(msg.v)) {
+          setGiftBadgeOpacity(Math.min(100, Math.max(0, Math.round(msg.v))));
+        }
       } else if (msg.type === "entryParticleMode") {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
       } else if (msg.type === "entryColors") {
@@ -1128,6 +1162,8 @@ export default function DisplayCanvas() {
                 featherV={animeFeatherV}
                 muted={animeMuted}
                 onMutedChange={onAnimeMutedChange}
+                endingMode={animeEnding}
+                openingMode={animeOpening}
               />
             )}
             {isEdit && (
@@ -1143,6 +1179,8 @@ export default function DisplayCanvas() {
                     featherV={animeFeatherV}
                     muted={animeMuted}
                     onMutedChange={onAnimeMutedChange}
+                    endingMode={animeEnding}
+                    openingMode={animeOpening}
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center px-6 text-center">
@@ -1210,6 +1248,7 @@ export default function DisplayCanvas() {
             highlight={giftSeparateBar ? undefined : giftHighlight}
             slots={giftSlots}
             flash={giftBarFlash}
+            badgeOpacity={giftBadgeOpacity}
           />
         </MovableBox>
       )}
@@ -1231,6 +1270,7 @@ export default function DisplayCanvas() {
             highlight={giftHighlight}
             slots={giftSlots}
             highlightOnly
+            badgeOpacity={giftBadgeOpacity}
           />
         </MovableBox>
       )}

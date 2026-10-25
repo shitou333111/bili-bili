@@ -1,4 +1,16 @@
 import type { NextConfig } from "next";
+import tauriConf from "./src-tauri/tauri.conf.json";
+
+/**
+ * 应用版本号（单一来源 = src-tauri/tauri.conf.json）。
+ * Web 端没有原生包，但版本显示要与客户端统一为 V{版本}-{日期}，
+ * 因此直接沿用客户端原生版本号。这里用静态 JSON import（构建期求值并内联），
+ * 不读文件系统——否则 Next 的产物追踪会误把整个项目打进 standalone。
+ */
+const appVersion =
+  process.env.NEXT_PUBLIC_APP_VERSION ||
+  (typeof tauriConf?.version === "string" ? tauriConf.version : "");
+
 
 const isTauri = process.env.TAURI_BUILD === "1";
 const isProd = process.env.NODE_ENV === "production";
@@ -46,6 +58,7 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_SERVER_URL: process.env.NEXT_PUBLIC_SERVER_URL || "",
     NEXT_PUBLIC_BUILD_SEQ: process.env.NEXT_PUBLIC_BUILD_SEQ || "",
     NEXT_PUBLIC_BUILD_DATE: process.env.NEXT_PUBLIC_BUILD_DATE || "",
+    NEXT_PUBLIC_APP_VERSION: appVersion,
   },
 };
 

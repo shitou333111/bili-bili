@@ -21,6 +21,7 @@ import AnchorDataModule from "@/components/AnchorDataModule";
 import AutostartCard from "@/components/AutostartCard";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
+import PwaInstallPrompt from "@/components/PwaInstallPrompt";
 import PieTooltip from "@/components/PieTooltip";
 import VolumeIcon from "@/components/VolumeIcon";
 import { showToast } from "@/lib/toast";
@@ -50,12 +51,12 @@ import {
   installDownloadedNative,
   notifyAppReady,
   restartApp,
-  compactBuildDate,
   detectPlatform,
   formatHotUpdateVersion,
   type UpdateCheckResult,
   type VersionDisplay,
 } from "@/lib/updater";
+import { compactBuildDate } from "@/lib/build-info";
 import { usePwaUpdate } from "@/lib/use-pwa-update";
 
 // Android/Tauri：关闭应用窗口（栈空时第二次按返回才调用）。非 Tauri 环境忽略。
@@ -1020,6 +1021,14 @@ export default function HomePage() {
   // 服务端与客户端首次渲染都按桌面处理，挂载后再按真实设备切换。
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  // 应用外壳标记：globals.css 用 .app-shell 锁定 html/body 为实测视口高度。
+  // 不依赖 :has()，避免部分安卓浏览器（内核较旧）不支持 :has() 时整条规则失效、
+  // 底部再次露出页面背景色带。
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add("app-shell");
+    return () => root.classList.remove("app-shell");
+  }, []);
   const pieIsMobile = mounted && isMobileDevice();
 
   // 加载模拟器历史记录
@@ -1848,9 +1857,6 @@ export default function HomePage() {
   const WEB_APP_ONLY_TOOLS = new Set([
     "助力主播 自动点赞",
     "自动抢天选和红包",
-    "粉丝清理",
-    "粉丝牌清理",
-    "年度大会员领B币换电池",
     "多人接力PK医药费",
   ]);
   // 默认隐藏的帮助页工具卡片：与"管理后台"入口同一触发方式（连击版本卡片 10 次），
@@ -2196,18 +2202,6 @@ export default function HomePage() {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [showGiftListRules]);
-
-  // 窄屏自适应缩放
-  useEffect(() => {
-    const MIN_WIDTH = 380;
-    function applyZoom() {
-      const vw = window.innerWidth;
-      document.documentElement.style.zoom = vw < MIN_WIDTH ? String(vw / MIN_WIDTH) : "";
-    }
-    applyZoom();
-    window.addEventListener("resize", applyZoom);
-    return () => window.removeEventListener("resize", applyZoom);
-  }, []);
 
   // 收益模块（AnchorDataModule）的 fetchData 注册引用，供页面统一刷新时调用（收益随页面一起更新）
   // 主播数据的更新触发只有两处（与粉丝数据完全一致）：
@@ -3002,6 +2996,14 @@ export default function HomePage() {
     setAuthError(null);
     try {
       const platform = await getPlatform();
+      // Web 端：没有本地数据文件，所有数据本来就由服务器路由按当前会话实时返回，
+      // 重新拉取即可（不能走下面的落盘逻辑，浏览器没有文件系统）。
+      if (!platform.isNative) {
+        await fetchData(true);
+        noteRefreshTime();
+        showToast("已从服务器重新加载数据");
+        return;
+      }
       // 服务器账号数据属于敏感数据，仅管理员可读取：
       // 携带本地已保存的 admin_sid（管理员在管理后台登录后写入 localStorage），
       // 服务器通过 getAdminSid 校验，跨源（Tauri）下 query 参数可正常传递。
@@ -3524,17 +3526,16 @@ export default function HomePage() {
       ? versionDisplay.native
       : "…";
   // 当前版本完整显示（含日期小版本标记）："V1.2.0-20260816"
-  // WEB 端没有原生版本号，用 CI 构建序号当版本（每次部署单调递增，与 Service Worker 缓存版本一致）
+  // WEB 端没有原生包，但版本显示与客户端统一为 V{版本}-{日期}（版本取自 tauri.conf.json），
+  // CI 构建序号只用于内部比较新旧，不进显示文本。
   const updateCurrentFull = isWeb
-    ? pwa.currentSeq > 0
-      ? `V${pwa.currentSeq}`
-      : "开发版"
+    ? pwa.currentLabel
     : versionDisplay?.full || (updateCurrent !== "…" ? `V${updateCurrent}` : "…");
   // 最新版本完整显示（与当前版本格式一致：版本号+紧凑日期；热更新带 ota 序号）
   const nativeLatestDate = compactBuildDate(updateResult?.native.date || "");
   const updateLatestFull = isWeb
     ? pwa.latestSeq && pwa.latestSeq > pwa.currentSeq
-      ? `V${pwa.latestSeq}`
+      ? pwa.latestLabel || pwa.currentLabel
       : ""
     : updateResult?.native.available
     ? `V${updateResult.native.serverVersion || ""}${nativeLatestDate ? `-${nativeLatestDate}` : ""}`
@@ -3720,8 +3721,8 @@ export default function HomePage() {
           </button>
         </div>
       )}
-      {/* Content Area - scrollable, 底部为悬浮托盘栏留出空间 */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden relative pb-24 page-scroll-area" style={{ overscrollBehavior: "none" }}>
+      {/* Content Area - scrollable, 底部留白由 .page-scroll-area 计算（含托盘栏与系统安全区） */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative page-scroll-area" style={{ overscrollBehavior: "none" }}>
 
       {/* Offline banner */}
       {!isOnline && (
@@ -4549,7 +4550,7 @@ export default function HomePage() {
             {activeModule === "screenshot" && toolsPage === "fans" && (
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
-                <div className="flex items-center gap-4 py-1">
+                <div className="flex items-center gap-4">
                   <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setFansList([]); setFansSelectMode(false); setFansSelected(new Set()); setFansMsg(""); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
@@ -4704,7 +4705,7 @@ export default function HomePage() {
             {activeModule === "screenshot" && toolsPage === "medal" && (
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
-                <div className="flex items-center gap-4 py-1">
+                <div className="flex items-center gap-4">
                   <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setMedalsList([]); setMedalsSelectMode(false); setMedalsSelected(new Set()); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
@@ -4834,7 +4835,7 @@ export default function HomePage() {
             {activeModule === "screenshot" && toolsPage === "like" && (
               <div className="space-y-3">
                 {/* 返回 + 操作栏 */}
-                <div className="flex items-center gap-4 py-1">
+                <div className="flex items-center gap-4">
                   <button onClick={() => { pushView(toolSourceModuleRef.current, "home"); setLikeList([]); }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 -ml-1 text-sm text-black/60 hover:bg-black/5 hover:text-black/90 transition active:scale-95">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                     返回
@@ -4926,7 +4927,7 @@ export default function HomePage() {
 
       {/* 模拟页 - B站直播送礼模拟器入口 */}
       <div style={{ display: activeModule === "pending" ? "block" : "none" }}>
-        <div className="content-wrapper px-2 min-w-0 py-6">
+        <div className="content-wrapper px-2 min-w-0 py-3">
           <div className="rounded-xl border border-black/10 bg-white/85 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
             <div className="text-center mb-6">
               <h2 className="text-xl font-semibold text-black/80 mb-2">B站直播模拟器</h2>
@@ -5014,6 +5015,9 @@ export default function HomePage() {
       </div>
 
       </div> {/* End of scrollable content area */}
+
+      {/* PWA 安装引导（仅移动端网页；客户端/桌面网页不显示，判断在 hook 内部） */}
+      <PwaInstallPrompt />
 
       {/* iOS 苹果风格悬浮底部托盘导航栏（fixed 定位相对视口，无需 Portal 绕过 transform） */}
       <BottomDock

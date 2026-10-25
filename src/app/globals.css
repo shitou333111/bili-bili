@@ -3,6 +3,8 @@
 :root {
   --background: #f5f5f5;
   --foreground: #1f1c17;
+  /* 被系统导航栏/浏览器工具栏遮住的底部条带高度，由 SafeAreaStyler 实测注入 */
+  --view-hidden-bottom: 0px;
   /* --page-max-width 由 layout.ts 的 PAGE_MAX_WIDTH_NUM 运行时注入 */
 }
 
@@ -65,6 +67,32 @@ body {
   font-feature-settings: "tnum" 1;
 }
 
+/* ===== 应用外壳：锁定在「动态可视视口」内，禁止文档级滚动 =====
+   根因：body 的 min-height:100%（100vh，按大视口解析）与 .page-main 的 100dvh（当前可视视口）
+   相差一条 iOS Safari 工具栏的高度 → body 比 main 高出一截：
+     ① 底部露出一条页面背景色带（导航栏下半部分到底部）；
+     ② 整份文档可滚动，上滑时外壳被顶进状态栏，顶部导航行卡住，点状态栏回顶才恢复。
+   把 html/body 都锁到 100dvh 并 overflow:hidden 后，滚动只发生在内部 .page-scroll-area，
+   文档永远不可滚动。用 :has 限定只作用于主应用页，login / landing / admin 等仍走文档滚动。 */
+/* 规则拆成两段（class 版 + :has 版）：若把 :has() 写在同一组选择器里，
+   不支持 :has() 的浏览器（部分安卓内核较旧的浏览器/WebView）会丢弃整条规则，
+   背景色带就会在这些设备上复现。 */
+html.app-shell,
+html.app-shell > body {
+  height: var(--app-height, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html:has(.page-main),
+body:has(> .page-main) {
+  height: var(--app-height, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* 必须放入 @layer base：Tailwind 工具类位于 @layer utilities，
    未分层的 a{color:inherit} 会覆盖 .text-white 等工具类，
    导致深色按钮上 <Link> 文字颜色继承为深色而不可见 */
@@ -90,7 +118,11 @@ body {
 
 /* 主页面容器：填满视口，顶部安全区用 padding-top 内缩（避免 body padding-top 导致底部漏出背景色） */
 .page-main {
-  height: 100dvh;
+  /* --app-height 由 SafeAreaStyler 实测 window.innerHeight / visualViewport 注入，
+     比 100dvh 更贴近安卓浏览器（含 PWA 独立窗口）的真实可视高度。
+     该值已按窄屏缩放（html 的 zoom）反向补偿：zoom 会让同一 CSS 像素渲染得更小，
+     若直接注入 innerHeight，外壳视觉高度只有 zoom 倍，底部就会露出灰色背景带。 */
+  height: var(--app-height, 100dvh);
   padding-top: var(--safe-top, 0px);
 }
 
@@ -98,13 +130,35 @@ body {
 .page-scroll-area {
   -webkit-overflow-scrolling: touch;
   z-index: 0; /* 显式设定层叠层级，确保底部托盘栏（z-index:9999）在其上方 */
+  /* 内容底部留白：托盘栏距底距离 + 托盘栏自身高度（约 56px）+ 间隙。
+     用 CSS 计算而不是写死 Tailwind 的 pb-24，是因为托盘栏的位置会随
+     --dock-safe（系统导航栏 / Home Indicator 安全区）与
+     --view-hidden-bottom（layout viewport 被遮住的底部条带）上移，留白必须同步。 */
+  padding-bottom: calc(
+    var(--dock-bottom, 16px) + max(var(--dock-safe, 0px), var(--view-hidden-bottom, 0px)) + 80px
+  );
+}
+
+/* 布局编辑弹窗打开时隐藏底部托盘：托盘 z-index:9999 位于根层级，会浮在弹窗遮罩
+   （.page-scroll-area 内 z-50，受其 z-index:0 层叠上下文限制在根层级 0）之上，
+   导致页面底部露出约 63px 未压暗的亮条。 */
+html.display-edit-open .bottom-dock-container {
+  display: none;
 }
 
 /* ===== iOS 悬浮底部托盘导航栏（Dock Bar） ===== */
 /* 1. 悬浮容器（定位在页面最底部，居中，容器穿透） */
 .bottom-dock-container {
   position: fixed;
-  bottom: var(--dock-bottom, 16px);
+  /* 托盘栏避让屏幕底部被系统/浏览器遮住的区域：
+       --dock-safe         : env(safe-area-inset-bottom)，系统导航栏 / Home Indicator；
+       --view-hidden-bottom: SafeAreaStyler 实测的 layout viewport 底部被遮住的高度
+                             （安卓 edge-to-edge / 部分三星机型 innerHeight 偏大，
+                              visualViewport 才是真正可见的区域）。
+     两者描述的是同一块区域，取较大值，避免重复上移。 */
+  bottom: calc(
+    var(--dock-bottom, 16px) + max(var(--dock-safe, 0px), var(--view-hidden-bottom, 0px))
+  );
   left: 0;
   right: 0;
   display: flex;
@@ -523,19 +577,22 @@ body {
 }
 
 /* ========== 展示模块 · 礼物横条 badge：毛玻璃磨砂 + 横幅同款横向颜色滚动 ========== */
+/* 透明度系数 --gift-bar-op（0-1，由 GiftFlower 根节点注入；缺省 1 = 原观感）：
+   底色/细白边/阴影/彩虹层按系数等比缩放，毛玻璃模糊强度不变（避免低透明度时发灰）。
+   display/page.tsx 等未注入变量的 .gift-bar 走 var 回退 1，样式与旧版一致。 */
 .gift-bar {
   position: relative;
   overflow: hidden;
   /* 中等圆角（略方一些，不做成全圆胶囊） */
   border-radius: 44px;
   /* 毛玻璃：半透明底 + 磨砂模糊 + 细白边（透出直播背景）；色彩适度增强避免过于平淡 */
-  background: rgba(255, 255, 255, 0.12);
+  background: rgb(255 255 255 / calc(0.12 * var(--gift-bar-op, 1)));
   backdrop-filter: blur(24px) saturate(1.8);
   -webkit-backdrop-filter: blur(24px) saturate(1.8);
-  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  border: 1.5px solid rgb(255 255 255 / calc(0.45 * var(--gift-bar-op, 1)));
   box-shadow:
-    0 8px 28px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    0 8px 28px rgb(0 0 0 / calc(0.28 * var(--gift-bar-op, 1))),
+    inset 0 1px 0 rgb(255 255 255 / calc(0.55 * var(--gift-bar-op, 1)));
 }
 
 /* 背景颜色滚动层：与横幅按钮同源（90° 横向 party-gradient 彩虹大跨度配色），低透明度薄铺，
@@ -556,7 +613,7 @@ body {
   );
   background-size: 300% 100%;
   animation: party-gradient 4s linear infinite;
-  opacity: 0.38;
+  opacity: calc(0.38 * var(--gift-bar-op, 1));
   pointer-events: none;
 }
 
@@ -664,6 +721,17 @@ body {
     --anime-ripple: 80%;
   }
 }
+/* 开场「渐显」：透明度从很低的中间值 0.12 渐入到 1（不从 0 起，起始足够通透才看得出
+   渐显），终点不透明 → 最终观感由包裹层 mask 的整体透明档位决定（alpha 相乘）。
+   时长由组件内联 animation-duration 传入（比椭圆拓展开场更长，过渡更缓和）。 */
+@keyframes anime-open-fade {
+  from {
+    opacity: 0.12;
+  }
+  to {
+    opacity: 1;
+  }
+}
 @keyframes anime-curtain-close {
   from {
     --anime-curtain: 0%;
@@ -743,3 +811,91 @@ body {
 /* 昵称（镂空）：没有独立的 DOM/样式——它由组件生成「白底挖出黑色昵称」的 SVG，作为
    .anime-curtain-group 的 mask-image（见 VideoOverlay.tsx 的 knockMaskImage），在黑幕上
    抠出文字形状；文字几何（33u 粗字、顶边 = 中线 + 5u、字距 1u）在 SVG 内部按 --u 计算。 */
+
+/* ===== 结尾头像昵称（传送门/渐显渐隐模式） ===== */
+/* 传送门火圈画布：铺满舞台，PortalFX 按舞台盒尺寸 resize 绘制 */
+.anime-portal-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* 昵称胶囊：黑字、只描绿色边框不填充。超舞台宽 80% 时由组件内联缩小字号/字距保证
+   全名完整显示（不截断），故不设 max-width/overflow/ellipsis。默认 top 给传送门模式；
+   渐显渐隐模式内联 top 覆盖。 */
+.anime-name-pill {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 46 * var(--u));
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  padding: calc(4 * var(--u)) calc(16 * var(--u));
+  border: calc(2 * var(--u)) solid #22c55e;
+  border-radius: 9999px;
+  background: transparent;
+  color: #000;
+  font-size: calc(33 * var(--u));
+  font-weight: 900;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+/* 渐显渐隐模式头像绿边圆框（border-box，占内部不改外径） */
+.anime-avatar-bordered {
+  border: calc(2 * var(--u)) solid #22c55e;
+}
+/* 渐显渐隐结尾整组（挂载即从 0 播动画） */
+.anime-end-fade {
+  position: absolute;
+  inset: 0;
+}
+@keyframes anime-end-show {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes anime-end-hide {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* ===== badge 透明度滑动条（展示设置面板）：无边框细轨道 + 小圆滑标 =====
+   默认 range 控件带 UA 边框且滑标偏大，这里用 appearance:none 自绘：
+   轨道 4px 无边框浅灰圆条，滑标 10px amber-600 小圆球。 */
+.badge-opacity-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.badge-opacity-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border: none;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.12);
+}
+.badge-opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  /* (轨道 4px − 滑标 10px) / 2：把滑标垂直居中到轨道上 */
+  margin-top: -3px;
+  border: none;
+  border-radius: 50%;
+  background: #d97706; /* amber-600 */
+  cursor: pointer;
+}
+/* Firefox（admin 网页在 Firefox 调试时的等价样式） */
+.badge-opacity-slider::-moz-range-track {
+  height: 4px;
+  border: none;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.12);
+}
+.badge-opacity-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: none;
+  border-radius: 50%;
+  background: #d97706;
+  cursor: pointer;
+}

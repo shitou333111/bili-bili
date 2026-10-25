@@ -32,8 +32,10 @@ const ICON = 84; // 礼物图标尺寸
 const HL_ICON = 92; // 高亮帧礼物图标尺寸（数量移走后图标独占，放大以充分利用 badge 空间）
 const HL_AVATAR = 84; // 高亮帧粉丝头像尺寸（横条）
 const HL_AVATAR_V = 84; // 高亮帧粉丝头像尺寸（竖条）
-/** 高亮帧数目（×N）与昵称之间的间距（数目与昵称同字号并排/上下排列） */
+/** 高亮帧数目（×N）与昵称之间的间距（数目按缩小后的字号与昵称并排/上下排列） */
 const HL_COUNT_GAP = 4;
+/** 高亮帧数目（×N）字号相对昵称字号的缩放：昵称是主要内容占大头，数目作为辅助信息缩小显示 */
+const HL_COUNT_SCALE = 0.65;
 /**
  * 高亮帧昵称字号填充系数：按实际字宽撑满空间后整体调小一点。
  * 西文/纯数字昵称（如 "I-2-3"）字宽折算后字号会撑得过大，多调小一点（0.72）；
@@ -41,6 +43,15 @@ const HL_COUNT_GAP = 4;
  */
 const HL_NAME_FILL_CJK = 0.95;
 const HL_NAME_FILL_OTHER = 0.72;
+/**
+ * 高亮帧昵称字号区间（收窄保留梯度）：上限压小短昵称的过大字号、下限抬高长昵称的过小字号，
+ * 让不同长度昵称的字号更均匀。取值对应「中」档、中文昵称、有数量时的最终字号：
+ * 竖条 1-4字=38 / 5字=37 / 6字=33；横条 1-4字=40 / 5字=38 / 6字=34。
+ */
+const HL_NAME_FONT_MAX_V = 38;
+const HL_NAME_FONT_MIN_V = 33;
+const HL_NAME_FONT_MAX_H = 40;
+const HL_NAME_FONT_MIN_H = 34;
 /** 高亮帧昵称超过该字数 → 在昵称区域内滚动显示（横条自左向右 / 竖条自上向下），不再截断 */
 const HL_NAME_MARQUEE_MIN_CHARS = 6;
 /** 滚动昵称两份之间的间距（px） */
@@ -248,8 +259,9 @@ function HighlightGiftIcon({ gift }: { gift: DisplayGiftItem }) {
  * 礼物数量（×N，该粉丝送出数量）放在昵称处：横条在昵称上方（两行），竖条在昵称右侧
  * （两列，×与数字上下竖直排列）；数量为 1 时不显示，礼物图标独占不被数量挤压。
  * 昵称字号自适：按实际字宽（em 折算）填满头像与礼物图标之间的空间（文字越少字号越大，
- * 西文昵称也能撑满），撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.85 西文短名不过大），
- * 数目与昵称同字号，同时受条厚几何限制（两行/两列并排时各占一半）。
+ * 西文昵称也能撑满），撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.72 西文短名不过大），
+ * 最后收窄进字号区间（竖条 33-38 / 横条 34-40，见 HL_NAME_FONT_* 常量）让各字数的字号更均匀；
+ * 数目按缩小比例显示（HL_COUNT_SCALE，辅助信息不喧宾夺主），同时受条厚几何限制。
  * 昵称超过 6 个字：不再截断，改为在昵称区域内滚动（横条自左向右、竖条自上向下），
  * 此时字号按"6 字基准"取（长昵称只滚动、不缩小到看不清）。
  */
@@ -296,20 +308,30 @@ function HighlightFrame({
     const fontAvailH = fontBarLen - 16 - HL_AVATAR_V - HL_ICON - 20;
     const countStr = `×${fan.count}`;
     // 字号自适填满头像与礼物图标之间的空间：按实际字宽（em 折算）排布，西文昵称也能撑满。
-    // 数目与昵称同字号：长度方向除数取两者占格较大者（数目列竖排每字符占一格），
-    // 厚度方向两列并排：昵称列宽 + 间距 + 数目列宽 = 2×字号 + HL_COUNT_GAP 不超过条内容宽
-    const units = Math.max(nameUnits, showCount ? countStr.length : 0, 0.5);
+    // 长度方向只按昵称占格计算（数目缩小后不再挤占昵称字号）；
+    // 厚度方向两列并排：昵称列宽 + 间距 + 数目列宽（≈昵称字号×HL_COUNT_SCALE）不超过条内容宽
+    const units = Math.max(nameUnits, 0.5);
     // 撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.72 西文/纯数字昵称不过大），最小 12 保证可读
     const fill = hasCjk(name) ? HL_NAME_FILL_CJK : HL_NAME_FILL_OTHER;
+    const thickAvailV = BAR_THICK - 12 - (showCount ? HL_COUNT_GAP : 0);
+    const thickDivV = showCount ? Math.floor(thickAvailV / (1 + HL_COUNT_SCALE)) : thickAvailV;
+    const fitted = Math.floor(Math.min(Math.floor(fontAvailH / units), thickDivV) * fill);
+    // 收窄字号区间：上限压小小字号的过大值、下限抬高大字号的过小值（保留字数梯度更均匀）；
+    // 下限抬高不突破几何容量（短档/超长昵称仍按实际空间收缩，避免压到头像/礼物图标上）
     const fontSize = Math.max(
       12,
-      Math.floor(
-        Math.min(
-          Math.floor(fontAvailH / units),
-          Math.floor((BAR_THICK - 12 - (showCount ? HL_COUNT_GAP : 0)) / (showCount ? 2 : 1)),
-        ) * fill,
+      Math.min(
+        Math.ceil(fontAvailH / units),
+        Math.min(HL_NAME_FONT_MAX_V, Math.max(HL_NAME_FONT_MIN_V, fitted)),
       ),
     );
+    // 数目字号：昵称字号按比例缩小（辅助信息不喧宾夺主）；超大计数再按条长 clamp 防溢出
+    const countFontSize = showCount
+      ? Math.min(
+          Math.round(fontSize * HL_COUNT_SCALE),
+          Math.floor(fontAvailH / Math.max(countStr.length, 1)),
+        )
+      : 0;
     const mq = scrollingName ? nameMarquee(name, nameUnits, fontSize, availH) : null;
     return (
       <div
@@ -368,7 +390,7 @@ function HighlightFrame({
           {showCount && (
             <div
               className="flex flex-col items-center justify-center"
-              style={{ ...countStyle, fontSize }}
+              style={{ ...countStyle, fontSize: countFontSize }}
             >
               {Array.from(`×${fan.count}`).map((ch, i) => (
                 <span key={i}>{ch}</span>
@@ -386,20 +408,30 @@ function HighlightFrame({
   const fontAvailW = fontBarLen - 16 - HL_AVATAR - HL_ICON - 16;
   const countStr = `×${fan.count}`;
   // 字号自适填满头像与礼物图标之间的空间：按实际字宽（em 折算）排布，西文昵称也能撑满。
-  // 数目与昵称同字号：宽度方向除数取两者较大者，
-  // 高度方向两行堆叠：数目行高 + 间距 + 昵称行高 = 2×字号 + HL_COUNT_GAP 不超过条厚
-  const units = Math.max(nameUnits, showCount ? emWidth(countStr) : 0, 0.5);
+  // 长度方向只按昵称占格计算（数目缩小后不再挤占昵称字号）；
+  // 厚度方向两行堆叠：昵称行高 + 间距 + 数目行高（≈昵称字号×HL_COUNT_SCALE）不超过条厚
+  const units = Math.max(nameUnits, 0.5);
   // 撑满后按填充系数调小一点（中文 0.95 稍大、其他 0.72 西文/纯数字昵称不过大），最小 12 保证可读
   const fill = hasCjk(name) ? HL_NAME_FILL_CJK : HL_NAME_FILL_OTHER;
+  const thickAvailH = BAR_THICK - (showCount ? HL_COUNT_GAP : 0);
+  const thickDivH = showCount ? Math.floor(thickAvailH / (1 + HL_COUNT_SCALE)) : thickAvailH;
+  const fitted = Math.floor(Math.min(Math.floor(fontAvailW / units), thickDivH) * fill);
+  // 收窄字号区间：上限压小小字号的过大值、下限抬高大字号的过小值（保留字数梯度更均匀）；
+  // 下限抬高不突破几何容量（短档/超长昵称仍按实际空间收缩，避免压到头像/礼物图标上）
   const fontSize = Math.max(
     12,
-    Math.floor(
-      Math.min(
-        Math.floor(fontAvailW / units),
-        Math.floor((BAR_THICK - (showCount ? HL_COUNT_GAP : 0)) / (showCount ? 2 : 1)),
-      ) * fill,
+    Math.min(
+      Math.ceil(fontAvailW / units),
+      Math.min(HL_NAME_FONT_MAX_H, Math.max(HL_NAME_FONT_MIN_H, fitted)),
     ),
   );
+  // 数目字号：昵称字号按比例缩小（辅助信息不喧宾夺主）；超大计数再按条宽 clamp 防溢出
+  const countFontSize = showCount
+    ? Math.min(
+        Math.round(fontSize * HL_COUNT_SCALE),
+        Math.floor(fontAvailW / Math.max(emWidth(countStr), 1)),
+      )
+    : 0;
   const mq = scrollingName ? nameMarquee(name, nameUnits, fontSize, availW) : null;
   return (
     <div
@@ -407,9 +439,9 @@ function HighlightFrame({
       style={{ width: "100%", height: BAR_THICK, gap: 8, padding: "0 8px" }}
     >
       <FanAvatar fan={fan} size={HL_AVATAR} />
-      {/* 昵称区：数目在昵称上方（两行），数量为 1 时不显示数目。昵称图层高于头像/礼物图标 */}
+      {/* 昵称区：数目在昵称上方（两行、缩小字号），数量为 1 时不显示数目。昵称图层高于头像/礼物图标 */}
       <div className="relative z-[2] flex min-w-0 flex-1 flex-col items-center justify-center gap-1">
-        {showCount && <div style={{ ...countStyle, fontSize }}>×{fan.count}</div>}
+        {showCount && <div style={{ ...countStyle, fontSize: countFontSize }}>×{fan.count}</div>}
         {scrollingName && mq ? (
           <div style={{ position: "relative", width: "100%", height: fontSize, overflow: "hidden" }}>
             <div
@@ -444,6 +476,7 @@ export default function GiftFlower({
   slots = GIFT_BAR_SLOTS.short,
   highlightOnly = false,
   flash,
+  badgeOpacity = 100,
 }: {
   gifts: DisplayGiftItem[];
   /** 无礼物时也渲染占位条（供编辑模式摆放/预览） */
@@ -458,6 +491,8 @@ export default function GiftFlower({
   highlightOnly?: boolean;
   /** 吸收闪烁代际：值变化（每次 +1）时礼物条闪一下——收到礼物飘入后被吸收的特效 */
   flash?: number;
+  /** badge 透明度 0-100：底色/边框/阴影按比例缩放（100 = 原观感），礼物/文字不受影响 */
+  badgeOpacity?: number;
 }) {
   const vertical = orientation === "vertical";
   const barLen = giftBarLength(slots);
@@ -617,9 +652,13 @@ export default function GiftFlower({
       ref={barRef}
       className={`gift-bar pointer-events-none relative flex items-center ${vertical ? "gift-bar-v flex-col" : ""}`}
       style={
-        vertical
-          ? { width: BAR_THICK, height: barLen }
-          : { width: barLen, height: BAR_THICK }
+        {
+          ...(vertical
+            ? { width: BAR_THICK, height: barLen }
+            : { width: barLen, height: BAR_THICK }),
+          // badge 透明度：.gift-bar 的底色/彩虹层/边框/阴影按此系数等比缩放（1 = 原观感）
+          "--gift-bar-op": String(Math.min(100, Math.max(0, badgeOpacity)) / 100),
+        } as CSSProperties
       }
     >
       {/* 滚动轨道靠起始端铺满（不居中，否则周期末尾另一端露空白）；

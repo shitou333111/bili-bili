@@ -68,6 +68,19 @@ export default function RootLayout({
         suppressHydrationWarning
       >
       <body className="min-h-full flex flex-col">
+        {/* Web 端：尽早登记 PWA 安装事件。
+            Chrome 的 beforeinstallprompt 可能在 React 挂载前就触发，晚监听会漏掉；
+            这里先 preventDefault 压住浏览器自带的迷你提示，交给 PwaInstallPrompt 卡片
+            在用户点击时调用 prompt() 弹出系统安装对话框。 */}
+        {!isTauriBuild && (
+          <script
+            dangerouslySetInnerHTML={{
+              __html:
+                "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bguaguaInstallPrompt=e;window.dispatchEvent(new Event('bguagua:pwa-installable'));});" +
+                "window.addEventListener('appinstalled',function(){window.__bguaguaInstallPrompt=null;});",
+            }}
+          />
+        )}
         {/* 页面最大宽度 CSS 变量：构建期由 page-config.json（单一源头）静态注入到 :root，
             随初始 HTML 一起下发，避免首帧先用 fallback 宽度渲染、再跳变为设定宽度的布局闪烁 */}
         <style

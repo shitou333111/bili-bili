@@ -5,8 +5,10 @@
  * http://asset.localhost/...，由 convertFileSrc 生成）。
  *
  * 播放分三个阶段（移植自测试页 ghost 变体；loop 编辑预览模式同样完整播放）：
- *  1. 开场：视频由中心一个实心大椭圆向外扩散渐显（CSS @property --anime-ripple，
- *     椭圆两轴均用盒百分比，与任意宽高比的视频同形，71% 半径盖住四角）。
+ *  1. 开场（openingMode 可配置）：ellipse = 视频由中心一个实心大椭圆向外扩散渐显（CSS @property
+ *     --anime-ripple，椭圆两轴均用盒百分比，与任意宽高比的视频同形，71% 半径盖住四角）；
+ *     fade（默认）= 透明度从很低的中间值（0.12）渐入到 1（时长 = 开场时长×1.6，更缓和，
+ *     终点遵循「整体透明」档位）；none = 视频直接显示。
  *  2. 结尾闭合：视频从自身上下边缘向中间被擦除成透明（--anime-curtain 0%→50%），
  *     **完全闭合的瞬间视频正好播放完毕**；黑幕只出现在中间固定区域（头像顶再上 20u ～
  *     昵称底再下 20u，u = 视频显示宽/328），前沿未进入区域时只是透明擦除、不露黑；
@@ -37,10 +39,28 @@
  * Chromium）下会在片段末尾"暂停"而不派发 ended，导致视频永久停在最后一帧。因此叠加
  * timeupdate 兜底：currentTime 接近结束点时同样进入收尾流程，保证画布必然释放。
  * handleEnd 幂等，重复触发只执行一次。
+ *
+ * 结尾的头像昵称（endingMode 可配置，面板「结尾的头像昵称」四选项）：
+ *  - none（无）：动画结束不加额外头像和昵称，视频播完即释放；
+ *  - fade（渐显渐隐）：头像（绿边圆框）与昵称（绿边胶囊）同时渐显、保持 1s、再渐隐；
+ *  - portal（奇异博士传送门，默认）：视频结束后画一个 WebGL 火花圆环（src/lib/portal
+ *    抽取自 SlingTab），头像在圈内随展开度 clip-path 圆形由小到大渐显，昵称胶囊同步
+ *    渐显渐隐，火圈悬停后吹散、圈内内容同步渐隐；
+ *  - curtain（黑幕闭合）：系统原结尾——视频从上下边缘向中间擦除，黑幕内头像随前沿显现，
+ *    昵称做镂空透出直播画面，保持 1s 后整体淡出。
+ * 所有结尾方式中，昵称最大宽度 ≤ 舞台宽 80%（超长时等比缩小字号保证全名完整显示；黑幕镂空
+ * 同样按估算宽度缩字号）。视频本身结尾 1s 渐隐（所有方式生效）。
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { ANIME_OPACITY_ALPHA, type AnimeOpacity, type DisplayEvent } from "@/lib/display/types";
+import {
+  ANIME_OPACITY_ALPHA,
+  type AnimeEnding,
+  type AnimeOpacity,
+  type AnimeOpening,
+  type DisplayEvent,
+} from "@/lib/display/types";
 import { srcWithFragment } from "@/lib/display/video";
+import { PortalFX } from "@/lib/portal/portal";
 import VolumeIcon from "@/components/VolumeIcon";
 
 /** 播放片段结束检测容差（秒）：timeupdate 约 4Hz，留出一次触发间隔的余量 */
@@ -51,13 +71,32 @@ const CLOSE_LEAD = 0.05;
 const HOLD_MS = 1000;
 /** 收尾整体淡出时长（ms） */
 const FADE_MS = 1000;
-/** 开场椭圆扩散时长上限/比例（测试页基准：5.602s 视频开场 2.602s ≈ 46.4%） */
-const OPEN_MAX_SEC = 2.602;
+/** 「渐显渐隐」结尾方式：头像+昵称胶囊渐显/渐隐各用时长（ms），中间保持 HOLD_MS */
+const ENDING_FADE_MS = 800;
+/** 开场椭圆扩散时长上限/比例（测试页基准：5.602s 视频开场 2.602s ≈ 46.4%，上限放宽到 3s） */
+const OPEN_MAX_SEC = 3;
 const OPEN_RATIO = 0.464;
 /** 闭合擦除时长上限（秒），短视频时取 D−E 以保证闭合完成=视频播完 */
 const CLOSE_MAX_SEC = 3;
+/** 视频结尾渐隐时长（秒）：到达结束点前 1s 开始把 video 本身淡出到透明（所有结尾方式生效） */
+const VIDEO_FADE_SEC = 1;
 /** 测试页几何基准宽度（px）：该宽度下 1u = 1px */
 const U_BASE_W = 328;
+/** 昵称最大宽度占舞台宽的比例（所有结尾方式统一 80%，给两侧留边距） */
+const NAME_MAX_W_RATIO = 0.8;
+
+/**
+ * 昵称胶囊字号缩放：估算渲染宽度（非 ASCII ≈1em、ASCII ≈0.62em，每字符 +1u 字距，
+ * 加胶囊 padding 16u×2 + border 2u×2），超过舞台宽 80% 时等比缩小字号与字距，
+ * 保证超长昵称完整显示（不截断省略号）。
+ */
+function namePillScale(uname: string, u: number, stageW: number): number {
+  const fsFull = 33 * u;
+  let est = 2 * 16 * u + 2 * 2 * u;
+  for (const ch of uname) est += (ch.codePointAt(0)! > 0xff ? 1 : 0.62) * fsFull + u;
+  const maxW = stageW * NAME_MAX_W_RATIO;
+  return est > maxW ? maxW / est : 1;
+}
 
 /** XML 文本转义（昵称可能含 & < > "，直接拼进 SVG 会破坏结构） */
 function xmlEscape(s: string): string {
@@ -77,7 +116,15 @@ function xmlEscape(s: string): string {
  * 合法取值（会被丢弃为 normal），只有 mask/filter 能真正扣 alpha。
  */
 function knockMaskImage(w: number, h: number, u: number, uname: string): string {
-  const fs = 33 * u; // 昵称字号（与旧 .anime-name span 一致）
+  // 昵称宽度估算：非 ASCII ≈ 1em、ASCII ≈ 0.62em，加每字符 1u 字距；
+  // 超过舞台宽 80% 时等比缩小字号（字距同步缩），保证全名可见且两侧留边距
+  const fsFull = 33 * u; // 昵称字号（与旧 .anime-name span 一致）
+  let est = 0;
+  for (const ch of uname) est += (ch.codePointAt(0)! > 0xff ? 1 : 0.62) * fsFull + u;
+  const maxW = w * NAME_MAX_W_RATIO;
+  const scale = est > maxW ? maxW / est : 1;
+  const fs = fsFull * scale;
+  const ls = u * scale;
   const y = h / 2 + 21.5 * u; // 文字垂直中心 = 中线 + 5u(顶边) + 33u/2
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
@@ -85,18 +132,29 @@ function knockMaskImage(w: number, h: number, u: number, uname: string): string 
     `<rect x="0" y="0" width="${w}" height="${h}" fill="#fff"/>` +
     `<text x="${w / 2}" y="${y}" text-anchor="middle" dominant-baseline="central"` +
     ` font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif"` +
-    ` font-weight="900" font-size="${fs}" letter-spacing="${u}" fill="#000">${xmlEscape(uname)}</text>` +
+    ` font-weight="900" font-size="${fs}" letter-spacing="${ls}" fill="#000">${xmlEscape(uname)}</text>` +
     `</mask></defs>` +
     `<rect x="0" y="0" width="${w}" height="${h}" fill="#fff" mask="url(#k)"/>` +
     `</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
-/** 头像：face 缺失/加载失败时回退为昵称首字渐变圆（与 EntryBadge 的 Avatar 同视觉） */
-function AnimeAvatar({ face, uname }: { face: string; uname: string }) {
+/** 头像：face 缺失/加载失败时回退为昵称首字渐变圆（与 EntryBadge 的 Avatar 同视觉）。
+ *  className/style 可覆盖：传送门模式改尺寸/位置/clip-path，渐显渐隐模式加绿边圆框。 */
+function AnimeAvatar({
+  face,
+  uname,
+  className,
+  style,
+}: {
+  face: string;
+  uname: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
   const [failed, setFailed] = useState(!face);
   return (
-    <div className="anime-avatar">
+    <div className={className ? `anime-avatar ${className}` : "anime-avatar"} style={style}>
       {!failed && face ? (
         <img src={face} alt="" onError={() => setFailed(true)} />
       ) : (
@@ -116,6 +174,8 @@ export default function VideoOverlay({
   featherV = 0,
   muted = true,
   onMutedChange,
+  endingMode = "portal",
+  openingMode = "fade",
 }: {
   anime: Extract<DisplayEvent, { type: "anime" }>;
   onEnd: () => void;
@@ -133,6 +193,10 @@ export default function VideoOverlay({
   muted?: boolean;
   /** 点击右下角声音按钮时回调：父级更新状态并同步各端（画布/面板/主进程） */
   onMutedChange?: (muted: boolean) => void;
+  /** 结尾的头像昵称方式：none=无 / fade=渐显渐隐 / portal=奇异博士传送门 / curtain=黑幕闭合 */
+  endingMode?: AnimeEnding;
+  /** 开场方式：none=无（视频直接显示）/ fade=渐显（从中间透明度渐入，终点遵循整体透明档位）/ ellipse=椭圆拓展 */
+  openingMode?: AnimeOpening;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -182,6 +246,18 @@ export default function VideoOverlay({
   const [gen, setGen] = useState(0);
   // 预览重播代际：loop 模式淡出后递增，整段重挂载（含外层，瞬时复位透明度）再播一遍
   const [replaySeq, setReplaySeq] = useState(0);
+  // 结尾头像昵称方式（ref 供 handleEnd 读取，避免进依赖导致中途重跑复位 effect）
+  const endingModeRef = useRef<AnimeEnding>(endingMode);
+  useEffect(() => { endingModeRef.current = endingMode; }, [endingMode]);
+  // 传送门结尾：激活态 + 火圈开合进度（PortalFX onOpen 回传 0..1）
+  const [portalActive, setPortalActive] = useState(false);
+  const [portalOpen, setPortalOpen] = useState(0);
+  // 渐显渐隐结尾：show=渐显+保持 / hide=渐隐
+  const [endingPhase, setEndingPhase] = useState<"show" | "hide" | null>(null);
+  // 视频结尾渐隐（state 触发 CSS transition，ref 防 onTimeUpdate 每帧重复置位）
+  const [videoFading, setVideoFading] = useState(false);
+  const videoFadingRef = useRef(false);
+  const portalCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // 新的 anime 事件 → 递增代际（初始挂载也触发一次，无副作用）
   useEffect(() => {
@@ -196,26 +272,62 @@ export default function VideoOverlay({
     setClosing(false);
     endingRef.current = false;
     closingRef.current = false;
+    // 结尾头像昵称/视频渐隐状态一并复位（预览重播整段干净重来）
+    setPortalActive(false);
+    setPortalOpen(0);
+    setEndingPhase(null);
+    setVideoFading(false);
+    videoFadingRef.current = false;
     setReplaySeq((s) => s + 1);
   }, []);
+
+  // 收尾统一出口：delayMs 后整体淡出→复位(预览)/释放画布(正式)
+  const release = useCallback(
+    (delayMs: number) => {
+      endTimersRef.current.push(
+        setTimeout(() => {
+          setFadeOut(true);
+          endTimersRef.current.push(
+            setTimeout(() => {
+              if (loopRef.current) restart();
+              else onEndRef.current();
+            }, FADE_MS),
+          );
+        }, delayMs),
+      );
+    },
+    [restart],
+  );
 
   const handleEnd = useCallback(() => {
     if (endingRef.current) return;
     endingRef.current = true;
-    // 闭合完成（≈视频播完）→ 黑幕+头像昵称保持 1s → 整体淡出 1s
-    // 预览模式：淡出后复位整段重播；正常播放：释放画布
-    endTimersRef.current.push(
-      setTimeout(() => {
-        setFadeOut(true);
+    switch (endingModeRef.current) {
+      case "curtain":
+        // 黑幕闭合：闭合完成（≈视频播完）→ 黑幕+头像昵称保持 1s → 整体淡出 1s
+        release(HOLD_MS);
+        break;
+      case "portal": {
+        // 奇异博士传送门：激活火圈序列，onDone（火花熄灭后）统一收口
+        setPortalActive(true);
+        break;
+      }
+      case "fade":
+        // 渐显渐隐：头像+昵称渐显 → 保持 HOLD_MS → 渐隐 ENDING_FADE_MS 后收口
+        setEndingPhase("show");
         endTimersRef.current.push(
           setTimeout(() => {
-            if (loopRef.current) restart();
-            else onEndRef.current();
-          }, FADE_MS),
+            setEndingPhase("hide");
+            release(ENDING_FADE_MS);
+          }, ENDING_FADE_MS + HOLD_MS),
         );
-      }, HOLD_MS),
-    );
-  }, [restart]);
+        break;
+      case "none":
+      default:
+        release(0);
+        break;
+    }
+  }, [release]);
 
   useEffect(() => {
     setFadeOut(false);
@@ -226,6 +338,12 @@ export default function VideoOverlay({
     endSecRef.current = 0;
     endTimersRef.current.forEach(clearTimeout);
     endTimersRef.current = [];
+    // 结尾头像昵称/视频渐隐状态复位（新一轮播放/视频变更）
+    setPortalActive(false);
+    setPortalOpen(0);
+    setEndingPhase(null);
+    setVideoFading(false);
+    videoFadingRef.current = false;
     // 视频变更/新一轮播放时复位播放源（回到用户片段或整段初始，等待 loadedmetadata 再决定是否截尾 30s）
     setDisplaySrc(
       userSegmented ? srcWithFragment(anime.videoSrc, anime.startSec, anime.endSec) : anime.videoSrc,
@@ -247,6 +365,33 @@ export default function VideoOverlay({
       }
     };
   }, [anime.videoSrc, userSegmented, anime.startSec, anime.endSec, loop, handleEnd, gen]);
+
+  // 传送门结尾：激活时创建 PortalFX 跑完整序列（点燃→开圈→保持→消散）。
+  // onDone 时火花已自然衰减完毕（portal.ts 会继续渲染至火花数为 0 才停帧），
+  // 此刻统一走整体淡出收口。effect 卸载（重播/换事件/组件销毁）时直接 dispose。
+  useEffect(() => {
+    if (!portalActive) return;
+    const cv = portalCanvasRef.current;
+    // 画布未挂载（视频加载失败等 fx=false 场景）或盒尺寸未测得：直接收口，避免画布永久滞留
+    if (!cv || boxW <= 0 || boxH <= 0) {
+      release(0);
+      return;
+    }
+    const u = boxW / U_BASE_W;
+    const fx = new PortalFX(
+      cv,
+      { cx: boxW / 2, cy: boxH / 2 - 16 * u, radius: 38 * u },
+      {
+        onOpen: (o) => setPortalOpen(o),
+        onDone: () => release(0),
+      },
+    );
+    fx.resize(boxW, boxH, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+    fx.start();
+    return () => {
+      fx.dispose();
+    };
+  }, [portalActive, boxW, boxH, gen, replaySeq, release]);
 
   // 测量舞台实际盒宽 → --u（几何缩放单位），ResizeObserver 应对布局拖动/缩放
   useEffect(() => {
@@ -300,7 +445,7 @@ export default function VideoOverlay({
   const fh = Math.min(40, Math.max(0, Math.round(featherH)));
   const fv = Math.min(40, Math.max(0, Math.round(featherV)));
   const maskLayers = [
-    ...(fx ? [wipeMask] : []),
+    ...(fx && endingMode === "curtain" ? [wipeMask] : []),
     fh > 0
       ? `linear-gradient(to right, transparent 0%, #000 ${fh}%, #000 ${100 - fh}%, transparent 100%)`
       : null,
@@ -348,25 +493,46 @@ export default function VideoOverlay({
       : {}),
   };
 
+  // 昵称胶囊字号缩放（portal/fade 两种模式共用）：超舞台宽 80% 时等比缩小字号与字距，
+  // 保证超长昵称完整显示（不再省略号截断）。盒宽未测得前不挂内联字号，沿用 CSS 默认。
+  const pillU = boxW > 0 ? boxW / U_BASE_W : 0;
+  const namePillScaleV = namePillScale(anime.user.uname, pillU, boxW);
+  const namePillStyle: CSSProperties | undefined =
+    boxW > 0
+      ? { fontSize: `${33 * pillU * namePillScaleV}px`, letterSpacing: `${pillU * namePillScaleV}px` }
+      : undefined;
+
   // 开场椭圆扩散 mask：中心实心大椭圆，横/纵半径都用 --anime-ripple（百分比分别按盒宽/盒高
   // 解析，故与视频同形）；内边缘收 6u 做轻微羽化。注意：渐变 stop 的百分比是相对「渐变射线」
   // 长度（= 椭圆边界在该方向的半径），不是相对盒子尺寸——所以边界处的 stop 必须写 100%（写
   // --anime-ripple 会把实心区缩到 ripple²，椭圆偏小、四角被遮）。椭圆外透明 → 开场渐显。
   const rippleMask =
     "radial-gradient(ellipse var(--anime-ripple) var(--anime-ripple) at 50% 50%, #000 0, #000 max(0%, calc(100% - 6 * var(--u))), transparent 100%)";
-  // 开场扩散 ∩ 整体透明度：两层 mask 显式取交集（alpha 乘性叠加）。遮罩只挂在包视频的
-  // 包裹层上，不加在 MovableBox/wrapper 上，否则编辑虚线框、缩放把手、声音按钮
-  // 也会跟着透明（黑幕容器单独用 opacity 挂同一档位）。
-  const rippleLayers = [rippleMask, alphaMask].join(", ");
-  const wrapStyle: CSSProperties | undefined = fx
-    ? {
-        animation: `anime-ripple-open ${timing.eMs}ms cubic-bezier(.4,0,.2,1) both`,
-        maskImage: rippleLayers,
-        WebkitMaskImage: rippleLayers,
-        maskComposite: "intersect",
-        WebkitMaskComposite: "source-in",
-      }
-    : undefined;
+  // 开场方式（openingMode）三态：
+  //  - ellipse（椭圆拓展）：中心大椭圆向外扩散（--anime-ripple 动画）∩ 整体透明度（两层 mask 交集）；
+  //  - fade（渐显，默认）：无形状遮罩，透明度从很低的 0.12 渐入到 1（不从 0 起），时长 = 开场时长×1.6；
+  //    mask 的整体透明档位始终生效 → 最终观感遵循「整体透明」设置；
+  //  - none（无）：视频直接显示，只挂整体透明度 mask，无开场动画。
+  const wrapStyle: CSSProperties | undefined = !fx
+    ? undefined
+    : openingMode === "ellipse"
+      ? {
+          animation: `anime-ripple-open ${timing.eMs}ms cubic-bezier(.4,0,.2,1) both`,
+          maskImage: [rippleMask, alphaMask].join(", "),
+          WebkitMaskImage: [rippleMask, alphaMask].join(", "),
+          maskComposite: "intersect",
+          WebkitMaskComposite: "source-in",
+        }
+      : openingMode === "fade"
+        ? {
+            animation: `anime-open-fade ${Math.round(timing.eMs * 1.6)}ms ease both`,
+            maskImage: alphaMask,
+            WebkitMaskImage: alphaMask,
+          }
+        : {
+            maskImage: alphaMask,
+            WebkitMaskImage: alphaMask,
+          };
 
   // 头像+昵称的 reveal mask：仅「黑幕区域内、已被上下擦除前沿扫过的部分」可见。
   // 黑幕区域：中线−85u（头像顶再上 20u）～ 中线+58u（昵称底再下 20u）。
@@ -401,7 +567,12 @@ export default function VideoOverlay({
               muted={muted}
               playsInline
               className="w-full h-full object-contain"
-              style={videoMaskStyle}
+              style={{
+                ...videoMaskStyle,
+                // 视频结尾渐隐：进入结束前 1s 由 onTimeUpdate 触发，线性淡出到 0
+                transition: `opacity ${VIDEO_FADE_SEC}s linear`,
+                opacity: videoFading ? 0 : 1,
+              }}
               onLoadStart={() => logVideoEvent("loadstart")}
               onLoadedMetadata={() => {
                 // 视频已成功加载：取消 6s 兜底释放，避免截断正常的长视频
@@ -420,7 +591,7 @@ export default function VideoOverlay({
                     : el.duration > 30
                       ? Math.max(0, el.duration - 30)
                       : 0;
-                  // 按有效时长动态计算开场/闭合时长：E = min(2.602, 46.4%D)，
+                  // 按有效时长动态计算开场/闭合时长：E = min(3, 46.4%D)，
                   // C = min(3, D−E)，保证闭合完成时刻 = 视频结束时刻
                   const d = Math.max(0.1, end - start);
                   const eSec = Math.min(OPEN_MAX_SEC, OPEN_RATIO * d);
@@ -452,10 +623,19 @@ export default function VideoOverlay({
                 if (!el) return;
                 const end = endSecRef.current;
                 if (end <= 0) return;
-                // 到达闭合起点（视频结束前 C 秒）：一次性启动闭合擦除动画
-                if (!closingRef.current && el.currentTime >= end - timing.cMs / 1000 - CLOSE_LEAD) {
+                // 到达闭合起点（视频结束前 C 秒）：一次性启动闭合擦除动画（仅黑幕闭合模式）
+                if (
+                  endingMode === "curtain" &&
+                  !closingRef.current &&
+                  el.currentTime >= end - timing.cMs / 1000 - CLOSE_LEAD
+                ) {
                   closingRef.current = true;
                   setClosing(true);
+                }
+                // 视频结尾渐隐：进入结束前 1s 一次性触发（CSS transition 线性淡出到 0）
+                if (!videoFadingRef.current && end > VIDEO_FADE_SEC && el.currentTime >= end - VIDEO_FADE_SEC) {
+                  videoFadingRef.current = true;
+                  setVideoFading(true);
                 }
                 // 兜底结束检测：媒体片段在部分内核下暂停而不派发 ended，
                 // currentTime 到达结束点附近时同样进入收尾（保持1s/淡出1s/释放）
@@ -470,7 +650,7 @@ export default function VideoOverlay({
               onError={handleVideoError}
             />
           </div>
-          {fx && (
+          {fx && endingMode === "curtain" && (
             <>
               {/* 黑幕：上下各一条，只在中间固定区域内随擦除前沿长起（形状与之前一致）。
                   整体套当前档位的中心不透明度 → 黑幕均匀半透明、透出下层画面。 */}
@@ -488,6 +668,52 @@ export default function VideoOverlay({
                 <AnimeAvatar face={anime.user.face} uname={anime.user.uname} />
               </div>
             </>
+          )}
+          {fx && endingMode === "portal" && portalActive && (
+            <>
+              {/* 传送门火圈画布：PortalFX 按舞台盒尺寸绘制完整序列 */}
+              <canvas ref={portalCanvasRef} className="anime-portal-canvas" />
+              {/* 头像：随火圈开合进度 circle 裁剪放大 + 渐显（圆心与火圈一致） */}
+              <AnimeAvatar
+                face={anime.user.face}
+                uname={anime.user.uname}
+                style={{
+                  width: `calc(76 * var(--u))`,
+                  height: `calc(76 * var(--u))`,
+                  top: `calc(50% - 16 * var(--u))`,
+                  clipPath: `circle(${(portalOpen * 50).toFixed(2)}% at 50% 50%)`,
+                  opacity: portalOpen,
+                }}
+              />
+              {/* 昵称胶囊：与头像同步渐显（portalOpen 驱动） */}
+              <div
+                className="anime-name-pill"
+                style={{
+                  top: `min(calc(50% + 46 * var(--u)), calc(100% - 56 * var(--u)))`,
+                  opacity: portalOpen,
+                  ...namePillStyle,
+                }}
+              >
+                {anime.user.uname}
+              </div>
+            </>
+          )}
+          {fx && endingMode === "fade" && endingPhase && (
+            // 渐显渐隐：整组挂载即播 show 动画（both 从 0 起），hide 换动画名端点衔接
+            <div
+              className="anime-end-fade"
+              style={{
+                animation:
+                  endingPhase === "show"
+                    ? `anime-end-show ${ENDING_FADE_MS}ms ease both`
+                    : `anime-end-hide ${ENDING_FADE_MS}ms ease both`,
+              }}
+            >
+              <AnimeAvatar face={anime.user.face} uname={anime.user.uname} className="anime-avatar-bordered" />
+              <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
+                {anime.user.uname}
+              </div>
+            </div>
           )}
         </div>
       ) : (
