@@ -63,8 +63,11 @@ export default function SafeAreaStyler() {
         safeTop = "env(safe-area-inset-top, 24px)";
         safeBottom = "env(safe-area-inset-bottom, 8px)";
         dockBottom = "16px";
-        // 移动端浏览器（尤其"添加到主屏幕"后的独立窗口）：托盘栏避开 Home Indicator / 手势条
-        dockSafe = "env(safe-area-inset-bottom, 0px)";
+        // iOS（含"添加到主屏幕"后的独立 PWA）：与 iOS 客户端保持一致，托盘栏不额外避让
+        // Home Indicator。本项目 viewport-fit:cover，内容已延伸到屏幕底边；若托盘再上移
+        // env(safe-area-inset-bottom)（约 34px），底部就会露出一条页面背景横条（真机仅苹果复现）。
+        // Android 仍需避让虚拟导航栏（edge-to-edge 下托盘会被盖住）。
+        dockSafe = isAndroid ? "env(safe-area-inset-bottom, 0px)" : "0px";
         activityTop = "80px";
       } else {
         // 桌面浏览器：与桌面 Tauri 保持一致，避免模拟器底部一行贴边

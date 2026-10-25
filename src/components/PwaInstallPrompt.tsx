@@ -50,18 +50,20 @@ export default function PwaInstallPrompt() {
           </svg>
         </button>
 
-        <div className="flex items-start gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/icon-192.png"
-            alt="B瓜"
-            width={44}
-            height={44}
-            className="mt-0.5 h-11 w-11 shrink-0 rounded-[12px] shadow-[0_4px_12px_rgba(0,0,0,0.16)]"
-          />
-          <div className="min-w-0 flex-1 pr-5">
-            <p className="text-[15px] font-semibold leading-5 text-[#1f1c17]">强烈建议把B瓜添加到主屏幕</p>
-            <p className="mt-1 text-[12.5px] leading-[18px] text-black/55">
+        <div className="min-w-0 pr-5">
+          {/* 标题行：缩小后的头像与标题同行 */}
+          <div className="flex items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/icon-192.png"
+              alt="B瓜"
+              width={24}
+              height={24}
+              className="h-6 w-6 shrink-0 rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.16)]"
+            />
+            <p className="truncate text-[15px] font-semibold leading-5 text-[#1f1c17]">强烈建议把B瓜添加到主屏幕</p>
+          </div>
+          <p className="mt-1.5 text-[12.5px] leading-[18px] text-black/55">
               {mode === "ios" ? (
                 <>
                   使用苹果系统浏览器Safari，点击浏览器工具栏的共享按钮
@@ -99,7 +101,6 @@ export default function PwaInstallPrompt() {
                 </button>
               )}
             </div>
-          </div>
         </div>
       </div>
     </div>
