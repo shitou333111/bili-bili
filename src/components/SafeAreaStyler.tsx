@@ -26,6 +26,9 @@ export default function SafeAreaStyler() {
     const isAndroid = /Android/.test(ua);
     const isTauri =
       typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    // iOS Safari 专有：true = 已"添加到主屏幕"，当前在独立 PWA 窗口里运行（没有地址栏）
+    const isStandalone =
+      isIOS && (navigator as Navigator & { standalone?: boolean }).standalone === true;
 
     let safeTop = "0px";
     let safeBottom = "0px";
@@ -62,10 +65,13 @@ export default function SafeAreaStyler() {
       if (isIOS || isAndroid) {
         safeTop = "env(safe-area-inset-top, 24px)";
         safeBottom = "env(safe-area-inset-bottom, 8px)";
-        dockBottom = "16px";
-        // iOS（含"添加到主屏幕"后的独立 PWA）：与 iOS 客户端保持一致，托盘栏不额外避让
-        // Home Indicator。本项目 viewport-fit:cover，内容已延伸到屏幕底边；若托盘再上移
-        // env(safe-area-inset-bottom)（约 34px），底部就会露出一条页面背景横条（真机仅苹果复现）。
+        // 独立 PWA（主屏 Web App）没有 Safari 地址栏，可视区一直铺到屏幕物理底边，
+        // 托盘若沿用 Safari 的 16px 就会压到 Home Indicator 上（"过于靠下"）。
+        // 这里与 iOS 客户端 APP 取同一个值（24px），两边视觉高度一致。
+        dockBottom = isStandalone ? "24px" : "16px";
+        // iOS（含"添加到主屏幕"后的独立 PWA）：托盘栏不额外避让 Home Indicator，
+        // 与 iOS 客户端保持一致。本项目 viewport-fit:cover，内容已延伸到屏幕底边；
+        // 若托盘再上移 env(safe-area-inset-bottom)（约 34px），底部就会露出一条页面背景横条。
         // Android 仍需避让虚拟导航栏（edge-to-edge 下托盘会被盖住）。
         dockSafe = isAndroid ? "env(safe-area-inset-bottom, 0px)" : "0px";
         activityTop = "80px";
@@ -84,16 +90,16 @@ export default function SafeAreaStyler() {
     doc.style.setProperty("--dock-safe", dockSafe);
     doc.style.setProperty("--activity-top", activityTop);
 
-    // iOS 独立 PWA（主屏 Web App）底部系统条带融合：
-    // iOS 26.1+ 存在 WebKit bug（bugs.webkit.org 301994）——独立 PWA 中系统在 web 渲染层
-    // 之外保留一条底部区域（约 34~62px），由系统绘制、任何 DOM 都无法覆盖，且其颜色取自
-    // 页面背景的缓存（重启 PWA 后才更新）。页面主体是白色内容，#f5f5f5 的系统条就会在
-    // 底部形成一条突兀的"背景横条"。html/body 的 --background 是该处唯一可见的底色，
-    // 因此仅在 iOS 独立 PWA 下把它改成与内容一致的白色，让条带在视觉上融合。
-    // navigator.standalone 是 iOS Safari 专有（true=已"添加到主屏幕"），其他平台不存在，
-    // 浏览器标签页与安卓/桌面均不受影响。
-    if (isIOS && (navigator as Navigator & { standalone?: boolean }).standalone === true) {
-      doc.style.setProperty("--background", "#ffffff");
+    // iOS Web 底部地址栏（Liquid Glass）的正确观感 = 半透明玻璃 + 随文档滚动自动收缩。
+    // 它不靠 theme-color，也不靠给底栏"上色"，而是要求：
+    //   ① 文档本身可滚动（见 globals.css 的 html.ios-web 规则，解除 html/body 的锁高）；
+    //   ② 根背景不能是平涂色，否则 Safari 在采样不到内容时会退回这块颜色，把地址栏涂成一条灰带。
+    // 这里只负责挂开关 + 把根背景设为透明；外壳高度/滚动方式交给 globals.css。
+    // 独立 PWA（主屏 Web App）没有 Safari 工具栏，规则不生效，行为与之前一致。
+    const iosWeb = isIOS && !isTauri;
+    if (iosWeb) {
+      doc.classList.add("ios-web");
+      doc.style.setProperty("--background", "transparent");
     }
 
     // ===== 视口宽度自适应缩放 =====
@@ -121,19 +127,25 @@ export default function SafeAreaStyler() {
     // 因此外壳高度以 visualViewport.height 为准，innerHeight 只做兜底。
     // 例外：软键盘弹出时 visualViewport 会缩小而 innerHeight 不变，此时保留 innerHeight，
     //       避免输入时整页被压扁；双指缩放（scale>1）时 visualViewport 同样不能用于布局。
-    // 例外：iOS（含独立 PWA）visualViewport.height 不含 Home Indicator 遮盖的约 34px，
-    //       但本项目 viewport-fit:cover，该区域内容实际完全可见——若按"被遮挡"处理，
-    //       外壳会矮 34px（底部露出页面背景横条），托盘还会被 --view-hidden-bottom
-    //       再抬高 34px。故 iOS 直接信 innerHeight，此实测仅供安卓 edge-to-edge 使用。
+    // 例外：iOS（Safari 标签页与独立 PWA 均是）——iOS 26 上 innerHeight 与 visualViewport
+    //       互相矛盾（WebKit bug 292603 / 312149），任何 JS 实测都无法自洽。
+    //       两者现在都改用文档级滚动，外壳高度由 CSS 的 min-height: 100lvh 决定
+    //       （见 globals.css），因此 iOS 下不再注入 --app-height。
     const KEYBOARD_GAP = 150;
     const applyViewport = () => {
       // 先算缩放：下面的高度/避让值都要除以它，换算回"被缩放的 CSS 像素"空间
       const zoom = applyZoom(window.innerWidth || 0);
+      if (iosWeb) {
+        // iOS Web 已改用文档级滚动，外壳高度由 CSS 的 min-height: 100lvh 决定，
+        // 不再需要 JS 注入外壳高度；托盘只用 CSS 的 bottom 锚定，也无需避让被遮挡区。
+        doc.style.setProperty("--view-hidden-bottom", "0px");
+        return;
+      }
       const vv = window.visualViewport;
       const innerH = window.innerHeight || 0;
       let height = innerH;
       let hiddenBottom = 0;
-      if (!isIOS && vv && vv.height > 0 && vv.scale <= 1.05) {
+      if (vv && vv.height > 0 && vv.scale <= 1.05) {
         // 被遮住的底部高度（layout viewport 底边 - 可视区底边）
         const gap = Math.round(innerH - (vv.offsetTop + vv.height));
         if (gap >= 0 && gap < KEYBOARD_GAP) {
@@ -157,8 +169,10 @@ export default function SafeAreaStyler() {
       window.removeEventListener("orientationchange", applyViewport);
       window.visualViewport?.removeEventListener("resize", applyViewport);
       window.visualViewport?.removeEventListener("scroll", applyViewport);
+      doc.classList.remove("ios-web");
     };
   }, []);
 
+  // 本组件不渲染任何 DOM：iOS Web 的底栏透明化完全由 globals.css 的 html.ios-web 规则完成
   return null;
 }

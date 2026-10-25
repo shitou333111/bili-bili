@@ -170,6 +170,39 @@ html.display-edit-open .bottom-dock-container {
   isolation: isolate; /* 强制创建独立层叠上下文，防止 iOS Safari 上层元素覆盖点击区域 */
 }
 
+/* ===== iOS Web：把滚动交还给「文档」本身 =====
+   参考 apple.com 的正确现象：底部地址栏四周是半透明的玻璃，向下滑动时它会自动收缩成小胶囊。
+   这是 Safari 的原生 chrome 行为，前提是「文档」在滚动——它只有跟着文档滚动才会收缩，
+   并且玻璃背后要能看到真实的页面像素。
+
+   本项目此前为了修「底部色带 + 文档可滚动被顶进状态栏」，把 html/body 锁成
+   height: 100dvh + overflow: hidden，只让 .page-scroll-area 内层滚动。副作用就是：
+     ① 文档永远不滚 → 地址栏永远保持展开，不会收缩；
+     ② 玻璃背后只有画布底色，没有真实内容 → 表现为一条平涂的背景横条。
+   因此这里单独给 iOS Web 解除锁定（其余平台保持原锁高架构，零影响）：
+   文档高度由内容撑开，最小为 100lvh（让工具栏收起/展开都有足够的滚动余量）。 */
+html.ios-web.app-shell,
+html.ios-web.app-shell > body,
+html.ios-web:has(.page-main),
+html.ios-web body:has(> .page-main) {
+  height: auto;
+  min-height: 100lvh;
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+
+/* 外壳与内容区跟随文档自然高度（.page-main 不再锁高，滚动层不再内部滚动） */
+html.ios-web .page-main {
+  height: auto;
+  min-height: 100lvh;
+}
+
+html.ios-web .page-scroll-area {
+  flex: 0 0 auto;
+  /* 覆盖 Tailwind 的 overflow-y-auto / overflow-x-hidden，滚动交给文档 */
+  overflow: visible;
+}
+
 /* 2. 苹果毛玻璃胶囊托盘（完全参照参考代码改编） */
 .bottom-dock {
   position: relative;
@@ -209,6 +242,28 @@ html.display-edit-open .bottom-dock-container {
   filter: blur(10px);
   z-index: -1;
   pointer-events: none; /* 防止 iOS WebKit 上层叠上下文覆盖按钮点击区域 */
+}
+
+/* iOS Web：光晕保持改动前的观感，只把下沿往里收
+   底栏变成半透明玻璃后，页面下方不再有平涂底色掩盖光晕的边缘，原来的写法就露馅了：
+   inset:-2px + filter:blur(10px) 的高斯尾巴会向下延伸约 20~30px，而托盘只离可视区底边 16px
+   （--dock-bottom），越过底边的部分被裁掉 → 出现一条分明的水平截断。
+   这里不做任何遮罩（遮罩会把发光层整个框住，光晕反而消失），只把发光层的下沿上收 6px：
+   尾巴最远到不了可视区底边，自然衰减完毕；而收上去的那一截被托盘本体的胶囊完全挡住，
+   所以上下左右的辉光强度与改动前完全一致。仅 iOS Web 生效，其他平台保持原样。 */
+html.ios-web .bottom-dock::before {
+  inset: -2px -2px 6px -2px;
+}
+
+/* iOS Web：托盘投影必须收短
+   .bottom-dock 原投影是 0 12px 40px rgba(0,0,0,.2)：模糊 40px（σ≈20），投影矩形下沿在胶囊
+   之下 12px，要往下 70px 才衰减完；而胶囊离可视区底边只有 16px，fixed 元素超出可视区的部分
+   被裁 → 在可视区底边处留下一道灰色水平硬边（该处浓度仍有约 9%，肉眼就是"badge 底部的
+   灰色边界"）。之前光晕更大更亮时把这段盖住了，光晕收回原位后就露了出来。
+   这里把投影压到 10px 模糊（尾巴 12px 内基本衰减完），顶部高光保留；
+   "悬浮"的观感仍由霓虹光晕承担。仅 iOS Web，其他平台保持原投影。 */
+html.ios-web .bottom-dock {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), inset 0 1px rgba(255, 255, 255, 0.6);
 }
 
 /* 4. 托盘内部按钮 */
