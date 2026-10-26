@@ -91,16 +91,15 @@ export default function SafeAreaStyler() {
     doc.style.setProperty("--activity-top", activityTop);
 
     // iOS Web 底部地址栏（Liquid Glass）的正确观感 = 半透明玻璃 + 随文档滚动自动收缩。
-    // 它不靠 theme-color，也不靠给底栏"上色"，而是要求：
-    //   ① 文档本身可滚动（见 globals.css 的 html.ios-web 规则，解除 html/body 的锁高）；
-    //   ② 根背景不能是平涂色，否则 Safari 在采样不到内容时会退回这块颜色，把地址栏涂成一条灰带。
-    // 这里只负责挂开关 + 把根背景设为透明；外壳高度/滚动方式交给 globals.css。
-    // 独立 PWA（主屏 Web App）没有 Safari 工具栏，规则不生效，行为与之前一致。
+    // 它不靠 theme-color，也不靠给底栏"上色"，而是要求文档本身可滚动
+    // （见 globals.css 的 html.ios-web 规则，解除 html/body 的锁高）。
+    // 根背景保持页面底色 #f5f5f5 不动：之前试过改成 transparent，底部确实不再发灰，
+    // 但 Safari 顶部的状态栏/工具栏在采样不到固定元素时会退回根背景色，
+    // 透明根背景会被它当成"没有颜色"，于是顶部那一条被画成白色。
+    // 页面内容（.page-main）本来就不透明，底栏玻璃后面有真实像素可采样，不需要再动根背景。
+    // 独立 PWA（主屏 Web App）没有 Safari 工具栏，此开关只影响文档滚动方式。
     const iosWeb = isIOS && !isTauri;
-    if (iosWeb) {
-      doc.classList.add("ios-web");
-      doc.style.setProperty("--background", "transparent");
-    }
+    if (iosWeb) doc.classList.add("ios-web");
 
     // ===== 视口宽度自适应缩放 =====
     // 窗口宽度不足 MIN_WIDTH 时把整份 UI 等比缩小（zoom 是布局级缩放，比 transform:scale

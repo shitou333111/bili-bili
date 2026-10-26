@@ -203,6 +203,41 @@ html.ios-web .page-scroll-area {
   overflow: visible;
 }
 
+/* ===== iOS 独立 PWA：吸顶导航条避让状态栏 =====
+   文档级滚动后，sticky 的 top 相对「可视区顶部」：
+     · Safari 标签页里可视区顶部本就在地址栏之下（顶部那段由浏览器自己绘制），top:0 正好；
+     · 独立 PWA 没有地址栏，可视区顶部 = 屏幕物理顶边，状态栏（时间/电量）就压在上面，
+       于是分段导航条一吸顶就钻进状态栏区域。
+   这里只在独立 PWA 把吸顶位置下移到顶部安全区（与 .page-main 的 padding-top 同一来源）。
+   只作用于打了 .nav-sticky 标记的两个分段导航条；表格里的 sticky 表头在各自的滚动容器内，
+   top 相对的是那个容器而不是可视区，不受影响。 */
+@media (display-mode: standalone) {
+  html.ios-web .nav-sticky {
+    top: var(--safe-top, 0px);
+  }
+}
+
+/* ===== iOS 独立 PWA：状态栏那一条的固定底色 =====
+   吸顶导航条让开状态栏之后，滚动中的页面内容会从状态栏那一条缝里穿过。这里固定一条与页面
+   同色的底（#f5f5f5，和页面背景、吸顶条的 bg-[#f5f5f5]/95 一致），让这条缝看起来像原生
+   状态栏区域。
+   层级放在 .page-scroll-area 自己的层叠上下文内（它 z-index:0），取 40 —— 高于普通内容和
+   吸顶条（z-10），低于弹窗（z-50，全屏弹窗顶部不会被切掉）。pointer-events:none 让顶部
+   区域的点击/点状态栏回顶不受影响。仅在独立 PWA 生效。 */
+@media (display-mode: standalone) {
+  html.ios-web .page-scroll-area::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--safe-top, 0px);
+    background: #f5f5f5;
+    pointer-events: none;
+    z-index: 40;
+  }
+}
+
 /* 2. 苹果毛玻璃胶囊托盘（完全参照参考代码改编） */
 .bottom-dock {
   position: relative;

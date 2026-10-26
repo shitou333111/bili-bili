@@ -68,11 +68,10 @@ export default function RootLayout({
         suppressHydrationWarning
       >
       <body className="min-h-full flex flex-col">
-        {/* iOS Web 首帧预置：必须在第一帧绘制之前给 html 打上 ios-web 类、并把根背景透明化。
-            这些状态原本只由 SafeAreaStyler 在 useEffect 里设置，而 useEffect 在首帧之后才执行：
-            独立 PWA 冷启动会先按「锁定外壳」渲染（html/body 锁高 + 根背景 #f5f5f5），
-            底部于是先露出一条背景条，挂载后才切换成文档级滚动 + 透明背景（闪变）。
-            判定条件与 SafeAreaStyler 内的 iosWeb / dockBottom 保持一致。 */}
+        {/* iOS Web 首帧预置：必须在第一帧绘制之前给 html 打上 ios-web 类。
+            这个状态原本只由 SafeAreaStyler 在 useEffect 里设置，而 useEffect 在首帧之后才执行：
+            独立 PWA 冷启动会先按「锁定外壳」渲染（html/body 锁高），底部于是先露出一条背景条，
+            挂载后才切换成文档级滚动（闪变）。判定条件与 SafeAreaStyler 内的 iosWeb 保持一致。 */}
         {!isTauriBuild && (
           <script
             dangerouslySetInnerHTML={{
@@ -81,7 +80,6 @@ export default function RootLayout({
                 "if(!/iPad|iPhone|iPod/.test(ua)||('__TAURI_INTERNALS__' in window))return;" +
                 "var d=document.documentElement;" +
                 "d.classList.add('ios-web');" +
-                "d.style.setProperty('--background','transparent');" +
                 "if(navigator.standalone===true)d.style.setProperty('--dock-bottom','24px');" +
                 "})();",
             }}
