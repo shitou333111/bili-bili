@@ -491,18 +491,65 @@ export async function readAccountNoRevenue(mid: number, uname: string): Promise<
  *  状态会自动跟随变化，无需额外置位。 */
 export type StreamerStatus = "streamer" | "non-streamer" | "unknown";
 
+/** 判定主播状态时只读取记录文件的头部字节：收益记录文件可达数十 MB，
+ *  全量 readFile + JSON.parse 会让 admin 用户列表/统计接口按用户数线性变慢。 */
+const STREAMER_PEEK_BYTES = 8 * 1024;
+
+/** 读取文件头部（返回 text 与是否已读到文件末尾）。文件不存在返回 null。 */
+async function readFileHead(
+  file: string,
+  maxBytes: number,
+): Promise<{ text: string; whole: boolean } | null> {
+  let fh: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    fh = await fs.open(file, "r");
+    const buf = Buffer.alloc(maxBytes);
+    const { bytesRead } = await fh.read(buf, 0, maxBytes, 0);
+    return { text: buf.toString("utf8", 0, bytesRead), whole: bytesRead < maxBytes };
+  } catch {
+    return null;
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
 export async function readAccountStreamerStatus(mid: number, uname: string): Promise<StreamerStatus> {
   const dir = getUserDataDir(mid, uname);
-  try {
-    const raw = await fs.readFile(path.join(dir, "anchor-gifts-records.json"), "utf8");
-    const parsed = JSON.parse(raw) as { noRevenue?: boolean; records?: unknown[]; total_count?: number };
-    if (parsed && typeof parsed === "object") {
-      const recordCount = Array.isArray(parsed.records) ? parsed.records.length : 0;
-      if (recordCount > 0 || (typeof parsed.total_count === "number" && parsed.total_count > 0)) return "streamer";
-      if (parsed.noRevenue === true) return "non-streamer";
+  const file = path.join(dir, "anchor-gifts-records.json");
+  const peek = await readFileHead(file, STREAMER_PEEK_BYTES);
+  if (peek) {
+    const { text, whole } = peek;
+    if (whole) {
+      // 小文件（无收益记录时通常只有几 KB）：直接解析，与原逻辑等价
+      try {
+        const parsed = JSON.parse(text) as { noRevenue?: boolean; records?: unknown[]; total_count?: number };
+        if (parsed && typeof parsed === "object") {
+          const recordCount = Array.isArray(parsed.records) ? parsed.records.length : 0;
+          if (recordCount > 0 || (typeof parsed.total_count === "number" && parsed.total_count > 0)) return "streamer";
+          if (parsed.noRevenue === true) return "non-streamer";
+        }
+      } catch {
+        // 文件损坏：回退 account-info
+      }
+    } else {
+      // 大文件（有大量收益记录）：只看头部元信息即可判定，避免整文件读入 + 解析
+      const totalCount = Number(/"total_count"\s*:\s*(\d+)/.exec(text)?.[1] ?? 0);
+      const totalRecords = Number(/"totalRecords"\s*:\s*(\d+)/.exec(text)?.[1] ?? 0);
+      if (totalCount > 0 || totalRecords > 0) return "streamer";
+      if (/"noRevenue"\s*:\s*true/.test(text)) return "non-streamer";
+      if (/"records"\s*:\s*\[/.test(text)) {
+        // records 数组已开始且不是空数组 → 至少有一条记录
+        if (!/"records"\s*:\s*\[\s*\]/.test(text)) return "streamer";
+        // records 为空，但 noRevenue 可能位于头部之后：完整解析一次（此时文件很小）
+        try {
+          const raw = await fs.readFile(file, "utf8");
+          const parsed = JSON.parse(raw) as { noRevenue?: boolean };
+          if (parsed?.noRevenue === true) return "non-streamer";
+        } catch {
+          // ignore
+        }
+      }
     }
-  } catch {
-    // 记录文件缺失/损坏：回退 account-info
   }
   const info = await loadAccountInfo(mid, uname);
   if (info?.noRevenue === true) return "non-streamer";

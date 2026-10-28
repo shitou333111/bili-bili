@@ -139,6 +139,21 @@ function knockMaskImage(w: number, h: number, u: number, uname: string): string 
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
+/** 头像地址规范化：B站接口/弹幕消息里的 face 可能是 //i0.hdslb.com/... 或 http://...，
+ *  在 https 页面/Tauri WebView 下会被当成混合内容或无效地址拦截 → onError → 回退首字母头像。
+ *  这里统一升级为 https；noface 占位图直接视为无头像。 */
+function normalizeFaceUrl(url: string): string {
+  const u = (url || "").trim();
+  if (!u || /\/noface\.jpg$/.test(u)) return "";
+  if (u.startsWith("//")) return "https:" + u;
+  if (u.startsWith("http://")) return "https://" + u.slice(7);
+  return u;
+}
+
+/** 头像加载失败的重试次数：结尾才挂载头像，首次请求偶发 CDN/网络抖动时重试，
+ *  避免整段动画结尾都退化成首字母头像。 */
+const AVATAR_RETRY = 2;
+
 /** 头像：face 缺失/加载失败时回退为昵称首字渐变圆（与 EntryBadge 的 Avatar 同视觉）。
  *  className/style 可覆盖：传送门模式改尺寸/位置/clip-path，渐显渐隐模式加绿边圆框。 */
 function AnimeAvatar({
@@ -152,11 +167,26 @@ function AnimeAvatar({
   className?: string;
   style?: CSSProperties;
 }) {
-  const [failed, setFailed] = useState(!face);
+  const src = normalizeFaceUrl(face);
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState(!src);
+  // 注：调用处用 key={face} 挂载，face 变化时整组件重挂载，状态自然复位
   return (
     <div className={className ? `anime-avatar ${className}` : "anime-avatar"} style={style}>
-      {!failed && face ? (
-        <img src={face} alt="" onError={() => setFailed(true)} />
+      {!failed && src ? (
+        <img
+          key={attempt}
+          src={src}
+          alt=""
+          onError={() => {
+            if (attempt < AVATAR_RETRY) {
+              // 换 key 重新挂载 <img>，让浏览器重新发起一次请求
+              setTimeout(() => setAttempt((n) => n + 1), 300);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
       ) : (
         (uname || "?").slice(0, 1)
       )}
@@ -263,6 +293,15 @@ export default function VideoOverlay({
   useEffect(() => {
     setGen((g) => g + 1);
   }, [anime]);
+
+  // 预加载结尾头像：结尾阶段才挂载 <img>，若届时才开始请求，弱网下会先闪出首字母头像；
+  // 动画一开始就预热，结尾时通常已命中缓存。
+  useEffect(() => {
+    const src = normalizeFaceUrl(anime.user.face);
+    if (!src) return;
+    const img = new Image();
+    img.src = src;
+  }, [anime.user.face]);
 
   // 预览重播：同步复位收尾态（与 replaySeq 同批渲染，重挂载的新节点直接以
   // opacity-100/闭合动画未启动的状态出现，避免上一轮淡出/闭合状态残留）
@@ -665,7 +704,7 @@ export default function VideoOverlay({
                 className="anime-content"
                 style={{ maskImage: contentMask, WebkitMaskImage: contentMask }}
               >
-                <AnimeAvatar face={anime.user.face} uname={anime.user.uname} />
+                <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
               </div>
             </>
           )}
@@ -675,6 +714,7 @@ export default function VideoOverlay({
               <canvas ref={portalCanvasRef} className="anime-portal-canvas" />
               {/* 头像：随火圈开合进度 circle 裁剪放大 + 渐显（圆心与火圈一致） */}
               <AnimeAvatar
+                key={anime.user.face}
                 face={anime.user.face}
                 uname={anime.user.uname}
                 style={{
@@ -709,7 +749,7 @@ export default function VideoOverlay({
                     : `anime-end-hide ${ENDING_FADE_MS}ms ease both`,
               }}
             >
-              <AnimeAvatar face={anime.user.face} uname={anime.user.uname} className="anime-avatar-bordered" />
+              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} className="anime-avatar-bordered" />
               <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
                 {anime.user.uname}
               </div>

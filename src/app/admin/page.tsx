@@ -270,9 +270,6 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState("");
   // 用户列表惰性渲染：先渲染前 50 条，滚动到底部再追加（避免上万用户时页面卡顿）
   const [userVisible, setUserVisible] = useState(50);
-  // 用户列表默认不渲染（用户条目过多、头像补齐请求量大，拖慢页面），点“加载”后再显示；
-  // 卡片顶部的统计信息基于已拉取的 users 数据计算，不受影响
-  const [userListLoaded, setUserListLoaded] = useState(false);
   useEffect(() => {
     // 搜索条件变化时重置可见数量
     setUserVisible(50);
@@ -402,10 +399,12 @@ export default function AdminPage() {
       const usersUrl = sid
         ? `/api/admin/users?_sid=${encodeURIComponent(sid)}&_device_token=${encodeURIComponent(deviceToken)}`
         : `/api/admin/users?_device_token=${encodeURIComponent(deviceToken)}`;
-      const [usersRes, configRes, catalogRes] = await Promise.all([
+      // 礼物目录只用于盲盒搜索/单价联想，体积较大：只取精简版（compact=1），
+      // 且不放进下面的 await 里，避免首屏等它传输完才渲染。
+      const catalogPromise = adminFetch(serverApiUrl("/api/gift-catalog?compact=1")).catch(() => null);
+      const [usersRes, configRes] = await Promise.all([
         adminFetch(serverApiUrl(usersUrl)),
         adminFetch(serverApiUrl("/api/admin/config")),
-        adminFetch(serverApiUrl("/api/gift-catalog")),
       ]);
       const usersData = await usersRes.json();
       const configData = await configRes.json();
@@ -550,33 +549,40 @@ export default function AdminPage() {
               }))
         };
         setConfig(normalized);
-        // 解析礼物目录（用于盲盒按名称搜索）
-        try {
-          const catalogData = await catalogRes.json();
-          if (catalogData.code === 0 && catalogData.data?.gifts) {
-            const catalog: Record<number, { name: string; img: string }> = catalogData.data.gifts;
-            setGiftCatalog(catalog);
-            // 礼物单价映射（分 → 电池），用于礼物明细联想自动填价
-            const priceMap: Record<number, number> = {};
-            for (const g of Array.isArray(catalogData.data.list) ? catalogData.data.list : []) {
-              if (g?.id && g?.coin_type === "gold" && g?.price) priceMap[Number(g.id)] = Math.round(Number(g.price) / 100);
-            }
-            setGiftPriceCatalog(priceMap);
-            // 自动填充名称为空的盲盒
-            let modified = false;
-            const boxes = normalized.blind_boxes.map((b) => {
-              if (b.id > 0 && !b.name && catalog[b.id]?.name) {
-                modified = true;
-                return { ...b, name: catalog[b.id].name };
+        // 礼物目录异步填充（不阻塞首屏渲染）：名称/图标用于盲盒搜索，单价用于礼物明细自动填价。
+        void (async () => {
+          try {
+            const catalogRes = await catalogPromise;
+            if (!catalogRes) return;
+            const catalogData = await catalogRes.json();
+            if (catalogData.code === 0 && catalogData.data?.gifts) {
+              const catalog: Record<number, { name: string; img: string }> = catalogData.data.gifts;
+              setGiftCatalog(catalog);
+              // 礼物单价映射（分 → 电池）：compact 模式由服务端算好；旧版服务端回退到完整 list 自行计算
+              let priceMap: Record<number, number> = catalogData.data.prices ?? {};
+              if (!catalogData.data.prices) {
+                priceMap = {};
+                for (const g of Array.isArray(catalogData.data.list) ? catalogData.data.list : []) {
+                  if (g?.id && g?.coin_type === "gold" && g?.price) priceMap[Number(g.id)] = Math.round(Number(g.price) / 100);
+                }
               }
-              return b;
-            });
-            if (modified) {
-              normalized.blind_boxes = boxes;
-              setConfig({ ...normalized });
+              setGiftPriceCatalog(priceMap);
+              // 自动填充名称为空的盲盒
+              let modified = false;
+              const boxes = normalized.blind_boxes.map((b) => {
+                if (b.id > 0 && !b.name && catalog[b.id]?.name) {
+                  modified = true;
+                  return { ...b, name: catalog[b.id].name };
+                }
+                return b;
+              });
+              if (modified) {
+                normalized.blind_boxes = boxes;
+                setConfig({ ...normalized });
+              }
             }
-          }
-        } catch { /* ignore */ }
+          } catch { /* ignore */ }
+        })();
       } else if (configData.code === 403) {
         try { localStorage.removeItem("bili_live_admin_sid"); } catch { /* ignore */ }
         setAdminLoggedIn(false);
@@ -596,7 +602,7 @@ export default function AdminPage() {
   // 服务器收集账号无本地头像，用 B站公开信息接口按 UID 补齐头像（已尝试过的 mid 不再重复请求）
   const avatarAttempted = useRef<Set<number>>(new Set());
   useEffect(() => {
-    if (!adminLoggedIn || !userListLoaded || users.length === 0) return;
+    if (!adminLoggedIn || users.length === 0) return;
     const missing = users.filter((u) => !u.face && u.mid && !avatarAttempted.current.has(u.mid));
     if (missing.length === 0) return;
     missing.forEach((u) => avatarAttempted.current.add(u.mid));
@@ -623,7 +629,7 @@ export default function AdminPage() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminLoggedIn, userListLoaded, users]);
+  }, [adminLoggedIn, users]);
 
   // 加载抽奖记录 + 当前概率配置（管理后台左下角抽奖模块）
   useEffect(() => {
@@ -1611,14 +1617,6 @@ export default function AdminPage() {
           <div className="flex items-center justify-between mb-1.5 gap-2">
             <div className="flex items-center gap-1.5">
               <h2 className="text-sm font-bold">用户列表 ({filteredUsers.length})</h2>
-              <button
-                onClick={() => setUserListLoaded(true)}
-                disabled={userListLoaded}
-                className="rounded-lg border border-black/10 bg-white px-2.5 py-1 text-[11px] font-medium text-black/55 transition hover:border-black/25 hover:text-black/80 disabled:opacity-45 disabled:hover:border-black/10 disabled:hover:text-black/55"
-                title={userListLoaded ? "用户信息已加载" : "加载并显示用户信息（含头像补齐请求）"}
-              >
-                {userListLoaded ? "已加载" : "加载"}
-              </button>
             </div>
             <input
               type="text"
@@ -1649,11 +1647,7 @@ export default function AdminPage() {
               </div>
             );
           })()}
-          {!userListLoaded ? (
-            <p className="text-xs text-black/40 py-1">
-              用户信息未加载{users.length > 0 ? `（共 ${users.length} 条）` : ""}，点击左侧“加载”按钮显示。上方统计信息基于全量数据实时计算。
-            </p>
-          ) : filteredUsers.length === 0 ? (
+          {filteredUsers.length === 0 ? (
             <p className="text-xs text-black/30">{users.length === 0 ? "暂无用户" : "无匹配用户"}</p>
           ) : (
             <div

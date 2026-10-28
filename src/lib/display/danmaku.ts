@@ -1635,7 +1635,9 @@ class DisplayDanmakuService {
           });
           this.emitTo({
             type: "anime",
-            user: { uid, uname: user.uname || "", face: user.face || "" },
+            // 入场消息有时不带 face（或为空），回退到名单里配置时查询到的头像，
+            // 避免结尾头像退化成首字母
+            user: { uid, uname: user.uname || "", face: user.face || animeCfg.face || "" },
             videoSrc: toDisplayVideoSrc(video),
             startSec: seg.startSec,
             endSec: seg.endSec,
