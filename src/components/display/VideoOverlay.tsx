@@ -263,6 +263,10 @@ export default function VideoOverlay({
   );
   // 加载兜底计时器：视频成功加载（loadedmetadata）后清除，避免把正常的长视频截断
   const failTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 播放推进守护：canplay 后若视频一直处于 paused（自动播放被浏览器/CEF 策略拒绝），
+  // 既不会 ended 也不会 timeupdate，6s 加载兜底又已在 loadedmetadata 清除 →
+  // 画布永久不释放、后续入场动画全部排队（表现为"只播一次，之后再也触发不了"）。
+  const playGuardRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 片段结束秒数（未设片段 = 视频时长），供 timeupdate 兜底检测结束
   const endSecRef = useRef(0);
   // 淡出幂等标记：ended 与 timeupdate 可能先后触发，只执行一次保持+淡出+释放
@@ -338,9 +342,21 @@ export default function VideoOverlay({
     [restart],
   );
 
+  const clearPlayGuard = useCallback(() => {
+    if (playGuardRef.current) {
+      clearInterval(playGuardRef.current);
+      playGuardRef.current = null;
+    }
+  }, []);
+
   const handleEnd = useCallback(() => {
     if (endingRef.current) return;
     endingRef.current = true;
+    // 收尾开始后停止播放守护（否则守护会在收尾过程中再次判定"没播放"）
+    if (playGuardRef.current) {
+      clearInterval(playGuardRef.current);
+      playGuardRef.current = null;
+    }
     switch (endingModeRef.current) {
       case "curtain":
         // 黑幕闭合：闭合完成（≈视频播完）→ 黑幕+头像昵称保持 1s → 整体淡出 1s
@@ -368,10 +384,46 @@ export default function VideoOverlay({
     }
   }, [release]);
 
+  // 自动播放守护：canplay 时启动（此时已尝试 play()）。
+  // 正常播放 → paused=false，直接停表；若一直 paused（策略拒绝自动播放、CEF 静音策略等），
+  // 每秒重试一次 play()，累计 ~2.5s 仍未播放则直接收尾，保证画布必然释放、队列不会堵死。
+  const startPlayGuard = useCallback(() => {
+    if (loop || playGuardRef.current) return;
+    let retried = false;
+    let stalled = 0;
+    playGuardRef.current = setInterval(() => {
+      const el = videoRef.current;
+      if (!el) {
+        clearPlayGuard();
+        return;
+      }
+      // 已在播放（或已播完进入收尾）：守护使命结束
+      if (!el.paused || endingRef.current) {
+        clearPlayGuard();
+        return;
+      }
+      // 仍在加载/缓冲（readyState < HAVE_FUTURE_DATA）：不判定，等下一拍
+      if (el.readyState < 3) return;
+      stalled += 1;
+      if (!retried && stalled >= 2) {
+        retried = true;
+        console.warn("[展示] 入场视频未能自动播放，重试 play()");
+        el.play?.().catch(() => {});
+        return;
+      }
+      if (retried && stalled >= 5) {
+        console.warn("[展示] 入场视频自动播放被拒绝，直接进入收尾释放画布");
+        clearPlayGuard();
+        handleEnd();
+      }
+    }, 500);
+  }, [loop, clearPlayGuard, handleEnd]);
+
   useEffect(() => {
     setFadeOut(false);
     setLoadError(false);
     setClosing(false);
+    clearPlayGuard();
     endingRef.current = false;
     closingRef.current = false;
     endSecRef.current = 0;
@@ -403,7 +455,7 @@ export default function VideoOverlay({
         failTimerRef.current = null;
       }
     };
-  }, [anime.videoSrc, userSegmented, anime.startSec, anime.endSec, loop, handleEnd, gen]);
+  }, [anime.videoSrc, userSegmented, anime.startSec, anime.endSec, loop, handleEnd, gen, clearPlayGuard]);
 
   // 传送门结尾：激活时创建 PortalFX 跑完整序列（点燃→开圈→保持→消散）。
   // onDone 时火花已自然衰减完毕（portal.ts 会继续渲染至火花数为 0 才停帧），
@@ -417,18 +469,33 @@ export default function VideoOverlay({
       return;
     }
     const u = boxW / U_BASE_W;
-    const fx = new PortalFX(
-      cv,
-      { cx: boxW / 2, cy: boxH / 2 - 16 * u, radius: 38 * u },
-      {
-        onOpen: (o) => setPortalOpen(o),
-        onDone: () => release(0),
-      },
-    );
-    fx.resize(boxW, boxH, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
-    fx.start();
+    let fx: PortalFX | null = null;
+    try {
+      fx = new PortalFX(
+        cv,
+        { cx: boxW / 2, cy: boxH / 2 - 16 * u, radius: 38 * u },
+        {
+          onOpen: (o) => setPortalOpen(o),
+          onDone: () => release(0),
+        },
+      );
+      fx.resize(boxW, boxH, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+      fx.start();
+    } catch (e) {
+      // WebGL2 不可用（虚拟机/远程桌面/GPU 黑名单/CEF 关闭硬件加速）或着色器编译失败：
+      // 绝不能让异常冒泡——effect 抛错会让 React 卸载整棵画布组件树，页面从此不再响应
+      // 任何弹幕事件（刷新浏览器源才恢复一次）。降级为直接收尾即可。
+      console.warn("[展示] 传送门结尾初始化失败，降级为直接收尾", (e as Error)?.message || e);
+      try {
+        fx?.dispose();
+      } catch {
+        /* 已创建的部分资源释放失败忽略 */
+      }
+      release(0);
+      return;
+    }
     return () => {
-      fx.dispose();
+      fx?.dispose();
     };
   }, [portalActive, boxW, boxH, gen, replaySeq, release]);
 
@@ -655,7 +722,11 @@ export default function VideoOverlay({
               }}
               onCanPlay={() => {
                 logVideoEvent("canplay");
-                videoRef.current?.play?.().catch(() => {});
+                videoRef.current?.play?.().catch((e) => {
+                  console.warn("[展示] 入场视频 play() 被拒绝", (e as Error)?.message || e);
+                });
+                // 自动播放可能被静音策略以外的情况拒绝：启动守护，避免停在首帧永久占画布
+                startPlayGuard();
               }}
               onTimeUpdate={() => {
                 const el = videoRef.current;

@@ -593,6 +593,9 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
   const [liveStatus, setLiveStatus] = useState(0);
   // 弹幕调试日志卡片默认折叠
   const [debugOpen, setDebugOpen] = useState(false);
+  // 「复制最后10条 / 清空」按钮的短暂反馈状态（点击后按钮变绿+改文案，1.5s 后自动复位）
+  const [debugCopied, setDebugCopied] = useState(false);
+  const [debugCleared, setDebugCleared] = useState(false);
   // 盲盒盈亏 · 弹幕查询：可查询盲盒名称列表（admin"盲盒盈亏配置"指定，供使用说明展示）
   const [profitBoxNames, setProfitBoxNames] = useState<string[]>([]);
 
@@ -1001,6 +1004,43 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       toast("复制失败，请手动选择复制", "error");
     }
   }, [browserSourceUrl, toast]);
+
+  // 清空弹幕调试日志（仅清空面板展示，不影响服务端记录与落盘数据）
+  const clearDebugLogs = useCallback(() => {
+    setDebugEvents([]);
+    setDebugCleared(true);
+  }, []);
+
+  // 复制最后 10 条弹幕调试日志
+  const copyDebugLogs = useCallback(async () => {
+    const last10 = debugEvents.slice(-10);
+    if (last10.length === 0) {
+      toast("暂无可复制的日志");
+      return;
+    }
+    const text = last10
+      .map((e) => `${e.time} [${e.cmd}] ${e.action} ${JSON.stringify(e.data)}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setDebugCopied(true);
+      toast(`已复制最后 ${last10.length} 条日志`);
+    } catch {
+      toast("复制失败，请手动选择复制", "error");
+    }
+  }, [debugEvents, toast]);
+
+  // 两个按钮的反馈只停留 1.5s，到点自动复位（状态驱动，卸载时自动清定时器）
+  useEffect(() => {
+    if (!debugCopied) return;
+    const t = setTimeout(() => setDebugCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [debugCopied]);
+  useEffect(() => {
+    if (!debugCleared) return;
+    const t = setTimeout(() => setDebugCleared(false), 1500);
+    return () => clearTimeout(t);
+  }, [debugCleared]);
 
   // 一键添加直播姬浏览器源：按 URL 检测添加状态（红=未添加，绿=已添加），手动步骤默认折叠
   const [sourceAdded, setSourceAdded] = useState(false);
@@ -1621,7 +1661,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                     </button>
                   </div>
                   <p className="mt-2 text-[11px] leading-relaxed text-black/45">
-                    使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️上面链接粘贴到URL输入框➡️高级设置➡️宽度1920 高度1080➡️确认
+                    使用步骤（横屏）：直播姬➡️素材➡️浏览器➡️上面链接粘贴到URL输入框➡️高级设置➡️不可见时关闭源的开关打开➡️宽度1920 高度1080➡️确认
                   </p>
                   <p className="mt-1 text-[11px] leading-relaxed text-black/45">
                     竖屏：步骤一致，仅改变 宽度1080 高度1920。
@@ -2985,6 +3025,36 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               ▶
             </span>
             <h3 className="text-sm font-bold text-black/75">弹幕调试日志（用户不必关心）</h3>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void copyDebugLogs();
+                }}
+                className={`rounded-lg border px-2 py-0.5 text-[11px] font-medium transition ${
+                  debugCopied
+                    ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-700"
+                    : "border-black/10 bg-white/70 text-black/55 hover:border-black/25 hover:text-black/80"
+                }`}
+              >
+                {debugCopied ? "已复制 ✓" : "复制最后10条"}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clearDebugLogs();
+                }}
+                className={`rounded-lg border px-2 py-0.5 text-[11px] font-medium transition ${
+                  debugCleared
+                    ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-700"
+                    : "border-black/10 bg-white/70 text-black/55 hover:border-black/25 hover:text-black/80"
+                }`}
+              >
+                {debugCleared ? "已清空 ✓" : "清空"}
+              </button>
+            </div>
           </div>
           {debugOpen && (
             <div className="mt-2 max-h-72 overflow-y-auto rounded-xl bg-white/60 p-2 text-[11px] font-mono space-y-1">

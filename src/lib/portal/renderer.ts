@@ -303,7 +303,10 @@ export class GLRenderer {
       gl.deleteVertexArray(this.sparkVao);
       gl.deleteProgram(this.ringProg);
       gl.deleteProgram(this.sparkProg);
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // 刻意不调用 WEBGL_lose_context.loseContext()：同一个 canvas 元素会被复用
+      // （结尾阶段盒尺寸变化会让 effect 重建 PortalFX）。主动丢上下文会让该 canvas
+      // 永久失效，后续 getContext 拿到的是丢失的上下文 → createShader 返回 null →
+      // 抛异常 → React 卸载整棵画布组件树。只删除资源，交给 canvas 销毁时自然回收。
     } catch {
       /* context already gone */
     }

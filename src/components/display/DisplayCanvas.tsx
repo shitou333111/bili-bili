@@ -77,6 +77,8 @@ const TEST_ENTRY_USER: DisplayEntryPayload = {
 };
 /** 测试循环：一轮完整生命周期（聚合→停留→消散）结束后的间隔（重新挂载前） */
 const LOOP_GAP_MS = 1500;
+/** 入场动画僵尸判定阈值（ms）：单条动画正常 ≤ 约 35s，超过即视为卡死（见 applyEvent） */
+const ANIME_MAX_MS = 60_000;
 
 /** 撒花飘带（ribbons）提速：库把粒子 move.speed {min:4,max:6} 硬编码在容器与发射器
  *  选项里（公开 IRibbonsOptions 覆盖不到，且 ribbonOptions.load 是整体替换、不含 move），
@@ -710,14 +712,20 @@ export default function DisplayCanvas() {
   useEffect(() => {
     animeRef.current = anime;
   }, [anime]);
+  // 入场动画僵尸防护：正常单条动画 ≤ 约 35s（有效片段 ≤30s + 开场/收尾）。若当前动画
+  // 超过 ANIME_MAX_MS 仍未结束（任何未预期原因导致 onEnd 没回来），新事件到达时直接丢弃
+  // 旧事件，避免队列永久堵死（表现为"只播一次，之后再也触发不了"，刷新浏览器源才恢复）。
+  const animeStartedAtRef = useRef(0);
   const onAnimeEnd = useCallback(() => {
     const q = animeQueueRef.current;
     if (q.length) {
       const [next, ...rest] = q;
       animeQueueRef.current = rest;
+      animeStartedAtRef.current = Date.now();
       setAnime(next);
       notifyEffectPlay("anime");
     } else {
+      animeStartedAtRef.current = 0;
       setAnime(null);
     }
   }, []);
@@ -791,7 +799,13 @@ export default function DisplayCanvas() {
       // 入场动画模块关闭：忽略事件
       if (!flagsRef.current.anime) return;
       const ev = p as AnimeEvent;
+      // 僵尸防护：当前动画超时未结束 → 丢弃旧动画与排队事件，直接播新事件
+      if (animeRef.current && Date.now() - animeStartedAtRef.current > ANIME_MAX_MS) {
+        animeQueueRef.current = [];
+        animeRef.current = null;
+      }
       if (!animeRef.current) {
+        animeStartedAtRef.current = Date.now();
         setAnime(ev);
         notifyEffectPlay("anime");
       } else {
