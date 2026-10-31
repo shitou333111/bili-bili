@@ -6,12 +6,12 @@ import type { RenderState } from "./types";
 /**
  * 相位时间轴（沿用 SlingTab tools/tune.html 的取值；描圈点火加长以呈现「画圈」过程）：
  *   描圈点火 1200ms（头部沿圆周画出火线，参考 gif/portal-test.html 的 draw 阶段）→
- *   圈内展开 180ms → 悬停 2600ms → 消散 380ms
+ *   圈内展开 180ms → 悬停 3000ms → 消散 380ms
  * 只跑一次，不做导航专用的 GAP/COMMIT 相位。
  */
 const T_IGNITE = 1200;
 const T_OPEN = 180;
-const T_HOLD = 2600;
+const T_HOLD = 3000;
 const T_DISSIPATE = 380;
 
 /* ── 描圈螺旋曲线（portal-test.html / Unity PortalSpawner 一比一）──────────────

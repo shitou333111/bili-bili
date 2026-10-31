@@ -803,14 +803,6 @@ html.ios-web .bottom-dock {
   inherits: true;
   initial-value: 0%;
 }
-@keyframes anime-ripple-open {
-  from {
-    --anime-ripple: 0%;
-  }
-  to {
-    --anime-ripple: 80%;
-  }
-}
 /* 开场「渐显」：透明度从很低的中间值 0.12 渐入到 1（不从 0 起，起始足够通透才看得出
    渐显），终点不透明 → 最终观感由包裹层 mask 的整体透明档位决定（alpha 相乘）。
    时长由组件内联 animation-duration 传入（比椭圆拓展开场更长，过渡更缓和）。 */
@@ -819,6 +811,20 @@ html.ios-web .bottom-dock {
     opacity: 0.12;
   }
   to {
+    opacity: 1;
+  }
+}
+/* 开场「椭圆拓展」：把「椭圆扩散」与「渐显」合并在一条动画里——椭圆半径由中心向外推到
+   80%（形状边缘向外铺开），同时整层 opacity 从 0.08 渐入到 1。两轴同时插值，视觉上就是
+   「中心区域最先显现、随后沿椭圆边界逐渐向四周变实」，而不是单纯放大或整块淡入。
+   （原「椭圆渐显」独立选项已并入此项，选项名沿用旧版「椭圆拓展」以兼容旧配置。） */
+@keyframes anime-ellipse-fade-open {
+  from {
+    --anime-ripple: 0%;
+    opacity: 0.08;
+  }
+  to {
+    --anime-ripple: 80%;
     opacity: 1;
   }
 }
@@ -833,6 +839,15 @@ html.ios-web .bottom-dock {
 
 /* 舞台 = 视频盒本身；--u 由组件按实际盒宽内联提供。 */
 .anime-stage {
+  /* 彩虹色带（固定参数）：色相起点 200°、跨度 360°（覆盖全部色相）、饱和度 100%。
+     昵称边框、头像描边、彩虹圈光环共用同一个 conic-gradient，颜色天然一致。 */
+  --rainbow-ring: conic-gradient(from 0deg,
+    hsl(200, 100%, 62%),
+    hsl(272, 100%, 62%),
+    hsl(344, 100%, 62%),
+    hsl(56, 100%, 62%),
+    hsl(128, 100%, 62%),
+    hsl(200, 100%, 62%));
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -911,17 +926,20 @@ html.ios-web .bottom-dock {
   height: 100%;
   display: block;
 }
-/* 昵称胶囊：黑字、只描绿色边框不填充。超舞台宽 80% 时由组件内联缩小字号/字距保证
-   全名完整显示（不截断），故不设 max-width/overflow/ellipsis。默认 top 给传送门模式；
-   渐显渐隐模式内联 top 覆盖。 */
+/* 昵称胶囊：黑字、只描彩虹渐变边框不填充（与头像色带同色相）。超舞台宽 80% 时由组件
+   内联缩小字号/字距保证全名完整显示（不截断），故不设 max-width/overflow/ellipsis。
+   默认 top 给传送门模式；渐显渐隐/彩虹圈模式内联 top 覆盖。
+   渐变不能用作 border-color：边框宽度留在 border 上（透明），由 ::before 以环形渐变
+   填充该区域（padding + mask 抠空内部），得到圆角渐变描边。 */
 .anime-name-pill {
   position: absolute;
   left: 50%;
   top: calc(50% + 46 * var(--u));
   transform: translateX(-50%);
   box-sizing: border-box;
+  --pill-border-w: calc(2 * var(--u));
   padding: calc(4 * var(--u)) calc(16 * var(--u));
-  border: calc(2 * var(--u)) solid #22c55e;
+  border: var(--pill-border-w) solid transparent;
   border-radius: 9999px;
   background: transparent;
   color: #000;
@@ -930,9 +948,91 @@ html.ios-web .bottom-dock {
   line-height: 1.15;
   white-space: nowrap;
 }
-/* 渐显渐隐模式头像绿边圆框（border-box，占内部不改外径） */
-.anime-avatar-bordered {
-  border: calc(2 * var(--u)) solid #22c55e;
+.anime-name-pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--pill-border-w);
+  background: var(--rainbow-ring);
+  /* 只在 padding 区域（即透明 border 所占的环带）保留渐变，内部挖空 → 纯描边、不填充文字区。
+     必须用 mask 简写：只有简写允许跟 content-box 这类 box 关键字；mask-image 长写不接受，
+     整条声明会被内核丢弃 → 渐变直接铺满整个胶囊（表现为昵称被彩虹色填充）。 */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* 传送门模式昵称胶囊：更细的边框、更小的内边距（更贴字）。
+   与上面的通用胶囊同样的选择器权重，靠书写顺序覆盖。 */
+.anime-name-pill-portal {
+  --pill-border-w: calc(1.5 * var(--u));
+  padding: calc(2 * var(--u)) calc(10 * var(--u));
+}
+/* 彩虹光环（渐显渐隐的头像描边 / 彩虹圈的光环共用）。
+   注意 radial-gradient 的色标百分比是相对「渐变半径」而不是盒子直径：盒子 120u → 半径 60u，
+   色带中心（mask 的 50% 位置）= 30u，正好落在 60u 头像的边缘上，头像与圆环完全贴合；
+   半径以内的一半被头像盖住，向外柔和渐薄（半宽 6.2% × 60u ≈ 3.7u）。
+   （盒子必须 ≥2× 期望圆环半径，否则色带会被盒子边界裁掉。） */
+.anime-rainbow-halo {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 35 * var(--u));
+  width: calc(120 * var(--u));
+  height: calc(120 * var(--u));
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+/* 彩虹圈旋转层（固定 1.5s 一圈）：旋转只能作用在内层，避免覆盖光环的居中 transform。 */
+.anime-rainbow-spin {
+  position: absolute;
+  inset: 0;
+  animation: anime-rainbow-spin 1.5s linear infinite;
+}
+@keyframes anime-rainbow-spin {
+  to { transform: rotate(360deg); }
+}
+/* 色带本体：环与光晕是一体的——中线最实，向内/向外按阶梯逐渐稀薄到透明，
+   无需额外的光晕层。色标 ±2.79%/±5.766%/±9.3% 是相对渐变半径（60u）的比例，
+   → 环带中心在 30u（头像边缘），向外约 5.6u 渐薄（更粗的环）。 */
+.anime-rainbow-band {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--rainbow-ring);
+  filter: blur(1px) saturate(1.15);
+  -webkit-mask-image: radial-gradient(circle closest-side,
+    transparent calc(50% - 9.3%),
+    rgba(0, 0, 0, 0.24) calc(50% - 5.766%),
+    rgba(0, 0, 0, 0.72) calc(50% - 2.79%),
+    #000 50%,
+    rgba(0, 0, 0, 0.72) calc(50% + 2.79%),
+    rgba(0, 0, 0, 0.24) calc(50% + 5.766%),
+    transparent calc(50% + 9.3%));
+  mask-image: radial-gradient(circle closest-side,
+    transparent calc(50% - 9.3%),
+    rgba(0, 0, 0, 0.24) calc(50% - 5.766%),
+    rgba(0, 0, 0, 0.72) calc(50% - 2.79%),
+    #000 50%,
+    rgba(0, 0, 0, 0.72) calc(50% + 2.79%),
+    rgba(0, 0, 0, 0.24) calc(50% + 5.766%),
+    transparent calc(50% + 9.3%));
+}
+/* 彩虹圈结尾整组：头像与昵称作为一组，从较小尺寸单调放大到正常尺寸，
+   随后继续放大并渐隐（sink 由 endingPhase 切换动画名）。 */
+.anime-rainbow-group {
+  position: absolute;
+  inset: 0;
+}
+@keyframes anime-rainbow-rise {
+  from { transform: scale(0.55); }
+  to { transform: scale(1); }
+}
+@keyframes anime-rainbow-sink {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(1.06); opacity: 0; }
 }
 /* 渐显渐隐结尾整组（挂载即从 0 播动画） */
 .anime-end-fade {

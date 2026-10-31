@@ -2450,7 +2450,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           </div>
           {/* 开场：视频开始播放时的显现方式（无 / 渐显 / 椭圆拓展），默认「渐显」。
               「无」= 视频直接显示；「渐显」= 透明度从中间值渐入，终点遵循整体透明档位；
-              「椭圆拓展」= 中心椭圆向外扩散。切换后实时广播到画布。 */}
+              「椭圆拓展」= 椭圆由中心向外扩散，同时由内向外渐显（选项名沿用旧版，兼容老配置）。
+              切换后实时广播到画布。 */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <p className="text-xs text-black shrink-0">开场</p>
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="开场">
@@ -2491,7 +2492,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               </span>
             </div>
           </div>
-          {/* 结尾的头像昵称：动画结束时头像+昵称的展示方式（无 / 渐显渐隐 / 奇异博士传送门 / 黑幕闭合）。
+          {/* 结尾的头像昵称：动画结束时头像+昵称的展示方式（无 / 渐显渐隐 / 奇异博士传送门 / 彩虹圈 / 黑幕闭合）。
               默认「奇异博士传送门」；切换后实时广播到画布。 */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <p className="text-xs text-black shrink-0">结尾的头像昵称</p>
@@ -2501,6 +2502,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   ["none", "无"],
                   ["fade", "渐显渐隐"],
                   ["portal", "传送门"],
+                  ["rainbow", "彩虹圈"],
                   ["curtain", "黑幕闭合"],
                 ] as Array<[AnimeEnding, string]>
               ).map(([key, label]) => {

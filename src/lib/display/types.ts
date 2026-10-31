@@ -267,17 +267,19 @@ export function isAnimeOpacity(v: unknown): v is AnimeOpacity {
 
 /** 入场动画 · 结尾的头像昵称显示方式：
  *  none = 无（动画结束不加额外头像和昵称）；fade = 渐显渐隐（头像+昵称同步渐显渐隐）；
- *  portal = 奇异博士传送门（火圈+头像渐显）；curtain = 黑幕闭合（系统原结尾方式）。 */
-export type AnimeEnding = "none" | "fade" | "portal" | "curtain";
+ *  portal = 奇异博士传送门（火圈+头像渐显）；rainbow = 彩虹圈（彩色光环旋转，头像+昵称
+ *  从小到大单调放大后渐隐）；curtain = 黑幕闭合（系统原结尾方式）。 */
+export type AnimeEnding = "none" | "fade" | "portal" | "rainbow" | "curtain";
 
 /** 合法结尾方式判定（配置容错与画布消息共用） */
 export function isAnimeEnding(v: unknown): v is AnimeEnding {
-  return v === "none" || v === "fade" || v === "portal" || v === "curtain";
+  return v === "none" || v === "fade" || v === "portal" || v === "rainbow" || v === "curtain";
 }
 
 /** 入场动画 · 开场方式：
  *  none = 无（视频直接显示，无额外开场）；fade = 渐显（透明度从中间值渐变到整体透明档位的最终值）；
- *  ellipse = 椭圆拓展（视频由中心椭圆向外扩散显现）。 */
+ *  ellipse = 椭圆拓展（椭圆由中心向外扩散显现，同时整层由内向外的渐显叠加 —— 原「椭圆渐显」的效果，
+ *            选项名保持「椭圆拓展」以兼容旧配置）。 */
 export type AnimeOpening = "none" | "fade" | "ellipse";
 
 /** 合法开场方式判定（配置容错与画布消息共用） */

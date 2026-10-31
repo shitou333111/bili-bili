@@ -438,6 +438,14 @@ export default function DisplayCanvas() {
   // 服务端不可达判定：断线超过宽限仍连不上 → 判定本地服务/应用已关闭，浏览器源清空不再显示
   const [serverDown, setServerDown] = useState(false);
   const serverDownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 断线即视为本地服务重启过（应用重启 / 热更新替换了前端）：重连成功时整页 reload，
+  // 让浏览器源（直播姬 CEF 长驻页面）重新拉取最新前端代码。否则页面一直执行旧 JS，
+  // 即使客户端已更新，画面也毫无变化（表现为「代码改了、界面没变」）。
+  // hadOpenRef 保证只有「本来连上过、后来断开」才 reload：页面初次加载时 APP 还没启动的
+  // 那几次失败重连不触发 reload（页面本身就是最新的）。
+  const reloadOnReconnectRef = useRef(false);
+  const hadOpenRef = useRef(false);
+  const openAtRef = useRef(0);
 
   // 挂载：检测编辑模式（?mode=edit）、记录卸载标记；卸载时关闭 WS 并清理重连定时器
   useEffect(() => {
@@ -463,6 +471,14 @@ export default function DisplayCanvas() {
         serverDownTimerRef.current = null;
       }
       setServerDown(false);
+      hadOpenRef.current = true;
+      openAtRef.current = Date.now();
+      // 服务重启后重连：整页 reload 获取最新前端（刷新后本标记自然重置，不会循环）。
+      if (reloadOnReconnectRef.current) {
+        reloadOnReconnectRef.current = false;
+        window.location.reload();
+        return;
+      }
       ws.send(
         JSON.stringify({
           type: "ready",
@@ -571,6 +587,9 @@ export default function DisplayCanvas() {
     };
     ws.onclose = () => {
       wsRef.current = null;
+      // WS 断开说明本地服务已停止（应用重启 / 热更新换包）→ 重连成功后整页 reload。
+      // 连接存活不足 2s 就断开视为异常抖动，不 reload，避免反复 reload 闪烁。
+      reloadOnReconnectRef.current = hadOpenRef.current && Date.now() - openAtRef.current > 2000;
       // 断线退避重连：首次立即，之后 3s 起步指数退避
       const delay = reconnectRef.current ? 3000 : 0;
       reconnectRef.current = setTimeout(() => connect(), delay);

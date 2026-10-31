@@ -86,10 +86,11 @@ fn mime_of(name: &str) -> String {
         .to_string()
 }
 
-/// 解析 webroot：环境变量 → 从 cwd 与 exe 所在目录逐级向上查找 out/；找不到返回 None（走内嵌 asset）。
-///
-/// 需要逐级向上的原因：`tauri dev` 启动的进程 cwd 是 src-tauri/（out/ 在项目根 src-tauri/..），
-/// 打包安装后磁盘上根本没有 out/（资源内嵌在二进制里，走 asset 兜底）。
+/// 生产模式下的磁盘 webroot：仅在显式指定 BILI_DISPLAY_WEBROOT，或 exe 同目录 / 上一级
+/// 存在 out/ 时才使用；找不到返回 None（走内嵌 asset）。
+/// 不再从 cwd 向上搜索项目目录：开发机上直接运行打包 exe（src-tauri/target/release）时，
+/// 向上 3 级就是项目根的 out/（可能已陈旧），会覆盖二进制内嵌的最新前端，
+/// 表现为「代码改了、界面没变」。把覆盖范围限制在便携式部署目录即可。
 fn resolve_webroot(_app: &AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("BILI_DISPLAY_WEBROOT") {
         let p = PathBuf::from(dir);
@@ -97,25 +98,16 @@ fn resolve_webroot(_app: &AppHandle) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let mut starts: Vec<PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        starts.push(cwd);
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let mut candidates = vec![exe_dir.to_path_buf()];
+    if let Some(parent) = exe_dir.parent() {
+        candidates.push(parent.to_path_buf());
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            starts.push(dir.to_path_buf());
-        }
-    }
-    for start in starts {
-        let mut cur = Some(start);
-        // 最多向上 4 级：dev 下 exe=src-tauri/target/debug → 项目根正好在第 3 级
-        for _ in 0..4 {
-            let Some(dir) = cur else { break };
-            let p = dir.join("out");
-            if p.is_dir() {
-                return Some(p);
-            }
-            cur = dir.parent().map(Path::to_path_buf);
+    for dir in candidates {
+        let p = dir.join("out");
+        if p.is_dir() {
+            return Some(p);
         }
     }
     None

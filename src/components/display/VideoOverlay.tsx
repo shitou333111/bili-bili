@@ -5,8 +5,9 @@
  * http://asset.localhost/...，由 convertFileSrc 生成）。
  *
  * 播放分三个阶段（移植自测试页 ghost 变体；loop 编辑预览模式同样完整播放）：
- *  1. 开场（openingMode 可配置）：ellipse = 视频由中心一个实心大椭圆向外扩散渐显（CSS @property
- *     --anime-ripple，椭圆两轴均用盒百分比，与任意宽高比的视频同形，71% 半径盖住四角）；
+ *  1. 开场（openingMode 可配置）：ellipse = 视频由中心椭圆向外扩散的同时整层由 0.08 渐入到 1，
+ *     得到「中心先实、边缘后实」的由内向外显现（CSS @property --anime-ripple，椭圆两轴均用盒
+ *     百分比，与任意宽高比的视频同形，80% 半径盖住四角）；
  *     fade（默认）= 透明度从很低的中间值（0.12）渐入到 1（时长 = 开场时长×1.6，更缓和，
  *     终点遵循「整体透明」档位）；none = 视频直接显示。
  *  2. 结尾闭合：视频从自身上下边缘向中间被擦除成透明（--anime-curtain 0%→50%），
@@ -67,12 +68,14 @@ import VolumeIcon from "@/components/VolumeIcon";
 const END_EPSILON = 0.12;
 /** 闭合起点提前量（秒）：抵消 timeupdate 采样间隔，保证闭合动画尽早启动 */
 const CLOSE_LEAD = 0.05;
-/** 闭合完成后黑幕+头像昵称保持时长（ms），随后整体淡出 */
-const HOLD_MS = 1000;
+/** 头像+昵称的保持时长（ms）：所有结尾方式共用，随后整体淡出 */
+const HOLD_MS = 3000;
 /** 收尾整体淡出时长（ms） */
 const FADE_MS = 1000;
 /** 「渐显渐隐」结尾方式：头像+昵称胶囊渐显/渐隐各用时长（ms），中间保持 HOLD_MS */
 const ENDING_FADE_MS = 800;
+/** 「彩虹圈」结尾方式：头像+昵称由小放大到正常尺寸的时长（ms），随后保持 HOLD_MS 再渐隐 */
+const RAINBOW_RISE_MS = 900;
 /** 开场椭圆扩散时长上限/比例（测试页基准：5.602s 视频开场 2.602s ≈ 46.4%，上限放宽到 3s） */
 const OPEN_MAX_SEC = 3;
 const OPEN_RATIO = 0.464;
@@ -225,7 +228,7 @@ export default function VideoOverlay({
   onMutedChange?: (muted: boolean) => void;
   /** 结尾的头像昵称方式：none=无 / fade=渐显渐隐 / portal=奇异博士传送门 / curtain=黑幕闭合 */
   endingMode?: AnimeEnding;
-  /** 开场方式：none=无（视频直接显示）/ fade=渐显（从中间透明度渐入，终点遵循整体透明档位）/ ellipse=椭圆拓展 */
+  /** 开场方式：none=无（视频直接显示）/ fade=渐显（从中间透明度渐入，终点遵循整体透明档位）/ ellipse=椭圆拓展（椭圆由中心向外扩散 + 由内向外的渐显叠加） */
   openingMode?: AnimeOpening;
 }) {
   const [fadeOut, setFadeOut] = useState(false);
@@ -375,6 +378,16 @@ export default function VideoOverlay({
             setEndingPhase("hide");
             release(ENDING_FADE_MS);
           }, ENDING_FADE_MS + HOLD_MS),
+        );
+        break;
+      case "rainbow":
+        // 彩虹圈：头像+昵称由小单调放大到正常尺寸 → 保持 HOLD_MS → 继续放大并渐隐后收口
+        setEndingPhase("show");
+        endTimersRef.current.push(
+          setTimeout(() => {
+            setEndingPhase("hide");
+            release(ENDING_FADE_MS);
+          }, RAINBOW_RISE_MS + HOLD_MS),
         );
         break;
       case "none":
@@ -615,7 +628,8 @@ export default function VideoOverlay({
   const rippleMask =
     "radial-gradient(ellipse var(--anime-ripple) var(--anime-ripple) at 50% 50%, #000 0, #000 max(0%, calc(100% - 6 * var(--u))), transparent 100%)";
   // 开场方式（openingMode）三态：
-  //  - ellipse（椭圆拓展）：中心大椭圆向外扩散（--anime-ripple 动画）∩ 整体透明度（两层 mask 交集）；
+  //  - ellipse（椭圆拓展）：中心椭圆向外扩散（--anime-ripple 0%→80%），同时整层 opacity 由很低的
+  //    0.08 渐入到 1 —— 两轴同时插值，得到「中心先实、边缘后实」的由内向外显现感；
   //  - fade（渐显，默认）：无形状遮罩，透明度从很低的 0.12 渐入到 1（不从 0 起），时长 = 开场时长×1.6；
   //    mask 的整体透明档位始终生效 → 最终观感遵循「整体透明」设置；
   //  - none（无）：视频直接显示，只挂整体透明度 mask，无开场动画。
@@ -623,7 +637,7 @@ export default function VideoOverlay({
     ? undefined
     : openingMode === "ellipse"
       ? {
-          animation: `anime-ripple-open ${timing.eMs}ms cubic-bezier(.4,0,.2,1) both`,
+          animation: `anime-ellipse-fade-open ${Math.round(timing.eMs * 1.6)}ms cubic-bezier(.4,0,.2,1) both`,
           maskImage: [rippleMask, alphaMask].join(", "),
           WebkitMaskImage: [rippleMask, alphaMask].join(", "),
           maskComposite: "intersect",
@@ -798,7 +812,7 @@ export default function VideoOverlay({
               />
               {/* 昵称胶囊：与头像同步渐显（portalOpen 驱动） */}
               <div
-                className="anime-name-pill"
+                className="anime-name-pill anime-name-pill-portal"
                 style={{
                   top: `min(calc(50% + 46 * var(--u)), calc(100% - 56 * var(--u)))`,
                   opacity: portalOpen,
@@ -820,7 +834,34 @@ export default function VideoOverlay({
                     : `anime-end-hide ${ENDING_FADE_MS}ms ease both`,
               }}
             >
-              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} className="anime-avatar-bordered" />
+              {/* 头像彩虹描边：与昵称边框、彩虹圈同色相的环形渐变 */}
+              <div className="anime-rainbow-halo" aria-hidden="true">
+                <div className="anime-rainbow-band" />
+              </div>
+              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
+              <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
+                {anime.user.uname}
+              </div>
+            </div>
+          )}
+          {fx && endingMode === "rainbow" && endingPhase && (
+            // 彩虹圈：整组（彩虹光环 + 头像 + 昵称）由小单调放大到正常尺寸，保持后继续放大渐隐。
+            // 缩放作用在舞台中心，头像与昵称作为一组同步放大/缩小。
+            <div
+              className="anime-rainbow-group"
+              style={{
+                animation:
+                  endingPhase === "show"
+                    ? `anime-rainbow-rise ${RAINBOW_RISE_MS}ms cubic-bezier(.2,.8,.2,1) both`
+                    : `anime-rainbow-sink ${ENDING_FADE_MS}ms ease both`,
+              }}
+            >
+              <div className="anime-rainbow-halo" aria-hidden="true">
+                <div className="anime-rainbow-spin">
+                  <div className="anime-rainbow-band" />
+                </div>
+              </div>
+              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
               <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
                 {anime.user.uname}
               </div>
