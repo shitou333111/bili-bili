@@ -1913,7 +1913,7 @@ export default function HomePage() {
     ? "bg-[#00a1d6] text-white hover:opacity-90 active:scale-95"
     : "bg-black/5 text-black/40 cursor-default";
 
-  /** 「粉丝」页「其他」tab（天选&红包卡片上方）：清理类工具卡片 + 合成活动"黑抽"卡片 */
+  /** 「粉丝」页「其他」tab（天选&红包卡片上方）：清理类工具卡片 + 年度大会员卡片 */
   const fansOtherTools = (
     <>
       {FANS_TOOLS.map((tool) => (
@@ -1982,42 +1982,46 @@ export default function HomePage() {
           </div>
         </div>
       </div>
-      {/* 合成活动"黑抽"卡片 - 真实活动页面，非模拟；服务器账号无登录凭证不可用 */}
-      <button
-        onClick={() => {
-          if (serverAccount) {
-            showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
-            return;
-          }
-          setRealActivityModalOpen(true);
-        }}
-        disabled={!realActivityUrl}
-        className={
-          !realActivityUrl || serverAccount
-            ? "w-full rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
-            : "w-full rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
-        }
-      >
-        <div className="flex items-center gap-3">
-          <span className={`text-3xl ${serverAccount ? "grayscale opacity-50" : ""}`}>⚡</span>
-          <div>
-            <h3 className={!realActivityUrl || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-red-700"}>合成活动"黑抽"</h3>
-            <p className={!realActivityUrl || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-red-600/60"}>
-              {serverAccount
-                ? "服务器账号无登录凭证，无法使用真实消费功能"
-                : realActivityUrl
-                  ? "主播未开播时直接进入真实合成活动页面，真实消费"
-                  : "管理员暂未配置黑抽活动地址"}
-            </p>
-          </div>
-          {!realActivityUrl || serverAccount ? (
-            <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
-          ) : (
-            <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-          )}
-        </div>
-      </button>
     </>
+  );
+
+  /** 「粉丝」页「合成」tab 最上方：合成活动"黑抽"卡片（真实活动页面，非模拟；服务器账号无登录凭证不可用）。
+   *  与合成页其他卡片同为 w-full，宽度自动一致。 */
+  const fansSynthesisTools = (
+    <button
+      onClick={() => {
+        if (serverAccount) {
+          showOfflineToast("该功能需要登录凭证，服务器账号无法使用");
+          return;
+        }
+        setRealActivityModalOpen(true);
+      }}
+      disabled={!realActivityUrl}
+      className={
+        !realActivityUrl || serverAccount
+          ? "w-full min-w-0 rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+          : "w-full min-w-0 rounded-xl border border-red-200 bg-red-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-red-300 hover:shadow-lg"
+      }
+    >
+      <div className="flex items-center gap-3">
+        <span className={`text-3xl ${serverAccount ? "grayscale opacity-50" : ""}`}>⚡</span>
+        <div>
+          <h3 className={!realActivityUrl || serverAccount ? "text-base font-bold text-black/40" : "text-base font-bold text-red-700"}>合成活动"黑抽"</h3>
+          <p className={!realActivityUrl || serverAccount ? "mt-0.5 text-xs text-black/30" : "mt-0.5 text-xs text-red-600/60"}>
+            {serverAccount
+              ? "服务器账号无登录凭证，无法使用真实消费功能"
+              : realActivityUrl
+                ? "主播未开播时直接进入真实合成活动页面，真实消费"
+                : "管理员暂未配置黑抽活动地址"}
+          </p>
+        </div>
+        {!realActivityUrl || serverAccount ? (
+          <svg className="w-4 h-4 text-black/20 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
+        ) : (
+          <svg className="w-4 h-4 text-red-300 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        )}
+      </div>
+    </button>
   );
 
   // 本地优先：返回用户先快速显示本地缓存，再后台同步 B站；首次使用直接扫码登录
@@ -3868,6 +3872,7 @@ export default function HomePage() {
           fixImageUrl={fixImageUrl}
           formatProfit={formatProfit}
           otherToolsExtra={fansOtherTools}
+          synthesisToolsExtra={fansSynthesisTools}
         />
       </div>
 

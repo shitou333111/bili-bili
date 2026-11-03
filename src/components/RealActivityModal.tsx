@@ -15,6 +15,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getStreamerInfoByUid, type StreamerInfo } from "./bili-simulator/liveStream";
 import { getPlatform } from "@/lib/platform";
+import { ensureValidCredentialClient } from "@/lib/bilibili/cookie-refresh-client";
 
 interface Props {
   isOpen: boolean;
@@ -68,16 +69,34 @@ export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate
       // 取出当前登录账号的 B站 Cookie 注入真实活动 WebView，实现自动登录
       const platform = await getPlatform();
       const state = await platform.getSessionState();
-      const currentSession = state.sessions.find((s: any) => s.sid === state.currentSid);
-      const cookies: string[] = [];
-      if (currentSession) {
-        if (currentSession.biliCookies?.length) {
-          cookies.push(...currentSession.biliCookies);
-        }
-        // 保证 SESSDATA 存在（biliCookies 可能不完整）
-        if (currentSession.biliSessdata && !cookies.some((c) => c.startsWith("SESSDATA="))) {
-          cookies.push(`SESSDATA=${currentSession.biliSessdata}`);
-        }
+      let currentSession = state.sessions.find((s: any) => s.sid === state.currentSid);
+      if (!currentSession) {
+        setError("未找到当前登录账号，请先登录后再打开");
+        return;
+      }
+      // 复用项目统一的凭证校验/刷新：黑抽页面的 csrf 直接取自 bili_jct，
+      // 登录久了服务端会轮换 bili_jct，用旧 token 必然报 csrf 校验失败。
+      const cred = await ensureValidCredentialClient(platform, currentSession);
+      if (!cred.valid) {
+        setError(cred.reason ? `登录凭证已失效（${cred.reason}），请重新登录` : "登录凭证已失效，请重新登录");
+        return;
+      }
+      currentSession = cred.session;
+      // 按 Cookie 名去重：biliCookies 里可能残留旧值，SESSDATA 以会话字段为准
+      const cookieMap = new Map<string, string>();
+      for (const raw of currentSession.biliCookies ?? []) {
+        const idx = raw.indexOf("=");
+        if (idx <= 0) continue;
+        cookieMap.set(raw.slice(0, idx), raw.slice(idx + 1));
+      }
+      if (currentSession.biliSessdata) {
+        cookieMap.set("SESSDATA", currentSession.biliSessdata);
+      }
+      const cookies = Array.from(cookieMap, ([name, value]) => `${name}=${value}`);
+      // 黑抽的抽取/付款请求都在 payload 里带 csrf，必须与服务端登录态中的 bili_jct 一致
+      if (!cookieMap.get("bili_jct")) {
+        setError("当前登录状态缺少 CSRF 凭证（bili_jct），请退出账号后重新扫码登录");
+        return;
       }
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("open_real_activity_panel", {

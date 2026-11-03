@@ -35,6 +35,24 @@ const BILIBILI_LIVE_HEADERS: Record<string, string> = {
   "Origin": "https://live.bilibili.com",
 };
 
+/**
+ * 把 Set-Cookie 头拆成独立 cookie。
+ * WebView 的 Headers 会把同名响应头用 ", " 合并成一个字符串，
+ * 而 `Expires=Wed, 15 Nov 2023 ...` 里本身含逗号，所以只能在
+ * 「逗号 + 下一个 cookie 的 name=」处切分，否则会把多个 cookie 当成一个，
+ * 导致刷新后只取到 SESSDATA、拿不到 bili_jct（刷新等于没做）。
+ */
+function splitSetCookieHeaders(values: string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    for (const part of value.split(/,(?=\s*[A-Za-z0-9_\-!#$%&'*+.^`|~]+=)/g)) {
+      const trimmed = part.trim();
+      if (trimmed) out.push(trimmed);
+    }
+  }
+  return out;
+}
+
 /** 服务器地址（配置中心 + 数据收集） */
 const SERVER_BASE_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000";
 
@@ -137,11 +155,14 @@ export const tauriPlatform: Platform = {
       headers: {
         getSetCookie: () => {
           try {
-            if (typeof response.headers.getSetCookie === "function") {
-              return response.headers.getSetCookie();
-            }
+            const apiCookies =
+              typeof response.headers.getSetCookie === "function"
+                ? response.headers.getSetCookie()
+                : [];
             const raw = response.headers.get("set-cookie");
-            return raw ? [raw] : [];
+            const list = apiCookies.length ? apiCookies : raw ? [raw] : [];
+            // 无论走 getSetCookie 还是合并后的单头，都再拆一次，保证返回的是独立 cookie
+            return splitSetCookieHeaders(list);
           } catch {
             return [];
           }

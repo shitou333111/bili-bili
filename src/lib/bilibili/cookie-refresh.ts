@@ -48,6 +48,23 @@ export function buildCookieHeader(session: AuthSession): string {
     : `SESSDATA=${session.biliSessdata}`;
 }
 
+/**
+ * 合并新旧 Cookie：刷新只下发 sid/DedeUserID/DedeUserID__ckMd5/SESSDATA/bili_jct，
+ * 旧的 buvid3、buvid4、bili_ticket 等设备标识要保留，否则可能触发风控。
+ */
+function mergeCookies(oldCookies: string[] | undefined, newCookies: string[]): string[] {
+  const map = new Map<string, string>();
+  for (const c of oldCookies ?? []) {
+    const idx = c.indexOf("=");
+    if (idx > 0) map.set(c.slice(0, idx), c.slice(idx + 1));
+  }
+  for (const c of newCookies) {
+    const idx = c.indexOf("=");
+    if (idx > 0) map.set(c.slice(0, idx), c.slice(idx + 1));
+  }
+  return Array.from(map, ([name, value]) => `${name}=${value}`);
+}
+
 /** 生成 CorrespondPath（RSA-OAEP 加密 refresh_${timestamp}） */
 function generateCorrespondPath(timestamp: number): string {
   const data = Buffer.from(`refresh_${timestamp}`, "utf8");
@@ -63,28 +80,35 @@ function generateCorrespondPath(timestamp: number): string {
 }
 
 /** 获取 refresh_csrf（从 correspond 页面解析） */
-async function getRefreshCsrf(cookie: string): Promise<string | null> {
+async function getRefreshCsrf(
+  cookie: string,
+  serverTimestampMs?: number,
+): Promise<string | null> {
   // 用 B站服务端时间戳生成 correspondPath：correspond 对时间戳严格校验，
   // 本地系统时钟与 B站服务器不同步时 Date.now() 会产生"过期"路径 → 404「出错啦」。
-  // 先取 cookie/info 返回的服务端当前毫秒时间戳，取不到再回退本地时钟。
-  let timestamp = Date.now();
-  try {
-    const infoRes = await fetch(
-      "https://passport.bilibili.com/x/passport-login/web/cookie/info",
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-          Cookie: cookie,
+  // 调用方已从 cookie/info 拿到时间戳时直接复用，避免重复请求。
+  let timestamp = serverTimestampMs && serverTimestampMs > 0 ? serverTimestampMs : Date.now();
+  if (!serverTimestampMs) {
+    try {
+      const infoRes = await fetch(
+        "https://passport.bilibili.com/x/passport-login/web/cookie/info",
+        {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            Cookie: cookie,
+          },
+          cache: "no-store",
         },
-        cache: "no-store",
-      },
-    );
-    const infoBody = (await infoRes.json()) as { code?: number; data?: { timestamp?: number } };
-    if (infoRes.ok && infoBody.code === 0 && infoBody.data?.timestamp) {
-      timestamp = infoBody.data.timestamp;
+      );
+      const infoBody = (await infoRes.json()) as { code?: number; data?: { timestamp?: number } };
+      if (infoRes.ok && infoBody.code === 0 && infoBody.data?.timestamp) {
+        timestamp = infoBody.data.timestamp;
+      }
+    } catch {
+      // 拿不到服务端时间则回退本地时钟
     }
-  } catch { /* 拿不到服务端时间则回退本地时钟 */ }
+  }
   const correspondPath = generateCorrespondPath(timestamp);
   const url = `https://www.bilibili.com/correspond/1/${correspondPath}`;
 
@@ -155,7 +179,10 @@ type ConfirmRefreshResponse = {
  * 刷新 B站 Cookie
  * 当 SESSDATA 失效时调用，使用 refresh_token 获取新的凭证
  */
-export async function refreshBiliCookie(session: AuthSession): Promise<RefreshCookieResult> {
+export async function refreshBiliCookie(
+  session: AuthSession,
+  serverTimestampMs?: number,
+): Promise<RefreshCookieResult> {
   const cookie = buildCookieHeader(session);
   const biliJct = session.biliCookies
     ? extractCookieValue(session.biliCookies, "bili_jct")
@@ -172,7 +199,7 @@ export async function refreshBiliCookie(session: AuthSession): Promise<RefreshCo
   console.log("[CookieRefresh] 开始刷新 B站 Cookie...");
 
   // 步骤1：获取 refresh_csrf
-  const refreshCsrf = await getRefreshCsrf(cookie);
+  const refreshCsrf = await getRefreshCsrf(cookie, serverTimestampMs);
   if (!refreshCsrf) {
     return { success: false, error: "获取 refresh_csrf 失败" };
   }
@@ -215,10 +242,6 @@ export async function refreshBiliCookie(session: AuthSession): Promise<RefreshCo
     } catch {
       newCookies = [];
     }
-    const newRefreshToken = refreshResult.data?.refresh_token || "";
-    const newSessdata = extractCookieValue(newCookies, "SESSDATA");
-    const newBiliJct = extractCookieValue(newCookies, "bili_jct");
-
     // 兜底：个别环境取不到 set-cookie 头时回退 body 的 cookie_info（旧结构）
     if (newCookies.length === 0 && refreshResult.data?.cookie_info?.cookies) {
       newCookies = refreshResult.data.cookie_info.cookies.map(
@@ -226,9 +249,23 @@ export async function refreshBiliCookie(session: AuthSession): Promise<RefreshCo
       );
     }
 
-    if (!newSessdata || !newBiliJct) {
-      console.error("[CookieRefresh] 刷新响应缺少必要 cookie; Set-Cookie=", JSON.stringify(newCookies));
-      return { success: false, error: "刷新响应缺少 SESSDATA 或 bili_jct" };
+    const newRefreshToken = refreshResult.data?.refresh_token || "";
+    const newSessdata = extractCookieValue(newCookies, "SESSDATA");
+    const newBiliJct = extractCookieValue(newCookies, "bili_jct");
+
+    if (!newSessdata || !newBiliJct || !newRefreshToken) {
+      // 没有完整拿到轮换后的凭证 → 按失败处理，绝不写回新 refresh_token：
+      // 新 token 只与「新 Cookie」配对，旧 Cookie + 新 token 会让后续刷新永远 86095。
+      console.error(
+        "[CookieRefresh] 刷新未轮换 Cookie; Set-Cookie=",
+        JSON.stringify(newCookies),
+        "; 有 refresh_token=",
+        Boolean(newRefreshToken),
+      );
+      return {
+        success: false,
+        error: `刷新未轮换 Cookie（SESSDATA=${Boolean(newSessdata)}, bili_jct=${Boolean(newBiliJct)}, refresh_token=${Boolean(newRefreshToken)}）`,
+      };
     }
 
     // 步骤3：确认更新（使用新 cookie 和旧 refresh_token）
@@ -253,7 +290,7 @@ export async function refreshBiliCookie(session: AuthSession): Promise<RefreshCo
     console.log("[CookieRefresh] B站 Cookie 刷新成功");
     return {
       success: true,
-      newCookies,
+      newCookies: mergeCookies(session.biliCookies, newCookies),
       newRefreshToken,
       newSessdata,
     };
@@ -281,6 +318,13 @@ type NavResponse = {
   };
 };
 
+/** cookie/info 接口响应 */
+type CookieInfoResponse = {
+  code: number;
+  message: string;
+  data?: { refresh: boolean; timestamp: number };
+};
+
 /** 凭证验证结果 */
 export type CredentialCheckResult =
   | { valid: true; session: AuthSession; cookie: string }
@@ -290,7 +334,9 @@ export type CredentialCheckResult =
 // 多个请求并发调用 ensureValidCredential 时，若不锁会同时用同一 refresh_token 刷新，
 // 但 token 在刷新后被消耗/轮换，只有一个成功，其余失败并触发 86095 / correspond 404。
 const REVALIDATE_MS = 5 * 60 * 1000; // 验证有效缓存：5 分钟内不重复调 nav
-const REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000; // 实际刷新节流：12 小时最多刷一次
+// 刷新成功后 cookie/info 会返回 refresh=false；这个节流主要是「失败后多久再试」，
+// 12 小时太长会把续期窗口拖过 SESSDATA 过期点，故缩短为 1 小时。
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 const _okCache = new Map<string, number>();
 const _lastRefreshAt = new Map<string, number>();
 const _inflightBySid = new Map<string, Promise<CredentialCheckResult>>();
@@ -313,145 +359,194 @@ export async function ensureValidCredential(session: AuthSession): Promise<Crede
 
 async function _doEnsureValidCredential(session: AuthSession): Promise<CredentialCheckResult> {
   const cookie = buildCookieHeader(session);
+  const biliJct = session.biliCookies
+    ? extractCookieValue(session.biliCookies, "bili_jct")
+    : "";
 
-  // 步骤1：用 nav 接口验证凭证（限流/网络错误时重试 3 次，指数退避）
-  // 这是切号后偶发"伪失效"的主因——短时间内并发请求B站导致临时限流
-  let navResult: NavResponse | null = null;
-  // 是否拿到"凭证确实失效"的确凿结论。只有 -101/3（账号未登录）或 nav 明确返回未登录才算，
-  // 限流（-412）、网络异常、未知 code 都只是临时异常，不能据此把用户踢下线。
-  let expired = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetchBilibiliJson<NavResponse>({
-        url: "https://api.bilibili.com/x/web-interface/nav",
-        cookie,
-      });
-      navResult = res;
-      if (navResult.code === 0 && navResult.data?.isLogin) {
+  // 步骤1：先用 cookie/info 判断「是否需要刷新」。
+  // 关键：刷新必须趁 SESSDATA 还没过期时做。一旦真过期，correspond 页会返回 404，
+  // 再新的 refresh_token 也救不回来，只能重新扫码。原实现只靠 nav 判断失效，
+  // 等 nav 报 -101 时刷新窗口早就错过了——这就是服务端自动续期从未成功的原因。
+  let needsRefresh = false;
+  let serverTimestampMs: number | undefined;
+  let infoUncertain = false;
+
+  try {
+    const infoUrl = biliJct
+      ? `https://passport.bilibili.com/x/passport-login/web/cookie/info?csrf=${encodeURIComponent(biliJct)}`
+      : "https://passport.bilibili.com/x/passport-login/web/cookie/info";
+    const info = await fetchBilibiliJson<CookieInfoResponse>({ url: infoUrl, cookie });
+    if (info.code === 0 && info.data) {
+      if (info.data.refresh) {
+        needsRefresh = true;
+        serverTimestampMs = info.data.timestamp;
+        console.log("[CredentialCheck] cookie/info 提示需要刷新（SESSDATA 仍有效）");
+      } else {
         _okCache.set(session.sid, Date.now());
         return { valid: true, session, cookie };
       }
-      if (isBiliCredentialExpired(navResult.code) || navResult.code === 0) {
-        // -101/3 = 账号未登录；code=0 且没有 isLogin = 明确未登录
-        expired = true;
-        break;
-      }
-      // 其他错误（-412 限流、-799 等）：临时异常，继续重试
-    } catch (err) {
-      console.error(`[CredentialCheck] nav 接口请求失败 attempt=${attempt + 1}:`, err);
-    }
-    if (attempt < 2) {
-      const delay = 1500 * Math.pow(2, attempt); // 1.5s / 3s
-      console.log(`[CredentialCheck] nav 接口失败，等待 ${delay}ms 后重试`);
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-
-  // 没拿到"确凿失效"结论（限流/网络抖动/未知 code）：保守放行，保留当前会话。
-  // 误判成失效的代价是把用户直接踢出登录，且刷新有 12h 节流、期间无法自愈；
-  // 放行的最坏结果只是下游 B站 请求报错，下次校验还能自愈。
-  if (!expired) {
-    console.log(
-      "[CredentialCheck] nav 未取得“凭证失效”结论（疑似限流或网络异常），保留当前会话:",
-      navResult?.code,
-      navResult?.message,
-    );
-    // 记 okCache，避免每个请求都重跑 nav 重试（最多 4.5s）造成请求堆积
-    _okCache.set(session.sid, Date.now());
-    return { valid: true, session, cookie };
-  }
-
-  console.log("[CredentialCheck] B站凭证已失效，尝试刷新...", navResult?.code, navResult?.message);
-
-  // 刷新节流：距上次刷新间隔过短则跳过（旧 cookie 可能仍可用），避免高频死循环与 token 消耗。
-  // 服务端 refresh 失败（如 correspond 404、refresh_token 不匹配）时尤其需要节流，防止每请求都刷。
-  const lastRf = _lastRefreshAt.get(session.sid);
-  if (lastRf && Date.now() - lastRf < REFRESH_INTERVAL_MS) {
-    console.log(`[CredentialCheck] 距上次刷新 ${((Date.now() - lastRf) / 3600000).toFixed(1)}h，跳过本次刷新`);
-  } else {
-    _lastRefreshAt.set(session.sid, Date.now());
-
-    // 步骤2：凭证失效，尝试刷新（也加重试）
-    let refreshResult: RefreshCookieResult | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      refreshResult = await refreshBiliCookie(session);
-      if (refreshResult.success && refreshResult.newCookies) break;
-      if (attempt < 1) {
-        console.log(`[CredentialCheck] 刷新失败 attempt=${attempt + 1}，重试...`, refreshResult.error);
-        await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt))); // 2s / 4s
-      }
-    }
-    if (!refreshResult || !refreshResult.success || !refreshResult.newCookies) {
+    } else if (isBiliCredentialExpired(info.code)) {
+      console.log("[CredentialCheck] cookie/info 返回 -101，SESSDATA 已完全过期，需重新登录");
       return {
         valid: false,
         needsRelogin: true,
-        reason: refreshResult?.error || "刷新失败",
+        reason: "SESSDATA 已完全过期，无法刷新，需重新登录",
       };
+    } else {
+      console.warn(`[CredentialCheck] cookie/info 返回未知 code=${info.code}，回退 nav 检查`);
+      infoUncertain = true;
     }
+  } catch (err) {
+    console.warn("[CredentialCheck] cookie/info 请求失败，回退 nav 检查:", err);
+    infoUncertain = true;
+  }
 
-    // 步骤3：更新 session 中的凭证
-    const updatedSession = await updateSessionCredentials(session.sid, {
-      biliSessdata: refreshResult.newSessdata,
-      biliRefreshToken: refreshResult.newRefreshToken,
-      biliCookies: refreshResult.newCookies,
-    });
-
-    if (!updatedSession) {
-      return {
-        valid: false,
-        needsRelogin: true,
-        reason: "无法更新会话凭证",
-      };
-    }
-
-    // 步骤4：用新凭证验证一次（加重试）
-    // 刷新本身已成功（B站下发了新 cookie，说明 refresh_token 仍有效），
-    // 所以只有 nav 明确回报未登录才算失败；限流/网络异常一律按刷新成功处理，
-    // 否则一次限流就会把刚刷好的会话又踢掉。
-    const newCookie = refreshResult.newCookies.join("; ");
-    let retryExpired = false;
+  // 步骤1b：cookie/info 不可用时才退回 nav 判断。
+  // 限流（-412）、网络抖动、未知 code 都只是临时异常，不能据此把用户踢下线。
+  if (infoUncertain) {
+    let navResult: NavResponse | null = null;
+    let expired = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const retryNav = await fetchBilibiliJson<NavResponse>({
+        const res = await fetchBilibiliJson<NavResponse>({
           url: "https://api.bilibili.com/x/web-interface/nav",
-          cookie: newCookie,
+          cookie,
         });
-        if (retryNav.code === 0 && retryNav.data?.isLogin) {
-          console.log("[CredentialCheck] 凭证刷新成功");
+        navResult = res;
+        if (navResult.code === 0 && navResult.data?.isLogin) {
           _okCache.set(session.sid, Date.now());
-          return { valid: true, session: updatedSession, cookie: newCookie };
+          return { valid: true, session, cookie };
         }
-        if (isBiliCredentialExpired(retryNav.code) || retryNav.code === 0) {
-          retryExpired = true;
+        if (isBiliCredentialExpired(navResult.code) || navResult.code === 0) {
+          // -101/3 = 账号未登录；code=0 且没有 isLogin = 明确未登录
+          expired = true;
           break;
         }
+        // 其他错误（-412 限流、-799 等）：临时异常，继续重试
       } catch (err) {
-        console.error(`[CredentialCheck] 刷新后验证 attempt=${attempt + 1} 失败:`, err);
+        console.error(`[CredentialCheck] nav 接口请求失败 attempt=${attempt + 1}:`, err);
       }
       if (attempt < 2) {
-        const delay = 1500 * Math.pow(2, attempt);
+        const delay = 1500 * Math.pow(2, attempt); // 1.5s / 3s
+        console.log(`[CredentialCheck] nav 接口失败，等待 ${delay}ms 后重试`);
         await new Promise(r => setTimeout(r, delay));
       }
     }
 
-    if (retryExpired) {
-      return {
-        valid: false,
-        needsRelogin: true,
-        reason: "刷新后凭证仍失效",
-      };
+    if (!expired) {
+      console.log(
+        "[CredentialCheck] nav 未取得“凭证失效”结论（疑似限流或网络异常），保留当前会话:",
+        navResult?.code,
+        navResult?.message,
+      );
+      // 记 okCache，避免每个请求都重跑 nav 重试（最多 4.5s）造成请求堆积
+      _okCache.set(session.sid, Date.now());
+      return { valid: true, session, cookie };
     }
-    console.log("[CredentialCheck] 刷新后验证未取得失效结论，按刷新成功处理");
-    _okCache.set(session.sid, Date.now());
-    return { valid: true, session: updatedSession, cookie: newCookie };
+    console.log("[CredentialCheck] nav 确认凭证已失效，尝试刷新...", navResult?.code, navResult?.message);
   }
 
-  // 刷新被节流跳过，且 nav 已确凿回报未登录（否则上面已按临时异常放行）：
-  // 此时确实需要重新登录。注意不要写 _okCache——那会让后续 5 分钟内的校验
-  // 反向返回"有效"，造成各接口登录态自相矛盾。
-  return {
-    valid: false,
-    needsRelogin: true,
-    reason: "刷新节流跳过，等待重新登录",
-  };
+  // cookie/info 说 refresh=true 时旧 SESSDATA 仍可用；nav 报失效时旧凭证已不可用。
+  // 两者决定「刷新失败/被节流时是否还能继续用旧 cookie」。
+  const oldCookieStillUsable = needsRefresh;
+
+  // 刷新节流：距上次刷新间隔过短则跳过，避免高频死循环与 token 消耗。
+  const lastRf = _lastRefreshAt.get(session.sid);
+  if (lastRf && Date.now() - lastRf < REFRESH_INTERVAL_MS) {
+    console.log(`[CredentialCheck] 距上次刷新 ${((Date.now() - lastRf) / 3600000).toFixed(1)}h，跳过本次刷新`);
+    if (oldCookieStillUsable) {
+      // cookie/info 只是提示该刷新，旧 SESSDATA 仍有效，可以继续用
+      _okCache.set(session.sid, Date.now());
+      return { valid: true, session, cookie };
+    }
+    // 旧凭证已确凿失效且不能刷新 → 必须重新登录。
+    // 注意不要写 _okCache，否则后续 5 分钟内的校验会反向返回"有效"。
+    return {
+      valid: false,
+      needsRelogin: true,
+      reason: "刷新节流跳过，等待重新登录",
+    };
+  }
+
+  _lastRefreshAt.set(session.sid, Date.now());
+
+  // 步骤2：尝试刷新（加重试）
+  let refreshResult: RefreshCookieResult | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    refreshResult = await refreshBiliCookie(session, serverTimestampMs);
+    if (refreshResult.success && refreshResult.newCookies) break;
+    if (attempt < 1) {
+      console.log(`[CredentialCheck] 刷新失败 attempt=${attempt + 1}，重试...`, refreshResult.error);
+      await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt))); // 2s / 4s
+    }
+  }
+  if (!refreshResult || !refreshResult.success || !refreshResult.newCookies) {
+    if (oldCookieStillUsable) {
+      // 旧 SESSDATA 仍有效：刷新失败不代表登录失效，保留会话、下次再试
+      console.warn("[CredentialCheck] 刷新失败，继续使用旧 cookie:", refreshResult?.error);
+      _okCache.set(session.sid, Date.now());
+      return { valid: true, session, cookie };
+    }
+    return {
+      valid: false,
+      needsRelogin: true,
+      reason: refreshResult?.error || "刷新失败",
+    };
+  }
+
+  // 步骤3：更新 session 中的凭证（newCookies 已合并旧的非轮换项）
+  const updatedSession = await updateSessionCredentials(session.sid, {
+    biliSessdata: refreshResult.newSessdata,
+    biliRefreshToken: refreshResult.newRefreshToken,
+    biliCookies: refreshResult.newCookies,
+  });
+
+  if (!updatedSession) {
+    return {
+      valid: false,
+      needsRelogin: true,
+      reason: "无法更新会话凭证",
+    };
+  }
+
+  // 步骤4：用新凭证验证一次（加重试）
+  // 刷新本身已成功（B站下发了新 cookie，说明 refresh_token 仍有效），
+  // 所以只有 nav 明确回报未登录才算失败；限流/网络异常一律按刷新成功处理，
+  // 否则一次限流就会把刚刷好的会话又踢掉。
+  const newCookie = refreshResult.newCookies.join("; ");
+  let retryExpired = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const retryNav = await fetchBilibiliJson<NavResponse>({
+        url: "https://api.bilibili.com/x/web-interface/nav",
+        cookie: newCookie,
+      });
+      if (retryNav.code === 0 && retryNav.data?.isLogin) {
+        console.log("[CredentialCheck] 凭证刷新成功");
+        _okCache.set(session.sid, Date.now());
+        return { valid: true, session: updatedSession, cookie: newCookie };
+      }
+      if (isBiliCredentialExpired(retryNav.code) || retryNav.code === 0) {
+        retryExpired = true;
+        break;
+      }
+    } catch (err) {
+      console.error(`[CredentialCheck] 刷新后验证 attempt=${attempt + 1} 失败:`, err);
+    }
+    if (attempt < 2) {
+      const delay = 1500 * Math.pow(2, attempt);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  if (retryExpired) {
+    return {
+      valid: false,
+      needsRelogin: true,
+      reason: "刷新后凭证仍失效",
+    };
+  }
+  console.log("[CredentialCheck] 刷新后验证未取得失效结论，按刷新成功处理");
+  _okCache.set(session.sid, Date.now());
+  return { valid: true, session: updatedSession, cookie: newCookie };
 }

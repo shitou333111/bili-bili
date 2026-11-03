@@ -309,6 +309,8 @@ interface RevenueModuleContentProps {
 
   /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「天选&红包」之前 */
   otherToolsExtra?: React.ReactNode;
+  /** 「合成」tab 顶部额外内容（黑抽卡片），渲染在所有合成卡片之前 */
+  synthesisToolsExtra?: React.ReactNode;
 }
 
 // ==================== 防氪记录 ====================
@@ -652,6 +654,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     fixImageUrl,
     formatProfit,
     otherToolsExtra,
+    synthesisToolsExtra,
   } = props;
 
   // 防氪记录轻提示：标题按钮只弹说明文案，圆形按钮只弹分级说明+消费数据；
@@ -1553,8 +1556,12 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           )}
 
           {/* Synthesis tab */}
-          {activeTab === "synthesis" && synthesisStats ? (
+          {activeTab === "synthesis" && (
             <>
+              {/* 黑抽卡片固定在合成页最上方；即使统计数据还在加载也先展示入口 */}
+              {synthesisToolsExtra}
+              {synthesisStats ? (
+                <>
               {synthesisStats.activities.length > 0 ? (
                 synthesisStats.activities.map((activity, actIndex) => (
                   <SynthesisActivityCard key={activity.id} activity={activity} index={actIndex} />
@@ -1690,14 +1697,16 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                   </div>
                 )}
               </div>
+                </>
+              ) : (
+                <div className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
+                  <div className="text-sm text-black/45">
+                    正在加载合成统计...
+                  </div>
+                </div>
+              )}
             </>
-          ) : activeTab === "synthesis" ? (
-            <div className="rounded-xl border border-black/10 bg-white/80 p-6 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-center">
-              <div className="text-sm text-black/45">
-                正在加载合成统计...
-              </div>
-            </div>
-          ) : null}
+          )}
 
           {/* 其他数据 tab */}
           {activeTab === "other" && otherStats && (

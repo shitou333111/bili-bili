@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { serverApiUrl, serverPost, isTauri, pageUrl } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
+import { fetchMedicalRoomId } from "@/lib/medical-client";
 import { dataFetch } from "@/lib/client-fetch";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import WindowTitleBar from "@/components/WindowTitleBar";
@@ -16,6 +17,51 @@ function fixImageUrl(url: string): string {
   if (url.startsWith("//")) return "https:" + url;
   if (url.startsWith("http://")) return url.replace("http://", "https://");
   return url;
+}
+
+/**
+ * 打开主播直播间：记录里有 roomId 时直接用，缺失时复用项目已有的
+ * fetchMedicalRoomId（/api/medical/room-id，getRoomInfoOld）按 UID 查询。
+ */
+async function openMicroLightRoom(uid: number, roomId?: number) {
+  let target = Number(roomId) || 0;
+  if (!target && uid > 0) {
+    const room = await fetchMedicalRoomId(uid).catch(() => null);
+    target = room?.data?.roomid ?? 0;
+  }
+  if (!target) {
+    window.alert("未找到该主播的直播间");
+    return;
+  }
+  const platform = await getPlatform();
+  const appScheme = `bilibili://live/${target}`;
+  const webUrl = `https://live.bilibili.com/${target}`;
+  if (platform.isNative) {
+    let opened = false;
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      try {
+        await openUrl(appScheme);
+        opened = true;
+      } catch {
+        try {
+          await openUrl(webUrl);
+          opened = true;
+        } catch { /* ignore */ }
+      }
+    } catch { /* plugin-opener 不可用，降级到 window.open */ }
+    if (opened) return;
+  }
+  try {
+    const schemeWin = window.open(appScheme, "_blank");
+    setTimeout(() => {
+      try {
+        if (schemeWin) schemeWin.location.href = webUrl;
+      } catch { /* ignore cross-origin */ }
+    }, 1200);
+  } catch {
+    window.open(webUrl, "_blank");
+  }
 }
 
 /**
@@ -181,6 +227,62 @@ type AdminConfigData = {
   wechat_qr_url: string;
 };
 
+/** 备用药活动奖品（10 个槽位：special / consolation / p1..p8） */
+type MicroLightPrizeData = {
+  id: string;
+  kind: "special" | "consolation" | "normal";
+  name: string;
+  giftId: number;
+  img?: string;
+  battery: number;
+  prob: number;
+  text: string;
+};
+
+/** 备用药活动「本月微光天使」 */
+type MicroLightSponsorData = { uid: number; uname: string; face: string; note?: string };
+
+type MicroLightConfigData = {
+  enabled: boolean;
+  seasonAuto: boolean;
+  seasonId: number;
+  drawWindowHours: number;
+  monthlyWinCap: number;
+  /** 本月奖金上限（电池）：本月累计中奖礼物价值超过该值时活动自动暂停；0 = 不限制 */
+  monthlyBatteryCap: number;
+  voidScoreThreshold: number;
+  votesPerBattery: number;
+  prizes: MicroLightPrizeData[];
+  sponsors: MicroLightSponsorData[];
+  updatedAt?: string;
+  currentSeasonId?: number;
+};
+
+type MicroLightDrawData = {
+  id: string;
+  pkId: number;
+  uid: number;
+  uname: string;
+  face?: string;
+  roomId: number;
+  month: string;
+  pkEndTime: number;
+  votes: number;
+  rank: number;
+  participants: number;
+  secondVotes: number;
+  playedFull: boolean;
+  prizeId: string;
+  prizeKind: "special" | "consolation" | "normal" | "none";
+  prizeName: string;
+  prizeText: string;
+  prizeImg?: string;
+  battery: number;
+  drawnAt: string;
+  status: "miss" | "pending" | "granted" | "void";
+  note?: string;
+};
+
 /** 帮助页「常见问题」条目 */
 type FaqItemData = { q: string; a: string };
 
@@ -339,6 +441,17 @@ export default function AdminPage() {
     title: string;
   } | null>(null);
   const [anchorError, setAnchorError] = useState("");
+  // ===== 备用药活动（/120 多人 PK 安慰抽奖）=====
+  const [microLight, setMicroLight] = useState<MicroLightConfigData | null>(null);
+  const [microLightDraws, setMicroLightDraws] = useState<MicroLightDrawData[]>([]);
+  const [microLightSaved, setMicroLightSaved] = useState(false);
+  const [microLightCollapsed, setMicroLightCollapsed] = useState(true);
+  // 奖品名称搜索建议（当前展开的奖品行）
+  const [microLightPrizeSearch, setMicroLightPrizeSearch] = useState<number | null>(null);
+  const [microLightSponsorUid, setMicroLightSponsorUid] = useState("");
+  const [microLightSponsorQuerying, setMicroLightSponsorQuerying] = useState(false);
+  const [microLightDrawMonth, setMicroLightDrawMonth] = useState("");
+  const [microLightStatusSaving, setMicroLightStatusSaving] = useState<string | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -656,6 +769,127 @@ export default function AdminPage() {
       } catch { /* 全局开关读取失败不影响其他模块 */ }
     })();
   }, [adminLoggedIn]);
+
+  /** 加载备用药活动配置 + 抽奖记录 */
+  const loadMicroLight = useCallback(async () => {
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/micro-light"));
+      const data = await res.json();
+      if (data.code === 0 && data.data?.config) {
+        setMicroLight(data.data.config as MicroLightConfigData);
+        setMicroLightDraws(Array.isArray(data.data.draws) ? (data.data.draws as MicroLightDrawData[]) : []);
+      }
+    } catch {
+      /* 备用药配置加载失败不影响其他模块 */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!adminLoggedIn) return;
+    // 延后一帧执行：避免在 effect 内同步触发 setState 的级联渲染告警
+    const timer = window.setTimeout(() => void loadMicroLight(), 0);
+    return () => window.clearTimeout(timer);
+  }, [adminLoggedIn, loadMicroLight]);
+
+  /** 保存备用药活动配置（奖品 / 开关 / 参数 / 微光天使） */
+  const saveMicroLight = async () => {
+    if (!microLight) return;
+    setMicroLightSaved(false);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/micro-light"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(microLight),
+      });
+      const data = await res.json();
+      if (data.code === 0 && data.data?.config) {
+        setMicroLight(data.data.config as MicroLightConfigData);
+        setMicroLightSaved(true);
+        setTimeout(() => setMicroLightSaved(false), 2000);
+      } else {
+        alert(data.message || "保存失败");
+      }
+    } catch {
+      alert("网络错误，保存失败");
+    }
+  };
+
+  /** 更新备用药某条抽奖记录的结算状态；reset 表示撤销该次抽奖（回到未抽奖状态） */
+  const updateMicroLightStatus = async (id: string, status: MicroLightDrawData["status"] | "reset") => {
+    setMicroLightStatusSaving(id);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/micro-light/status"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      const data = await res.json();
+      if (data.code === 0 && data.data?.reset) {
+        // 重抽：抽奖记录被移除，该 PK 回到未抽奖状态
+        setMicroLightDraws((list) => list.filter((d) => d.id !== id));
+      } else if (data.code === 0 && data.data?.draw) {
+        const next = data.data.draw as MicroLightDrawData;
+        setMicroLightDraws((list) => list.map((d) => (d.id === next.id ? next : d)));
+      } else {
+        alert(data.message || "操作失败");
+      }
+    } catch {
+      alert("网络错误，操作失败");
+    } finally {
+      setMicroLightStatusSaving(null);
+    }
+  };
+
+  /** 更新某个奖品的字段 */
+  const updateMicroLightPrize = (index: number, patch: Partial<MicroLightPrizeData>) => {
+    if (!microLight) return;
+    const prizes = microLight.prizes.map((p, i) => (i === index ? { ...p, ...patch } : p));
+    setMicroLight({ ...microLight, prizes });
+  };
+
+  /** 添加微光天使（按 UID 查询昵称/头像） */
+  const addMicroLightSponsor = async () => {
+    if (!microLight || !microLightSponsorUid.trim()) return;
+    const uid = Number(microLightSponsorUid.trim());
+    if (!uid || uid <= 0) { alert("请输入正确的UID"); return; }
+    if (microLight.sponsors.some((s) => s.uid === uid)) { alert("该用户已在列表中"); return; }
+    setMicroLightSponsorQuerying(true);
+    try {
+      let uname = "";
+      let face = "";
+      // 优先按直播主播信息获取；普通用户（无直播间）回退到通用用户信息接口
+      try {
+        const res = await dataFetch(`/api/tools/streamer-info?uid=${uid}`, { cache: "no-store" });
+        const data = await res.json();
+        if (data.code === 0 && data.data?.uname) {
+          uname = String(data.data.uname);
+          face = String(data.data.face ?? "");
+        }
+      } catch { /* 回退到通用接口 */ }
+      if (!uname) {
+        const res = await dataFetch(`/api/tools/user-info?uids=${uid}`, { cache: "no-store" });
+        const data = await res.json();
+        const info = data?.data?.[String(uid)] as { name?: string; face?: string } | undefined;
+        if (info?.name) {
+          uname = info.name;
+          face = info.face ?? "";
+        }
+      }
+      if (!uname) {
+        alert("未查询到该用户信息，请确认 UID 是否正确");
+        return;
+      }
+      setMicroLight({
+        ...microLight,
+        sponsors: [...microLight.sponsors, { uid, uname, face: face ? fixImageUrl(face) : "", note: "" }],
+      });
+      setMicroLightSponsorUid("");
+    } catch {
+      alert("查询用户信息失败");
+    } finally {
+      setMicroLightSponsorQuerying(false);
+    }
+  };
 
   /** 保存抽奖概率（格式 "1/n"，n≥2 整数），改后所有平台立即生效 */
   const saveLotteryConfig = async () => {
@@ -2675,6 +2909,330 @@ export default function AdminPage() {
                     ))
                 )}
               </div>
+            </ConfigCard>
+
+            {/* 备用药：/120 多人 PK 安慰抽奖 */}
+            <ConfigCard
+              title="备用药（/120 多人 PK 安慰抽奖）"
+              collapsed={microLightCollapsed}
+              onToggle={() => setMicroLightCollapsed((v) => !v)}
+              onSave={saveMicroLight}
+              saved={microLightSaved}
+            >
+              {!microLight ? (
+                <p className="text-[10px] text-black/30">加载中…</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-black/10 bg-black/[0.02] px-2 py-1.5">
+                    <label className="flex items-center gap-1.5 text-[11px] font-medium">
+                      <input
+                        type="checkbox"
+                        checked={microLight.enabled}
+                        onChange={(e) => setMicroLight({ ...microLight, enabled: e.target.checked })}
+                        className="w-3.5 h-3.5 accent-[#00a1d6]"
+                      />
+                      活动开启
+                    </label>
+                    <a
+                      href={pageUrl("/120")}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto rounded bg-[#00a1d6] px-2 py-0.5 text-[10px] text-white hover:opacity-90"
+                    >
+                      打开 /120 ↗
+                    </a>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                    {[
+                      { label: "有效期(小时)", key: "drawWindowHours" as const, step: 1 },
+                      { label: "每月中奖上限", key: "monthlyWinCap" as const, step: 1 },
+                      { label: "本月奖金上限(电池)", key: "monthlyBatteryCap" as const, step: 100 },
+                      { label: "流局阈值(票)", key: "voidScoreThreshold" as const, step: 100 },
+                      { label: "中奖期望=第二名票数的1/", key: "votesPerBattery" as const, step: 1 },
+                    ].map((f) => (
+                      <label key={f.key} className="flex items-center gap-1.5 rounded border border-black/10 px-2 py-1">
+                        <span className="shrink-0 text-[10px] text-black/50">{f.label}</span>
+                        <input
+                          type="number"
+                          step={f.step}
+                          value={microLight[f.key]}
+                          onChange={(e) => setMicroLight({ ...microLight, [f.key]: Number(e.target.value) || 0 })}
+                          className="min-w-0 flex-1 rounded border border-black/10 px-1 py-0.5 text-[11px]"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[10px] leading-4 text-black/40">
+                    不再按名次/人数判定抽奖资格：只要不是流局（第 2 名票数低于「流局阈值」），该局所有主播都可以抽；流局记录与计划时长不足 30 分钟的场次在页面直接隐藏。有效期从 PK 开始时间起算。特别奖、安慰奖概率固定；8 个普通奖按该局第二名票数动态分配，期望值 = min(第二名票数, 5.5万) ÷ 中奖期望分母，取整数。本月累计中奖礼物价值超过「本月奖金上限」时活动会自动暂停（填 0 表示不限制）。
+                  </p>
+
+                  {/* 10 个奖品 */}
+                  <div className="space-y-1">
+                    {microLight.prizes
+                      .map((p, i) => ({ p, i }))
+                      .sort((a, b) => Number(a.p.kind === "special") - Number(b.p.kind === "special"))
+                      .map(({ p, i }) => {
+                      const label = p.kind === "special" ? "特别奖" : p.kind === "consolation" ? "安慰奖" : `普通奖 ${p.id.replace("p", "")}`;
+                      const suggestions = microLightPrizeSearch === i ? searchGiftsByName(p.name) : [];
+                      return (
+                        <div key={p.id} className="rounded-lg border border-black/10 p-1.5 space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                p.kind === "special"
+                                  ? "bg-[#fff0f5] text-[#c05880]"
+                                  : p.kind === "consolation"
+                                    ? "bg-amber-50 text-amber-600"
+                                    : "bg-black/[0.04] text-black/55"
+                              }`}
+                            >
+                              {label}
+                            </span>
+                            {/* 礼物名称搜索 */}
+                            <div className="relative min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                {p.img ? (
+                                  <img src={fixImageUrl(p.img)} alt="" className="h-6 w-6 shrink-0 rounded object-contain" />
+                                ) : (
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-black/[0.04] text-[10px] text-black/30">礼</span>
+                                )}
+                                <input
+                                  value={p.name}
+                                  onChange={(e) => {
+                                    setMicroLightPrizeSearch(i);
+                                    updateMicroLightPrize(i, { name: e.target.value, giftId: 0, img: undefined });
+                                  }}
+                                  onFocus={() => setMicroLightPrizeSearch(i)}
+                                  onBlur={() => window.setTimeout(() => setMicroLightPrizeSearch((cur) => (cur === i ? null : cur)), 150)}
+                                  placeholder="输入礼物名称搜索"
+                                  className="min-w-0 flex-1 rounded border border-black/10 px-1.5 py-0.5 text-[11px]"
+                                />
+                              </div>
+                              {suggestions.length > 0 && (
+                                <div className="absolute left-0 right-0 top-full z-30 mt-0.5 overflow-hidden rounded-lg border border-black/10 bg-white shadow-lg">
+                                  {suggestions.map((g) => (
+                                    <button
+                                      key={g.id}
+                                      type="button"
+                                      onClick={() => {
+                                        updateMicroLightPrize(i, {
+                                          name: g.name,
+                                          giftId: g.id,
+                                          img: g.img,
+                                          battery: giftPriceCatalog[g.id] ?? p.battery,
+                                        });
+                                        setMicroLightPrizeSearch(null);
+                                      }}
+                                      className="flex w-full items-center gap-1.5 px-2 py-1 text-left hover:bg-black/[0.04]"
+                                    >
+                                      <img src={fixImageUrl(g.img)} alt="" className="h-5 w-5 rounded object-contain" />
+                                      <span className="truncate text-[11px]">{g.name}</span>
+                                      <span className="ml-auto shrink-0 text-[10px] text-black/35">
+                                        {giftPriceCatalog[g.id] ?? "-"} 电池
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <label className="flex items-center gap-1 text-[10px] text-black/45">
+                              电池
+                              <input
+                                type="number"
+                                value={p.battery}
+                                onChange={(e) => updateMicroLightPrize(i, { battery: Number(e.target.value) || 0 })}
+                                className="w-16 rounded border border-black/10 px-1 py-0.5 text-[11px]"
+                              />
+                            </label>
+                            {p.kind === "normal" ? (
+                              <span className="rounded bg-black/[0.03] px-1.5 py-0.5 text-[10px] text-black/40">概率动态计算</span>
+                            ) : (
+                              <label className="flex items-center gap-1 text-[10px] text-black/45">
+                                固定概率
+                                <input
+                                  type="number"
+                                  step={0.01}
+                                  min={0}
+                                  value={Math.round(p.prob * 10000) / 100}
+                                  onChange={(e) => updateMicroLightPrize(i, { prob: Math.max(0, Number(e.target.value) || 0) / 100 })}
+                                  className="w-16 rounded border border-black/10 px-1 py-0.5 text-[11px]"
+                                />
+                                %{p.kind === "special" ? "（稀有奖建议 ≤1%）" : ""}
+                              </label>
+                            )}
+                            <input
+                              value={p.text}
+                              onChange={(e) => updateMicroLightPrize(i, { text: e.target.value })}
+                              placeholder="中奖词"
+                              className="min-w-[140px] flex-1 rounded border border-black/10 px-1.5 py-0.5 text-[11px]"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 本月药神 */}
+                  <div className="rounded-lg border border-black/10 p-1.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-medium">本月药神</span>
+                      <span className="text-[10px] text-black/35">昵称与头像按 UID 自动获取</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={microLightSponsorUid}
+                        onChange={(e) => setMicroLightSponsorUid(e.target.value.replace(/[^\d]/g, ""))}
+                        placeholder="输入 UID"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-1.5 py-1 text-[11px]"
+                      />
+                      <button
+                        onClick={addMicroLightSponsor}
+                        disabled={microLightSponsorQuerying || !microLightSponsorUid.trim()}
+                        className="shrink-0 rounded bg-[#00a1d6] px-2 py-1 text-[10px] text-white disabled:opacity-40"
+                      >
+                        {microLightSponsorQuerying ? "查询中…" : "+ 添加"}
+                      </button>
+                    </div>
+                    {microLight.sponsors.length === 0 ? (
+                      <p className="py-1 text-[10px] text-black/30">暂无赞助者</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {microLight.sponsors.map((s, i) => (
+                          <div key={`${s.uid}-${i}`} className="flex items-center gap-1.5">
+                            {s.face ? (
+                              <img src={fixImageUrl(s.face)} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+                            ) : (
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/5 text-[10px] text-black/30">人</span>
+                            )}
+                            <span className="shrink-0 text-[11px] font-medium">{s.uname}</span>
+                            <input
+                              value={s.note ?? ""}
+                              onChange={(e) => {
+                                const sponsors = microLight.sponsors.map((x, idx) => (idx === i ? { ...x, note: e.target.value } : x));
+                                setMicroLight({ ...microLight, sponsors });
+                              }}
+                              placeholder="备注（如：赞助特别奖）"
+                              className="min-w-0 flex-1 rounded border border-black/10 px-1.5 py-0.5 text-[10px]"
+                            />
+                            <button
+                              onClick={() =>
+                                setMicroLight({ ...microLight, sponsors: microLight.sponsors.filter((_, idx) => idx !== i) })
+                              }
+                              className="shrink-0 text-[10px] text-[#e74c3c] hover:underline"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 抽奖记录与结算 */}
+                  <div className="rounded-lg border border-black/10 p-1.5 space-y-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-medium">抽奖记录</span>
+                      <select
+                        value={microLightDrawMonth}
+                        onChange={(e) => setMicroLightDrawMonth(e.target.value)}
+                        className="rounded border border-black/10 px-1.5 py-0.5 text-[10px]"
+                      >
+                        <option value="">全部月份</option>
+                        {Array.from(new Set(microLightDraws.map((d) => d.month))).sort().reverse().map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                      <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                        {microLightDrawMonth || "全部月份"} 累计奖金{" "}
+                        {microLightDraws
+                          .filter(
+                            (d) =>
+                              (microLightDrawMonth ? d.month === microLightDrawMonth : true) &&
+                              d.status !== "void" &&
+                              d.prizeKind !== "none",
+                          )
+                          .reduce((sum, d) => sum + (Number(d.battery) || 0), 0)}{" "}
+                        电池
+                      </span>
+                      <span className="text-[10px] text-black/40">
+                        共 {microLightDraws.filter((d) => (microLightDrawMonth ? d.month === microLightDrawMonth : true)).length} 条
+                        · 待发放 {microLightDraws.filter((d) => d.status === "pending").length}
+                        · 已发放 {microLightDraws.filter((d) => d.status === "granted").length}
+                      </span>
+                      <button
+                        onClick={() => void loadMicroLight()}
+                        className="ml-auto rounded border border-black/10 px-2 py-0.5 text-[10px] text-black/50 hover:border-black/25"
+                      >
+                        刷新
+                      </button>
+                    </div>
+                    {microLightDraws.length === 0 ? (
+                      <p className="py-1 text-[10px] text-black/30">暂无抽奖记录</p>
+                    ) : (
+                      <div className="max-h-72 space-y-1 overflow-y-auto pr-0.5">
+                        {microLightDraws
+                          .filter((d) => (microLightDrawMonth ? d.month === microLightDrawMonth : true))
+                          .map((d) => (
+                            <div key={d.id} className="rounded border border-black/10 p-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => void openMicroLightRoom(d.uid, d.roomId)}
+                                  title={`打开 ${d.uname || d.uid} 的直播间`}
+                                  className="shrink-0 transition hover:opacity-80 active:scale-95"
+                                >
+                                  {d.face ? (
+                                    <img src={fixImageUrl(d.face)} alt="" className="h-6 w-6 rounded-full object-cover" />
+                                  ) : (
+                                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-black/5 text-[10px] text-black/30">人</span>
+                                  )}
+                                </button>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex min-w-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => void openMicroLightRoom(d.uid, d.roomId)}
+                                      title={`打开 ${d.uname || d.uid} 的直播间`}
+                                      className="truncate text-left text-[11px] font-medium transition hover:text-[#00a1d6]"
+                                    >
+                                      {d.uname || `UID ${d.uid}`}
+                                    </button>
+                                    <span className="shrink-0 text-[11px] font-normal text-black/45">
+                                      · {d.prizeKind === "none" ? "未中奖" : d.prizeName}
+                                    </span>
+                                  </div>
+                                  <div className="text-[9px] text-black/35">
+                                    PK {d.pkId} · {d.month} · 第 {d.rank}/{d.participants} 名 · 票数 {d.votes} · 抽于 {d.drawnAt.slice(5, 16).replace("T", " ")}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-0.5">
+                                  {([["pending", "待发放"], ["granted", "已发放"], ["reset", "重抽"], ["void", "废弃"]] as const).map(([st, txt]) => (
+                                    <button
+                                      key={st}
+                                      onClick={() => void updateMicroLightStatus(d.id, st)}
+                                      disabled={microLightStatusSaving === d.id || d.status === st}
+                                      className={`rounded px-1.5 py-0.5 text-[9px] border transition ${
+                                        d.status === st
+                                          ? "border-[#00a1d6] bg-[#00a1d6]/10 text-[#00a1d6]"
+                                          : "border-black/10 text-black/45 hover:border-black/25 disabled:opacity-40"
+                                      }`}
+                                    >
+                                      {txt}
+                                    </button>
+                                  ))}
+                                  {microLightStatusSaving === d.id && <span className="text-[9px] text-black/30">…</span>}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </ConfigCard>
           </div>
         )}

@@ -73,6 +73,23 @@ export function extractCookieValue(cookies: string[], name: string): string {
   return "";
 }
 
+/**
+ * 合并新旧 Cookie：刷新只下发 sid/DedeUserID/DedeUserID__ckMd5/SESSDATA/bili_jct，
+ * 旧的 buvid3、buvid4、bili_ticket 等设备标识要保留，否则可能触发风控。
+ */
+function mergeCookies(oldCookies: string[] | undefined, newCookies: string[]): string[] {
+  const map = new Map<string, string>();
+  for (const c of oldCookies ?? []) {
+    const idx = c.indexOf("=");
+    if (idx > 0) map.set(c.slice(0, idx), c.slice(idx + 1));
+  }
+  for (const c of newCookies) {
+    const idx = c.indexOf("=");
+    if (idx > 0) map.set(c.slice(0, idx), c.slice(idx + 1));
+  }
+  return Array.from(map, ([name, value]) => `${name}=${value}`);
+}
+
 /** 检查 B站 API 返回是否表示凭证失效 */
 export function isBiliCredentialExpired(code: number, message?: string): boolean {
   return (
@@ -103,10 +120,12 @@ async function getRefreshCsrf(
   // 若本地系统时钟与 B站服务器不同步，Date.now() 会产出"过期"的路径 → 404「出错啦」。
   // cookie/info 返回的 data.timestamp 即服务端当前毫秒时间戳，应优先使用。
   const timestamp = serverTimestampMs && serverTimestampMs > 0 ? serverTimestampMs : Date.now();
-  const correspondPath = await generateCorrespondPath(timestamp);
-  const url = `https://www.bilibili.com/correspond/1/${correspondPath}`;
 
   try {
+    // 加密也放进 try：部分 WebView 没有 crypto.subtle（非安全上下文），
+    // 放在外面抛出会直接打断整个刷新流程，连日志都看不到。
+    const correspondPath = await generateCorrespondPath(timestamp);
+    const url = `https://www.bilibili.com/correspond/1/${correspondPath}`;
     // 用 fetchArrayBuffer 拿原始字节，避免 text() 把压缩/二进制当 UTF-8 产生乱码
     const buf = await platform.fetchArrayBuffer(url, cookie);
     const bytes = new Uint8Array(buf);
@@ -267,50 +286,38 @@ export async function refreshBiliCookieClient(
       );
     }
 
-    if (!newSessdata || !newBiliJct) {
-      // code=0 但未返回新 SESSDATA：B站 常见两种情况 ——
-      // ① 触发「2 分钟最小刷新间隔」限流（data.status!=0，官方返回 code=0、无 Set-Cookie）；
-      // ② 仅续期 refresh_token、不轮换主 token 的正常续期（旧 SESSDATA 仍有效）。
-      // 两种都不该判失败：沿用旧 cookie、仅更新 refresh_token，按成功处理，避免每次刷新都报错。
+    if (!newSessdata || !newBiliJct || !newRefreshToken) {
+      // code=0 但没拿到完整的新凭证（SESSDATA + bili_jct + refresh_token）：
+      // 说明这次并没有真正轮换 Cookie（常见于 B站 刷新限流，code=0 却不下发 Set-Cookie）。
+      // 此时绝不能把 body 里的新 refresh_token 写回会话——新 token 只和「新 Cookie」配对，
+      // 旧 Cookie + 新 token 会永久失配，之后再刷新必然 86095，等于把账号的自动续期彻底废掉。
       const dataStatus = refreshResult.data?.status;
-      const oldCookies =
-        session.biliCookies?.length
-          ? session.biliCookies
-          : [`SESSDATA=${session.biliSessdata}`];
       let rawSetCookie: string[] = [];
       try {
         rawSetCookie = refreshResponse.headers.getSetCookie?.() ?? [];
       } catch {
         rawSetCookie = [];
       }
-      // 有 refresh_token 时正常续期，沿用旧 cookie
-      if (newRefreshToken) {
-        console.warn(
-          "[CookieRefresh-Client] code=0 未返回新 SESSDATA; data.status=",
-          dataStatus,
-          "; 沿用旧 cookie 并更新 refresh_token",
-        );
-        return {
-          success: true,
-          newCookies: newCookies.length ? newCookies : oldCookies,
-          newRefreshToken,
-          newSessdata: session.biliSessdata,
-        };
-      }
-      // 连 refresh_token 都没有：视为失败，保留诊断
       console.error(
-        "[CookieRefresh-Client] 刷新响应缺少必要 cookie; platform=",
+        "[CookieRefresh-Client] 刷新响应缺少必要凭证，按失败处理（保留旧 cookie 与旧 refresh_token）; platform=",
         platform.name,
         "; data.status=",
         dataStatus,
-        "; rawSetCookie=",
-        JSON.stringify(rawSetCookie),
-        "; newCookies=",
-        JSON.stringify(newCookies),
         "; status=",
         refreshResponse.status,
+        "; rawSetCookie=",
+        JSON.stringify(rawSetCookie),
+        "; 解析出的 cookie=",
+        JSON.stringify(newCookies),
+        "; 有 refresh_token=",
+        Boolean(newRefreshToken),
       );
-      return { success: false, error: "刷新响应缺少 SESSDATA 或 bili_jct" };
+      return {
+        success: false,
+        error:
+          `刷新未轮换 Cookie（SESSDATA=${Boolean(newSessdata)}, ` +
+          `bili_jct=${Boolean(newBiliJct)}, refresh_token=${Boolean(newRefreshToken)}）`,
+      };
     }
 
     // 步骤3：确认更新（使用新 cookie 和旧 refresh_token）
@@ -344,7 +351,12 @@ export async function refreshBiliCookieClient(
     }
 
     console.log("[CookieRefresh-Client] B站 Cookie 刷新成功");
-    return { success: true, newCookies, newRefreshToken, newSessdata };
+    return {
+      success: true,
+      newCookies: mergeCookies(session.biliCookies, newCookies),
+      newRefreshToken,
+      newSessdata,
+    };
   } catch (err) {
     console.error("[CookieRefresh-Client] 刷新请求异常:", err);
     return {
@@ -412,7 +424,10 @@ async function updateClientSessionCredentials(
 // 因此必须：① 同一 session 的刷新只允许同时一个在跑（单飞锁）；② 验证结果短窗缓存，避免每个请求都调 B站；
 // ③ 即使 cookie/info 说 refresh=true，也按间隔节流，避免高频死循环。
 const REVALIDATE_MS = 5 * 60 * 1000; // 验证结果缓存：5 分钟内不再重复调 cookie/info
-const REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000; // 实际刷新节流：12 小时最多刷新一次
+// 刷新节流：成功刷新后 cookie/info 会返回 refresh=false，这个节流基本用不上；
+// 真正需要的是「失败后多久再试」——原来定 12 小时，一次失败就会把续期窗口拖到
+// SESSDATA 过期之后，等于永远修不回来，因此缩短为 1 小时。
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 /** sid -> 最近一次验证为"有效"的时间戳（用旧 cookie 继续用即可，不必每次调 B站） */
 const _okCache = new Map<string, number>();

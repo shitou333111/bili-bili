@@ -734,6 +734,66 @@ fn real_activity_title_bar_script(title: &str, top_offset: f64) -> String {
     )
 }
 
+/// 把 "name=value" 形式的登录 Cookie 转成 WebView 原生 Cookie。
+/// 原生写入先于页面导航，避免仅靠 document.cookie 时首个请求可能取不到 Cookie。
+#[cfg(any(desktop, target_os = "ios"))]
+fn build_bili_cookie(raw: &str) -> Option<tauri::webview::Cookie<'static>> {
+    let (name, value) = raw.split_once('=')?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(
+        tauri::webview::Cookie::build((name.to_string(), value.to_string()))
+            .domain(".bilibili.com")
+            .path("/")
+            .secure(true)
+            .build(),
+    )
+}
+
+/// 把当前账号 Cookie 写入 WebView，并清掉同名的历史残留。
+///
+/// B站 csrf 校验要求 payload 里的 csrf 与请求实际携带的 bili_jct 一致：
+/// 页面 JS 从 document.cookie 读 bili_jct 拼 payload，而请求头里的 Cookie 由网络层按
+/// domain/path 匹配拼装。WebView 持久化目录里若残留不同 domain（.bilibili.com、
+/// .live.bilibili.com、host-only）或不同 path 的同名 Cookie，就会出现"页面读到的值"与
+/// "请求带上的值"不是同一个，服务端返回 csrf 校验失败。因此先按名字删除所有命中项，
+/// 再写入唯一的 .bilibili.com 版本。
+#[cfg(any(desktop, target_os = "ios"))]
+fn apply_bili_cookies(webview: &tauri::Webview, cookies: &[String]) {
+    let names: Vec<&str> = cookies
+        .iter()
+        .filter_map(|raw| raw.split_once('=').map(|(name, _)| name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    // 清理历史残留：同名 Cookie 会按 domain/path 各自随请求发送，导致 csrf 与 Cookie 不一致
+    for url in [
+        "https://www.bilibili.com/",
+        "https://live.bilibili.com/",
+        "https://api.bilibili.com/",
+    ] {
+        let Ok(url) = url.parse::<tauri::Url>() else {
+            continue;
+        };
+        let Ok(existing) = webview.cookies_for_url(url) else {
+            continue;
+        };
+        for cookie in existing {
+            if names.contains(&cookie.name()) {
+                let _ = webview.delete_cookie(cookie);
+            }
+        }
+    }
+    for raw in cookies {
+        if let Some(cookie) = build_bili_cookie(raw) {
+            let _ = webview.set_cookie(cookie);
+        }
+    }
+}
+
 /// 打开真实 B站 活动页（无 mock，真实交易）。
 /// 与模拟器的 open_activity_panel 完全独立：不注入 mock-shim，不拦截登录，
 /// 标题栏带返回按钮（点击通过 IPC 调用 close_real_activity_panel 关闭面板）。
@@ -792,15 +852,26 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         format!(
             r##"(function() {{
   var __cookies = [{}];
+  var __patched = {{}};
   try {{
     for (var i = 0; i < __cookies.length; i++) {{
       var parts = __cookies[i].split("=");
       if (parts.length < 2) continue;
       var name = parts.shift();
       var val = parts.join("=");
-      try {{ document.cookie = name + "=" + val + "; path=/; domain=.bilibili.com;"; }} catch(e){{}}
-      try {{ document.cookie = name + "=" + val + "; path=/; domain=.live.bilibili.com;"; }} catch(e){{}}
+      if (!name) continue;
+      __patched[name] = val;
+      // 先清掉同名旧 Cookie（含 host-only 和 .live 域名下的历史残留），
+      // 否则 WebView 持久化目录里不同域名/不同账号的 bili_jct 会被页面读到旧值，
+      // 导致 payload 里的 csrf 与实际请求携带的 Cookie 不一致（csrf 校验失败）。
+      try {{ document.cookie = name + "=; path=/; max-age=0"; }} catch(e) {{}}
+      try {{ document.cookie = name + "=; path=/; max-age=0; domain=.live.bilibili.com"; }} catch(e) {{}}
+      var attrs = "; path=/; domain=.bilibili.com";
+      if (location.protocol === "https:") attrs += "; secure; samesite=none";
+      try {{ document.cookie = name + "=" + val + attrs; }} catch(e) {{}}
     }}
+    // B站活动页部分模块会优先读取 window.__custom_cookie，作为 Cookie 写入失败时的兜底
+    window.__custom_cookie = Object.assign({{}}, window.__custom_cookie || {{}}, __patched);
   }} catch(e) {{}}
 }})();
 "##,
@@ -843,12 +914,21 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         // 拼接所有初始化脚本：先注 Cookie，再挂标题栏。
         // 关闭由标题栏脚本通过 IPC 调用 close_real_activity_panel 完成（close-activity:// 旧导航方案已废弃）
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
-        let builder = WebviewBuilder::new(REAL_ACTIVITY_PANEL_LABEL, WebviewUrl::External(parsed_url))
-            .initialization_script(&init_script);
+        // 先在空白页写入原生 Cookie，再导航到活动页，保证页面的首个请求就能带上 bili_jct。
+        let blank_url: tauri::Url = "about:blank".parse().map_err(|e| format!("{:?}", e))?;
+        let builder = WebviewBuilder::new(
+            REAL_ACTIVITY_PANEL_LABEL,
+            WebviewUrl::External(blank_url),
+        )
+        .initialization_script(&init_script);
 
         let webview = main_window
             .add_child(builder, position, size)
             .map_err(|e| format!("创建真实活动面板失败: {}", e))?;
+        apply_bili_cookies(&webview, &cookies);
+        webview
+            .navigate(parsed_url)
+            .map_err(|e| format!("打开真实活动页失败: {}", e))?;
         let _ = webview.set_focus();
         Ok(())
     }
@@ -893,6 +973,7 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
             // 每次打开都重新导航：WKWebView 窗口被隐藏后可能被系统挂起/冻结，
             // 复用旧页面会出现按钮无响应等异常（如黑抽页"已确认风险"按钮）。
             // 重新加载保证页面功能始终正常。
+            apply_bili_cookies(panel.as_ref(), &cookies);
             let _ = panel.navigate(parsed_url);
             let _ = panel.show();
             let _ = panel.set_focus();
@@ -900,16 +981,21 @@ async fn open_real_activity_panel(app: tauri::AppHandle, config: Value) -> Resul
         }
 
         let init_script = format!("{}\n{}", cookie_script, title_bar_script);
+        let blank_url: tauri::Url = "about:blank".parse().map_err(|e| format!("{:?}", e))?;
         let builder = WebviewWindowBuilder::new(
             &app,
             REAL_ACTIVITY_PANEL_LABEL,
-            WebviewUrl::External(parsed_url),
+            WebviewUrl::External(blank_url),
         )
         .initialization_script(&init_script);
 
         let panel = builder
             .build()
             .map_err(|e| format!("创建真实活动面板失败: {}", e))?;
+        apply_bili_cookies(panel.as_ref(), &cookies);
+        panel
+            .navigate(parsed_url)
+            .map_err(|e| format!("打开真实活动页失败: {}", e))?;
         let _ = panel.show();
         let _ = panel.set_focus();
         Ok(())
