@@ -324,6 +324,8 @@ export interface DisplayConfig {
   entryParticleMode: EntryParticleMode;
   /** 模块1 · 入场提示配色（badge 底色渐变 + 粒子取色同源 + 昵称单色；面板「设置颜色」模态框编辑） */
   entryColors: EntryColors;
+  /** 模块1 · 入场提示形式："particle"=粒子聚散（默认），或 admin「官方入场提示」中某项的 id */
+  entryStyle: string;
   /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
@@ -405,6 +407,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entry: false,
   entryParticleMode: "center", // 默认「中心聚散」（自研四面八方聚散）
   entryColors: DEFAULT_ENTRY_COLORS, // 默认红橙黄渐变 + 白色昵称（与改造前一致）
+  entryStyle: "particle", // 默认粒子聚散（可选 admin 中定义的官方入场提示 id）
   gift: false,
   anime: false,
   giftEffect: {
@@ -530,9 +533,82 @@ export interface GiftEffectFrameConfig {
   };
 }
 
+/** 官方入场提示（B站入场动画）：视频 + 配套 JSON，admin 页「官方入场提示」模块维护 */
+export interface OfficialEntryStyle {
+  /** 唯一 id（存入 DisplayConfig.entryStyle 作为选中标识） */
+  id: string;
+  /** 展示名称（面板单选项文字） */
+  name: string;
+  /** 特效视频地址（B站 web_mp4 直链） */
+  video: string;
+  /** 配套 JSON 地址（web_mp4_json：info 动画/透明区 + src/frame 模板区） */
+  json: string;
+}
+
+/** 入场动画 JSON · 模板元素定义（src[]：txt 文本 / img 图片） */
+export interface EntryTemplateSrc {
+  /** 元素 id（frame[].obj 按 srcId 引用） */
+  srcId: string;
+  /** 元素类型：txt=文本（昵称等动态文字）/ img=图片 */
+  srcType: string;
+  /** 资源标签（B站内部素材标识，如 live.wealth.upgrade.animation.level） */
+  srcTag?: string;
+  /** txt 颜色（#RRGGBB） */
+  color?: string;
+  /** 文本样式（b=加粗等） */
+  style?: string;
+  /** 元素宽/高（像素，RGB 画面区坐标系） */
+  w?: number;
+  h?: number;
+}
+
+/** 入场动画 JSON · 模板元素逐帧布局（i=视频帧号（0 基），可乱序且稀疏：取 <= 当前帧的最大 i） */
+export interface EntryTemplateFrame {
+  /** 帧号（对应视频第 i 帧，0 基） */
+  i: number;
+  /** 该帧上的元素布局（按 z 叠放） */
+  obj: Array<{
+    /** 元素在 RGB 画面区中的矩形 [x,y,w,h]（绘制位置；输出坐标 = 该矩形 × info.scale） */
+    frame: [number, number, number, number];
+    /** 元素遮罩在视频中的矩形 [x,y,w,h]（绝对视频坐标，位于 RGB 区右侧的遮罩带；白=可见）。
+     *  尺寸与 frame 不一定相同 → 采样时需拉伸到 frame。缺省 = 无遮罩。 */
+    mFrame?: [number, number, number, number];
+    srcId: string;
+    /** 叠放层级（小的在下） */
+    z?: number;
+  }>;
+}
+
+/** 入场动画配套 JSON（三部分：info=动画+透明度、attr=全局属性、src+frame=模板） */
+export interface EntryEffectConfig {
+  /** 动画信息（rgbFrame 画面区 + aFrame 透明区，与礼物特效同构） */
+  info: GiftEffectFrameConfig["info"];
+  /** 全局属性（如 live.backgroundcolor；可缺省） */
+  attr?: Record<string, unknown>;
+  /** 模板元素定义（缺省 = 无模板，昵称按默认区域绘制） */
+  src?: EntryTemplateSrc[];
+  /** 模板元素逐帧布局（缺省 = 无模板） */
+  frame?: EntryTemplateFrame[];
+}
+
+/** 随入场事件下发的官方动画（服务端按当前选中项解析 + 加载 JSON） */
+export interface EntryOfficialPayload {
+  /** 动画定义（视频/JSON 地址与名称） */
+  style: OfficialEntryStyle;
+  /** 实际播放地址：命中本地缓存时为 /api/video?p=<本地绝对路径>，否则为 CDN 直链 */
+  video: string;
+  /** 配套 JSON（加载失败为 null → 退化为整段绘制、无昵称模板） */
+  config: EntryEffectConfig | null;
+}
+
 /** 主窗口 → 展示窗口 事件 payload（channel: "display-event"） */
 export type DisplayEvent =
-  | { type: "entry"; user: DisplayEntryPayload }
+  | {
+      type: "entry";
+      user: DisplayEntryPayload;
+      /** 官方入场动画（entryStyle 选中官方项时携带；缺省 = 粒子聚散） */
+      official?: EntryOfficialPayload;
+    }
   | {
       type: "anime";
       user: { uid: number; uname: string; face: string };

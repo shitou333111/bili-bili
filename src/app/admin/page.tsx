@@ -225,6 +225,20 @@ type AdminConfigData = {
   anchor_activity_materials: AnchorMaterialItemData[];
   /** 帮助页「扫码加入微信群」二维码图片链接（留空则回退 /feedback.jpg） */
   wechat_qr_url: string;
+  /** 官方入场提示列表（名称 + 视频地址 + JSON 地址），主播面板「入场提示」单选使用 */
+  official_entry_styles: OfficialEntryItemData[];
+};
+
+/** admin「官方入场提示」条目：B站官方入场动画（视频 + 配套 JSON） */
+type OfficialEntryItemData = {
+  /** 唯一 id（主播面板选中标识；保存时缺省则由服务器按下标补齐） */
+  id: string;
+  /** 展示名称（面板单选项文字） */
+  name: string;
+  /** 特效视频地址（web_mp4 直链） */
+  video: string;
+  /** 配套 JSON 地址（web_mp4_json） */
+  json: string;
 };
 
 /** 备用药活动奖品（10 个槽位：special / consolation / p1..p8） */
@@ -439,6 +453,8 @@ export default function AdminPage() {
   const [synthesisCollapsed, setSynthesisCollapsed] = useState(true);
   const [faqCollapsed, setFaqCollapsed] = useState(true);
   const [materialsCollapsed, setMaterialsCollapsed] = useState(true);
+  // 官方入场提示列表（名称/视频地址/JSON 地址）：默认收起
+  const [officialEntryCollapsed, setOfficialEntryCollapsed] = useState(true);
   // 公告 / 微信群二维码 / 黑抽 / 推荐主播：保持原有默认展开状态
   const [announcementCollapsed, setAnnouncementCollapsed] = useState(false);
   const [wechatQrCollapsed, setWechatQrCollapsed] = useState(false);
@@ -686,6 +702,17 @@ export default function AdminPage() {
             ? data.anchor_activity_materials.map((m: Record<string, unknown>) => ({ name: String(m?.name ?? ""), url: String(m?.url ?? "") }))
             : [],
           wechat_qr_url: typeof data.wechat_qr_url === "string" ? data.wechat_qr_url : "",
+          official_entry_styles: Array.isArray(data.official_entry_styles)
+            ? data.official_entry_styles.map((s: unknown, i: number): OfficialEntryItemData => {
+                const o = (s ?? {}) as Record<string, unknown>;
+                return {
+                  id: String(o.id ?? "").trim() || `style_${i}`,
+                  name: String(o.name ?? ""),
+                  video: String(o.video ?? ""),
+                  json: String(o.json ?? ""),
+                };
+              })
+            : [],
           simulator_activities: simActs.map((a: any) => ({
                 id: String(a.id ?? ""),
                 title: String(a.title ?? ""),
@@ -2294,6 +2321,83 @@ export default function AdminPage() {
                         />
                       </label>
                     </div>
+                  </div>
+                ))}
+              </div>
+            </ConfigCard>
+
+            {/* 官方入场提示（可折叠，默认折叠） */}
+            <ConfigCard
+              title="官方入场提示"
+              collapsed={officialEntryCollapsed}
+              onToggle={() => setOfficialEntryCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <p className="text-[10px] text-black/40">“主播”页面“展示”tab“入场提示”卡片中的官方动画选项（与“粒子聚散”单选互斥）。每个动画含名称、视频地址（B站 web_mp4 直链）与配套 JSON 地址（web_mp4_json），保存后主播面板即可选择、预览与使用。</p>
+              <div className="flex justify-end">
+                <button
+                  onClick={() =>
+                    setConfig({
+                      ...config,
+                      official_entry_styles: [
+                        { id: `oes_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: "", video: "", json: "" },
+                        ...(config.official_entry_styles ?? []),
+                      ],
+                    })
+                  }
+                  className="text-xs text-[#00a1d6] hover:underline shrink-0"
+                >
+                  + 添加官方动画
+                </button>
+              </div>
+              {(config.official_entry_styles ?? []).length === 0 && (
+                <p className="text-[10px] text-black/30">暂无官方动画（添加后会出现在主播“入场提示”卡片中）</p>
+              )}
+              <div className="space-y-1">
+                {(config.official_entry_styles ?? []).map((item, i) => (
+                  <div key={item.id || i} className="rounded-lg border border-black/10 p-1.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={item.name}
+                        onChange={(e) => {
+                          const list = [...(config.official_entry_styles ?? [])];
+                          list[i] = { ...list[i], name: e.target.value };
+                          setConfig({ ...config, official_entry_styles: list });
+                        }}
+                        placeholder="动画名称（面板选项文字）"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                      />
+                      <button
+                        onClick={() => {
+                          const list = (config.official_entry_styles ?? []).filter((_, idx) => idx !== i);
+                          setConfig({ ...config, official_entry_styles: list });
+                        }}
+                        className="text-xs text-[#e74c3c] hover:underline shrink-0"
+                      >
+                        删除
+                      </button>
+                    </div>
+                    <input
+                      value={item.video}
+                      onChange={(e) => {
+                        const list = [...(config.official_entry_styles ?? [])];
+                        list[i] = { ...list[i], video: e.target.value };
+                        setConfig({ ...config, official_entry_styles: list });
+                      }}
+                      placeholder="视频地址（web_mp4 直链）"
+                      className="w-full rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                    />
+                    <input
+                      value={item.json}
+                      onChange={(e) => {
+                        const list = [...(config.official_entry_styles ?? [])];
+                        list[i] = { ...list[i], json: e.target.value };
+                        setConfig({ ...config, official_entry_styles: list });
+                      }}
+                      placeholder="JSON 地址（web_mp4_json 直链）"
+                      className="w-full rounded border border-black/10 px-2 py-1 text-xs focus:outline-none focus:border-black/30"
+                    />
                   </div>
                 ))}
               </div>

@@ -28,6 +28,7 @@ import {
   type DisplayEntryPayload,
   type DisplayLayout,
   type EntryColors,
+  type EntryOfficialPayload,
   type EntryParticleMode,
   type GiftBarWidth,
   type GiftFlipConfig,
@@ -47,6 +48,7 @@ import {
   isHexColor,
 } from "@/lib/display/types";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
+import EntryOfficialEffect from "./EntryOfficialEffect";
 import GiftFlower, { GIFT_BAR_THICK, giftBarLength } from "./GiftFlower";
 import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
@@ -182,6 +184,10 @@ type ServerMsg =
       entryParticleMode: EntryParticleMode;
       /** 入场提示配色（badge 渐变 + 粒子同源 + 昵称单色） */
       entryColors: EntryColors;
+      /** 入场提示形式："particle"=粒子聚散，或 admin「官方入场提示」某项 id */
+      entryStyle: string;
+      /** entryStyle 对应的官方动画资源（选中官方项时下发；视频优先本地缓存地址） */
+      entryOfficial: EntryOfficialPayload | null;
       /** 礼物突出显示选择（giftId → 选中 uid 列表；点击 badge 时广播同步） */
       giftHighlight: GiftHighlight;
       /** 礼物翻卡/抽奖模块配置（选项/触发礼物/是否显示文字） */
@@ -204,10 +210,14 @@ type ServerMsg =
   | { type: "giftBadgeOpacity"; v: number }
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "entryColors"; v: EntryColors }
+  | { type: "entryStyle"; v: string; official: EntryOfficialPayload | null }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "giftFlipConfig"; v: GiftFlipConfig }
   | { type: "giftFlipReset" }
   | { type: "celebrate" };
+
+/** 入场队列条目：进场用户 + 可选官方动画负载（entryStyle 选中官方项时由服务端随事件附带） */
+type EntryItem = { user: DisplayEntryPayload; official?: EntryOfficialPayload };
 
 /**
  * 测试模式的常驻入场提示：每轮用递增的 key 重新挂载 EntryBadge。
@@ -316,12 +326,12 @@ function pickEntryColors(v: unknown): EntryColors {
 }
 
 export default function DisplayCanvas() {
-  const [currentEntry, setCurrentEntry] = useState<DisplayEntryPayload | null>(null);
+  const [currentEntry, setCurrentEntry] = useState<EntryItem | null>(null);
   // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
   // 仅用 uid 做 key 时，onEntryDone 里 setCurrentEntry(null)+setCurrentEntry(next) 被 React
   // 批量合并成一次渲染，同 uid 不重挂载 → EntryBadge 的 hidden 无法复位、粒子动画永不启动。
   const [entrySeq, setEntrySeq] = useState(0);
-  const [, setEntryQueue] = useState<DisplayEntryPayload[]>([]);
+  const [, setEntryQueue] = useState<EntryItem[]>([]);
   const [gifts, setGifts] = useState<DisplayGiftItem[]>([]);
   // 礼物飘入动画：收到达标礼物时图标从固定起点飘向礼物条落点（null = 无飞行）
   const [flyingGift, setFlyingGift] = useState<FlyingGift | null>(null);
@@ -373,6 +383,9 @@ export default function DisplayCanvas() {
   );
   // 入场提示配色（init/entryColors 消息下发）：badge 渐变两端色 + 昵称单色
   const [entryColors, setEntryColors] = useState<EntryColors>(DEFAULT_ENTRY_COLORS);
+  // 入场提示形式（init/entryStyle 消息下发）：当前选中的官方动画（null=粒子聚散）。
+  // 运行时每条入场事件自带 official 负载；此状态主要用于编辑模式常驻预览。
+  const [entryOfficial, setEntryOfficial] = useState<EntryOfficialPayload | null>(null);
   // 礼物突出显示选择（init/giftHighlight 消息下发）：giftId → 选中展示的 uid 列表（顺序=循环顺序）
   const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>({});
   // 礼物翻卡/抽奖模块配置（init/giftFlipConfig 消息下发）
@@ -527,6 +540,7 @@ export default function DisplayCanvas() {
         );
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
         setEntryColors(pickEntryColors(msg.entryColors));
+        setEntryOfficial(msg.entryOfficial ?? null);
         setGiftHighlight(
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
         );
@@ -574,6 +588,8 @@ export default function DisplayCanvas() {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
       } else if (msg.type === "entryColors") {
         setEntryColors(pickEntryColors(msg.v));
+      } else if (msg.type === "entryStyle") {
+        setEntryOfficial(msg.official ?? null);
       } else if (msg.type === "giftHighlight") {
         setGiftHighlight(msg.giftHighlight ?? {});
       } else if (msg.type === "giftFlipConfig") {
@@ -791,27 +807,28 @@ export default function DisplayCanvas() {
     }
   }, []);
 
-  const currentEntryRef = useRef<DisplayEntryPayload | null>(null);
+  const currentEntryRef = useRef<EntryItem | null>(null);
   useEffect(() => {
     currentEntryRef.current = currentEntry;
   }, [currentEntry]);
 
   // 队列 & 当前显示 ref（供 applyEvent 读避免闭包过期）
-  const queueRef = useRef<DisplayEntryPayload[]>([]);
+  const queueRef = useRef<EntryItem[]>([]);
   const showingRef = useRef(false);
 
   const applyEvent = useCallback((p: DisplayEvent) => {
     if (p.type === "entry") {
       // 入场提示模块关闭：忽略事件（不排队）
       if (!flagsRef.current.entry) return;
+      const item: EntryItem = p.official ? { user: p.user, official: p.official } : { user: p.user };
       if (!showingRef.current && !currentEntryRef.current && queueRef.current.length === 0) {
         queueRef.current = [];
         showingRef.current = true;
         setEntrySeq((s) => s + 1);
-        setCurrentEntry(p.user);
+        setCurrentEntry(item);
         notifyEffectPlay("entry");
       } else {
-        queueRef.current.push(p.user);
+        queueRef.current.push(item);
         setEntryQueue([...queueRef.current]);
       }
     } else if (p.type === "anime") {
@@ -925,10 +942,14 @@ export default function DisplayCanvas() {
     }
   }, [flags]);
 
-  // 入场：超过最长停留仍未完成时兜底清空（防卡死）
+  // 入场：超过最长停留仍未完成时兜底清空（防卡死）。
+  // 官方动画时长由视频决定（正常经 EntryOfficialEffect.onEnd 结束），兜底上限单独放宽；
+  // 粒子聚散仍按完整生命周期 + 余量兜底。
+  const OFFICIAL_ENTRY_MAX_MS = 30_000;
   useEffect(() => {
     if (!currentEntry) return;
-    const t = setTimeout(() => onEntryDone(), ENTRY_TOTAL_MS + 400);
+    const limit = currentEntry.official ? OFFICIAL_ENTRY_MAX_MS : ENTRY_TOTAL_MS + 400;
+    const t = setTimeout(() => onEntryDone(), limit);
     return () => clearTimeout(t);
   }, [currentEntry, onEntryDone]);
 
@@ -1388,7 +1409,8 @@ export default function DisplayCanvas() {
           选中的卡片都能在画布中心放大展示（含 pop/flip/hold/restore 过渡动画）。 */}
       {flags.giftFlip && <GiftFlipReveal phase={flipPhase} active={flipActive} options={giftFlipCfg.options} />}
 
-      {/* 入场提示：编辑模式常驻循环；否则当前有入场才显示 */}
+      {/* 入场提示：编辑模式常驻循环（官方项循环播预览 / 粒子聚散循环 TestEntryLoop）；
+          否则当前有入场才显示，按事件负载分流到官方动画或粒子 badge */}
       {flags.entry && (isEdit || currentEntry) && (
         <MovableBox
           id="entry"
@@ -1398,16 +1420,40 @@ export default function DisplayCanvas() {
           {...selectProps("entry")}
         >
           {isEdit ? (
-            <TestEntryLoop
-              scale={entryRect.scale}
-              particleMode={entryParticleMode}
-              colors={entryColors}
+            entryOfficial ? (
+              <EntryOfficialEffect
+                key={`official-${entryOfficial.style.id}`}
+                src={entryOfficial.video}
+                json={entryOfficial.style.json}
+                config={entryOfficial.config}
+                fallbackSrc={entryOfficial.style.video}
+                user={{ uname: TEST_ENTRY_USER.uname, face: TEST_ENTRY_USER.face }}
+                loop
+                onMeasure={setEntryMeasuredW}
+              />
+            ) : (
+              <TestEntryLoop
+                scale={entryRect.scale}
+                particleMode={entryParticleMode}
+                colors={entryColors}
+                onMeasure={setEntryMeasuredW}
+              />
+            )
+          ) : currentEntry?.official ? (
+            <EntryOfficialEffect
+              key={`${currentEntry.user.uid}-${entrySeq}`}
+              src={currentEntry.official.video}
+              json={currentEntry.official.style.json}
+              config={currentEntry.official.config}
+              fallbackSrc={currentEntry.official.style.video}
+              user={{ uname: currentEntry.user.uname, face: currentEntry.user.face }}
+              onEnd={onEntryDone}
               onMeasure={setEntryMeasuredW}
             />
           ) : currentEntry ? (
             <EntryBadge
-              key={`${currentEntry.uid}-${entrySeq}`}
-              user={currentEntry}
+              key={`${currentEntry.user.uid}-${entrySeq}`}
+              user={currentEntry.user}
               particleMode={entryParticleMode}
               colors={entryColors}
               onDone={onEntryDone}

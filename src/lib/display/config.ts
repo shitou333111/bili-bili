@@ -167,6 +167,9 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       end: isHexColor(r.entryColors?.end) ? r.entryColors.end : d.entryColors.end,
       name: isHexColor(r.entryColors?.name) ? r.entryColors.name : d.entryColors.name,
     },
+    // 入场提示形式："particle"（粒子聚散）或 admin 中官方入场提示的 id；空/非法回退 "particle"
+    entryStyle:
+      typeof r.entryStyle === "string" && r.entryStyle.trim() ? r.entryStyle.trim() : "particle",
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
     giftEffect: {

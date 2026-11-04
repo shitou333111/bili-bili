@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readAdminConfig, writeAdminConfig, normalizeBlindBoxItem, type AdminConfig } from "@/lib/admin-config";
+import { readAdminConfig, writeAdminConfig, normalizeBlindBoxItem, normalizeOfficialEntryStyle, type AdminConfig } from "@/lib/admin-config";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +32,7 @@ export async function GET(request: Request) {
         faq: [],
         anchor_activity_materials: [],
         wechat_qr_url: "",
+        official_entry_styles: [],
       },
     });
   }
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
       faq: adminConfig.faq ?? [],
       anchor_activity_materials: adminConfig.anchor_activity_materials ?? [],
       wechat_qr_url: adminConfig.wechat_qr_url ?? "",
+      official_entry_styles: adminConfig.official_entry_styles ?? [],
     },
   });
 }
@@ -120,6 +122,13 @@ export async function POST(request: Request) {
           .filter((m: { url: string }) => m.url.trim())
       : [],
     wechat_qr_url: typeof body.wechat_qr_url === "string" ? body.wechat_qr_url : "",
+    // 官方入场提示：名称 + 视频地址 + JSON 地址（视频/JSON 缺一不可；name 缺省给占位名）
+    official_entry_styles: Array.isArray(body.official_entry_styles)
+      ? body.official_entry_styles
+          .map((s: unknown, i: number) => normalizeOfficialEntryStyle(s, i))
+          .filter((s: { name: string; video: string; json: string }) => s.video && s.json)
+          .map((s: { name: string }) => s.name ? s : { ...s, name: "官方动画" })
+      : [],
     // 模拟器活动入口配置（含算法类型），按原样持久化
     simulator_activities: Array.isArray(body.simulator_activities)
       ? body.simulator_activities.map((a: any) => ({

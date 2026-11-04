@@ -3,10 +3,13 @@ import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
 // 仅允许代理 B站 的 API 域名，避免 SSRF；host 精确匹配。
+// i0.hdslb.com：B站 CDN（礼物特效/入场动画的 mp4 与配套 JSON 直链，浏览器直连被
+// CORS 拦时经此同源兜底，见 EntryOfficialEffect.fetchEntryJson）。
 const ALLOWED_HOSTS = [
   "api.live.bilibili.com",
   "api.bilibili.com",
   "passport.bilibili.com",
+  "i0.hdslb.com",
 ];
 
 /**

@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { SynthesisActivityConfig } from "./config";
+import type { OfficialEntryStyle } from "./display/types";
 
 const CONFIG_FILE = path.join(process.cwd(), ".data", "admin-config.json");
 const DEFAULT_CONFIG_FILE = path.join(process.cwd(), "public", "admin-config.default.json");
@@ -68,12 +69,26 @@ export function normalizeBlindBoxItem(raw: unknown): BlindBoxItem {
   };
 }
 
+/** 归一化单个官方入场提示条目（容错任意输入；id 缺失按列表下标补齐，保证选中标识稳定） */
+export function normalizeOfficialEntryStyle(raw: unknown, index: number): OfficialEntryStyle {
+  const s = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: String(s.id ?? "").trim() || `style_${index}`,
+    name: String(s.name ?? "").trim(),
+    video: String(s.video ?? "").trim(),
+    json: String(s.json ?? "").trim(),
+  };
+}
+
 /** 归一化 admin 配置（仅重写 blind_boxes，其余字段原样保留） */
 export function normalizeAdminConfig(raw: AdminConfig): AdminConfig {
   if (!raw || typeof raw !== "object") return raw;
   return {
     ...raw,
     blind_boxes: Array.isArray(raw.blind_boxes) ? raw.blind_boxes.map(normalizeBlindBoxItem) : [],
+    official_entry_styles: Array.isArray(raw.official_entry_styles)
+      ? raw.official_entry_styles.map(normalizeOfficialEntryStyle)
+      : [],
   };
 }
 
@@ -161,6 +176,9 @@ export type AdminConfig = {
   anchor_activity_materials?: AnchorActivityMaterial[];
   /** 帮助页「扫码加入微信群」二维码图片链接（管理员在 admin 页上传/替换，为空则回退 /feedback.jpg） */
   wechat_qr_url?: string;
+  /** 官方入场提示列表（管理员在 admin 页「官方入场提示」模块编辑：
+   *  名称 + 视频地址（web_mp4）+ JSON 地址（web_mp4_json），主播面板「入场提示」单选使用） */
+  official_entry_styles?: OfficialEntryStyle[];
 };
 
 async function ensureConfigFile() {

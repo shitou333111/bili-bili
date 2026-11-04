@@ -36,7 +36,9 @@ import {
   type EntryAnimeConfig,
   type EntryColors,
   type EntryCooldownOption,
+  type EntryOfficialPayload,
   type EntryParticleMode,
+  type OfficialEntryStyle,
   type GiftBarWidth,
   type GiftFlipConfig,
   type GiftFlipOption,
@@ -52,6 +54,7 @@ import {
   saveDisplayConfig,
   resolveAnimeVideo,
 } from "@/lib/display/config";
+import { resolveEntryStyleAssets } from "@/lib/display/entry-style-cache";
 import {
   addBililiveSource,
   detectBililiveSource,
@@ -75,6 +78,7 @@ import { getEffectiveBlindBoxConfig, getAllBlindBoxInfo } from "@/lib/stats-clie
 import { type ToastKind } from "@/lib/toast";
 import DisplayEditModal from "./DisplayEditModal";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
+import EntryOfficialEffect from "./EntryOfficialEffect";
 import ColorBoard from "./ColorBoard";
 import GiftSearchInput, { type GiftPick } from "./GiftSearchInput";
 import GiftFlipCarousel, { GIFT_FLIP_STAGE } from "./GiftFlipCarousel";
@@ -1331,6 +1335,66 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     setStyleModal(null);
   }, [styleModal, update]);
 
+  // —— 入场提示形式（单选）：粒子聚散 + admin「官方入场提示」中定义的若干官方动画 ——
+  // 官方列表来自公开配置接口（readAdminConfig 归一化后的 official_entry_styles）。
+  const [officialEntryStyles, setOfficialEntryStyles] = useState<OfficialEntryStyle[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/config", { cache: "no-store" });
+        const j = (await res.json()) as { data?: { official_entry_styles?: unknown } };
+        const list = Array.isArray(j?.data?.official_entry_styles)
+          ? (j.data.official_entry_styles as OfficialEntryStyle[])
+          : [];
+        if (alive) setOfficialEntryStyles(list);
+      } catch {
+        /* 拉取失败：仅显示粒子聚散项 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const selectEntryStyle = useCallback(
+    (id: string) => {
+      if (id === config.entryStyle) return;
+      // 官方向：首次选择时后台下载视频 + JSON 到本地（之后所有进场用户复用同一份，不再走网络）
+      const style = officialEntryStyles.find((s) => s.id === id);
+      if (style) void resolveEntryStyleAssets(style);
+      void update({ entryStyle: id }).then((next) => {
+        void displayDanmaku.broadcastEntryStyle(next.entryStyle);
+      });
+    },
+    [config.entryStyle, officialEntryStyles, update],
+  );
+  // 官方动画预览弹窗：预览项 + 解析后的播放资源（null=资源准备中）
+  const [entryPreview, setEntryPreview] = useState<OfficialEntryStyle | null>(null);
+  const [entryPreviewAssets, setEntryPreviewAssets] = useState<EntryOfficialPayload | null>(null);
+  useEffect(() => {
+    if (!entryPreview) {
+      setEntryPreviewAssets(null);
+      return;
+    }
+    let alive = true;
+    setEntryPreviewAssets(null);
+    void resolveEntryStyleAssets(entryPreview).then((a) => {
+      if (alive) setEntryPreviewAssets(a);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [entryPreview]);
+  /** 单选组后按钮：粒子聚散 → 打开「设置样式」；官方动画 → 预览当前选中项 */
+  const onEntryAction = useCallback(() => {
+    if (config.entryStyle === "particle") {
+      openStyleModal();
+      return;
+    }
+    const s = officialEntryStyles.find((x) => x.id === config.entryStyle);
+    if (s) setEntryPreview(s);
+  }, [config.entryStyle, officialEntryStyles, openStyleModal]);
+
   // 点击视频文件名：解析当前朝向实际使用的视频路径，探测时长；>30s 才打开设置模态框
   const openSegmentModal = useCallback(
     async (idx: number, orient: "landscape" | "portrait", a: EntryAnimeConfig) => {
@@ -2054,15 +2118,59 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           onToggle={(v) => void toggleModule({ entry: v })}
         />
         <Card bg="bg-blue-200" border="border-blue-400">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-black/45 leading-relaxed">用户进入直播间时，粒子聚合成头像+昵称提示</p>
+          {/* 入场提示形式：一个按钮组（单选：粒子聚散 + admin「官方入场提示」定义的若干官方动画），
+              按钮组后统一一个「设置/预览」按钮 —— 粒子聚散时打开设置样式、官方动画时预览当前选中项。
+              选中项写入 config.entryStyle 并广播画布；官方项首次选中即在后台缓存视频/JSON 到本地。 */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="shrink-0 text-xs text-black/55">选择样式</span>
+            <div
+              role="radiogroup"
+              aria-label="入场提示形式"
+              className="inline-flex flex-wrap items-center gap-0.5 rounded-full bg-white/55 p-0.5 shadow-inner"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={config.entryStyle === "particle"}
+                onClick={() => selectEntryStyle("particle")}
+                className={`cursor-pointer rounded-full px-2.5 py-1 text-xs transition ${
+                  config.entryStyle === "particle"
+                    ? "bg-blue-600 text-white shadow"
+                    : "text-black/55 hover:bg-white/80"
+                }`}
+              >
+                粒子聚散
+              </button>
+              {officialEntryStyles.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={config.entryStyle === s.id}
+                  onClick={() => selectEntryStyle(s.id)}
+                  title={s.name}
+                  className={`max-w-40 cursor-pointer truncate rounded-full px-2.5 py-1 text-xs transition ${
+                    config.entryStyle === s.id
+                      ? "bg-blue-600 text-white shadow"
+                      : "text-black/55 hover:bg-white/80"
+                  }`}
+                >
+                  {s.name || "官方动画"}
+                </button>
+              ))}
+            </div>
+            <span aria-hidden className="shrink-0 text-s text-black/50">→</span>
             <button
               type="button"
-              onClick={openStyleModal}
-              title="设置粒子聚散方式（中心/左右）与 badge、粒子、昵称的颜色"
-              className="shrink-0 rounded-full bg-white/70 px-2.5 py-0.5 text-xs text-black/60 shadow-sm transition hover:bg-white cursor-pointer"
+              onClick={onEntryAction}
+              title={
+                config.entryStyle === "particle"
+                  ? "设置粒子聚散方式与配色"
+                  : "预览当前选中的官方入场动画"
+              }
+              className="shrink-0 cursor-pointer rounded-full bg-white/70 px-3 py-1 text-xs text-black/65 shadow-sm transition hover:bg-white"
             >
-              设置样式
+              设置/预览
             </button>
           </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
@@ -3299,6 +3407,41 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   确定
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 官方入场提示「预览」弹窗：循环播放视频特效（alpha/RGB 合成 + 模板昵称/头像绘制），
+          与画布运行时同一渲染组件，仅 CSS 宽度缩小适配弹窗。首次预览会先下载/读取本地缓存。 */}
+      {entryPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-[520px] overflow-hidden rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-base font-bold text-black/85">预览入场提示</h3>
+            <p className="mt-1 text-xs text-black/45">{entryPreview.name || "官方动画"}</p>
+            <div className="mt-3 flex min-h-40 items-center justify-center overflow-hidden rounded-xl bg-[#141210] p-3">
+              {entryPreviewAssets ? (
+                <EntryOfficialEffect
+                  key={entryPreview.id}
+                  src={entryPreviewAssets.video}
+                  json={entryPreview.json}
+                  config={entryPreviewAssets.config}
+                  fallbackSrc={entryPreview.video}
+                  user={{ uname: "测试用户昵称", face: "" }}
+                  loop
+                  cssWidth={440}
+                />
+              ) : (
+                <p className="text-xs text-white/60">正在准备特效资源…</p>
+              )}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                className="rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs font-medium text-white shadow transition hover:opacity-90"
+                onClick={() => setEntryPreview(null)}
+              >
+                关闭
+              </button>
             </div>
           </div>
         </div>

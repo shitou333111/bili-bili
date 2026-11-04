@@ -18,6 +18,7 @@ import {
   type DisplayEvent,
   type DisplayGiftItem,
   type EntryColors,
+  type EntryOfficialPayload,
   type EntryParticleMode,
   type GiftEffectFrameConfig,
   type GiftFlipConfig,
@@ -25,6 +26,7 @@ import {
   type GiftHighlight,
   type LayoutElementId,
   type MovableRect,
+  type OfficialEntryStyle,
   type ScreenOrientation,
 } from "./types";
 import {
@@ -34,6 +36,7 @@ import {
   resolveAnimeVideo,
   resolveAnimeSegment,
 } from "./config";
+import { resolveEntryStyleAssets } from "./entry-style-cache";
 import {
   appendGiftRecord,
   loadRecentQualifyingGifts,
@@ -977,6 +980,8 @@ class DisplayDanmakuService {
       giftBadgeOpacity: cfg.giftBadgeOpacity,
       entryParticleMode: cfg.entryParticleMode,
       entryColors: cfg.entryColors,
+      entryStyle: cfg.entryStyle,
+      entryOfficial: await this.resolveOfficialEntryPayload(cfg.entryStyle),
       giftHighlight: this.giftHighlight,
       giftFlip: cfg.giftFlip,
       flags: {
@@ -1125,6 +1130,39 @@ class DisplayDanmakuService {
   /** 广播入场提示配色（badge 渐变 + 粒子同源 + 昵称色）到画布（面板「设置颜色」保存后调用，配置已落盘）。 */
   async broadcastEntryColors(v: EntryColors): Promise<void> {
     await this.broadcast({ type: "entryColors", v });
+  }
+
+  /** 广播入场提示形式（"particle"=粒子聚散 / 官方动画 id）到画布（面板单选切换后调用，配置已落盘）。
+   *  连带下发当前选中的官方动画资源（本地缓存的视频地址 + 已加载的配套 JSON），画布编辑模式据此常驻预览。 */
+  async broadcastEntryStyle(style: string): Promise<void> {
+    const official = await this.resolveOfficialEntryPayload(style);
+    await this.broadcast({ type: "entryStyle", v: style, official });
+  }
+
+  /** 按 entryStyle 从 admin「官方入场提示」解析选中项（"particle"/未匹配 → null）。 */
+  private async resolveOfficialEntryStyle(entryStyle: string): Promise<OfficialEntryStyle | null> {
+    if (!entryStyle || entryStyle === "particle") return null;
+    try {
+      // 走公开配置接口（服务端读 admin-config 归一化后整包返回）。
+      // 注意：不能在此直接 import "@/lib/admin-config" —— 该模块用 fs 读盘，
+      // danmaku 服务跑在主窗口（浏览器侧），会把 fs 拖进客户端打包导致构建失败。
+      const res = await fetch("/api/config", { cache: "no-store" });
+      const j = (await res.json()) as { data?: { official_entry_styles?: OfficialEntryStyle[] } };
+      const list = j?.data?.official_entry_styles;
+      return Array.isArray(list) ? (list.find((s) => s.id === entryStyle) ?? null) : null;
+    } catch {
+      return null; // 配置不可用：画布回退粒子聚散
+    }
+  }
+
+  /** 解析官方动画的播放资源：本地缓存优先（首次选中时已下载，见 entry-style-cache），
+   *  命中即返回 /api/video 本地地址 + JSON，所有进场用户复用同一份，不再逐次走网络。 */
+  private async resolveOfficialEntryPayload(
+    entryStyle: string,
+  ): Promise<EntryOfficialPayload | null> {
+    const style = await this.resolveOfficialEntryStyle(entryStyle);
+    if (!style) return null;
+    return resolveEntryStyleAssets(style);
   }
 
   /** 触发一次撒花庆祝（纸屑 + 飘带，一次性效果；面板"撒花"按钮调用）。 */
@@ -1684,7 +1722,19 @@ class DisplayDanmakuService {
             config.entryLastSeen[uid] = now;
             needSave = true;
           }
-          this.pushDebug("entry", "emit", { uid, uname: user.uname || "", guardType, medalLevel });
+          // 入场提示形式：选中官方动画时随事件下发资源（本地缓存视频地址 + 已加载配套 JSON）
+          //（画布运行在外部浏览器、无 Tauri IPC，视频/JSON 都在主窗口侧解析）
+          let official: EntryOfficialPayload | undefined;
+          if (config.entryStyle && config.entryStyle !== "particle") {
+            official = await this.resolveOfficialEntryPayload(config.entryStyle) ?? undefined;
+          }
+          this.pushDebug("entry", "emit", {
+            uid,
+            uname: user.uname || "",
+            guardType,
+            medalLevel,
+            style: official?.style.id ?? "particle",
+          });
           this.emitTo({
             type: "entry",
             user: {
@@ -1694,6 +1744,7 @@ class DisplayDanmakuService {
               guardType: guardType as any,
               medalLevel,
             },
+            ...(official ? { official } : {}),
           });
         }
       }
