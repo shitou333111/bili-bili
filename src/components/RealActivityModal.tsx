@@ -24,20 +24,56 @@ interface Props {
   activityUrlTemplate?: string;
 }
 
+/** 黑抽最近使用的主播记录 */
+type BlackDrawHistory = {
+  uid: number;
+  uname: string;
+  face?: string;
+  roomId: number;
+};
+
+const BLACK_DRAW_HISTORY_KEY = "bili_live_black_draw_history";
+const BLACK_DRAW_HISTORY_MAX = 5;
+
+/** 读取本地历史（最多 5 条，最近使用在前） */
+function readBlackDrawHistory(): BlackDrawHistory[] {
+  try {
+    const raw = localStorage.getItem(BLACK_DRAW_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is BlackDrawHistory => Number(item?.uid) > 0 && typeof item?.uname === "string")
+      .slice(0, BLACK_DRAW_HISTORY_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function writeBlackDrawHistory(list: BlackDrawHistory[]) {
+  try {
+    localStorage.setItem(BLACK_DRAW_HISTORY_KEY, JSON.stringify(list));
+  } catch {
+    /* 隐私模式等场景忽略 */
+  }
+}
+
 export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate }: Props) {
   const [uidInput, setUidInput] = useState("");
   const [streamer, setStreamer] = useState<StreamerInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [phase, setPhase] = useState<"input" | "confirm">("input");
+  const [history, setHistory] = useState<BlackDrawHistory[]>([]);
 
-  // 打开时重置状态
+  // 打开时重置状态，并读取最近使用的主播
   useEffect(() => {
     if (isOpen) {
       setUidInput("");
       setStreamer(null);
       setError("");
       setPhase("input");
+      setHistory(readBlackDrawHistory());
     }
   }, [isOpen]);
 
@@ -49,12 +85,37 @@ export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate
       const info = await getStreamerInfoByUid(Number(uidInput.trim()));
       setStreamer(info);
       setPhase("confirm");
+      // 记录最近使用：去重并保留最近 5 条
+      const entry: BlackDrawHistory = {
+        uid: info.uid,
+        uname: info.uname,
+        face: info.face,
+        roomId: info.roomId,
+      };
+      const next = [entry, ...history.filter((h) => h.uid !== info.uid)].slice(0, BLACK_DRAW_HISTORY_MAX);
+      setHistory(next);
+      writeBlackDrawHistory(next);
     } catch (e: any) {
       setError(e?.message || "查询失败");
     } finally {
       setLoading(false);
     }
-  }, [uidInput]);
+  }, [uidInput, history]);
+
+  /** 点击历史主播：直接进入风险确认面板（仍需用户确认后才打开活动页） */
+  const selectHistory = useCallback((item: BlackDrawHistory) => {
+    setUidInput(String(item.uid));
+    setStreamer({
+      uid: item.uid,
+      roomId: item.roomId,
+      uname: item.uname,
+      face: item.face ?? "",
+      liveStatus: 0,
+      title: "",
+    });
+    setError("");
+    setPhase("confirm");
+  }, []);
 
   const handleConfirm = useCallback(async () => {
     if (!streamer) return;
@@ -151,6 +212,30 @@ export default function RealActivityModal({ isOpen, onClose, activityUrlTemplate
                   {loading ? "查询中..." : "查询"}
                 </button>
               </div>
+              {history.length > 0 && (
+                <div className="mb-3">
+                  <p className="mb-1.5 text-[11px] text-black/40">最近使用</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {history.map((item) => (
+                      <button
+                        key={item.uid}
+                        type="button"
+                        onClick={() => selectHistory(item)}
+                        className="flex items-center gap-1.5 rounded-full border border-black/10 bg-gray-50 py-0.5 pl-0.5 pr-2 text-[11px] text-black/60 transition hover:border-red-300 hover:bg-red-50 active:scale-95"
+                      >
+                        {item.face ? (
+                          <img src={item.face} alt="" className="h-5 w-5 rounded-full object-cover" />
+                        ) : (
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-200 text-[10px] text-black/30">
+                            人
+                          </span>
+                        )}
+                        <span className="max-w-[88px] truncate">{item.uname}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {error && <p className="text-xs text-red-500 mb-2">{error}</p>}
               <button
                 onClick={onClose}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { getPlatform } from "@/lib/platform";
 
@@ -368,11 +368,15 @@ export default function MicroLightPage() {
   const [uid, setUid] = useState<number | null>(null);
   const [data, setData] = useState<RecordsData | null>(null);
   const [loading, setLoading] = useState(false);
+  /** PK 卡片内「刷新」按钮的加载动画状态 */
+  const [refreshingRecords, setRefreshingRecords] = useState(false);
   const [error, setError] = useState("");
   /** 我的 PK 记录筛选：全部 / 已抽 / 已中奖 */
   const [recordFilter, setRecordFilter] = useState<"all" | "drawn" | "won">("all");
   /** 展开的记录 pkId 集合（折叠条） */
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  /** 已过期记录分组：默认折叠 */
+  const [expiredOpen, setExpiredOpen] = useState(false);
   const [allDraws, setAllDraws] = useState<AllDraw[]>([]);
   const [allLoading, setAllLoading] = useState(false);
 
@@ -440,6 +444,21 @@ export default function MicroLightPage() {
     },
     [],
   );
+
+  /** 只刷新当前卡片中的 PK 记录，不触碰下方「全部抽奖记录」卡片 */
+  const refreshPkRecords = useCallback(async () => {
+    if (!uid) return;
+    setRefreshingRecords(true);
+    const started = performance.now();
+    try {
+      await loadRecords(uid, true);
+      // 保证刷新动画至少可见 500ms
+      const remain = 500 - (performance.now() - started);
+      if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain));
+    } finally {
+      setRefreshingRecords(false);
+    }
+  }, [uid, loadRecords]);
 
   const loadAllDraws = useCallback(async () => {
     setAllLoading(true);
@@ -650,6 +669,12 @@ export default function MicroLightPage() {
     if (recordFilter === "won") return e.state === "drawn" && wonEntry(e);
     return true;
   });
+  // 已过期记录统一放到列表最下方；已抽奖的过期记录已在上方展示，不再放进过期分组
+  const activeEntries = filteredEntries.filter((e) => e.state !== "expired");
+  const expiredEntries = filteredEntries.filter((e) => e.state === "expired" && !e.draw);
+  const orderedEntries = [...activeEntries, ...expiredEntries];
+  const expiredCount = expiredEntries.length;
+  const firstExpiredIndex = expiredCount > 0 ? activeEntries.length : -1;
   const toggleEntry = (pkId: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -686,7 +711,7 @@ export default function MicroLightPage() {
             </span>
           </div>
           <p className="mt-3 text-[14px] leading-6 text-[#6d6470] sm:text-[15px]">
-            多人接力 PK，拼到最后却没吃到医药费的主播，可以在这里抽一份小惊喜
+            多人接力 PK，拼到最后却没吃到医药费的主播，可以在这里抽一份小安慰
           </p>
         </header>
 
@@ -798,7 +823,7 @@ export default function MicroLightPage() {
                 </button>
               </form>
               <p className="mt-3 text-[11px] leading-5 text-black/40">
-                无需登录。UID 会保存在当前浏览器，下次打开自动读取；换设备需要重新输入。
+                无需登录。UID 也会记住，短期只需输入一次。
               </p>
             </>
           ) : (
@@ -812,18 +837,21 @@ export default function MicroLightPage() {
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[17px] font-semibold">{data?.uname || (loading ? "加载中…" : `UID ${uid}`)}</div>
-                <div className="mt-1 text-[11px] text-black/40">UID {uid}</div>
+                <div className="mt-1 text-[11px] text-black/40">{uid}</div>
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    if (uid) void loadRecords(uid, true);
-                    void loadAllDraws();
-                  }}
-                  className="flex items-center gap-1.5 rounded-full border border-black/10 bg-white px-3 py-1.5 text-[11px] text-black/60 transition hover:border-black/25"
+                  onClick={() => void refreshPkRecords()}
+                  disabled={refreshingRecords}
+                  className="group flex items-center gap-1.5 rounded-full border border-black/10 bg-white px-3 py-1.5 text-[11px] text-black/60 transition hover:border-black/25 active:scale-90 disabled:opacity-60"
                 >
-                  <Icon name="refresh" className="h-3.5 w-3.5" />
-                  刷新
+                  <Icon
+                    name="refresh"
+                    className={`h-3.5 w-3.5 transition-transform duration-500 group-active:rotate-180 ${
+                      refreshingRecords ? "animate-spin" : ""
+                    }`}
+                  />
+                  {refreshingRecords ? "刷新中" : "刷新"}
                 </button>
                 <button
                   onClick={changeUid}
@@ -879,11 +907,35 @@ export default function MicroLightPage() {
                     </p>
                   ) : (
                     <div className="mt-3 overflow-hidden rounded-2xl border border-black/[0.07] bg-[#fbfaff]">
-                      {filteredEntries.map((entry, idx) => {
+                      {orderedEntries.map((entry, idx) => {
                         const open = expanded.has(entry.pkId);
                         const status = entryStatus(entry);
+                        const isExpired = entry.state === "expired";
+                        const isFirstExpired = idx === firstExpiredIndex;
+                        const expiredToggle = (
+                          <button
+                            key="expired-toggle"
+                            onClick={() => setExpiredOpen((v) => !v)}
+                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-black/45 transition hover:bg-black/[0.02] ${
+                              idx > 0 ? "border-t border-black/[0.06]" : ""
+                            }`}
+                          >
+                            <Icon name="lock" className="h-3.5 w-3.5" />
+                            <span>已过期记录（{expiredCount}）</span>
+                            <span className="ml-auto">{expiredOpen ? "收起" : "展开"}</span>
+                            <Icon
+                              name="chevron"
+                              className={`h-3.5 w-3.5 shrink-0 transition-transform ${expiredOpen ? "rotate-90" : ""}`}
+                            />
+                          </button>
+                        );
+                        if (isExpired && !expiredOpen) {
+                          return isFirstExpired ? expiredToggle : null;
+                        }
                         return (
-                          <div key={entry.pkId} className={idx > 0 ? "border-t border-black/[0.06]" : ""}>
+                          <Fragment key={entry.pkId}>
+                            {isExpired && isFirstExpired && expiredToggle}
+                          <div className={idx > 0 ? "border-t border-black/[0.06]" : ""}>
                             <button
                               onClick={() => toggleEntry(entry.pkId)}
                               className={`flex w-full items-center gap-2 px-3 py-2.5 text-left transition ${
@@ -995,6 +1047,7 @@ export default function MicroLightPage() {
                               </div>
                             )}
                           </div>
+                          </Fragment>
                         );
                       })}
                     </div>
@@ -1007,9 +1060,9 @@ export default function MicroLightPage() {
         </section>
 
         {/* ===== 全部抽奖记录（与 PK 记录解耦，独立模块） ===== */}
-        <section className="mt-10 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_20px_56px_-32px_rgba(120,80,120,0.4)]">
+        <section className="mt-5 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_20px_56px_-32px_rgba(120,80,120,0.4)]">
           <div className="flex flex-wrap items-center gap-2 border-b border-black/[0.06] px-5 py-4 sm:px-7">
-            <h2 className="text-sm font-semibold">全部抽奖记录</h2>
+            <h2 className="text-sm font-semibold">全部主播抽奖记录</h2>
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
               <select
                 value={allMonth}
@@ -1269,7 +1322,7 @@ function Rules({ config }: { config: PublicConfig | null }) {
   const voidScore = config?.voidScoreThreshold ?? 1000;
 
   return (
-    <section className="mt-10 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_20px_56px_-32px_rgba(120,80,120,0.35)]">
+    <section className="mt-5 overflow-hidden rounded-2xl border border-black/[0.07] bg-white shadow-[0_20px_56px_-32px_rgba(120,80,120,0.35)]">
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between gap-2 px-5 py-4 text-left sm:px-7"

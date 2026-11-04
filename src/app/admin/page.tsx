@@ -493,6 +493,8 @@ export default function AdminPage() {
   const [microLightStatusSaving, setMicroLightStatusSaving] = useState<string | null>(null);
   /** 已展开的抽奖记录主播 uid（默认全部折叠） */
   const [expandedDrawUids, setExpandedDrawUids] = useState<Set<number>>(new Set());
+  /** 抽奖记录刷新中（用于按钮动画反馈） */
+  const [microLightRefreshing, setMicroLightRefreshing] = useState(false);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -831,6 +833,20 @@ export default function AdminPage() {
     const timer = window.setTimeout(() => void loadMicroLight(), 0);
     return () => window.clearTimeout(timer);
   }, [adminLoggedIn, loadMicroLight]);
+
+  /** 手动刷新抽奖记录：按钮点击缩放 + 加载时图标旋转 */
+  const refreshMicroLightDraws = useCallback(async () => {
+    setMicroLightRefreshing(true);
+    const started = performance.now();
+    try {
+      await loadMicroLight();
+      // 保证「刷新中」动画至少可见 500ms，避免接口过快时用户看不到反馈
+      const remain = 500 - (performance.now() - started);
+      if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain));
+    } finally {
+      setMicroLightRefreshing(false);
+    }
+  }, [loadMicroLight]);
 
   /** 保存备用药活动配置（奖品 / 开关 / 参数 / 微光天使） */
   const saveMicroLight = async () => {
@@ -3213,10 +3229,19 @@ export default function AdminPage() {
                         · 已发放 {microLightDraws.filter((d) => d.status === "granted").length}
                       </span>
                       <button
-                        onClick={() => void loadMicroLight()}
-                        className="ml-auto rounded border border-black/10 px-2 py-0.5 text-[10px] text-black/50 hover:border-black/25"
+                        onClick={() => void refreshMicroLightDraws()}
+                        disabled={microLightRefreshing}
+                        className="ml-auto flex items-center gap-1 rounded border border-black/10 px-2 py-0.5 text-[10px] text-black/50 transition hover:border-black/25 active:scale-90 disabled:opacity-60"
                       >
-                        刷新
+                        <svg
+                          className={`h-3 w-3 ${microLightRefreshing ? "animate-spin" : ""}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12a8 8 0 10-2.5 5.8M20 4v5h-5" />
+                        </svg>
+                        {microLightRefreshing ? "刷新中" : "刷新"}
                       </button>
                     </div>
                     {microLightDrawGroups.length === 0 ? (
