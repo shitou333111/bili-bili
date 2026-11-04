@@ -559,13 +559,23 @@ export function evaluateRecord(
   if (duration > 0 && duration < SHORT_PK_SECONDS) {
     return { ...base, baseState: "skipped", baseReason: "计划时长不足 30 分钟，不参与活动" };
   }
+  // 流局：第二名票数低于阈值（此类记录一律不在页面展示）
+  // 必须优先于「已过期」判断，否则过期后会以「已过期」重新出现在页面上
+  if (secondVotes < voidThreshold) {
+    return { ...base, baseState: "void", baseReason: `流局：本局第二名票数未达到 ${voidThreshold}` };
+  }
+  // 7 人局：非流局但第二名未达到 5.5 万票说明本局没有医药费，不展示、不可抽
+  // 同样必须优先于「已过期」判断
+  if (participants === 7 && secondVotes < EXPECTATION_VOTES_CAP) {
+    return {
+      ...base,
+      baseState: "skipped",
+      baseReason: `7 人局第二名票数未达到 ${EXPECTATION_VOTES_CAP}，本局没有医药费`,
+    };
+  }
   // 有效期：以 pk_start_time 起算（可配置）
   if (nowMs - startAt * 1000 > config.drawWindowHours * 3600 * 1000 || startAt * 1000 > nowMs + 60_000) {
     return { ...base, baseState: "expired", baseReason: `已超过 ${config.drawWindowHours} 小时有效期` };
-  }
-  // 流局：第二名票数低于阈值（此类记录不在页面展示）
-  if (secondVotes < voidThreshold) {
-    return { ...base, baseState: "void", baseReason: `流局：本局第二名票数未达到 ${voidThreshold}` };
   }
   // 不再按名次/人数判定资格：未流局的局内任意主播都可以抽
   return { ...base, baseState: "drawable", baseReason: "" };

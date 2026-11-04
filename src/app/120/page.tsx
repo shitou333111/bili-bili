@@ -375,7 +375,7 @@ export default function MicroLightPage() {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [allDraws, setAllDraws] = useState<AllDraw[]>([]);
   const [allLoading, setAllLoading] = useState(false);
-  const [winnersOnly, setWinnersOnly] = useState(false);
+
   const [allMonth, setAllMonth] = useState("");
   const [toast, setToast] = useState("");
   const toastTimer = useRef<number | null>(null);
@@ -639,9 +639,7 @@ export default function MicroLightPage() {
   };
 
   const monthOptions = Array.from(new Set(allDraws.map((d) => d.month))).sort().reverse();
-  const filteredDraws = allDraws
-    .filter((d) => (allMonth ? d.month === allMonth : true))
-    .filter((d) => (winnersOnly ? d.prizeKind !== "none" && d.status !== "miss" && d.status !== "void" : true));
+  const filteredDraws = allDraws.filter((d) => (allMonth ? d.month === allMonth : true));
 
   const wonEntry = (e: Entry) =>
     Boolean(e.draw && e.draw.prizeKind !== "none" && e.draw.status !== "miss" && e.draw.status !== "void");
@@ -1023,16 +1021,6 @@ export default function MicroLightPage() {
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
-              <button
-                onClick={() => setWinnersOnly((v) => !v)}
-                className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
-                  winnersOnly
-                    ? "bg-[#221d24] text-white"
-                    : "border border-black/10 bg-white text-black/55 hover:border-black/25"
-                }`}
-              >
-                只看获奖
-              </button>
               <span className="text-[10px] text-black/35">
                 共 {filteredDraws.length} 条{allLoading ? " · 刷新中…" : ""}
               </span>
@@ -1292,11 +1280,12 @@ function Rules({ config }: { config: PublicConfig | null }) {
       {open && (
         <div className="space-y-2.5 border-t border-black/[0.06] px-5 py-5 text-[12px] leading-6 text-black/55 sm:px-7">
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>只展示本月的「多人接力 PK」记录，不包含分组PK/竞技/流局。</p>
-          <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>只有真正没抢到医药费的主播才可以抽奖，第一第二名好心额外给了医药费的也不要抽。虽然没有做限制，请自觉遵守，不要乱抽，因为本该抽奖的主播会看到你占用了她的抽奖资格，会非常尴尬，严重的还会被挂在网站上。同一局先到先得，一人抽完后其余人不可再抽。</p>
+          <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>记录的是PK条结束时的分数，所以并不准确，比如时长超过1个小时，中途掉线结束PK。如果7人局在1小时以后才打满，不会被识别为抢医药费，不显示在记录中。之后如果使用者增多，会用更严谨的方法来判断本局中错失医药费的主播。</p>
+          <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>只有真正没抢到医药费的主播才可以抽奖，第一第二名好心额外给了医药费的也不要抽。虽然没有做限制，请自觉遵守，不要乱抽，因为本该抽奖的主播会看到你占用了她的抽奖资格，会非常尴尬，严重的还会被挂在网站上。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>同一局无论有几位错失医药费，只有一个人可以抽奖，先到先得。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>每一局的抽奖有效期为 PK 开始后 {hours} 小时，过期不可抽。因为如果当时不抽，通常就会被遗忘。另外，这个抽奖旨在安抚错失医药费那一会儿的心情失落。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>每位主播每个自然月最多抽中 {cap} 次非安慰奖；安慰奖（粉丝牌）不占用次数。</p>
-          <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>每次抽奖的概率和本局医药费有关，大体上是平均值等于医药费的1/10，当然由于随机，会抽中更大或者更小的礼物。抽奖肯定是要远低于医药费的，否则对抢医药费的不公平，另外就是资助能力有限。总之得承认这是一个聊胜于无的抽奖，但好在不用你复杂的操作，不用主动联系。</p>
+          <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>每次抽奖的概率和本局医药费有关，大体上是平均值等于医药费的1/10，当然由于随机，会抽中更大或者更小的礼物。抽奖肯定是要远低于医药费的，否则对抢医药费的不公平，另外就是资助能力有限。总之得承认这是一个聊胜于无的抽奖，但好在不用你复杂的操作。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>奖品每月底发放，耐心等待即可。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>免责声明：这是一个公益小项目，主要是见过好多次主播由于没抢到医药费破防痛哭下播的。如果有人恶意抽奖，是不会兑现的。甚至如果一个月有好几位主播抽中了大奖，导致资助无法覆盖，可能也会和中奖者协商，当然会尽量避免这种情况。总之一句常见的流氓话，所有解释权归网站所有。</p>
           <p><span className="mr-1.5 text-[15px] font-bold text-[#c05880]">•</span>急切寻找资助者，开发者本人是没有钱资助维持这个活动的。每月一次资助，资助的大哥/大姐会展示在首页，也可以展示自己的爱播，所有月份的资助者都会长期记录。每月资助金暂时还不确定，但预计会在1000块左右，可以是多位资助者分担。如有兴趣，微信联系 MRI_QA，感恩！</p>

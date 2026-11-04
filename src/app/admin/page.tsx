@@ -283,6 +283,45 @@ type MicroLightDrawData = {
   note?: string;
 };
 
+/** 抽奖记录按主播归类后的分组 */
+type MicroLightDrawGroup = {
+  uid: number;
+  uname: string;
+  face?: string;
+  roomId: number;
+  draws: MicroLightDrawData[];
+};
+
+/** 把抽奖记录按主播 uid 分组（保持记录原始顺序） */
+function groupMicroLightDraws(draws: MicroLightDrawData[]): MicroLightDrawGroup[] {
+  const map = new Map<number, MicroLightDrawGroup>();
+  for (const d of draws) {
+    let g = map.get(d.uid);
+    if (!g) {
+      g = { uid: d.uid, uname: d.uname, face: d.face, roomId: d.roomId, draws: [] };
+      map.set(d.uid, g);
+    }
+    g.draws.push(d);
+  }
+  return Array.from(map.values());
+}
+
+/** 折叠条标题：抽中礼物的汇总数目，如「共 2 件 · 送花花×1 · 情书×1」 */
+function summarizeDrawPrizes(draws: MicroLightDrawData[]): string {
+  const counts = new Map<string, number>();
+  for (const d of draws) {
+    if (d.status === "void" || d.prizeKind === "none") continue;
+    const name = d.prizeName || "未知奖品";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  if (counts.size === 0) return "未中奖";
+  const total = Array.from(counts.values()).reduce((sum, n) => sum + n, 0);
+  const detail = Array.from(counts.entries())
+    .map(([name, n]) => `${name}×${n}`)
+    .join(" · ");
+  return `共 ${total} 件 · ${detail}`;
+}
+
 /** 帮助页「常见问题」条目 */
 type FaqItemData = { q: string; a: string };
 
@@ -452,6 +491,8 @@ export default function AdminPage() {
   const [microLightSponsorQuerying, setMicroLightSponsorQuerying] = useState(false);
   const [microLightDrawMonth, setMicroLightDrawMonth] = useState("");
   const [microLightStatusSaving, setMicroLightStatusSaving] = useState<string | null>(null);
+  /** 已展开的抽奖记录主播 uid（默认全部折叠） */
+  const [expandedDrawUids, setExpandedDrawUids] = useState<Set<number>>(new Set());
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -1805,6 +1846,12 @@ export default function AdminPage() {
     );
   }
 
+  // 抽奖记录：先按所选月份筛选，再按主播归类
+  const filteredMicroLightDraws = microLightDraws.filter((d) =>
+    microLightDrawMonth ? d.month === microLightDrawMonth : true,
+  );
+  const microLightDrawGroups = groupMicroLightDraws(filteredMicroLightDraws);
+
   return (
     <div className="admin-root min-h-screen bg-[#faf9f6] py-2 px-2 overflow-x-hidden" style={{ paddingTop: "calc(var(--safe-top, 0px) + 8px)" }}>
       <SafeAreaStyler />
@@ -3137,7 +3184,10 @@ export default function AdminPage() {
                       <span className="text-[11px] font-medium">抽奖记录</span>
                       <select
                         value={microLightDrawMonth}
-                        onChange={(e) => setMicroLightDrawMonth(e.target.value)}
+                        onChange={(e) => {
+                          setMicroLightDrawMonth(e.target.value);
+                          setExpandedDrawUids(new Set());
+                        }}
                         className="rounded border border-black/10 px-1.5 py-0.5 text-[10px]"
                       >
                         <option value="">全部月份</option>
@@ -3169,23 +3219,41 @@ export default function AdminPage() {
                         刷新
                       </button>
                     </div>
-                    {microLightDraws.length === 0 ? (
+                    {microLightDrawGroups.length === 0 ? (
                       <p className="py-1 text-[10px] text-black/30">暂无抽奖记录</p>
                     ) : (
                       <div className="max-h-72 space-y-1 overflow-y-auto pr-0.5">
-                        {microLightDraws
-                          .filter((d) => (microLightDrawMonth ? d.month === microLightDrawMonth : true))
-                          .map((d) => (
-                            <div key={d.id} className="rounded border border-black/10 p-1.5">
-                              <div className="flex items-center gap-1.5">
+                        {microLightDrawGroups.map((g) => {
+                          const open = expandedDrawUids.has(g.uid);
+                          return (
+                            <div key={g.uid} className="rounded border border-black/10">
+                              <div className="flex items-center gap-1.5 p-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => void openMicroLightRoom(d.uid, d.roomId)}
-                                  title={`打开 ${d.uname || d.uid} 的直播间`}
+                                  onClick={() =>
+                                    setExpandedDrawUids((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(g.uid)) next.delete(g.uid);
+                                      else next.add(g.uid);
+                                      return next;
+                                    })
+                                  }
+                                  title={open ? "收起" : "展开"}
+                                  aria-expanded={open}
+                                  className="shrink-0 rounded p-0.5 text-black/40 transition hover:bg-black/5"
+                                >
+                                  <svg className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                                  </svg>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void openMicroLightRoom(g.uid, g.roomId)}
+                                  title={`打开 ${g.uname || g.uid} 的直播间`}
                                   className="shrink-0 transition hover:opacity-80 active:scale-95"
                                 >
-                                  {d.face ? (
-                                    <img src={fixImageUrl(d.face)} alt="" className="h-6 w-6 rounded-full object-cover" />
+                                  {g.face ? (
+                                    <img src={fixImageUrl(g.face)} alt="" className="h-6 w-6 rounded-full object-cover" />
                                   ) : (
                                     <span className="flex h-6 w-6 items-center justify-center rounded-full bg-black/5 text-[10px] text-black/30">人</span>
                                   )}
@@ -3194,40 +3262,76 @@ export default function AdminPage() {
                                   <div className="flex min-w-0 items-center gap-1">
                                     <button
                                       type="button"
-                                      onClick={() => void openMicroLightRoom(d.uid, d.roomId)}
-                                      title={`打开 ${d.uname || d.uid} 的直播间`}
+                                      onClick={() => void openMicroLightRoom(g.uid, g.roomId)}
+                                      title={`打开 ${g.uname || g.uid} 的直播间`}
                                       className="truncate text-left text-[11px] font-medium transition hover:text-[#00a1d6]"
                                     >
-                                      {d.uname || `UID ${d.uid}`}
+                                      {g.uname || `UID ${g.uid}`}
                                     </button>
-                                    <span className="shrink-0 text-[11px] font-normal text-black/45">
-                                      · {d.prizeKind === "none" ? "未中奖" : d.prizeName}
-                                    </span>
+                                    <span className="shrink-0 text-[9px] text-black/35">{g.draws.length} 条</span>
                                   </div>
-                                  <div className="text-[9px] text-black/35">
-                                    PK {d.pkId} · {d.month} · 第 {d.rank}/{d.participants} 名 · 票数 {d.votes} · 抽于 {d.drawnAt.slice(5, 16).replace("T", " ")}
-                                  </div>
+                                  <div className="truncate text-[10px] text-black/50">{summarizeDrawPrizes(g.draws)}</div>
                                 </div>
-                                <div className="flex shrink-0 items-center gap-0.5">
-                                  {([["pending", "待发放"], ["granted", "已发放"], ["reset", "重抽"], ["void", "废弃"]] as const).map(([st, txt]) => (
-                                    <button
-                                      key={st}
-                                      onClick={() => void updateMicroLightStatus(d.id, st)}
-                                      disabled={microLightStatusSaving === d.id || d.status === st}
-                                      className={`rounded px-1.5 py-0.5 text-[9px] border transition ${
-                                        d.status === st
-                                          ? "border-[#00a1d6] bg-[#00a1d6]/10 text-[#00a1d6]"
-                                          : "border-black/10 text-black/45 hover:border-black/25 disabled:opacity-40"
-                                      }`}
-                                    >
-                                      {txt}
-                                    </button>
-                                  ))}
-                                  {microLightStatusSaving === d.id && <span className="text-[9px] text-black/30">…</span>}
-                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedDrawUids((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(g.uid)) next.delete(g.uid);
+                                      else next.add(g.uid);
+                                      return next;
+                                    })
+                                  }
+                                  className="shrink-0 text-[9px] text-black/40 transition hover:text-black/70"
+                                >
+                                  {open ? "收起" : "展开"}
+                                </button>
                               </div>
+                              {open && (
+                                <div className="space-y-1 border-t border-black/10 bg-black/[0.015] p-1.5">
+                                  {g.draws.map((d) => (
+                                    <div key={d.id} className="rounded border border-black/10 bg-white p-1.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex min-w-0 items-center gap-1">
+                                            <span className="shrink-0 text-[11px] font-normal text-black/60">
+                                              {d.prizeKind === "none" ? "未中奖" : d.prizeName}
+                                            </span>
+                                            <span className="truncate text-[9px] text-black/35">
+                                              {d.prizeImg && (
+                                                <img src={fixImageUrl(d.prizeImg)} alt="" className="mr-1 inline h-4 w-4 object-contain align-text-bottom" />
+                                              )}
+                                            </span>
+                                          </div>
+                                          <div className="text-[9px] text-black/35">
+                                            PK {d.pkId} · {d.month} · 第 {d.rank}/{d.participants} 名 · 票数 {d.votes} · 抽于 {d.drawnAt.slice(5, 16).replace("T", " ")}
+                                          </div>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-0.5">
+                                          {([["pending", "待发放"], ["granted", "已发放"], ["reset", "重抽"], ["void", "废弃"]] as const).map(([st, txt]) => (
+                                            <button
+                                              key={st}
+                                              onClick={() => void updateMicroLightStatus(d.id, st)}
+                                              disabled={microLightStatusSaving === d.id || d.status === st}
+                                              className={`rounded px-1.5 py-0.5 text-[9px] border transition ${
+                                                d.status === st
+                                                  ? "border-[#00a1d6] bg-[#00a1d6]/10 text-[#00a1d6]"
+                                                  : "border-black/10 text-black/45 hover:border-black/25 disabled:opacity-40"
+                                              }`}
+                                            >
+                                              {txt}
+                                            </button>
+                                          ))}
+                                          {microLightStatusSaving === d.id && <span className="text-[9px] text-black/30">…</span>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
-                          ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
