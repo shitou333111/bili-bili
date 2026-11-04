@@ -47,6 +47,23 @@ function parseConfig(text: string): EntryEffectConfig | null {
   }
 }
 
+/** 本地视频的 blob URL 缓存（主窗口预览用：同源 → canvas 可读像素做 alpha/遮罩合成） */
+const blobUrls = new Map<string, string>();
+
+async function localBlobUrl(videoPath: string): Promise<string | null> {
+  const hit = blobUrls.get(videoPath);
+  if (hit) return hit;
+  try {
+    const fs = await import("@tauri-apps/plugin-fs");
+    const bytes = await fs.readFile(videoPath);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+    blobUrls.set(videoPath, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 async function load(style: OfficialEntryStyle): Promise<EntryOfficialPayload> {
   // 非 Tauri（Web 预览）：没有本地目录与 /api/video，直接用 CDN 地址，JSON 由组件自行拉取
   const fallback: EntryOfficialPayload = { style, video: style.video, config: null };
@@ -80,8 +97,10 @@ async function load(style: OfficialEntryStyle): Promise<EntryOfficialPayload> {
 
     const payload: EntryOfficialPayload = {
       style,
-      // 本地服务器视频路由（支持 Range）；占位后由画布/主窗口直接播放
+      // 画布（浏览器源/编辑面框）与本地服务器同源 → 用它播放（支持 Range）
       video: `/api/video?p=${encodeURIComponent(videoPath)}`,
+      // 主窗口预览：blob URL 同源，canvas 像素可读（否则跨源读像素会抛异常、无法合成 alpha/遮罩）
+      previewVideo: (await localBlobUrl(videoPath)) ?? style.video,
       config,
     };
     mem.set(style.video, payload);

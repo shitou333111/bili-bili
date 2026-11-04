@@ -55,6 +55,7 @@ import {
   resolveAnimeVideo,
 } from "@/lib/display/config";
 import { resolveEntryStyleAssets } from "@/lib/display/entry-style-cache";
+import { serverFetch } from "@/lib/server-api";
 import {
   addBililiveSource,
   detectBililiveSource,
@@ -1342,8 +1343,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     let alive = true;
     void (async () => {
       try {
-        const res = await fetch("/api/config", { cache: "no-store" });
-        const j = (await res.json()) as { data?: { official_entry_styles?: unknown } };
+        // 必须 serverFetch：Tauri 生产包为静态导出（无 /api 路由），相对路径 404
+        const j = await serverFetch<{ data?: { official_entry_styles?: unknown } }>("/api/config");
         const list = Array.isArray(j?.data?.official_entry_styles)
           ? (j.data.official_entry_styles as OfficialEntryStyle[])
           : [];
@@ -3423,7 +3424,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               {entryPreviewAssets ? (
                 <EntryOfficialEffect
                   key={entryPreview.id}
-                  src={entryPreviewAssets.video}
+                  src={entryPreviewAssets.previewVideo ?? entryPreviewAssets.video}
                   json={entryPreview.json}
                   config={entryPreviewAssets.config}
                   fallbackSrc={entryPreview.video}

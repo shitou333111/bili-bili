@@ -595,8 +595,10 @@ export interface EntryEffectConfig {
 export interface EntryOfficialPayload {
   /** 动画定义（视频/JSON 地址与名称） */
   style: OfficialEntryStyle;
-  /** 实际播放地址：命中本地缓存时为 /api/video?p=<本地绝对路径>，否则为 CDN 直链 */
+  /** 实际播放地址：命中本地缓存时为 /api/video?p=<本地绝对路径>，否则为 CDN 直链（画布用） */
   video: string;
+  /** 主窗口内预览用地址：本地文件经 blob URL（同源，canvas 可读像素合成）；无缓存时回落 video */
+  previewVideo?: string;
   /** 配套 JSON（加载失败为 null → 退化为整段绘制、无昵称模板） */
   config: EntryEffectConfig | null;
 }

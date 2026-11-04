@@ -37,6 +37,7 @@ import {
   resolveAnimeSegment,
 } from "./config";
 import { resolveEntryStyleAssets } from "./entry-style-cache";
+import { serverFetch } from "@/lib/server-api";
 import {
   appendGiftRecord,
   loadRecentQualifyingGifts,
@@ -1144,10 +1145,11 @@ class DisplayDanmakuService {
     if (!entryStyle || entryStyle === "particle") return null;
     try {
       // 走公开配置接口（服务端读 admin-config 归一化后整包返回）。
-      // 注意：不能在此直接 import "@/lib/admin-config" —— 该模块用 fs 读盘，
-      // danmaku 服务跑在主窗口（浏览器侧），会把 fs 拖进客户端打包导致构建失败。
-      const res = await fetch("/api/config", { cache: "no-store" });
-      const j = (await res.json()) as { data?: { official_entry_styles?: OfficialEntryStyle[] } };
+      // 必须用 serverFetch：Tauri 生产包是静态导出（无 /api 路由），相对路径会 404，
+      // 需要用 NEXT_PUBLIC_SERVER_URL 的绝对地址 + plugin-http 绕过 CORS（见 server-api.ts）。
+      const j = await serverFetch<{ data?: { official_entry_styles?: OfficialEntryStyle[] } }>(
+        "/api/config",
+      );
       const list = j?.data?.official_entry_styles;
       return Array.isArray(list) ? (list.find((s) => s.id === entryStyle) ?? null) : null;
     } catch {

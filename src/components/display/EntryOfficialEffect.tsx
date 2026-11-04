@@ -34,6 +34,7 @@ import type {
   EntryTemplateFrame,
   EntryTemplateSrc,
 } from "@/lib/display/types";
+import { serverFetch } from "@/lib/server-api";
 
 /** 加载兜底：JSON/视频超时仍未开始播放则结束，避免永久占用 */
 const LOAD_TIMEOUT_MS = 8000;
@@ -72,11 +73,9 @@ async function fetchEntryJson(url: string): Promise<EntryEffectConfig | null> {
     /* 直连失败（CORS/网络）→ 同源代理兜底 */
   }
   try {
-    const res = await fetch(`/api/bili-proxy?url=${encodeURIComponent(url)}`);
-    if (res.ok) {
-      const j = await res.json();
-      if (j && typeof j === "object" && j.info) return j as EntryEffectConfig;
-    }
+    // 同源代理兜底（Tauri 生产包为静态导出，相对路径需经 serverFetch 指向服务器）
+    const j = await serverFetch<EntryEffectConfig>(`/api/bili-proxy?url=${encodeURIComponent(url)}`);
+    if (j && typeof j === "object" && j.info) return j;
   } catch {
     /* 全部失败 → null（整段绘制回退，无模板层） */
   }
