@@ -508,8 +508,12 @@ export type MedicalFeeLeaderboards = {
   leiFeng: LeaderboardRow[];
   /** 爽吃榜：收医药费金额 */
   chiHuo: LeaderboardRow[];
-  /** 净利榜：收 - 发 */
+  /** 净利榜：收 - 发（前一半） */
   jingLi: LeaderboardRow[];
+  /** 净利榜最后几名（与 jingLi 中间用省略号隔开） */
+  jingLiBottom: LeaderboardRow[];
+  /** 净利榜总人数（用于计算倒数序号） */
+  jingLiTotal: number;
   /** 我自己的排名信息（可能不在榜单中） */
   me: { uid: number; leiFeng: LeaderboardRow | null; chiHuo: LeaderboardRow | null; jingLi: LeaderboardRow | null } | null;
 };
@@ -589,12 +593,23 @@ export async function buildLeaderboards(
   };
 
   const meRow = (list: LeaderboardRow[]) => list.find((r) => r.uid === uid) ?? null;
+
+  // 净吃榜：人数较多时只展示前一半 + 最后一半，中间用省略号隔开
+  const topCount = Math.ceil(limit / 2);
+  const bottomCount = limit - topCount;
+  const jingLiTop =
+    jingLi.length <= limit ? jingLi : jingLi.slice(0, topCount);
+  const jingLiBottom =
+    jingLi.length <= limit ? [] : jingLi.slice(-bottomCount);
+
   return {
     month,
     week,
     leiFeng: pick(leiFeng),
     chiHuo: pick(chiHuo),
-    jingLi: pick(jingLi),
+    jingLi: jingLiTop,
+    jingLiBottom,
+    jingLiTotal: jingLi.length,
     me: uid > 0 ? { uid, leiFeng: meRow(leiFeng), chiHuo: meRow(chiHuo), jingLi: meRow(jingLi) } : null,
   };
 }

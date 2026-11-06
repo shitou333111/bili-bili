@@ -86,6 +86,8 @@ type Leaderboards = {
   leiFeng: LeaderRow[];
   chiHuo: LeaderRow[];
   jingLi: LeaderRow[];
+  jingLiBottom: LeaderRow[];
+  jingLiTotal: number;
   me: { uid: number; leiFeng: LeaderRow | null; chiHuo: LeaderRow | null; jingLi: LeaderRow | null } | null;
 };
 
@@ -907,7 +909,7 @@ export default function MedicalFeeDashboard() {
                 tipOpen ? "visible opacity-100" : "invisible opacity-0 group-hover:visible group-hover:opacity-100"
               }`}
             >
-              只统计通过本网站收发的医药费，只供娱乐，切勿较真，如果有主播不适，可以联系排除
+              只统计通过本网站收发的医药费，只供娱乐，如果有主播不适，可以联系排除
             </div>
           </div>
           <span className="text-[17px] font-semibold">医药费排行榜</span>
@@ -935,7 +937,51 @@ export default function MedicalFeeDashboard() {
             const board = leaderboards[period];
             const rows = board?.[key] ?? [];
             const myRow = board?.me?.[key] ?? null;
-            const unit = key === "leiFeng" ? "元" : key === "chiHuo" ? "元" : "元";
+            const unit = "元";
+            const isJingLi = key === "jingLi";
+            const bottomRows = isJingLi ? board?.jingLiBottom ?? [] : [];
+            const totalCount = board?.jingLiTotal ?? rows.length;
+            const shownUids = new Set([...rows.map((r) => r.uid), ...bottomRows.map((r) => r.uid)]);
+
+            const renderRow = (row: LeaderRow, fromBottom = false) => {
+              const highlight = uid ? row.uid === uid : false;
+              const displayRank = fromBottom ? row.rank - totalCount - 1 : row.rank;
+              return (
+                <div
+                  key={`${fromBottom ? "b" : "t"}-${row.uid}`}
+                  className={`flex items-center gap-2 px-2.5 py-1.5 ${highlight ? "bg-[#fff7d6]" : "odd:bg-black/[0.015]"}`}
+                >
+                  <span
+                    className={`w-7 shrink-0 text-center text-[12px] font-semibold tabular-nums ${
+                      row.rank === 1
+                        ? "text-[#d4a017]"
+                        : row.rank === 2
+                          ? "text-[#9aa0a6]"
+                          : row.rank === 3
+                            ? "text-[#b87333]"
+                            : "text-black/35"
+                    }`}
+                  >
+                    {displayRank}
+                  </span>
+                  {faces[row.uid] ? (
+                    <img src={faces[row.uid]} alt="" className="h-5 w-5 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/[0.05] text-[11px] text-black/30">
+                      人
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-[13px]">
+                    {row.uname || `UID ${row.uid}`}
+                  </span>
+                  <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${meta.accent}`}>
+                    {money(row.value)}
+                    <span className="ml-0.5 text-[11px] font-normal text-black/35">{unit}</span>
+                  </span>
+                </div>
+              );
+            };
+
             return (
               <div
                 key={key}
@@ -950,9 +996,9 @@ export default function MedicalFeeDashboard() {
                 ) : (
                   <div className="mt-2 overflow-hidden rounded-xl border border-black/[0.05] bg-white">
                     {/* 我不在榜单时置顶显示（带我的真实排名） */}
-                    {myRow && !rows.some((r) => r.uid === myRow.uid) && (
+                    {myRow && !shownUids.has(myRow.uid) && (
                       <div className="flex items-center gap-2 bg-[#fff7d6] px-2.5 py-1.5">
-                        <span className="w-5 shrink-0 text-center text-[12px] font-semibold tabular-nums text-[#8a6d1b]">
+                        <span className="w-7 shrink-0 text-center text-[12px] font-semibold tabular-nums text-[#8a6d1b]">
                           {myRow.rank}
                         </span>
                         {faces[myRow.uid] ? (
@@ -971,43 +1017,13 @@ export default function MedicalFeeDashboard() {
                         </span>
                       </div>
                     )}
-                    {rows.map((row) => {
-                      const highlight = uid ? row.uid === uid : false;
-                      return (
-                        <div
-                          key={row.uid}
-                          className={`flex items-center gap-2 px-2.5 py-1.5 ${highlight ? "bg-[#fff7d6]" : "odd:bg-black/[0.015]"}`}
-                        >
-                          <span
-                            className={`w-5 shrink-0 text-center text-[12px] font-semibold tabular-nums ${
-                              row.rank === 1
-                                ? "text-[#d4a017]"
-                                : row.rank === 2
-                                  ? "text-[#9aa0a6]"
-                                  : row.rank === 3
-                                    ? "text-[#b87333]"
-                                    : "text-black/35"
-                            }`}
-                          >
-                            {row.rank}
-                          </span>
-                          {faces[row.uid] ? (
-                            <img src={faces[row.uid]} alt="" className="h-5 w-5 shrink-0 rounded-full object-cover" />
-                          ) : (
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black/[0.05] text-[11px] text-black/30">
-                              人
-                            </span>
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-[13px]">
-                            {row.uname || `UID ${row.uid}`}
-                          </span>
-                          <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${meta.accent}`}>
-                            {money(row.value)}
-                            <span className="ml-0.5 text-[11px] font-normal text-black/35">{unit}</span>
-                          </span>
-                        </div>
-                      );
-                    })}
+                    {rows.map((row) => renderRow(row))}
+                    {isJingLi && bottomRows.length > 0 && (
+                      <div className="py-1.5 text-center text-[16px] font-semibold leading-none tracking-[0.25em] text-black/50">
+                        ···
+                      </div>
+                    )}
+                    {bottomRows.map((row) => renderRow(row, true))}
                   </div>
                 )}
               </div>
@@ -1231,37 +1247,17 @@ function RecordBlock({
             onScore={onScore}
             onRole={onRole}
           />
-          <div className="mt-2 rounded-xl border border-black/[0.06] bg-[#fbfaff] px-2.5 py-2">
-            <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-              <span className="font-semibold text-[#c0392b]">发</span>
-              {split.payerUid > 0 ? (
-                <span className="rounded-full bg-[#fdecea] px-2 py-0.5 text-[12px] text-[#c0392b]">
-                  {names.get(split.payerUid) || `UID ${split.payerUid}`}
-                </span>
-              ) : (
-                <span className="text-black/35">未指定</span>
-              )}
-              <span className="ml-2 font-semibold text-[#2e9e6b]">收</span>
-              {split.receiverUids.length > 0 ? (
-                split.receiverUids.map((u) => (
-                  <span key={u} className="rounded-full bg-[#e9f7f0] px-2 py-0.5 text-[12px] text-[#2e9e6b]">
-                    {names.get(u) || `UID ${u}`}
-                  </span>
-                ))
-              ) : (
-                <span className="text-black/35">未指定</span>
-              )}
+          {/* 发红包方案 */}
+          <div className="mt-2 rounded-xl border border-black/[0.06] bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-[13px] font-semibold text-black/60">红包发在哪些群</span>
               {split.payerUid > 0 && split.receiverUids.length > 0 && (
-                <span className="ml-auto shrink-0 tabular-nums text-black/45">
-                  {money(split.total)} 元 ÷ {split.receiverUids.length} 人 = <span className="font-semibold text-[#2e9e6b]">{money(split.perPerson)}</span> 元
+                <span className="ml-auto shrink-0 text-[13px] tabular-nums text-black/60">
+                  {money(split.total)} 元 ÷ {split.receiverUids.length} 人 ={" "}
+                  <span className="font-semibold text-[#2e9e6b]">{money(split.perPerson)}</span> 元
                 </span>
               )}
             </div>
-          </div>
-
-          {/* 发红包方案 */}
-          <div className="mt-2 rounded-xl border border-black/[0.06] bg-white px-2.5 py-2">
-            <div className="text-[12px] font-semibold text-black/60">发红包的微信群方案</div>
             {plan.payerMissing && (
               <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-[12px] text-amber-600">
                 发医药费的主播还没有登记所在的微信群，请先点击上方群徽章登记。
