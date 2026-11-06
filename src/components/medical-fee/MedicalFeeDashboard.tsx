@@ -879,7 +879,7 @@ export default function MedicalFeeDashboard() {
         )}
 
         <p className="mt-3 text-center text-[13px] text-black/45">
-          💗未抢到医药费的主播可以去「备用药」页面抽一份小礼物💗
+          💗未抢到医药费的可以去「备用药」页面抽一份小礼物💗
         </p>
           </div>
           </>
@@ -1069,10 +1069,10 @@ export default function MedicalFeeDashboard() {
           }}
         >
           <div
-            className="max-h-full w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl"
+            className="flex h-[90vh] w-full max-w-[min(420px,40vh)] flex-col overflow-hidden rounded-2xl bg-white p-4 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <span
                 className="flex h-6 w-6 items-center justify-center rounded-full text-[12px] font-semibold text-white"
                 style={{ backgroundColor: groupColor(modalGroup.index) }}
@@ -1083,18 +1083,18 @@ export default function MedicalFeeDashboard() {
               <span className="shrink-0 text-[11px] text-black/35">{modalGroup.memberCount} 位主播已登记</span>
             </div>
 
-            <div className="mt-3 overflow-hidden rounded-xl border border-black/[0.08] bg-black/[0.02]">
+            <div className="mt-3 flex min-h-0 flex-1 items-center justify-center">
               {modalGroup.image ? (
                 <img
                   src={fixImage(modalGroup.image)}
                   alt={`${modalGroup.name} 微信群截图`}
-                  className="mx-auto max-h-[55vh] w-auto object-contain"
+                  className="max-h-full max-w-full rounded-sm border border-black/15 object-contain"
                 />
               ) : (
-                <p className="py-16 text-center text-[13px] text-black/35">管理员还没有上传该群截图</p>
+                <p className="px-4 py-16 text-center text-[13px] text-black/35">管理员还没有上传该群截图</p>
               )}
             </div>
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-4 flex shrink-0 items-center gap-2">
               {modalGroup.mine ? (
                 <button
                   onClick={() => void toggleMembership(modalGroup.id, false)}

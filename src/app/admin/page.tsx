@@ -909,13 +909,19 @@ export default function AdminPage() {
     }
   };
 
-  /** 上传微信群截图：复用素材分片上传，成功后回填图片链接 */
+  /** 上传微信群截图：复用素材分片上传，成功后回填图片链接；群名为空时使用文件名 */
   const uploadFeeGroupImage = async (index: number, file: File) => {
     setFeeGroupUploading(index);
     try {
       const url = await uploadImageToServer(file, () => {});
+      // 去掉扩展名作为群名（仅当群名还是空的，避免覆盖已手动修改的名称）
+      const fileName = file.name.replace(/\.[^.]+$/, "").trim();
       setFeeGroups((prev) =>
-        prev ? prev.map((g, i) => (i === index ? { ...g, image: url } : g)) : prev,
+        prev
+          ? prev.map((g, i) =>
+              i === index ? { ...g, image: url, name: g.name.trim() ? g.name : fileName } : g,
+            )
+          : prev,
       );
     } catch (err) {
       alert(err instanceof Error ? err.message : "上传失败");
