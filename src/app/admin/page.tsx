@@ -511,6 +511,12 @@ export default function AdminPage() {
   const [expandedDrawUids, setExpandedDrawUids] = useState<Set<number>>(new Set());
   /** 抽奖记录刷新中（用于按钮动画反馈） */
   const [microLightRefreshing, setMicroLightRefreshing] = useState(false);
+  // ===== 发医药费（/120 微信群配置 / 发放记录）=====
+  type FeeGroupData = { id: string; name: string; image: string; memberCount?: number };
+  const [feeGroups, setFeeGroups] = useState<FeeGroupData[] | null>(null);
+  const [feeGroupsSaved, setFeeGroupsSaved] = useState(false);
+  const [feeGroupsCollapsed, setFeeGroupsCollapsed] = useState(true);
+  const [feeGroupUploading, setFeeGroupUploading] = useState<number | null>(null);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -860,6 +866,68 @@ export default function AdminPage() {
     const timer = window.setTimeout(() => void loadMicroLight(), 0);
     return () => window.clearTimeout(timer);
   }, [adminLoggedIn, loadMicroLight]);
+
+  /** 加载「发医药费」微信群配置 */
+  const loadMedicalFeeGroups = useCallback(async () => {
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/medical-fee"));
+      const data = await res.json();
+      if (data.code === 0) {
+        setFeeGroups(Array.isArray(data.data?.groups) ? (data.data.groups as FeeGroupData[]) : []);
+      }
+    } catch {
+      /* 加载失败不影响其他模块 */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!adminLoggedIn) return;
+    const timer = window.setTimeout(() => void loadMedicalFeeGroups(), 0);
+    return () => window.clearTimeout(timer);
+  }, [adminLoggedIn, loadMedicalFeeGroups]);
+
+  /** 保存「发医药费」微信群配置 */
+  const saveMedicalFeeGroups = async () => {
+    if (!feeGroups) return;
+    setFeeGroupsSaved(false);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/medical-fee"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groups: feeGroups }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        setFeeGroupsSaved(true);
+        setTimeout(() => setFeeGroupsSaved(false), 2000);
+        void loadMedicalFeeGroups();
+      } else {
+        alert(data.message || "保存失败");
+      }
+    } catch {
+      alert("网络错误，保存失败");
+    }
+  };
+
+  /** 上传微信群截图：复用素材分片上传，成功后回填图片链接 */
+  const uploadFeeGroupImage = async (index: number, file: File) => {
+    setFeeGroupUploading(index);
+    try {
+      const url = await uploadImageToServer(file, () => {});
+      setFeeGroups((prev) =>
+        prev ? prev.map((g, i) => (i === index ? { ...g, image: url } : g)) : prev,
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setFeeGroupUploading(null);
+    }
+  };
+
+  /** 添加一个微信群（id 留空，保存时由服务端生成） */
+  const addMedicalFeeGroup = () => {
+    setFeeGroups((prev) => [...(prev ?? []), { id: "", name: "", image: "", memberCount: 0 }]);
+  };
 
   /** 手动刷新抽奖记录：按钮点击缩放 + 加载时图标旋转 */
   const refreshMicroLightDraws = useCallback(async () => {
@@ -3076,6 +3144,118 @@ export default function AdminPage() {
                     ))
                 )}
               </div>
+            </ConfigCard>
+
+            {/* 收发医药费（/120 微信群配置） */}
+            <ConfigCard
+              title="收发医药费（/120 微信群配置）"
+              collapsed={feeGroupsCollapsed}
+              onToggle={() => setFeeGroupsCollapsed((v) => !v)}
+              onSave={saveMedicalFeeGroups}
+              saved={feeGroupsSaved}
+            >
+              {!feeGroups ? (
+                <p className="text-[10px] text-black/30">加载中…</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-black/10 bg-black/[0.02] px-2 py-1.5">
+                    <span className="text-[11px] text-black/50">
+                      群名与截图用于 /120「收发医药费」页；主播自行登记所在群，按顺序编号配色
+                    </span>
+                    <a
+                      href={pageUrl("/120")}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto rounded bg-[#00a1d6] px-2 py-0.5 text-[10px] text-white hover:opacity-90"
+                    >
+                      打开 /120 ↗
+                    </a>
+                  </div>
+
+                  {feeGroups.length === 0 && (
+                    <p className="rounded-lg border border-dashed border-black/10 px-2 py-3 text-center text-[10px] text-black/35">
+                      还没有配置微信群，点击下方「添加微信群」
+                    </p>
+                  )}
+
+                  {feeGroups.map((g, i) => (
+                    <div
+                      key={`${g.id}-${i}`}
+                      className="flex flex-wrap items-center gap-1.5 rounded-lg border border-black/10 bg-white px-1.5 py-1.5"
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-black text-[10px] font-semibold text-white">
+                        {i + 1}
+                      </span>
+                      <input
+                        value={g.name}
+                        onChange={(e) =>
+                          setFeeGroups((prev) =>
+                            prev ? prev.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) : prev,
+                          )
+                        }
+                        placeholder="微信群名称"
+                        className="min-w-0 flex-1 rounded border border-black/10 px-2 py-1 text-[11px] outline-none focus:border-[#00a1d6]"
+                      />
+                      <span className="shrink-0 rounded bg-black/[0.04] px-1.5 py-0.5 text-[9px] text-black/40">
+                        {g.memberCount ?? 0} 人已登记
+                      </span>
+                      {g.image ? (
+                        <a
+                          href={g.image}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0"
+                          title="查看群截图"
+                        >
+                          <img src={g.image} alt="" className="h-8 w-8 rounded object-cover" />
+                        </a>
+                      ) : (
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-dashed border-black/15 text-[9px] text-black/30">
+                          无图
+                        </span>
+                      )}
+                      <label className="shrink-0 cursor-pointer rounded border border-black/10 bg-white px-2 py-1 text-[10px] text-black/55 hover:border-black/30">
+                        {feeGroupUploading === i ? "上传中…" : g.image ? "换截图" : "上传截图"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          disabled={feeGroupUploading !== null}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (file) void uploadFeeGroupImage(i, file);
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFeeGroups((prev) => (prev ? prev.filter((_, j) => j !== i) : prev))
+                        }
+                        className="shrink-0 rounded border border-red-200 px-2 py-1 text-[10px] text-red-500 hover:bg-red-50"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))}
+
+                  {feeGroups.length < 50 && (
+                    <button
+                      type="button"
+                      onClick={addMedicalFeeGroup}
+                      className="w-full rounded-lg border border-dashed border-black/20 py-1.5 text-[10px] text-black/45 hover:border-black/40 hover:text-black/70"
+                    >
+                      + 添加微信群（最多 50 个）
+                    </button>
+                  )}
+
+                  <p className="text-[10px] leading-4 text-black/35">
+                    截图上传后记得点「保存配置」；群顺序即编号顺序，颜色随编号自动区分。
+                    主播登记记录保存在服务器 .data/medical-fee，不随浏览器缓存丢失。
+                  </p>
+                </>
+              )}
             </ConfigCard>
 
             {/* 备用药：/120 多人 PK 安慰抽奖 */}

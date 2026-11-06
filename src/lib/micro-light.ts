@@ -431,16 +431,59 @@ export async function resolveRoomId(uid: number): Promise<number> {
   return Number(data?.data?.roomid) || 0;
 }
 
+/**
+ * room_id -> uid（get_info，公开）。
+ * B站多人 PK 的 other_match_list 只返回 name / room_id，uid 恒为 0，
+ * 需要按房间号反查 uid 才能按群成员匹配发/收主播。
+ * 房间与 uid 的绑定不会变化，成功结果进程内永久缓存。
+ */
+const roomUidCache = new Map<number, number>();
+
+export async function resolveUidsByRoomIds(roomIds: number[]): Promise<Map<number, number>> {
+  const unique = [...new Set(roomIds.map((id) => Number(id) || 0).filter((id) => id > 0))];
+  const pending = unique.filter((id) => !roomUidCache.has(id));
+  let index = 0;
+  async function worker() {
+    while (index < pending.length) {
+      const roomId = pending[index++];
+      const data = await biliJson<{ uid?: number }>(`${BILI_LIVE}/room/v1/Room/get_info?room_id=${roomId}`);
+      const uid = Number(data?.data?.uid) || 0;
+      if (data?.code === 0 && uid > 0) roomUidCache.set(roomId, uid);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(6, pending.length) }, worker));
+  const out = new Map<number, number>();
+  for (const id of unique) out.set(id, roomUidCache.get(id) ?? 0);
+  return out;
+}
+
+/**
+ * 主播昵称/头像的进程内缓存：两个页面（收发医药费 / 备用药）各自请求记录时
+ * 都会调用同一个接口，短时间内在两个页面间切换就会重复请求 B站。
+ * 昵称/头像变化很慢，缓存 5 分钟即可，避免重复调用。
+ */
+const anchorInfoCache = new Map<number, { uname: string; face: string; at: number }>();
+const ANCHOR_INFO_TTL = 5 * 60 * 1000;
+
 /** uid + room_id -> 主播昵称/头像（get_anchor_in_room，公开） */
 export async function fetchAnchorInfo(uid: number, roomId: number): Promise<{ uname: string; face: string }> {
+  const cached = anchorInfoCache.get(uid);
+  if (cached && Date.now() - cached.at < ANCHOR_INFO_TTL) {
+    return { uname: cached.uname, face: cached.face };
+  }
   const data = await biliJson<{ info?: { uname?: string; face?: string } }>(
     `${BILI_LIVE}/live_user/v1/UserInfo/get_anchor_in_room?roomid=${roomId}`,
   );
   const info = data?.data?.info ?? {};
-  return {
+  const result = {
     uname: String(info.uname ?? "") || String(uid),
     face: String(info.face ?? ""),
   };
+  // 仅缓存接口正常返回（有昵称）的结果，失败时下次仍会重试
+  if (data?.code === 0 && info.uname) {
+    anchorInfoCache.set(uid, { ...result, at: Date.now() });
+  }
+  return result;
 }
 
 /**

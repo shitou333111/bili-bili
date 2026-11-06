@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import Script from "next/script";
 import { PAGE_MAX_WIDTH_NUM } from "@/lib/layout";
 import ExternalLinkHandler from "@/components/ExternalLinkHandler";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
@@ -73,30 +74,24 @@ export default function RootLayout({
             独立 PWA 冷启动会先按「锁定外壳」渲染（html/body 锁高），底部于是先露出一条背景条，
             挂载后才切换成文档级滚动（闪变）。判定条件与 SafeAreaStyler 内的 iosWeb 保持一致。 */}
         {!isTauriBuild && (
-          <script
-            dangerouslySetInnerHTML={{
-              __html:
-                "(function(){var ua=navigator.userAgent;" +
-                "if(!/iPad|iPhone|iPod/.test(ua)||('__TAURI_INTERNALS__' in window))return;" +
-                "var d=document.documentElement;" +
-                "d.classList.add('ios-web');" +
-                "if(navigator.standalone===true)d.style.setProperty('--dock-bottom','24px');" +
-                "})();",
-            }}
-          />
+          <Script id="ios-web-init" strategy="beforeInteractive">
+            {"(function(){var ua=navigator.userAgent;" +
+              "if(!/iPad|iPhone|iPod/.test(ua)||('__TAURI_INTERNALS__' in window))return;" +
+              "var d=document.documentElement;" +
+              "d.classList.add('ios-web');" +
+              "if(navigator.standalone===true)d.style.setProperty('--dock-bottom','24px');" +
+              "})();"}
+          </Script>
         )}
         {/* Web 端：尽早登记 PWA 安装事件。
             Chrome 的 beforeinstallprompt 可能在 React 挂载前就触发，晚监听会漏掉；
             这里先 preventDefault 压住浏览器自带的迷你提示，交给 PwaInstallPrompt 卡片
             在用户点击时调用 prompt() 弹出系统安装对话框。 */}
         {!isTauriBuild && (
-          <script
-            dangerouslySetInnerHTML={{
-              __html:
-                "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bguaguaInstallPrompt=e;window.dispatchEvent(new Event('bguagua:pwa-installable'));});" +
-                "window.addEventListener('appinstalled',function(){window.__bguaguaInstallPrompt=null;});",
-            }}
-          />
+          <Script id="pwa-install-capture" strategy="beforeInteractive">
+            {"window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bguaguaInstallPrompt=e;window.dispatchEvent(new Event('bguagua:pwa-installable'));});" +
+              "window.addEventListener('appinstalled',function(){window.__bguaguaInstallPrompt=null;});"}
+          </Script>
         )}
         {/* 页面最大宽度 CSS 变量：构建期由 page-config.json（单一源头）静态注入到 :root，
             随初始 HTML 一起下发，避免首帧先用 fallback 宽度渲染、再跳变为设定宽度的布局闪烁 */}
