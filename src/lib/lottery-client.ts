@@ -11,6 +11,8 @@
 
 import { getPlatform, type Platform } from "./platform";
 import { resolveSession } from "./stats-client";
+import type { AuthSession } from "./auth/session";
+import type { BiliLive, AnchorLotEndData, RedPocketEndData } from "bili-live-listener";
 import {
   ensureValidCredentialClient,
   extractCookieValue,
@@ -224,8 +226,9 @@ export async function joinLotteryNative(
   platform: Platform,
   lotteryId: number,
   roomId: number,
+  sessionArg?: AuthSession,
 ): Promise<ApiResult> {
-  const session = await resolveSession(platform);
+  const session = sessionArg ?? (await resolveSession(platform));
   if (!session || session.source === "server") {
     return { code: -1, message: "服务器账号无法参与抽奖" };
   }
@@ -292,9 +295,16 @@ export async function joinLottery(lotteryId: number, roomId: number): Promise<Ap
 // 幂等复用：同房间只延长断开时间、不重复建连；连接在该房间所有抽奖（天选/红包）
 // 结束后 3 秒自动断开，避免长时间占用触发风控。
 
+/** 直播间元信息（用于中奖记录展示） */
+export type PresenceMeta = { uname?: string; anchorUid?: number; title?: string };
+
 type PresenceConn = {
-  live: any;
+  /** 连接唯一 key：`${sid}:${roomId}`（多账号同房各自一条连接） */
+  key: string;
+  sid: string;
+  live: BiliLive;
   room: number;
+  meta: PresenceMeta;
   /** 断开时间戳（ms）：该房间最后一个抽奖开奖后 3 秒 */
   deadline: number;
   timer: ReturnType<typeof setTimeout> | null;
@@ -302,9 +312,11 @@ type PresenceConn = {
   closed: boolean;
 };
 
-const presenceMap = new Map<number, PresenceConn>();
+const presenceMap = new Map<string, PresenceConn>();
 /** 单条连接意外断开后的最大重连次数，避免被风控持续拒绝时无限重试 */
 const MAX_PRESENCE_RETRY = 3;
+
+const presenceKey = (sid: string, roomId: number) => `${sid}:${roomId}`;
 
 /** 断开指定房间（不传则全部）的弹幕在场连接 */
 export function closeRoomPresence(roomId?: number) {
@@ -318,33 +330,67 @@ export function closeRoomPresence(roomId?: number) {
     presenceMap.clear();
     return;
   }
-  const conn = presenceMap.get(roomId);
-  if (conn) { presenceMap.delete(roomId); destroy(conn); }
+  for (const [key, conn] of presenceMap) {
+    if (conn.room === roomId) { presenceMap.delete(key); destroy(conn); }
+  }
 }
 
-/** 该房间当前是否已保持在弹幕在线连接 */
+/** 断开指定账号（不传则全部）的弹幕在场连接 */
+export function closeAccountPresence(sid?: string) {
+  const destroy = (conn: PresenceConn) => {
+    conn.closed = true;
+    if (conn.timer) clearTimeout(conn.timer);
+    try { conn.live?.close(); } catch {}
+  };
+  if (sid == null) {
+    for (const conn of presenceMap.values()) destroy(conn);
+    presenceMap.clear();
+    return;
+  }
+  for (const [key, conn] of presenceMap) {
+    if (conn.sid === sid) { presenceMap.delete(key); destroy(conn); }
+  }
+}
+
+/** 该房间当前是否已保持在弹幕在线连接（任意账号） */
 export function hasRoomPresence(roomId: number): boolean {
-  return presenceMap.has(roomId);
+  for (const conn of presenceMap.values()) if (conn.room === roomId) return true;
+  return false;
+}
+
+/** 指定账号在该房间是否已保持在线连接 */
+export function hasPresenceForAccount(sid: string, roomId: number): boolean {
+  return presenceMap.has(presenceKey(sid, roomId));
 }
 
 /** 按截止时间安排断开（房间所有抽奖结束后 3 秒） */
 function schedulePresenceClose(conn: PresenceConn, deadline: number) {
   if (conn.timer) clearTimeout(conn.timer);
   conn.deadline = deadline;
-  conn.timer = setTimeout(() => closeRoomPresence(conn.room), Math.max(0, deadline - Date.now()));
+  conn.timer = setTimeout(() => {
+    const current = presenceMap.get(conn.key);
+    if (current === conn) presenceMap.delete(conn.key);
+    conn.closed = true;
+    try { conn.live?.close(); } catch {}
+  }, Math.max(0, deadline - Date.now()));
 }
 
 /**
  * 建立一条弹幕在场连接（不做幂等判断，调用方负责登记）。
  * 连接被意外中断（非主动关闭）时，在截止时间前自动重连并重新登记，保证开奖时仍在线。
  */
-async function createPresence(platform: Platform, roomId: number, deadline: number, retries = 0): Promise<PresenceConn | null> {
+async function createPresence(
+  platform: Platform,
+  session: AuthSession,
+  roomId: number,
+  deadline: number,
+  meta: PresenceMeta,
+  retries = 0,
+): Promise<PresenceConn | null> {
   try {
-    const session = await resolveSession(platform);
-    if (!session || session.source === "server") return null;
     const cred = await ensureValidCredentialClient(platform, session);
     if (!cred.valid) return null;
-    const uid = Number(cred.cookie.match(/DedeUserID=(\d+)/i)?.[1] ?? 0);
+    const uid = Number(cred.cookie.match(/DedeUserID=(\d+)/i)?.[1] ?? session.mid ?? 0);
     if (!uid) return null;
     const reqCookie = await ensureBuvidCookie(platform, cred.cookie);
     // 弹幕服务器 token：getConf 已在客户端验证可避开 getDanmuInfo 的浏览器风控（同展示模块弹幕服务）
@@ -357,32 +403,47 @@ async function createPresence(platform: Platform, roomId: number, deadline: numb
       console.warn(`[Lottery] getConf 失败 room=${roomId} code=${conf?.code}`);
       return null;
     }
-    const { BiliLive } = (await import("bili-live-listener")) as {
-      BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
+    const { BiliLive: LiveClient } = (await import("bili-live-listener")) as typeof import("bili-live-listener");
+    const live = new LiveClient(roomId, { key: conf.data.token, uid, isBrowser: true });
+    const key = presenceKey(cred.session.sid, roomId);
+    const conn: PresenceConn = {
+      key,
+      sid: cred.session.sid,
+      live,
+      room: roomId,
+      meta,
+      deadline,
+      timer: null,
+      closed: false,
     };
-    const live = new BiliLive(roomId, { key: conf.data.token, uid, isBrowser: true });
-    const conn: PresenceConn = { live, room: roomId, deadline, timer: null, closed: false };
+    // 订阅开奖事件：命中自己（uid 在 winners 中）时落盘中奖记录
+    try {
+      live.onAnchorLotEnd((msg) => void recordAnchorLotteryWin(platform, cred.session, { ...meta, roomId }, msg.data));
+      live.onRedPocketEnd((msg) => void recordRedPocketWin(platform, cred.session, { ...meta, roomId }, msg.data));
+    } catch (e) {
+      console.warn("[Lottery] 订阅开奖事件失败", e);
+    }
     // 等待认证通过（onLive）后再返回：调用方"先建在场连接再参与抽奖"的顺序才真正生效，
     // 否则参与请求可能早于在线状态生效而失败。最长等待 5 秒，超时也照常返回，不阻塞参与。
     const ready = new Promise<void>((resolve) => {
       live.onLive(() => {
-        console.log(`[Lottery] 弹幕在场连接已建立 room=${roomId}（认证通过，账号计为在线）`);
+        console.log(`[Lottery] 弹幕在场连接已建立 room=${roomId} sid=${cred.session.sid}（认证通过，账号计为在线）`);
         resolve();
       });
       setTimeout(resolve, 5000);
     });
-    live.onError((e: any) => console.warn(`[Lottery] 弹幕在场连接异常 room=${roomId}`, e?.message || e));
+    live.onError((error) => console.warn(`[Lottery] 弹幕在场连接异常 room=${roomId}`, error));
     live.onClose(() => {
       // 主动关闭（到点断开/停止）不重连
       if (conn.closed) return;
       // 已被新连接取代时不再处理
-      if (presenceMap.get(roomId) !== conn) return;
-      presenceMap.delete(roomId);
+      if (presenceMap.get(key) !== conn) return;
+      presenceMap.delete(key);
       if (conn.timer) { clearTimeout(conn.timer); conn.timer = null; }
       if (Date.now() >= deadline || retries >= MAX_PRESENCE_RETRY) return;
       console.log(`[Lottery] 弹幕在场连接中断，重连 room=${roomId}（第 ${retries + 1} 次）`);
-      createPresence(platform, roomId, deadline, retries + 1).then((c) => {
-        if (c && !c.closed) presenceMap.set(roomId, c);
+      createPresence(platform, cred.session, roomId, deadline, meta, retries + 1).then((c) => {
+        if (c && !c.closed) presenceMap.set(c.key, c);
       });
     });
     schedulePresenceClose(conn, deadline);
@@ -395,40 +456,67 @@ async function createPresence(platform: Platform, roomId: number, deadline: numb
 }
 
 /**
- * 建立/延长指定房间的弹幕在场连接。
- * - 幂等：同一房间已连接时只延长断开时间，不重复建连
+ * 建立/延长指定账号在指定房间的弹幕在场连接。
+ * - 幂等：同一账号同一房间已连接时只延长断开时间，不重复建连
  * - untilTsSec：该房间最后一个抽奖（天选/红包）的开奖时间（秒），连接在结束后 3 秒断开
- * 失败静默返回 false，不影响参与抽奖
  */
-async function ensureRoomPresence(platform: Platform, roomId: number, untilTsSec: number): Promise<boolean> {
+async function ensureRoomPresence(
+  platform: Platform,
+  session: AuthSession,
+  roomId: number,
+  untilTsSec: number,
+  meta: PresenceMeta = {},
+): Promise<boolean> {
   const deadline = untilTsSec * 1000 + 3000;
-  const existing = presenceMap.get(roomId);
+  const key = presenceKey(session.sid, roomId);
+  const existing = presenceMap.get(key);
   if (existing) {
+    existing.meta = { ...existing.meta, ...meta };
     if (deadline > existing.deadline) {
       schedulePresenceClose(existing, deadline);
-      console.log(`[Lottery] 弹幕在场连接已延长 room=${roomId} 至 ${new Date(deadline).toLocaleTimeString()}`);
+      console.log(`[Lottery] 弹幕在场连接已延长 room=${roomId} sid=${session.sid} 至 ${new Date(deadline).toLocaleTimeString()}`);
     }
     return true;
   }
-  const conn = await createPresence(platform, roomId, deadline);
+  const conn = await createPresence(platform, session, roomId, deadline, meta);
   if (!conn) return false;
-  presenceMap.set(roomId, conn);
+  presenceMap.set(key, conn);
   return true;
+}
+
+/**
+ * 指定会话在直播间保持在线（弹幕 WS 长连接），供多账号并行使用。
+ */
+export async function enterRoomWithSession(
+  platform: Platform,
+  session: AuthSession,
+  roomId: number,
+  untilTsSec: number,
+  meta: PresenceMeta = {},
+): Promise<boolean> {
+  return ensureRoomPresence(platform, session, roomId, untilTsSec, meta);
 }
 
 /**
  * Tauri 直连：在直播间保持在线（弹幕 WS 长连接）
  * @param untilTsSec 该房间最后一个抽奖的开奖时间（秒），连接在结束后 3 秒断开
  */
-export async function enterRoomNative(platform: Platform, roomId: number, untilTsSec?: number): Promise<ApiResult> {
+export async function enterRoomNative(
+  platform: Platform,
+  roomId: number,
+  untilTsSec?: number,
+  sessionArg?: AuthSession,
+): Promise<ApiResult> {
+  const session = sessionArg ?? (await resolveSession(platform));
+  if (!session || session.source === "server") return { code: -1, message: "服务器账号无法进入直播间" };
   const until = untilTsSec ?? Math.floor(Date.now() / 1000);
-  const ok = await ensureRoomPresence(platform, roomId, until);
+  const ok = await ensureRoomPresence(platform, session, roomId, until);
   console.log(`[Lottery] enterRoom room=${roomId} presence=${ok ? "已建立弹幕在线" : "未建立在场"}`);
   return ok ? { code: 0 } : { code: -1, message: "建立弹幕在场连接失败" };
 }
 
 /**
- * 统一入口：在直播间保持在线（仅客户端支持）。
+ * 统一入口：在直播间保持在线（仅客户端支持，使用当前账号）。
  * @param untilTsSec 该房间最后一个抽奖的开奖时间（秒），连接在结束后 3 秒自动断开
  */
 export async function enterRoom(roomId: number, untilTsSec: number): Promise<boolean> {
@@ -436,6 +524,151 @@ export async function enterRoom(roomId: number, untilTsSec: number): Promise<boo
   if (!platform.isNative) return false;
   const r = await enterRoomNative(platform, roomId, untilTsSec);
   return r.code === 0;
+}
+
+/**
+ * 参与天选抽奖（指定账号），供多账号并行使用。
+ */
+export async function joinLotteryWithSession(
+  platform: Platform,
+  session: AuthSession,
+  lotteryId: number,
+  roomId: number,
+): Promise<ApiResult> {
+  return joinLotteryNative(platform, lotteryId, roomId, session);
+}
+
+/**
+ * 参与红包抽奖（指定账号），供多账号并行使用。
+ */
+export async function drawRedPocketWithSession(
+  platform: Platform,
+  session: AuthSession,
+  roomId: number,
+  lotId: number,
+  ruid: number,
+): Promise<ApiResult> {
+  return drawRedPocketNative(platform, roomId, lotId, ruid, session);
+}
+
+// ===== 中奖记录（本地长期保存） =====
+
+/** 中奖记录：哪个账号、什么时间、在哪个直播间、中了什么奖品 */
+export type PrizeRecord = {
+  id: string;
+  kind: "lottery" | "red_pocket";
+  accountMid: number;
+  accountName: string;
+  roomId: number;
+  roomName?: string;
+  anchorUid?: number;
+  prizeName: string;
+  prizeNum: number;
+  prizeImage?: string;
+  wonAt: number;
+  lotteryId?: number;
+  redLotId?: number;
+};
+
+const PRIZE_RECORDS_FILE = "lottery-prize-records";
+
+function prizeRecordsPath(dataDir: string, mid: number): string {
+  return `${dataDir}/uid_${mid}/${PRIZE_RECORDS_FILE}.json`;
+}
+
+/** 读取指定账号的中奖记录（按时间倒序） */
+export async function loadPrizeRecords(session: AuthSession): Promise<PrizeRecord[]> {
+  try {
+    const platform = await getPlatform();
+    if (!platform.isNative) return [];
+    const filePath = prizeRecordsPath(await platform.getDataDir(), session.mid);
+    if (!(await platform.exists(filePath))) return [];
+    const arr = JSON.parse(await platform.readFile(filePath));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function appendPrizeRecord(platform: Platform, session: AuthSession, record: PrizeRecord): Promise<void> {
+  try {
+    if (!platform.isNative) return;
+    const dir = `${await platform.getDataDir()}/uid_${session.mid}`;
+    await platform.mkdir(dir);
+    const filePath = `${dir}/${PRIZE_RECORDS_FILE}.json`;
+    let list: PrizeRecord[] = [];
+    if (await platform.exists(filePath)) {
+      try {
+        const parsed = JSON.parse(await platform.readFile(filePath));
+        if (Array.isArray(parsed)) list = parsed;
+      } catch { /* 忽略损坏文件，重建 */ }
+    }
+    if (list.some((r) => r.id === record.id)) return;
+    list.unshift(record);
+    await platform.writeFile(filePath, JSON.stringify(list.slice(0, 500), null, 2));
+    console.log(`[Lottery] 中奖记录已保存：${record.accountName} 获得 ${record.prizeName}`);
+  } catch (e) {
+    console.warn("[Lottery] 保存中奖记录失败", e);
+  }
+}
+
+/** 天选开奖：命中当前账号时落盘 */
+async function recordAnchorLotteryWin(
+  platform: Platform,
+  session: AuthSession,
+  meta: PresenceMeta & { roomId: number },
+  data: AnchorLotEndData,
+): Promise<void> {
+  const winners = Array.isArray(data?.winners) ? data.winners : [];
+  const mine = winners.filter((w) => Number(w?.uid) === session.mid);
+  if (mine.length === 0) return;
+  const num = mine.reduce((s, w) => s + (Number(w?.num) || 1), 0);
+  const award = data?.award;
+  await appendPrizeRecord(platform, session, {
+    id: `lottery:${Number(data?.id) || 0}:${session.mid}`,
+    kind: "lottery",
+    accountMid: session.mid,
+    accountName: session.uname,
+    roomId: meta.roomId,
+    roomName: meta.uname,
+    anchorUid: meta.anchorUid,
+    prizeName: String(award?.name ?? "天选奖品"),
+    prizeNum: num,
+    prizeImage: String(award?.image ?? ""),
+    wonAt: Date.now(),
+    lotteryId: Number(data?.id) || undefined,
+  });
+}
+
+/** 红包开奖：命中当前账号时落盘 */
+async function recordRedPocketWin(
+  platform: Platform,
+  session: AuthSession,
+  meta: PresenceMeta & { roomId: number },
+  data: RedPocketEndData,
+): Promise<void> {
+  const winners = Array.isArray(data?.winners) ? data.winners : [];
+  const mine = winners.filter((w) => Number(w?.uid) === session.mid);
+  if (mine.length === 0) return;
+  const awards = Array.isArray(data?.awards) ? data.awards : [];
+  const awardByGift = new Map(awards.map((a) => [Number(a?.giftId), a]));
+  for (const w of mine) {
+    const award = awardByGift.get(Number(w?.giftId));
+    await appendPrizeRecord(platform, session, {
+      id: `red:${Number(data?.id) || 0}:${session.mid}:${Number(w?.giftId) || 0}`,
+      kind: "red_pocket",
+      accountMid: session.mid,
+      accountName: session.uname,
+      roomId: meta.roomId,
+      roomName: meta.uname,
+      anchorUid: meta.anchorUid,
+      prizeName: String(award?.giftName ?? "红包奖品"),
+      prizeNum: 1,
+      prizeImage: String(award?.giftPic ?? ""),
+      wonAt: Date.now(),
+      redLotId: Number(data?.id) || undefined,
+    });
+  }
 }
 
 // ===== 红包（人气红包）检测与参与 =====
@@ -541,8 +774,14 @@ export async function checkRedPocketNative(platform: Platform, roomId: number): 
  * Tauri 直连参与红包抽奖
  * 携带完整反风控头和真实直播间参数，模仿 Android 客户端人工操作行为
  */
-export async function drawRedPocketNative(platform: Platform, roomId: number, lotId: number, ruid: number): Promise<ApiResult> {
-  const session = await resolveSession(platform);
+export async function drawRedPocketNative(
+  platform: Platform,
+  roomId: number,
+  lotId: number,
+  ruid: number,
+  sessionArg?: AuthSession,
+): Promise<ApiResult> {
+  const session = sessionArg ?? (await resolveSession(platform));
   if (!session || session.source === "server") return { code: -1, message: "服务器账号无法参与红包" };
   const cred = await ensureValidCredentialClient(platform, session);
   if (!cred.valid) return { code: -1, message: "登录凭证失效" };
@@ -726,7 +965,8 @@ export async function fetchRoomInfoByUid(uid: number): Promise<{ roomid: number;
   if (roomData.code !== 0 || !roomData.data || roomData.data.roomid <= 0) return null;
   const roomid = roomData.data.roomid;
   // 2. card_up API 获取昵称和头像（参照 gift-api.ts）
-  let uname = `UID${uid}`, face = "", title = roomData.data.title ?? "", online = 0;
+  let uname = `UID${uid}`, face = "", online = 0;
+  const title = roomData.data.title ?? "";
   try {
     const cardData = await platform.fetchBilibiliJson<{
       code: number;
