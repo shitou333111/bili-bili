@@ -2,7 +2,7 @@
  * 礼物目录模块（Tauri 客户端）—— 统一本地礼物数据仓的薄封装。
  *
  * 正式功能（收益统计、送礼名单等）通过本模块读取礼物图标/列表；
- * 数据由 gift-local-store 下载到本地文件（12h 自动刷新、支持强制刷新），全 APP 共用同一份，
+ * 数据由 gift-local-store 下载到本地文件（冷启动更新、支持强制刷新），全 APP 共用同一份，
  * 不再需要手动维护的静态快照。
  */
 
@@ -22,7 +22,7 @@ import {
 
 export type { GiftConfigItem, RoomGiftListData };
 
-/** 确保本地礼物数据已加载（TTL 12h；缺失或过期自动重新下载） */
+/** 确保本地礼物数据已加载（冷启动时重新下载；运行期间复用内存数据） */
 export async function ensureGiftCatalogLoaded(platform: Platform): Promise<void> {
   await ensureGiftDataLoaded(platform);
 }

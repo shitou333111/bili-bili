@@ -1,6 +1,6 @@
 /**
  * 礼物特效客户端模块
- * - Tauri 模式：读取统一本地礼物数据仓（gift-local-store，12h 自动刷新），直连 B站 配置 JSON
+ * - Tauri 模式：读取统一本地礼物数据仓（gift-local-store，冷启动更新），直连 B站 配置 JSON
  * - Web 模式：通过服务器 /api/gift-effects 代理
  */
 
@@ -57,7 +57,7 @@ async function fetchEffectJson(webMp4Json: string): Promise<EffectJsonConfig | n
 }
 
 async function fetchFromBili(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {
-  // 1. 确保本地数据仓已加载（TTL 12h；缺失或过期自动重新下载）
+  // 1. 确保本地数据仓已加载（冷启动时重新下载；运行期间复用内存数据）
   const platform = await getPlatform();
   await ensureGiftDataLoaded(platform);
 
@@ -92,7 +92,7 @@ async function fetchFromBili(giftIds: number[]): Promise<Record<number, GiftEffe
 
 /**
  * 返回全量特效绑定表：gift_id -> { web_mp4, web_mp4_json }。
- * Tauri：读本地礼物数据仓（12h 自动刷新）；Web：服务器 /api/gift-effects?list=1。
+ * Tauri：读本地礼物数据仓（冷启动更新）；Web：服务器 /api/gift-effects?list=1。
  * 供模拟器等需要完整特效映射的场景使用（配置 JSON 由调用方自行按 URL 去重拉取）。
  */
 export async function getEffectsMap(): Promise<Record<number, { web_mp4: string; web_mp4_json: string }>> {
@@ -118,7 +118,7 @@ async function fetchFromServer(giftIds: number[]): Promise<Record<number, GiftEf
 
 /**
  * 获取礼物特效配置
- * - Tauri 环境：读本地礼物数据仓（12h 自动刷新）
+ * - Tauri 环境：读本地礼物数据仓（冷启动更新）
  * - Web 环境：通过服务器代理
  */
 export async function fetchGiftEffects(giftIds: number[]): Promise<Record<number, GiftEffectResult>> {

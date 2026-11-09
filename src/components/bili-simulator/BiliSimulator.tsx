@@ -75,7 +75,7 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
     async function loadData() {
       try {
         // 礼物列表 + 特效绑定表：与全 APP 共用同一自动更新数据源
-        // （gift-catalog / gift-effects，12h 缓存），不再读取 public/ 下手动维护的静态快照。
+        // （gift-catalog / gift-effects，冷启动更新），不再读取 public/ 下手动维护的静态快照。
         let list: any[] = [];
         let effectsMap: Record<number, { web_mp4: string; web_mp4_json: string }> = {};
         let platform: Awaited<ReturnType<typeof getPlatform>> | null = null;
