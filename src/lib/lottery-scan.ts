@@ -30,6 +30,10 @@ const GOLD_PER_BATTERY = 100;
 const MAX_ROOMS_PER_ROUND = 1500;
 /** 分区热门接口每页条数（实测上限 30） */
 const HOT_PARTITION_PAGE_SIZE = 30;
+/** 常发红包直播间最多保留数量 */
+const MAX_HISTORY_ROOMS = 2000;
+/** 常发红包热度半衰期：2 天（近期记录权重更高） */
+const HISTORY_HALF_LIFE_MS = 2 * 24 * 60 * 60 * 1000;
 /** 结果最多保留条数 */
 const MAX_RESULTS = 400;
 /** 开奖后结果在快照中继续保留的秒数（供客户端暂留展示开奖结果） */
@@ -147,6 +151,12 @@ export type HistoryRoom = {
   lastAt: number;
   /** 最近记录过的红包 id，避免同一红包被重复计数 */
   lastLotIds: number[];
+  /**
+   * 热度分（用于 2000 上限淘汰）：
+   * 每次出现累加「数量权重 + 金额权重」，并按半衰期随时间衰减，近期记录权重更高。
+   * 旧数据没有该字段时回退用 count。
+   */
+  hot?: number;
 };
 
 export type RoundStats = {
@@ -395,7 +405,11 @@ async function ensureLoaded(): Promise<void> {
         count: Math.max(1, num(r.count) || 1),
         lastAt: num(r.lastAt) || Date.now(),
         lastLotIds: Array.isArray(r.lastLotIds) ? r.lastLotIds.map(num) : [],
+        hot: num(r.hot) || 0,
       }));
+    // 旧数据没有 hot 字段时回退为 count，避免热度全部为 0
+    for (const h of e.history) if (!h.hot) h.hot = h.count;
+    pruneHistory();
     e.loaded = true;
     e.loading = null;
     addLog("扫描引擎已从本地数据恢复");
@@ -794,7 +808,8 @@ async function fetchHotPartitionRooms(limit: number): Promise<ScanRoom[]> {
           face: fixFaceUrl(String(r.face ?? "")),
           title: String(r.title ?? ""),
           source: "hot",
-          areaName: String(r.area_v2_name || r.area_name || "").trim() || partition.name,
+          // 展示一级分区名（娱乐/网游/虚拟主播…），而不是接口返回的二级分区名
+          areaName: partition.name,
         });
         taken += 1;
         if (taken >= limit) break;
@@ -840,7 +855,9 @@ export async function resolveRoomByUid(uid: number): Promise<{ roomid: number; u
 async function collectHistoryRooms(): Promise<ScanRoom[]> {
   const out: ScanRoom[] = [];
   const e = engine();
-  for (const h of [...e.history].sort((a, b) => b.count - a.count)) {
+  const now = Date.now();
+  // 近年热度高的优先收集（单轮房间数有上限，冷门直播间可能轮不到）
+  for (const h of [...e.history].sort((a, b) => effectiveHot(b, now) - effectiveHot(a, now))) {
     const res = await biliGet<RoomInfoOld>(
       `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${h.uid}`,
       await anonCookie(),
@@ -895,9 +912,36 @@ async function collectRooms(): Promise<ScanRoom[]> {
 
 // ===== 历史（常发红包直播间） =====
 
-function recordHistoryRedPacket(room: ScanRoom, lots: { lotId: number }[]) {
+/**
+ * 单个红包对热度的贡献：基础 1 分（数量），再按金额加权（50 电池约 +1 分，最高 +4 分）。
+ * 这样「多」和「大」都能提分，但不会让单个巨额红包无限压过大量小红包。
+ */
+function redHotWeight(value: number): number {
+  return 1 + Math.min(4, Math.max(0, Number(value) || 0) / 50);
+}
+
+/** 当前有效热度：按 lastAt 做半衰期衰减（半衰期 2 天） */
+function effectiveHot(h: HistoryRoom, nowMs = Date.now()): number {
+  const base = h.hot ?? h.count;
+  const dt = Math.max(0, nowMs - (h.lastAt || 0));
+  return base * Math.pow(0.5, dt / HISTORY_HALF_LIFE_MS);
+}
+
+/** 超出上限时按有效热度淘汰最冷门的直播间 */
+function pruneHistory(): void {
   const e = engine();
-  for (const { lotId } of lots) {
+  if (e.history.length <= MAX_HISTORY_ROOMS) return;
+  const now = Date.now();
+  const sorted = [...e.history].sort((a, b) => effectiveHot(b, now) - effectiveHot(a, now));
+  const removed = sorted.length - MAX_HISTORY_ROOMS;
+  e.history = sorted.slice(0, MAX_HISTORY_ROOMS);
+  addLog(`常发红包直播间超过 ${MAX_HISTORY_ROOMS} 个，已按近期热度淘汰 ${removed} 个`, "warn");
+}
+
+function recordHistoryRedPacket(room: ScanRoom, lots: { lotId: number; value?: number }[]) {
+  const e = engine();
+  const now = Date.now();
+  for (const { lotId, value } of lots) {
     let entry = e.history.find((h) => h.roomid === room.roomid || (room.uid > 0 && h.uid === room.uid));
     if (!entry) {
       entry = {
@@ -908,18 +952,22 @@ function recordHistoryRedPacket(room: ScanRoom, lots: { lotId: number }[]) {
         count: 0,
         lastAt: 0,
         lastLotIds: [],
+        hot: 0,
       };
       e.history.push(entry);
     }
     if (entry.lastLotIds.includes(lotId)) continue;
+    // 先按时间衰减旧热度，再累加本次红包的权重
+    entry.hot = effectiveHot(entry, now) + redHotWeight(value ?? 0);
     entry.count += 1;
-    entry.lastAt = Date.now();
+    entry.lastAt = now;
     entry.roomid = room.roomid;
     entry.uid = room.uid || entry.uid;
     entry.uname = room.uname || entry.uname;
     entry.face = room.face || entry.face;
     entry.lastLotIds = [...entry.lastLotIds, lotId].slice(-50);
   }
+  pruneHistory();
 }
 
 // ===== 单轮扫描 =====
@@ -980,7 +1028,7 @@ async function runRound(): Promise<void> {
             if (reds.length > 0) {
               foundRedLots.set(room.roomid, {
                 room,
-                lots: reds.map((r) => ({ lotId: r.lotId ?? 0 })).filter((x) => x.lotId > 0),
+                lots: reds.map((r) => ({ lotId: r.lotId ?? 0, value: r.value })).filter((x) => x.lotId > 0),
               });
             }
           } else {
@@ -1125,7 +1173,7 @@ export async function getAdminSnapshot(): Promise<AdminScanSnapshot> {
         : null,
     },
     state: e.state,
-    history: [...e.history].sort((a, b) => b.count - a.count),
+    history: [...e.history].sort((a, b) => effectiveHot(b) - effectiveHot(a)),
   };
 }
 

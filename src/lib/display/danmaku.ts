@@ -20,6 +20,7 @@ import {
   type EntryColors,
   type EntryOfficialPayload,
   type EntryParticleMode,
+  type EntrySampleConfig,
   type GiftEffectFrameConfig,
   type GiftFlipConfig,
   type GiftBarWidth,
@@ -981,6 +982,7 @@ class DisplayDanmakuService {
       giftBadgeOpacity: cfg.giftBadgeOpacity,
       entryParticleMode: cfg.entryParticleMode,
       entryColors: cfg.entryColors,
+      entrySamples: cfg.entrySamples,
       entryStyle: cfg.entryStyle,
       entryOfficial: await this.resolveOfficialEntryPayload(cfg.entryStyle),
       giftHighlight: this.giftHighlight,
@@ -1131,6 +1133,11 @@ class DisplayDanmakuService {
   /** 广播入场提示配色（badge 渐变 + 粒子同源 + 昵称色）到画布（面板「设置颜色」保存后调用，配置已落盘）。 */
   async broadcastEntryColors(v: EntryColors): Promise<void> {
     await this.broadcast({ type: "entryColors", v });
+  }
+
+  /** 广播某个官方入场动画的样本（前置/后置语 + 三段文字颜色）到画布（面板「设置样本」保存后调用）。 */
+  async broadcastEntrySample(id: string, v: EntrySampleConfig): Promise<void> {
+    await this.broadcast({ type: "entrySample", id, v });
   }
 
   /** 广播入场提示形式（"particle"=粒子聚散 / 官方动画 id）到画布（面板单选切换后调用，配置已落盘）。

@@ -30,6 +30,7 @@ import {
   type EntryColors,
   type EntryOfficialPayload,
   type EntryParticleMode,
+  type EntrySampleConfig,
   type GiftBarWidth,
   type GiftFlipConfig,
   type GiftFlipPhase,
@@ -40,6 +41,7 @@ import {
   DEFAULT_DISPLAY_LAYOUT,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_ENTRY_COLORS,
+  DEFAULT_ENTRY_SAMPLE,
   GIFT_BAR_SLOTS,
   isAnimeOpacity,
   isAnimeEnding,
@@ -184,6 +186,8 @@ type ServerMsg =
       entryParticleMode: EntryParticleMode;
       /** 入场提示配色（badge 渐变 + 粒子同源 + 昵称单色） */
       entryColors: EntryColors;
+      /** 官方入场动画的样本表（key=动画 id：前置/后置语 + 三段文字颜色） */
+      entrySamples: Record<string, EntrySampleConfig>;
       /** 入场提示形式："particle"=粒子聚散，或 admin「官方入场提示」某项 id */
       entryStyle: string;
       /** entryStyle 对应的官方动画资源（选中官方项时下发；视频优先本地缓存地址） */
@@ -210,6 +214,7 @@ type ServerMsg =
   | { type: "giftBadgeOpacity"; v: number }
   | { type: "entryParticleMode"; v: EntryParticleMode }
   | { type: "entryColors"; v: EntryColors }
+  | { type: "entrySample"; id: string; v: EntrySampleConfig }
   | { type: "entryStyle"; v: string; official: EntryOfficialPayload | null }
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "giftFlipConfig"; v: GiftFlipConfig }
@@ -325,6 +330,29 @@ function pickEntryColors(v: unknown): EntryColors {
   };
 }
 
+/** 校验并规整下发的样本表（每项按 pickEntrySample 规整，空表合法 = 全部使用默认样本）。 */
+function pickEntrySamples(v: unknown): Record<string, EntrySampleConfig> {
+  const out: Record<string, EntrySampleConfig> = {};
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    for (const [id, sample] of Object.entries(v as Record<string, unknown>)) {
+      if (id) out[id] = pickEntrySample(sample);
+    }
+  }
+  return out;
+}
+
+/** 校验并规整下发的入场样本（文字缺失/非字符串回退默认，颜色非法回退默认）。 */
+function pickEntrySample(v: unknown): EntrySampleConfig {
+  const o = (v ?? {}) as Partial<EntrySampleConfig>;
+  return {
+    prefix: typeof o.prefix === "string" ? o.prefix : DEFAULT_ENTRY_SAMPLE.prefix,
+    suffix: typeof o.suffix === "string" ? o.suffix : DEFAULT_ENTRY_SAMPLE.suffix,
+    prefixColor: isHexColor(o.prefixColor) ? o.prefixColor : DEFAULT_ENTRY_SAMPLE.prefixColor,
+    nameColor: isHexColor(o.nameColor) ? o.nameColor : DEFAULT_ENTRY_SAMPLE.nameColor,
+    suffixColor: isHexColor(o.suffixColor) ? o.suffixColor : DEFAULT_ENTRY_SAMPLE.suffixColor,
+  };
+}
+
 export default function DisplayCanvas() {
   const [currentEntry, setCurrentEntry] = useState<EntryItem | null>(null);
   // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
@@ -383,6 +411,8 @@ export default function DisplayCanvas() {
   );
   // 入场提示配色（init/entryColors 消息下发）：badge 渐变两端色 + 昵称单色
   const [entryColors, setEntryColors] = useState<EntryColors>(DEFAULT_ENTRY_COLORS);
+  // 官方动画样本表（init/entrySample 消息下发）：按动画 id 各存一份，缺失 id 用默认样本
+  const [entrySamples, setEntrySamples] = useState<Record<string, EntrySampleConfig>>({});
   // 入场提示形式（init/entryStyle 消息下发）：当前选中的官方动画（null=粒子聚散）。
   // 运行时每条入场事件自带 official 负载；此状态主要用于编辑模式常驻预览。
   const [entryOfficial, setEntryOfficial] = useState<EntryOfficialPayload | null>(null);
@@ -540,6 +570,7 @@ export default function DisplayCanvas() {
         );
         setEntryParticleMode(msg.entryParticleMode === "lr" ? "lr" : "center");
         setEntryColors(pickEntryColors(msg.entryColors));
+        setEntrySamples(pickEntrySamples(msg.entrySamples));
         setEntryOfficial(msg.entryOfficial ?? null);
         setGiftHighlight(
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
@@ -588,6 +619,8 @@ export default function DisplayCanvas() {
         setEntryParticleMode(msg.v === "lr" ? "lr" : "center");
       } else if (msg.type === "entryColors") {
         setEntryColors(pickEntryColors(msg.v));
+      } else if (msg.type === "entrySample") {
+        setEntrySamples((prev) => ({ ...prev, [msg.id]: pickEntrySample(msg.v) }));
       } else if (msg.type === "entryStyle") {
         setEntryOfficial(msg.official ?? null);
       } else if (msg.type === "giftHighlight") {
@@ -1428,6 +1461,7 @@ export default function DisplayCanvas() {
                 config={entryOfficial.config}
                 fallbackSrc={entryOfficial.style.video}
                 user={{ uname: TEST_ENTRY_USER.uname, face: TEST_ENTRY_USER.face }}
+                sample={entrySamples[entryOfficial.style.id] ?? DEFAULT_ENTRY_SAMPLE}
                 loop
                 onMeasure={setEntryMeasuredW}
               />
@@ -1447,6 +1481,7 @@ export default function DisplayCanvas() {
               config={currentEntry.official.config}
               fallbackSrc={currentEntry.official.style.video}
               user={{ uname: currentEntry.user.uname, face: currentEntry.user.face }}
+              sample={entrySamples[currentEntry.official.style.id] ?? DEFAULT_ENTRY_SAMPLE}
               onEnd={onEntryDone}
               onMeasure={setEntryMeasuredW}
             />

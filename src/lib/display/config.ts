@@ -8,6 +8,7 @@
 import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_ENTRY_SAMPLE,
   DEFAULT_GIFT_FLIP_OPTIONS,
   GIFT_FLIP_MAX_OPTIONS,
   GIFT_FLIP_MAX_TEXT_LEN,
@@ -20,6 +21,7 @@ import {
   type DisplayConfig,
   type DisplayLayout,
   type EntryAnimeConfig,
+  type EntrySampleConfig,
   type GiftFlipOption,
   type MovableRect,
   type ScreenOrientation,
@@ -152,10 +154,49 @@ function normalizeGiftFlipOptions(raw: unknown): GiftFlipOption[] {
   return out.slice(0, GIFT_FLIP_MAX_OPTIONS);
 }
 
+/** 规整单个官方动画的入场样本：前置/后置语限 10 字（旧默认「光临直播间」迁移为「光临」），
+ *  颜色逐项校验 #rrggbb（旧默认紫色迁移为黑色），非法/缺失回退默认样本。 */
+function normalizeEntrySample(raw: unknown): EntrySampleConfig {
+  const o = (raw ?? {}) as Partial<EntrySampleConfig>;
+  return {
+    prefix: typeof o.prefix === "string" ? o.prefix.slice(0, 10) : DEFAULT_ENTRY_SAMPLE.prefix,
+    suffix:
+      typeof o.suffix === "string"
+        ? (o.suffix === "光临直播间" ? "光临" : o.suffix).slice(0, 10)
+        : DEFAULT_ENTRY_SAMPLE.suffix,
+    prefixColor: isHexColor(o.prefixColor) ? o.prefixColor : DEFAULT_ENTRY_SAMPLE.prefixColor,
+    nameColor: isHexColor(o.nameColor)
+      ? o.nameColor === "#8b5cf6"
+        ? "#000000"
+        : o.nameColor
+      : DEFAULT_ENTRY_SAMPLE.nameColor,
+    suffixColor: isHexColor(o.suffixColor) ? o.suffixColor : DEFAULT_ENTRY_SAMPLE.suffixColor,
+  };
+}
+
+/** 官方动画样本表：key = 动画 id，每项独立保存；旧版单一样本（entrySample）
+ *  迁移到当前选中的动画上，其余动画继续使用默认样本。 */
+function normalizeEntrySamples(raw: unknown, legacy: unknown, entryStyle: string): Record<string, EntrySampleConfig> {
+  const out: Record<string, EntrySampleConfig> = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (id.trim()) out[id] = normalizeEntrySample(v);
+    }
+  }
+  if (Object.keys(out).length === 0 && entryStyle !== "particle") {
+    out[entryStyle] = normalizeEntrySample(legacy);
+  }
+  return out;
+}
+
 /** 解析一个可能残缺的配置对象，用默认值补齐缺失字段（向前兼容）。 */
 export function normalizeConfig(raw: unknown): DisplayConfig {
   const d = DEFAULT_DISPLAY_CONFIG;
   const r = (raw ?? {}) as Partial<DisplayConfig>;
+  // 入场提示形式："particle"（粒子聚散）或 admin 中官方入场提示的 id；空/非法回退 "particle"
+  const entryStyle =
+    typeof r.entryStyle === "string" && r.entryStyle.trim() ? r.entryStyle.trim() : "particle";
+  const legacy = r as Record<string, unknown>;
   return {
     screenOrientation: r.screenOrientation === "portrait" ? "portrait" : "landscape",
     entry: r.entry ?? d.entry,
@@ -168,8 +209,9 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       name: isHexColor(r.entryColors?.name) ? r.entryColors.name : d.entryColors.name,
     },
     // 入场提示形式："particle"（粒子聚散）或 admin 中官方入场提示的 id；空/非法回退 "particle"
-    entryStyle:
-      typeof r.entryStyle === "string" && r.entryStyle.trim() ? r.entryStyle.trim() : "particle",
+    entryStyle,
+    // 官方动画样本表：每个动画独立保存，缺失项用默认样本（不影响粒子入场提示配色）
+    entrySamples: normalizeEntrySamples(legacy.entrySamples, legacy.entrySample, entryStyle),
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
     giftEffect: {

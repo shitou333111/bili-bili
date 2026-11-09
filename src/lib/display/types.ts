@@ -242,6 +242,29 @@ export const DEFAULT_ENTRY_COLORS: EntryColors = {
   name: "#ffffff",
 };
 
+/** 入场提示样本（官方入场动画的昵称模板用）：昵称前后的前置语/后置语与三段文字颜色。
+ *  默认「欢迎」+ 昵称 +「光临」，前置/后置浅紫、昵称黑色。 */
+export interface EntrySampleConfig {
+  /** 前置语（昵称前的固定文字） */
+  prefix: string;
+  /** 后置语（昵称后的固定文字） */
+  suffix: string;
+  /** 前置语颜色 */
+  prefixColor: string;
+  /** 昵称颜色 */
+  nameColor: string;
+  /** 后置语颜色 */
+  suffixColor: string;
+}
+
+export const DEFAULT_ENTRY_SAMPLE: EntrySampleConfig = {
+  prefix: "欢迎",
+  suffix: "光临",
+  prefixColor: "#c4b5fd",
+  nameColor: "#000000",
+  suffixColor: "#c4b5fd",
+};
+
 /** 合法 #rrggbb / #rgb 色值判定（配置容错与拾色板共用） */
 export function isHexColor(v: unknown): v is string {
   return typeof v === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v.trim());
@@ -326,6 +349,9 @@ export interface DisplayConfig {
   entryColors: EntryColors;
   /** 模块1 · 入场提示形式："particle"=粒子聚散（默认），或 admin「官方入场提示」中某项的 id */
   entryStyle: string;
+  /** 模块1 · 官方入场动画的昵称样本表：key = 官方动画 id（每项独立保存，互不覆盖；
+   *  表中缺失的动画使用 DEFAULT_ENTRY_SAMPLE）。与粒子入场提示的配色完全独立。 */
+  entrySamples: Record<string, EntrySampleConfig>;
   /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
@@ -408,6 +434,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entryParticleMode: "center", // 默认「中心聚散」（自研四面八方聚散）
   entryColors: DEFAULT_ENTRY_COLORS, // 默认红橙黄渐变 + 白色昵称（与改造前一致）
   entryStyle: "particle", // 默认粒子聚散（可选 admin 中定义的官方入场提示 id）
+  entrySamples: {}, // 官方入场动画样本表（key=动画 id），新动画自动用默认样本
   gift: false,
   anime: false,
   giftEffect: {

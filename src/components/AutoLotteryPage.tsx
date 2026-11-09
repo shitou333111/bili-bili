@@ -213,7 +213,7 @@ export default function AutoLotteryPage({ onBack }: Props) {
           <p className="text-[10px] text-black/40">
             「帮助」页「添加新账号」扫码登录（本页不提供登录入口）。
             <br />
-            ⚠ 不建议使用主播账号抢红包，存在风险。</p>
+            <span className="text-red-500">⚠</span> 不建议使用主播账号抢红包，存在风险，后果自负。</p>
           {validating && <p className="text-[10px] text-black/40">正在校验账号登录状态…</p>}
         </div>
 
@@ -393,7 +393,7 @@ export default function AutoLotteryPage({ onBack }: Props) {
             <div className="max-h-56 overflow-y-auto border-t border-black/5 px-2.5 py-1.5 space-y-1">
               {prizeGroups.length === 0 ? (
                 <p className="text-[10px] text-black/35 py-2 text-center">
-                  暂无中奖记录（开奖时客户端会通过直播弹幕连接自动识别并保存）
+                  暂无中奖记录
                 </p>
               ) : (
                 prizeGroups.map((g) => {

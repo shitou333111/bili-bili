@@ -22,6 +22,7 @@ import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_ENTRY_COLORS,
+  DEFAULT_ENTRY_SAMPLE,
   GIFT_BAR_SLOTS,
   GIFT_FLIP_MAX_OPTIONS,
   GIFT_FLIP_MAX_TEXT_LEN,
@@ -38,6 +39,7 @@ import {
   type EntryCooldownOption,
   type EntryOfficialPayload,
   type EntryParticleMode,
+  type EntrySampleConfig,
   type OfficialEntryStyle,
   type GiftBarWidth,
   type GiftFlipConfig,
@@ -1372,6 +1374,20 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
   // 官方动画预览弹窗：预览项 + 解析后的播放资源（null=资源准备中）
   const [entryPreview, setEntryPreview] = useState<OfficialEntryStyle | null>(null);
   const [entryPreviewAssets, setEntryPreviewAssets] = useState<EntryOfficialPayload | null>(null);
+  // 「设置样本」草稿：前置/后置语 + 三段文字颜色（打开弹窗时从配置拷贝，「确定」才写盘 + 广播）
+  const [sampleDraft, setSampleDraft] = useState<EntrySampleConfig>(DEFAULT_ENTRY_SAMPLE);
+  const [sampleTarget, setSampleTarget] = useState<"prefix" | "name" | "suffix">("prefix");
+  const sampleColorKey =
+    sampleTarget === "prefix" ? "prefixColor" : sampleTarget === "name" ? "nameColor" : "suffixColor";
+  const saveEntrySample = useCallback(() => {
+    if (!entryPreview) return;
+    const id = entryPreview.id;
+    // 每个官方动画的样本独立保存（entrySamples[id]），互不覆盖
+    void update({ entrySamples: { ...config.entrySamples, [id]: sampleDraft } }).then((next) => {
+      void displayDanmaku.broadcastEntrySample(id, next.entrySamples[id] ?? DEFAULT_ENTRY_SAMPLE);
+    });
+    setEntryPreview(null);
+  }, [config.entrySamples, entryPreview, sampleDraft, update]);
   useEffect(() => {
     if (!entryPreview) {
       setEntryPreviewAssets(null);
@@ -1386,15 +1402,20 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       alive = false;
     };
   }, [entryPreview]);
-  /** 单选组后按钮：粒子聚散 → 打开「设置样式」；官方动画 → 预览当前选中项 */
+  /** 单选组后按钮：粒子聚散 → 打开「设置样式」；官方动画 → 打开「设置样本」 */
   const onEntryAction = useCallback(() => {
     if (config.entryStyle === "particle") {
       openStyleModal();
       return;
     }
     const s = officialEntryStyles.find((x) => x.id === config.entryStyle);
-    if (s) setEntryPreview(s);
-  }, [config.entryStyle, officialEntryStyles, openStyleModal]);
+    if (s) {
+      // 该动画已有独立样本则读取，否则用默认样本
+      setSampleDraft({ ...(config.entrySamples[s.id] ?? DEFAULT_ENTRY_SAMPLE) });
+      setSampleTarget("prefix");
+      setEntryPreview(s);
+    }
+  }, [config.entryStyle, config.entrySamples, officialEntryStyles, openStyleModal]);
 
   // 点击视频文件名：解析当前朝向实际使用的视频路径，探测时长；>30s 才打开设置模态框
   const openSegmentModal = useCallback(
@@ -2167,11 +2188,11 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               title={
                 config.entryStyle === "particle"
                   ? "设置粒子聚散方式与配色"
-                  : "预览当前选中的官方入场动画"
+                  : "设置官方入场动画的昵称样本"
               }
               className="shrink-0 cursor-pointer rounded-full bg-white/70 px-3 py-1 text-xs text-black/65 shadow-sm transition hover:bg-white"
             >
-              设置/预览
+              ⚙️设置样式
             </button>
           </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-black/60">
@@ -3289,7 +3310,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       {styleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="max-h-[88vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-base font-bold text-black/85">设置入场提示样式</h3>
+            <h3 className="text-base font-bold text-black/85">设置粒子入场样式</h3>
             <p className="mt-1 text-xs text-black/45">
               聚散方式，横幅/粒子、昵称的颜色
             </p>
@@ -3413,13 +3434,18 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
         </div>
       )}
 
-      {/* 官方入场提示「预览」弹窗：循环播放视频特效（alpha/RGB 合成 + 模板昵称/头像绘制），
-          与画布运行时同一渲染组件，仅 CSS 宽度缩小适配弹窗。首次预览会先下载/读取本地缓存。 */}
+      {/* 官方入场提示「设置样本」弹窗：循环播放视频特效（alpha/RGB 合成 + 模板昵称/头像绘制），
+          预览区下方可设置昵称的前置语/后置语与三段文字颜色；与画布运行时同一渲染组件。
+          草稿实时作用于预览，「确定」才写盘 + 广播画布。首次预览会先下载/读取本地缓存。 */}
       {entryPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-[520px] overflow-hidden rounded-2xl bg-white p-5 shadow-xl">
-            <h3 className="text-base font-bold text-black/85">预览入场提示</h3>
-            <p className="mt-1 text-xs text-black/45">{entryPreview.name || "官方动画"}</p>
+          <div className="max-h-[88vh] w-full max-w-[520px] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 className="text-base font-bold text-black/85">设置入场提示样本</h3>
+              <span className="min-w-0 truncate text-sm font-medium text-black/60">
+                {entryPreview.name || "官方动画"}
+              </span>
+            </div>
             <div className="mt-3 flex min-h-40 items-center justify-center overflow-hidden rounded-xl bg-[#141210] p-3">
               {entryPreviewAssets ? (
                 <EntryOfficialEffect
@@ -3428,7 +3454,8 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   json={entryPreview.json}
                   config={entryPreviewAssets.config}
                   fallbackSrc={entryPreview.video}
-                  user={{ uname: "测试用户昵称", face: "" }}
+                  user={{ uname: "用户的昵称", face: "" }}
+                  sample={sampleDraft}
                   loop
                   cssWidth={440}
                 />
@@ -3436,13 +3463,83 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 <p className="text-xs text-white/60">正在准备特效资源…</p>
               )}
             </div>
-            <div className="mt-4 flex justify-end">
+
+            {/* 昵称前后文字：占位词即默认词（欢迎 / 光临），可清空；整行水平居中 */}
+            <div className="mt-3 flex items-center justify-center gap-2">
+              <input
+                value={sampleDraft.prefix}
+                onChange={(e) =>
+                  setSampleDraft({ ...sampleDraft, prefix: e.target.value.slice(0, 10) })
+                }
+                placeholder="欢迎"
+                className="h-8 w-24 shrink-0 rounded-lg border border-black/10 px-2 text-xs outline-none focus:border-[#1f1c17]"
+              />
+              <span className="shrink-0 text-xs text-black">用户的昵称</span>
+              <input
+                value={sampleDraft.suffix}
+                onChange={(e) =>
+                  setSampleDraft({ ...sampleDraft, suffix: e.target.value.slice(0, 10) })
+                }
+                placeholder="光临"
+                className="h-8 w-24 shrink-0 rounded-lg border border-black/10 px-2 text-xs outline-none focus:border-[#1f1c17]"
+              />
+            </div>
+
+            {/* 文字颜色：前置词 / 昵称 / 后置词（点击圆形色钮选中，下方色相面板编辑该色） */}
+            <div className="mt-3 flex items-center gap-4">
+              <ColorRow
+                compact
+                label="前置词"
+                color={sampleDraft.prefixColor}
+                active={sampleTarget === "prefix"}
+                onPick={() => setSampleTarget("prefix")}
+                onHex={(hex) => setSampleDraft({ ...sampleDraft, prefixColor: hex })}
+              />
+              <ColorRow
+                compact
+                label="昵称"
+                color={sampleDraft.nameColor}
+                active={sampleTarget === "name"}
+                onPick={() => setSampleTarget("name")}
+                onHex={(hex) => setSampleDraft({ ...sampleDraft, nameColor: hex })}
+              />
+              <ColorRow
+                compact
+                label="后置词"
+                color={sampleDraft.suffixColor}
+                active={sampleTarget === "suffix"}
+                onPick={() => setSampleTarget("suffix")}
+                onHex={(hex) => setSampleDraft({ ...sampleDraft, suffixColor: hex })}
+              />
+            </div>
+            <div className="mt-3">
+              <ColorBoard
+                value={sampleDraft[sampleColorKey]}
+                onChange={(hex) => setSampleDraft({ ...sampleDraft, [sampleColorKey]: hex })}
+              />
+            </div>
+
+            <div className="mt-4 flex items-center gap-2">
               <button
-                className="rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs font-medium text-white shadow transition hover:opacity-90"
-                onClick={() => setEntryPreview(null)}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-black/45 transition hover:bg-black/5 hover:text-black/70"
+                onClick={() => setSampleDraft({ ...DEFAULT_ENTRY_SAMPLE })}
               >
-                关闭
+                恢复默认
               </button>
+              <div className="flex flex-1 items-center justify-end gap-2">
+                <button
+                  className="rounded-lg bg-black/5 px-4 py-1.5 text-xs font-medium text-black/60 transition hover:bg-black/10"
+                  onClick={() => setEntryPreview(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="rounded-lg bg-[#1f1c17] px-4 py-1.5 text-xs font-medium text-white shadow transition hover:opacity-90"
+                  onClick={saveEntrySample}
+                >
+                  确定
+                </button>
+              </div>
             </div>
           </div>
         </div>

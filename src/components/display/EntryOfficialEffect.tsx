@@ -31,6 +31,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   EntryEffectConfig,
+  EntrySampleConfig,
   EntryTemplateFrame,
   EntryTemplateSrc,
 } from "@/lib/display/types";
@@ -118,6 +119,7 @@ export default function EntryOfficialEffect({
   onMeasure,
   cssWidth,
   fallbackSrc,
+  sample,
 }: {
   /** 特效视频地址（web_mp4；通常是本地缓存地址 /api/video?p=...） */
   src: string;
@@ -137,8 +139,13 @@ export default function EntryOfficialEffect({
   onMeasure?: (w: number) => void;
   /** CSS 宽度（缺省 = 输出原尺寸、canvas 内在分辨率 1:1；预览弹窗传小尺寸） */
   cssWidth?: number;
+  /** 昵称样本（前置语/后置语 + 三段文字颜色；缺省只画昵称、颜色取模板 src.color） */
+  sample?: EntrySampleConfig;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** 样本用 ref 传递：面板调整时实时生效，不需要重启视频（不进入绘制 effect 依赖） */
+  const sampleRef = useRef(sample);
+  sampleRef.current = sample;
   const [visible, setVisible] = useState(true);
   /** 服务端未下发 config 时自行拉取的进度：undefined=拉取中（暂不启动播放） */
   const [fetched, setFetched] = useState<EntryEffectConfig | null | undefined>(
@@ -236,7 +243,8 @@ export default function EntryOfficialEffect({
       return b;
     };
 
-    /** 昵称文字：画入元素缓冲（居中、超宽自动缩字号，颜色取模板 src.color） */
+    /** 昵称文字：画入元素缓冲（前置语 + 昵称 + 后置语，居中、超宽自动缩字号；
+     *  三段各自取样本颜色，无样本时统一用模板 src.color） */
     const drawTextInto = (
       bc: CanvasRenderingContext2D,
       w: number,
@@ -245,21 +253,42 @@ export default function EntryOfficialEffect({
     ) => {
       const uname = user.uname || "";
       if (!uname || w <= 0 || h <= 0) return;
+      const s = sampleRef.current;
+      const templateColor = safeColor(def?.color, "#ffffff");
+      const segments = [
+        { text: s?.prefix ?? "", color: s?.prefixColor ?? templateColor },
+        { text: uname, color: s?.nameColor ?? templateColor },
+        { text: s?.suffix ?? "", color: s?.suffixColor ?? templateColor },
+      ].filter((seg) => seg.text.length > 0);
+      // 前置词/昵称/后置词之间自动补一个空格，拉开视觉距离
+      const spaced = segments.map((seg, i) => (i === 0 ? seg : { ...seg, text: ` ${seg.text}` }));
       const bold = def?.style?.includes("b") ? "bold " : "";
+      const setFont = (sz: number) => {
+        bc.font = `${bold}${sz}px "Microsoft YaHei", "PingFang SC", sans-serif`;
+      };
       let size = Math.max(8, Math.round(h * 0.66));
       bc.save();
-      bc.font = `${bold}${size}px "Microsoft YaHei", "PingFang SC", sans-serif`;
-      const measured = bc.measureText(uname).width;
+      setFont(size);
+      const measured = spaced.reduce((sum, seg) => sum + bc.measureText(seg.text).width, 0);
       if (measured > w && measured > 0) {
         size = Math.max(8, Math.floor((size * w) / measured));
-        bc.font = `${bold}${size}px "Microsoft YaHei", "PingFang SC", sans-serif`;
+        setFont(size);
       }
-      bc.textAlign = "center";
+      const widths = spaced.map((seg) => bc.measureText(seg.text).width);
+      const totalWidth = widths.reduce((sum, x) => sum + x, 0);
+      bc.textAlign = "left";
       bc.textBaseline = "middle";
-      bc.fillStyle = safeColor(def?.color, "#ffffff");
       bc.shadowColor = "rgba(0,0,0,0.45)";
       bc.shadowBlur = Math.max(1, Math.round(size * 0.1));
-      bc.fillText(uname, def ? w * NICK_ANCHOR_X : w / 2, def ? h * NICK_ANCHOR_Y : h / 2);
+      // 整段文字以锚点为中心，逐段左对齐绘制
+      const x0 = (def ? w * NICK_ANCHOR_X : w / 2) - totalWidth / 2;
+      const y = def ? h * NICK_ANCHOR_Y : h / 2;
+      let x = x0;
+      spaced.forEach((seg, i) => {
+        bc.fillStyle = seg.color;
+        bc.fillText(seg.text, x, y);
+        x += widths[i];
+      });
       bc.restore();
     };
 
