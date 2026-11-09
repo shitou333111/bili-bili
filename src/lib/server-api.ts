@@ -64,12 +64,15 @@ export function serverApiUrl(path: string): string {
   return path;
 }
 
-/** 请求服务器 API（自动处理平台差异） */
-export async function serverFetch<T>(path: string, options?: RequestInit): Promise<T> {
+/**
+ * 请求服务器 API（自动处理平台差异）
+ * @param timeoutMs 超时时间，默认 8 秒；长轮询等场景可显式放大
+ */
+export async function serverFetch<T>(path: string, options?: RequestInit, timeoutMs = 8000): Promise<T> {
   const url = serverApiUrl(path);
   const ctrl = new AbortController();
   // 服务器请求加超时，避免原生模式下服务器不可达时长时间挂起
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     if (isTauri()) {
       // Tauri 原生：前端与服务器跨源，必须走 @tauri-apps/plugin-http（Rust 侧 HTTP 客户端，无 CORS 限制），

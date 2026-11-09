@@ -168,6 +168,11 @@ export default function LotteryScanAdmin() {
 
   const toggleScan = async () => {
     if (!data) return;
+    if (!data.config.enabled && !data.config.account) {
+      setAccountMsg("请先选择红包扫描账号后再开始扫描");
+      showToast("请先选择红包扫描账号后再开始扫描", "error");
+      return;
+    }
     await post({ action: "setEnabled", enabled: !data.config.enabled });
   };
 
@@ -194,8 +199,7 @@ export default function LotteryScanAdmin() {
         setAccountMsg(cred.reason || "该账号登录已失效，请到「帮助」页重新扫码登录");
         return;
       }
-      const ok = await post({ action: "setAccount", cookie: buildCookieHeader(cred.session) });
-      if (ok) setAccountMsg(`已将 ${cred.session.uname || `UID${cred.session.mid}`} 设为扫描账号`);
+      await post({ action: "setAccount", cookie: buildCookieHeader(cred.session) });
     } catch {
       setAccountMsg("设置失败，请稍后重试");
     } finally {
@@ -205,8 +209,7 @@ export default function LotteryScanAdmin() {
 
   const clearScanAccount = async () => {
     setAccountMsg("");
-    const ok = await post({ action: "setAccount", cookie: "" });
-    if (ok) setAccountMsg("已清除扫描账号");
+    await post({ action: "setAccount", cookie: "" });
   };
 
   const addRoom = async () => {
@@ -224,6 +227,15 @@ export default function LotteryScanAdmin() {
 
   const removeRoom = async (uid: number) => {
     await post({ action: "removeRoom", uid });
+  };
+
+  const removeHistoryRoom = async (roomid: number) => {
+    await post({ action: "removeHistory", roomid });
+  };
+
+  const clearHistoryRooms = async () => {
+    if (!window.confirm("确定清空全部「常发红包的直播间」记录吗？")) return;
+    await post({ action: "clearHistory" });
   };
 
   const config = data?.config;
@@ -377,26 +389,22 @@ export default function LotteryScanAdmin() {
                 保存配置
               </button>
             </div>
-            <p className="text-[10px] text-black/35">
-              天选按一份礼物价值、普通礼物红包按最大单个礼物价值、电池红包按单份电池数计算；低于阈值的扫描到也不显示。
-            </p>
           </div>
 
           {/* 扫描账号 */}
           <div className="rounded-lg border border-black/10 p-2 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium">红包扫描账号</span>
-              {config.account ? (
-                <span className="text-[10px] text-green-600">
-                  {config.account.uname}（UID {config.account.uid}）· {fmtDateTime(Date.parse(config.account.updatedAt))}
-                </span>
-              ) : (
-                <span className="text-[10px] text-orange-500">未配置，红包扫描不可用</span>
-              )}
+              <button
+                onClick={() => void loadSessions()}
+                disabled={saving}
+                className="rounded border border-black/10 px-2.5 py-0.5 text-[10px] text-black/60 hover:bg-black/5 disabled:opacity-40"
+              >
+                刷新账号列表
+              </button>
             </div>
             <p className="text-[10px] text-black/40">
-              天选扫描匿名完成，无需登录；红包接口必须登录，请从本机已登录账号中选择一个专用小号作为扫描账号（建议不要使用主播账号）。
-              如需更多账号，请到「帮助」页「添加新账号」扫码登录。
+              {config.account ? "" : "未配置扫描账号时红包扫描不可用。"}
             </p>
             {state.accountStatus?.valid === false && (
               <p className="text-[10px] text-red-500">⚠ {state.accountStatus.message}</p>
@@ -410,8 +418,8 @@ export default function LotteryScanAdmin() {
                   return (
                     <button
                       key={s.sid}
-                      onClick={() => void applyScanAccount(s)}
-                      disabled={saving || pickingSid === s.sid || isCurrent}
+                      onClick={() => void (isCurrent ? clearScanAccount() : applyScanAccount(s))}
+                      disabled={saving || pickingSid === s.sid}
                       className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] transition disabled:opacity-60 ${
                         isCurrent
                           ? "border-green-500/40 bg-green-500/10 text-green-600"
@@ -431,25 +439,7 @@ export default function LotteryScanAdmin() {
                 })}
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => void loadSessions()}
-                disabled={saving}
-                className="rounded border border-black/10 px-3 py-1 text-[11px] text-black/60 hover:bg-black/5 disabled:opacity-40"
-              >
-                刷新账号列表
-              </button>
-              {config.account && (
-                <button
-                  onClick={() => void clearScanAccount()}
-                  disabled={saving}
-                  className="rounded border border-black/10 px-3 py-1 text-[11px] text-black/60 hover:bg-black/5 disabled:opacity-40"
-                >
-                  清除扫描账号
-                </button>
-              )}
-              {accountMsg && <span className="text-[10px] text-black/45">{accountMsg}</span>}
-            </div>
+            {accountMsg && <p className="text-[10px] text-orange-500">{accountMsg}</p>}
           </div>
 
           {/* 指定直播间 */}
@@ -492,16 +482,27 @@ export default function LotteryScanAdmin() {
 
           {/* 常发红包直播间 */}
           <div className="rounded-lg border border-black/10 overflow-hidden">
-            <button
-              onClick={() => setExpandedHistory(!expandedHistory)}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-black/[0.02]"
-            >
-              <svg className={`w-3.5 h-3.5 transition-transform ${expandedHistory ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
-              </svg>
-              <span className="font-medium">常发红包的直播间</span>
-              <span className="text-black/35">{data?.history.length ?? 0} 个</span>
-            </button>
+            <div className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px]">
+              <button
+                onClick={() => setExpandedHistory(!expandedHistory)}
+                className="flex min-w-0 items-center gap-2 hover:opacity-80"
+              >
+                <svg className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${expandedHistory ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="font-medium">常发红包的直播间</span>
+                <span className="text-black/35">{data?.history.length ?? 0} 个</span>
+              </button>
+              {(data?.history.length ?? 0) > 0 && (
+                <button
+                  onClick={() => void clearHistoryRooms()}
+                  disabled={saving}
+                  className="ml-auto flex-shrink-0 rounded border border-red-300/50 px-2 py-0.5 text-[10px] text-red-500 hover:bg-red-50 disabled:opacity-40"
+                >
+                  一键清空
+                </button>
+              )}
+            </div>
             {expandedHistory && (
               <div className="max-h-52 overflow-y-auto border-t border-black/5 px-2 py-1.5 space-y-1">
                 {(data?.history.length ?? 0) === 0 ? (
@@ -515,6 +516,16 @@ export default function LotteryScanAdmin() {
                       </button>
                       <span className="ml-auto flex-shrink-0 text-orange-500 font-medium">{h.count} 次</span>
                       <span className="flex-shrink-0 text-black/30">{fmtDateTime(h.lastAt)}</span>
+                      <button
+                        onClick={() => void removeHistoryRoom(h.roomid)}
+                        disabled={saving}
+                        title="移除"
+                        className="flex-shrink-0 text-black/25 transition hover:text-red-500 disabled:opacity-40"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12M9 7V5h6v2m-8 0l1 12h8l1-12" />
+                        </svg>
+                      </button>
                     </div>
                   ))
                 )}
@@ -539,25 +550,34 @@ export default function LotteryScanAdmin() {
                 {results.length === 0 ? (
                   <p className="text-[10px] text-black/35">暂无达到阈值的进行中天选/红包</p>
                 ) : (
-                  results.map((r) => (
-                    <div key={r.key} className="flex items-center gap-2 text-[11px] rounded border border-black/5 px-1.5 py-1">
-                      <button onClick={() => openRoom(r.roomId)} className="flex min-w-0 items-center gap-1.5 text-left hover:text-[#00a1d6]">
+                  results.map((r) => {
+                    const battery = r.kind === "red_pocket" && (r.rpType === 3 || r.rpType === 5);
+                    const kindIcon = r.kind === "lottery" ? "/tianxuan.png" : battery ? "/gift-battery.avif" : "/red_pocket.png";
+                    const kindLabel = r.kind === "lottery" ? "天选" : battery ? "电池红包" : "红包";
+                    return (
+                      <div
+                        key={r.key}
+                        className="grid items-center gap-x-1.5 rounded border border-black/5 px-1.5 py-1 text-[11px]"
+                        style={{ gridTemplateColumns: "20px 110px 20px minmax(0, 1fr) 54px 46px 56px" }}
+                      >
                         {r.face ? <img src={r.face} alt="" className="h-5 w-5 rounded-full" /> : <div className="h-5 w-5 rounded-full bg-gray-200" />}
-                        <span className="truncate max-w-[8em]">{r.uname || `#${r.roomId}`}</span>
-                      </button>
-                      <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] ${r.kind === "lottery" ? "bg-[#00a1d6]/10 text-[#00a1d6]" : "bg-[#f59e0b]/15 text-[#b45309]"}`}>
-                        {r.kind === "lottery" ? "天选" : "红包"}
-                      </span>
-                      <span className="min-w-0 truncate text-black/70">
-                        {r.kind === "lottery" ? `${r.awardName} x${r.awardNum}` : `${r.awards?.[0]?.giftName || "红包"} ${r.awards?.length ?? 0} 种`}
-                      </span>
-                      <span className="flex-shrink-0 text-orange-500">{r.value} 电池</span>
-                      <span className="flex-shrink-0 text-red-500 font-mono">{fmtCountdown(r.endTime, now)}</span>
-                      <span className="flex-shrink-0 text-black/30">
-                        {{ custom: "指定", history: "常发", rank: "人气", hot: "热门" }[r.source]}
-                      </span>
-                    </div>
-                  ))
+                        <button onClick={() => openRoom(r.roomId)} className="min-w-0 truncate text-left hover:text-[#00a1d6]">
+                          {r.uname || `#${r.roomId}`}
+                        </button>
+                        <img src={kindIcon} alt={kindLabel} title={kindLabel} className="h-5 w-5 rounded object-cover" />
+                        <span className="min-w-0 truncate text-black/70">
+                          {r.kind === "lottery" ? `${r.awardName} x${r.awardNum}` : r.awards?.[0]?.giftName || kindLabel}
+                        </span>
+                        <span className="whitespace-nowrap text-orange-500">{r.value} 电池</span>
+                        <span className="whitespace-nowrap font-mono text-red-500">{fmtCountdown(r.endTime, now)}</span>
+                        <span className="truncate text-black/30">
+                          {r.source === "hot"
+                            ? r.areaName || "分区热门"
+                            : { custom: "指定", history: "常发", rank: "人气", hot: "分区热门" }[r.source]}
+                        </span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}

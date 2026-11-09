@@ -32,6 +32,8 @@ const MAX_ROOMS_PER_ROUND = 1500;
 const HOT_PARTITION_PAGE_SIZE = 30;
 /** 结果最多保留条数 */
 const MAX_RESULTS = 400;
+/** 开奖后结果在快照中继续保留的秒数（供客户端暂留展示开奖结果） */
+const RESULT_LINGER_SEC = 8;
 /** 限流事件最多保留条数 */
 const MAX_RATE_LIMIT_EVENTS = 60;
 /** 运行日志最多保留条数 */
@@ -56,6 +58,8 @@ export type ScanRoom = {
   face: string;
   title: string;
   source: RoomSource;
+  /** 分区名称（仅 source=hot 时有值），用于结果来源标注 */
+  areaName?: string;
 };
 
 export type ScanResult = {
@@ -68,6 +72,8 @@ export type ScanResult = {
   face: string;
   title: string;
   source: RoomSource;
+  /** 分区名称（仅 source=hot 时有值） */
+  areaName?: string;
   /** 单份礼物价值（电池） */
   value: number;
   /** 开奖时间（unix 秒） */
@@ -288,6 +294,10 @@ type Engine = {
   roundInFlight: boolean;
   lotteryRate: EndpointRate;
   redRate: EndpointRate;
+  /** 扫描结果版本号：结果有任何新增/变化时 +1，供客户端长轮询感知 */
+  generation: number;
+  /** 等待结果变化的客户端回调（长轮询） */
+  waiters: Set<() => void>;
 };
 
 const G = globalThis as unknown as { __biliLotteryScan?: Engine };
@@ -304,9 +314,38 @@ function engine(): Engine {
       roundInFlight: false,
       lotteryRate: { nextAt: 0, blockedUntil: 0, streak: 0 },
       redRate: { nextAt: 0, blockedUntil: 0, streak: 0 },
+      generation: 0,
+      waiters: new Set(),
     };
   }
   return G.__biliLotteryScan;
+}
+
+/** 通知所有等待中的客户端：扫描结果有更新 */
+function notifyChange() {
+  const e = engine();
+  e.generation += 1;
+  for (const resolve of e.waiters) resolve();
+  e.waiters.clear();
+}
+
+/**
+ * 合并本轮结果到快照：保留上一版中尚未超出保留期的结果（含刚开奖的），
+ * 避免开奖瞬间结果被新一轮扫描结果整体替换而立刻消失。
+ */
+function commitResults(next: ScanResult[], notify: boolean): void {
+  const e = engine();
+  const t = nowSec();
+  const map = new Map<string, ScanResult>();
+  for (const r of e.state.results) {
+    if (r.endTime + RESULT_LINGER_SEC > t) map.set(r.key, r);
+  }
+  for (const r of next) map.set(r.key, r);
+  e.state.results = [...map.values()]
+    .filter((r) => r.endTime + RESULT_LINGER_SEC > t)
+    .sort((a, b) => a.endTime - b.endTime)
+    .slice(-MAX_RESULTS);
+  if (notify) notifyChange();
 }
 
 function addLog(msg: string, type: ScanLog["type"] = "info") {
@@ -569,6 +608,7 @@ async function scanRoomLottery(room: ScanRoom): Promise<ScanResult | null> {
     face: room.face,
     title: room.title,
     source: room.source,
+    areaName: room.areaName,
     value,
     endTime,
     foundAt: Date.now(),
@@ -674,18 +714,22 @@ function collectRedResults(room: ScanRoom, list: RedPocketItem[]): ScanResult[] 
       face: room.face,
       title: room.title,
       source: room.source,
+      areaName: room.areaName,
       value,
       endTime,
       foundAt: Date.now(),
       lotId,
       rpType: num(rp.rp_type),
       totalPrice: num(rp.total_price),
-      awards: (rp.awards ?? []).map((a) => ({
-        giftId: num(a.gift_id),
-        giftName: String(a.gift_name ?? ""),
-        num: num(a.num),
-        giftPic: String(a.gift_pic ?? ""),
-      })),
+      // 按单份礼物价值降序，awards[0] 即价值最高的奖品（UI 只展示这一个）
+      awards: (rp.awards ?? [])
+        .map((a) => ({
+          giftId: num(a.gift_id),
+          giftName: String(a.gift_name ?? ""),
+          num: num(a.num),
+          giftPic: String(a.gift_pic ?? ""),
+        }))
+        .sort((a, b) => getGiftPrice(b.giftId) - getGiftPrice(a.giftId)),
     });
   }
   return out;
@@ -750,6 +794,7 @@ async function fetchHotPartitionRooms(limit: number): Promise<ScanRoom[]> {
           face: fixFaceUrl(String(r.face ?? "")),
           title: String(r.title ?? ""),
           source: "hot",
+          areaName: String(r.area_v2_name || r.area_name || "").trim() || partition.name,
         });
         taken += 1;
         if (taken >= limit) break;
@@ -912,10 +957,14 @@ async function runRound(): Promise<void> {
       }
       const room = rooms[i];
       e.state.progress = { done: i, total: rooms.length, currentRoom: room.roomid };
+      let added = 0;
       // 天选（匿名）
       try {
         const lot = await scanRoomLottery(room);
-        if (lot) results.push(lot);
+        if (lot) {
+          results.push(lot);
+          added += 1;
+        }
       } catch {
         failed += 1;
       }
@@ -927,6 +976,7 @@ async function runRound(): Promise<void> {
             const reds = collectRedResults(room, list);
             if (reds.length === 0) skipped += 1;
             for (const r of reds) results.push(r);
+            added += reds.length;
             if (reds.length > 0) {
               foundRedLots.set(room.roomid, {
                 room,
@@ -942,9 +992,13 @@ async function runRound(): Promise<void> {
           failed += 1;
         }
       }
+      // 有新结果时立即更新快照并通知客户端（客户端长轮询可近实时拿到新红包/天选）
+      if (added > 0) {
+        commitResults(results, true);
+      }
       // 每 30 个房间落盘一次进度，避免进程重启丢失太多
       if ((i + 1) % 30 === 0) {
-        e.state.results = results.slice(-MAX_RESULTS);
+        commitResults(results, false);
         await saveState().catch(() => {});
       }
     }
@@ -952,10 +1006,7 @@ async function runRound(): Promise<void> {
     for (const [, v] of foundRedLots) recordHistoryRedPacket(v.room, v.lots);
 
     const now = Date.now();
-    e.state.results = results
-      .filter((r) => r.endTime > nowSec())
-      .sort((a, b) => a.endTime - b.endTime)
-      .slice(-MAX_RESULTS);
+    commitResults(results, false);
     e.state.lastRound = {
       rooms: rooms.length,
       lottery: results.filter((r) => r.kind === "lottery").length,
@@ -966,6 +1017,7 @@ async function runRound(): Promise<void> {
     };
     e.state.lastScanFinishedAt = now;
     e.state.progress = { done: rooms.length, total: rooms.length, currentRoom: null };
+    notifyChange();
     addLog(
       `本轮完成：${rooms.length} 个房间，天选 ${e.state.lastRound.lottery} 个，红包 ${e.state.lastRound.red} 个，失败 ${failed} 个，耗时 ${Math.round((now - startedAt) / 1000)} 秒`,
       "success",
@@ -1027,6 +1079,8 @@ export type PublicScanSnapshot = {
   serverNow: number;
   lastScanAt: number | null;
   nextScanAt: number | null;
+  /** 扫描结果版本号（配合 /api/lottery/scan/wait 长轮询） */
+  generation: number;
   results: ScanResult[];
 };
 
@@ -1041,7 +1095,8 @@ export async function getPublicSnapshot(): Promise<PublicScanSnapshot> {
     serverNow: Date.now(),
     lastScanAt: e.state.lastScanAt,
     nextScanAt: e.state.nextScanAt,
-    results: e.state.results.filter((r) => r.endTime > nowSec()),
+    generation: e.generation,
+    results: e.state.results.filter((r) => r.endTime + RESULT_LINGER_SEC > nowSec()),
   };
 }
 
@@ -1074,9 +1129,13 @@ export async function getAdminSnapshot(): Promise<AdminScanSnapshot> {
   };
 }
 
-export async function setScanEnabled(enabled: boolean): Promise<void> {
+export async function setScanEnabled(enabled: boolean): Promise<{ ok: boolean; message?: string }> {
   await ensureLoaded();
   const e = engine();
+  // 红包扫描依赖登录账号，未配置账号时不允许启动，避免误以为在完整扫描
+  if (enabled && !e.config.account) {
+    return { ok: false, message: "请先选择红包扫描账号后再开始扫描" };
+  }
   e.config.enabled = enabled;
   await saveConfig();
   if (enabled) {
@@ -1093,6 +1152,7 @@ export async function setScanEnabled(enabled: boolean): Promise<void> {
     addLog("等待当前请求结束…", "info");
     await saveState().catch(() => {});
   }
+  return { ok: true };
 }
 
 export async function updateScanConfig(patch: {
@@ -1176,6 +1236,55 @@ export async function removeCustomRoom(uid: number): Promise<void> {
   const e = engine();
   e.config.customRooms = e.config.customRooms.filter((r) => r.uid !== uid);
   await saveConfig();
+}
+
+/** 从「常发红包的直播间」中移除一条记录 */
+export async function removeHistoryRoom(roomid: number): Promise<void> {
+  await ensureLoaded();
+  const e = engine();
+  const before = e.history.length;
+  e.history = e.history.filter((h) => h.roomid !== roomid);
+  if (e.history.length !== before) {
+    await saveHistory();
+    addLog(`已移除常发红包直播间 #${roomid}`, "info");
+  }
+}
+
+/** 清空「常发红包的直播间」记录 */
+export async function clearHistoryRooms(): Promise<void> {
+  await ensureLoaded();
+  const e = engine();
+  e.history = [];
+  await saveHistory();
+  addLog("已清空常发红包直播间记录", "warn");
+}
+
+/**
+ * 等待扫描结果变化（客户端长轮询）。
+ * 若版本号已变化或在超时时间内发生变化则立即返回，供客户端近实时获取新红包。
+ */
+export async function waitForScanUpdate(
+  since: number,
+  timeoutMs = 25_000,
+): Promise<{ generation: number; changed: boolean; serverNow: number }> {
+  await ensureLoaded();
+  const e = engine();
+  if (e.generation !== since) {
+    return { generation: e.generation, changed: true, serverNow: Date.now() };
+  }
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      e.waiters.delete(finish);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(1000, timeoutMs));
+    e.waiters.add(finish);
+  });
+  return { generation: e.generation, changed: e.generation !== since, serverNow: Date.now() };
 }
 
 export function getScanRuntimeInfo(): { nextScanAt: number | null; scanning: boolean; enabled: boolean } {

@@ -41,6 +41,7 @@ import RealActivityModal from "@/components/RealActivityModal";
 import RecommendedAnchors from "@/components/RecommendedAnchors";
 import LotteryPage from "@/components/LotteryPage";
 import AutoLotteryPage from "@/components/AutoLotteryPage";
+import { useAutoLotteryRunning } from "@/lib/auto-lottery-status";
 import WindowTitleBar from "@/components/WindowTitleBar";
 import {
   getVersionDisplay,
@@ -883,12 +884,15 @@ function ToolCard({
   desc,
   disabled,
   onClick,
+  highlight = false,
 }: {
   icon: string;
   title: string;
   desc: string;
   disabled: boolean;
   onClick: () => void;
+  /** 绿色高亮边框（用于提示后台正在运行） */
+  highlight?: boolean;
 }) {
   return (
     <button
@@ -896,7 +900,9 @@ function ToolCard({
       className={`w-full rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
         disabled
           ? "border-black/5 bg-gray-100/70 cursor-not-allowed opacity-60"
-          : "border-black/10 bg-white/80 hover:border-black/20 hover:shadow-lg"
+          : highlight
+            ? "border-red-500 bg-red-50/60 ring-1 ring-red-500/40 shadow-[0_0_22px_rgba(239,68,68,0.4)]"
+            : "border-black/10 bg-white/80 hover:border-black/20 hover:shadow-lg"
       }`}
     >
       <div className="flex items-center gap-3">
@@ -907,7 +913,7 @@ function ToolCard({
         )}
         <div className="min-w-0">
           <h3 className="text-base font-bold">{title}</h3>
-          <p className="mt-0.5 text-xs text-black/45">{desc}</p>
+          <p className="mt-0.5 text-xs text-black/45">{highlight ? "后台运行中" : desc}</p>
         </div>
         {disabled ? (
           <svg className="w-4 h-4 text-black/30 ml-auto flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 10a6 6 0 00-12 0" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 10v6a2 2 0 002 2h8a2 2 0 002-2v-6" /></svg>
@@ -992,6 +998,8 @@ export default function HomePage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<"revenue" | "anchor" | "screenshot" | "pending">("revenue");
   const [toolsPage, setToolsPage] = useState<"home" | "fans" | "medal" | "screenshot" | "medical" | "like" | "lottery">("home");
+  // 自动抢是否在后台运行（离开抢奖页面后仍继续，帮助页卡片据此显示绿色边框）
+  const autoLotteryRunning = useAutoLotteryRunning();
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState<string>("");
   const [simulatorOpen, setSimulatorOpen] = useState(false);
@@ -4230,6 +4238,7 @@ export default function HomePage() {
                       desc={tool.desc}
                       disabled={isToolDisabled(tool)}
                       onClick={() => runTool(tool)}
+                      highlight={tool.title === LOTTERY_TOOL.title && autoLotteryRunning}
                     />
                   );
                 })}

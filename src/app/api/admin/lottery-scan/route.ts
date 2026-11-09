@@ -7,6 +7,8 @@ import {
   setScanAccount,
   addCustomRoom,
   removeCustomRoom,
+  removeHistoryRoom,
+  clearHistoryRooms,
 } from "@/lib/lottery-scan";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +23,16 @@ export async function GET(request: Request) {
 }
 
 type Body = {
-  action?: "setEnabled" | "setConfig" | "setAccount" | "addRoom" | "removeRoom";
+  action?:
+    | "setEnabled"
+    | "setConfig"
+    | "setAccount"
+    | "addRoom"
+    | "removeRoom"
+    | "removeHistory"
+    | "clearHistory";
   enabled?: boolean;
+  roomid?: number;
   minValue?: number;
   scanIntervalMs?: number;
   requestIntervalMs?: number;
@@ -46,7 +56,10 @@ export async function POST(request: Request) {
 
   switch (body.action) {
     case "setEnabled": {
-      await setScanEnabled(!!body.enabled);
+      const result = await setScanEnabled(!!body.enabled);
+      if (!result.ok) {
+        return NextResponse.json({ code: -1, message: result.message });
+      }
       break;
     }
     case "setConfig": {
@@ -80,6 +93,15 @@ export async function POST(request: Request) {
     case "removeRoom": {
       const uid = Number(body.uid);
       if (Number.isInteger(uid) && uid > 0) await removeCustomRoom(uid);
+      break;
+    }
+    case "removeHistory": {
+      const roomid = Number(body.roomid);
+      if (Number.isInteger(roomid) && roomid > 0) await removeHistoryRoom(roomid);
+      break;
+    }
+    case "clearHistory": {
+      await clearHistoryRooms();
       break;
     }
     default:

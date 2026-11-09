@@ -18,6 +18,7 @@ import {
   extractCookieValue,
 } from "./bilibili/cookie-refresh-client";
 import { md5 } from "./md5";
+import { getGiftPrice } from "./gift-catalog-client";
 
 // ===== Wbi 签名（B站 风控要求） =====
 
@@ -296,7 +297,13 @@ export async function joinLottery(lotteryId: number, roomId: number): Promise<Ap
 // 结束后 3 秒自动断开，避免长时间占用触发风控。
 
 /** 直播间元信息（用于中奖记录展示） */
-export type PresenceMeta = { uname?: string; anchorUid?: number; title?: string };
+export type PresenceMeta = {
+  uname?: string;
+  anchorUid?: number;
+  title?: string;
+  /** 该抽奖/红包的单份奖品价值（电池），用于中奖记录估值 */
+  prizeValue?: number;
+};
 
 type PresenceConn = {
   /** 连接唯一 key：`${sid}:${roomId}`（多账号同房各自一条连接） */
@@ -553,6 +560,9 @@ export async function drawRedPocketWithSession(
 
 // ===== 中奖记录（本地长期保存） =====
 
+/** B站限制：每个账号每天最多中奖 20 次红包（中奖数，非参与数） */
+export const RED_POCKET_DAILY_LIMIT = 20;
+
 /** 中奖记录：哪个账号、什么时间、在哪个直播间、中了什么奖品 */
 export type PrizeRecord = {
   id: string;
@@ -564,11 +574,33 @@ export type PrizeRecord = {
   anchorUid?: number;
   prizeName: string;
   prizeNum: number;
+  /** 奖品总价值（电池），用于中奖总额统计 */
+  prizeValue?: number;
   prizeImage?: string;
   wonAt: number;
   lotteryId?: number;
   redLotId?: number;
 };
+
+/** 中奖记录更新监听（同进程内，供页面自动刷新中奖列表） */
+const prizeRecordListeners = new Set<(record: PrizeRecord) => void>();
+
+/** 订阅「新增中奖记录」事件，返回取消订阅函数 */
+export function onPrizeRecord(listener: (record: PrizeRecord) => void): () => void {
+  prizeRecordListeners.add(listener);
+  return () => {
+    prizeRecordListeners.delete(listener);
+  };
+}
+
+/**
+ * 判断参与结果是否表示「已经参与过」（重复参与不应视为失败）。
+ * B站 各接口对重复参与的返回码并不统一，这里以文案为主，辅以常见码。
+ */
+export function isAlreadyJoinedResult(r: ApiResult): boolean {
+  const msg = String(r.message || r.msg || "");
+  return /已(经)?(参与|参加|领取|抢|加入|中奖)|重复(参与|领取)|不可重复/.test(msg);
+}
 
 const PRIZE_RECORDS_FILE = "lottery-prize-records";
 
@@ -607,6 +639,11 @@ async function appendPrizeRecord(platform: Platform, session: AuthSession, recor
     list.unshift(record);
     await platform.writeFile(filePath, JSON.stringify(list.slice(0, 500), null, 2));
     console.log(`[Lottery] 中奖记录已保存：${record.accountName} 获得 ${record.prizeName}`);
+    for (const listener of prizeRecordListeners) {
+      try {
+        listener(record);
+      } catch { /* 监听方异常不影响记录 */ }
+    }
   } catch (e) {
     console.warn("[Lottery] 保存中奖记录失败", e);
   }
@@ -634,6 +671,7 @@ async function recordAnchorLotteryWin(
     anchorUid: meta.anchorUid,
     prizeName: String(award?.name ?? "天选奖品"),
     prizeNum: num,
+    prizeValue: (Number(meta.prizeValue) || 0) * num,
     prizeImage: String(award?.image ?? ""),
     wonAt: Date.now(),
     lotteryId: Number(data?.id) || undefined,
@@ -653,7 +691,15 @@ async function recordRedPocketWin(
   const awards = Array.isArray(data?.awards) ? data.awards : [];
   const awardByGift = new Map(awards.map((a) => [Number(a?.giftId), a]));
   for (const w of mine) {
-    const award = awardByGift.get(Number(w?.giftId));
+    const giftId = Number(w?.giftId) || 0;
+    const award = awardByGift.get(giftId);
+    const giftNum = 1;
+    // 优先使用开奖通知里的真实奖品价格（金瓜子，/100 = 电池）；
+    // 电池红包的“单份电池数”只是平均值，实际到账金额以通知为准
+    const notifiedPrice = Number(award?.price) || 0;
+    const unitValue = notifiedPrice > 0
+      ? notifiedPrice / 100
+      : (giftId ? getGiftPrice(giftId) : 0) || (Number(meta.prizeValue) || 0);
     await appendPrizeRecord(platform, session, {
       id: `red:${Number(data?.id) || 0}:${session.mid}:${Number(w?.giftId) || 0}`,
       kind: "red_pocket",
@@ -663,7 +709,8 @@ async function recordRedPocketWin(
       roomName: meta.uname,
       anchorUid: meta.anchorUid,
       prizeName: String(award?.giftName ?? "红包奖品"),
-      prizeNum: 1,
+      prizeNum: giftNum,
+      prizeValue: unitValue * giftNum,
       prizeImage: String(award?.giftPic ?? ""),
       wonAt: Date.now(),
       redLotId: Number(data?.id) || undefined,

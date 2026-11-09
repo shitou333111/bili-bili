@@ -149,7 +149,8 @@ async function fetchList(
     }
     return { list: resp.data.list, guard };
   } catch (err) {
-    console.error("[GiftLocalStore] 从B站获取礼物列表失败:", err);
+    // 网络波动属于可恢复情况，降级为 warn，避免开发环境误报为错误
+    console.warn("[GiftLocalStore] 从B站获取礼物列表失败:", err);
     return { list: null, guard: null };
   }
 }
@@ -176,7 +177,8 @@ async function fetchEffects(platform: Platform): Promise<Record<number, GiftEffe
     }
     return map;
   } catch (err) {
-    console.error("[GiftLocalStore] 从B站获取特效列表失败:", err);
+    // 特效列表拉取失败不影响礼物基础数据，降级为 warn 并使用本地缓存
+    console.warn("[GiftLocalStore] 从B站获取特效列表失败:", err);
     return null;
   }
 }
@@ -190,7 +192,7 @@ async function fetchRoomList(platform: Platform): Promise<RoomGiftListData | nul
     if (resp.code !== 0 || !resp.data?.gift_data?.room_gift_list) return null;
     return resp.data.gift_data;
   } catch (err) {
-    console.error("[GiftLocalStore] 从B站获取直播间礼物面板失败:", err);
+    console.warn("[GiftLocalStore] 从B站获取直播间礼物面板失败:", err);
     return null;
   }
 }
