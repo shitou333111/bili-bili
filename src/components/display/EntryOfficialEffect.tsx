@@ -209,6 +209,13 @@ export default function EntryOfficialEffect({
     /** 遮罩采样缓冲（复用） */
     const maskCanvas = document.createElement("canvas");
     const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
+    /** alpha 区采样缓冲 / 输出帧缓冲（复用）：旧实现每帧新建 canvas + getContext + getImageData，
+     *  大尺寸动画下每秒产生几十 MB 垃圾，直播姬（CEF）里极易卡顿、甚至让整个浏览器源假死。
+     *  这里只在尺寸变化时重建，逐帧复用同一批缓冲。 */
+    const alphaCanvas = document.createElement("canvas");
+    let alphaCtx: CanvasRenderingContext2D | null = null;
+    const frameCanvas = document.createElement("canvas");
+    let frameCtx: CanvasRenderingContext2D | null = null;
 
     let ended = false;
     let raf: number | null = null;
@@ -445,32 +452,54 @@ export default function EntryOfficialEffect({
           onMeasureRef.current?.(outW);
         }
 
-        // 1. 绘制 RGB 画面区（2 倍超采样 → 缩到 outW×outH）
-        ctx.clearRect(0, 0, outW, outH);
-        ctx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
-
-        // 2. 取 alpha 区 R 通道写 alpha（透明区尺寸即输出尺寸，逐像素同 GiftEffect）
+        // 2. 取 alpha 区 R 通道写 alpha（透明区尺寸即输出尺寸，逐像素同 GiftEffect）。
+        //    RGB 也先画进离屏帧缓冲：主画布（上屏）不做 getImageData，避免 GPU 回读同步；
+        //    所有缓冲只在尺寸变化时重建，逐帧零新建。
+        let composed = false;
         try {
-          const alphaCanvas = document.createElement("canvas");
-          alphaCanvas.width = aw;
-          alphaCanvas.height = ah;
-          const aCtx = alphaCanvas.getContext("2d", { willReadFrequently: true });
-          if (aCtx) {
-            aCtx.drawImage(video, ax, ay, aw, ah, 0, 0, aw, ah);
-            const alphaData = aCtx.getImageData(0, 0, aw, ah);
-            const frameData = ctx.getImageData(0, 0, outW, outH);
+          if (!alphaCtx || alphaCanvas.width !== aw || alphaCanvas.height !== ah) {
+            alphaCanvas.width = aw;
+            alphaCanvas.height = ah;
+            alphaCtx = alphaCanvas.getContext("2d", { willReadFrequently: true });
+          }
+          if (frameCanvas.width !== outW || frameCanvas.height !== outH) {
+            frameCanvas.width = outW;
+            frameCanvas.height = outH;
+            frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
+          }
+          if (alphaCtx && frameCtx) {
+            alphaCtx.clearRect(0, 0, aw, ah);
+            alphaCtx.drawImage(video, ax, ay, aw, ah, 0, 0, aw, ah);
+            const alphaData = alphaCtx.getImageData(0, 0, aw, ah);
+            frameCtx.clearRect(0, 0, outW, outH);
+            frameCtx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
+            const frameData = frameCtx.getImageData(0, 0, outW, outH);
+            const ad = alphaData.data;
+            const fd = frameData.data;
+            // 最近的 alpha 行/列下标预先算好，内层循环只做查表
+            const rowMap = new Int32Array(outH);
+            for (let y = 0; y < outH; y++) rowMap[y] = Math.min(ah - 1, Math.floor((y / outH) * ah)) * aw;
+            const colMap = new Int32Array(outW);
+            for (let x = 0; x < outW; x++) colMap[x] = Math.min(aw - 1, Math.floor((x / outW) * aw)) * 4;
             for (let y = 0; y < outH; y++) {
-              for (let x = 0; x < outW; x++) {
-                const srcX = Math.min(aw - 1, Math.floor((x / outW) * aw));
-                const srcY = Math.min(ah - 1, Math.floor((y / outH) * ah));
-                const alpha = alphaData.data[(srcY * aw + srcX) * 4];
-                frameData.data[(y * outW + x) * 4 + 3] = alpha;
+              const rowBase = rowMap[y];
+              let idx = y * outW * 4 + 3;
+              for (let x = 0; x < outW; x++, idx += 4) {
+                fd[idx] = ad[rowBase + colMap[x]];
               }
             }
-            ctx.putImageData(frameData, 0, 0);
+            frameCtx.putImageData(frameData, 0, 0);
+            ctx.clearRect(0, 0, outW, outH);
+            ctx.drawImage(frameCanvas, 0, 0);
+            composed = true;
           }
         } catch {
           /* 跨域读像素失败：保持 RGB 原样绘制（掩膜与合成退化） */
+        }
+        // 1'. 合成失败（跨域污染等）时直接铺 RGB，至少画面正确
+        if (!composed) {
+          ctx.clearRect(0, 0, outW, outH);
+          ctx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
         }
 
         // 3. 模板层（头像/昵称）：帧号取 0 基视频帧序号，对应 JSON frame[].i

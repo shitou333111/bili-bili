@@ -1673,6 +1673,25 @@ class DisplayDanmakuService {
         } else {
           const video = resolveAnimeVideo(animeCfg, config.screenOrientation);
           const seg = resolveAnimeSegment(animeCfg, config.screenOrientation);
+          // 头像兜底：入场消息可能不带 face，名单里也可能是当年查询失败时存下的空 face。
+          // 缺头像时按 uid 查一次并回写名单（下次直接命中，不再退化首字母）。
+          // 必须 forceRefresh：tools-client 会把查询失败的结果（{ face: "" }）缓存进内存，
+          // 普通查询永远返回空 → 这是"之前修过但仍显示首字母"的另一成因。
+          // 注意用 tools-client 的 fetchUserInfo（纯 HTTP，可进客户端包）而不是 gift-api——
+          // gift-api 依赖 user-data（fs），danmaku 会被客户端组件引用，静态引入会导致构建失败。
+          let face = user.face || animeCfg.face || "";
+          if (!face) {
+            try {
+              const hit = (await fetchUserInfo(await getPlatform(), [uid], true)).data?.[uid];
+              if (hit?.face) {
+                face = hit.face;
+                animeCfg.face = hit.face;
+                needSave = true;
+              }
+            } catch {
+              // 查询失败保持空，不影响动画本身
+            }
+          }
           this.pushDebug("entry", "anime", {
             uid,
             uname: user.uname || "",
@@ -1684,7 +1703,7 @@ class DisplayDanmakuService {
             type: "anime",
             // 入场消息有时不带 face（或为空），回退到名单里配置时查询到的头像，
             // 避免结尾头像退化成首字母
-            user: { uid, uname: user.uname || "", face: user.face || animeCfg.face || "" },
+            user: { uid, uname: user.uname || "", face },
             videoSrc: toDisplayVideoSrc(video),
             startSec: seg.startSec,
             endSec: seg.endSec,

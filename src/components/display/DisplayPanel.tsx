@@ -13,6 +13,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -1359,9 +1360,19 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       alive = false;
     };
   }, []);
+  // 有效入场样式：config.entryStyle 若指向已被删除的官方动画（或官方列表尚未加载到），
+  // 回退「粒子聚散」，保证按钮组始终有默认选中项（画布对未知样式同样按粒子渲染）
+  const activeEntryStyle = useMemo(
+    () =>
+      config.entryStyle === "particle" ||
+      officialEntryStyles.some((s) => s.id === config.entryStyle)
+        ? config.entryStyle
+        : "particle",
+    [config.entryStyle, officialEntryStyles],
+  );
   const selectEntryStyle = useCallback(
     (id: string) => {
-      if (id === config.entryStyle) return;
+      if (id === activeEntryStyle) return;
       // 官方向：首次选择时后台下载视频 + JSON 到本地（之后所有进场用户复用同一份，不再走网络）
       const style = officialEntryStyles.find((s) => s.id === id);
       if (style) void resolveEntryStyleAssets(style);
@@ -1369,7 +1380,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
         void displayDanmaku.broadcastEntryStyle(next.entryStyle);
       });
     },
-    [config.entryStyle, officialEntryStyles, update],
+    [activeEntryStyle, officialEntryStyles, update],
   );
   // 官方动画预览弹窗：预览项 + 解析后的播放资源（null=资源准备中）
   const [entryPreview, setEntryPreview] = useState<OfficialEntryStyle | null>(null);
@@ -1404,18 +1415,18 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
   }, [entryPreview]);
   /** 单选组后按钮：粒子聚散 → 打开「设置样式」；官方动画 → 打开「设置样本」 */
   const onEntryAction = useCallback(() => {
-    if (config.entryStyle === "particle") {
+    if (activeEntryStyle === "particle") {
       openStyleModal();
       return;
     }
-    const s = officialEntryStyles.find((x) => x.id === config.entryStyle);
+    const s = officialEntryStyles.find((x) => x.id === activeEntryStyle);
     if (s) {
       // 该动画已有独立样本则读取，否则用默认样本
       setSampleDraft({ ...(config.entrySamples[s.id] ?? DEFAULT_ENTRY_SAMPLE) });
       setSampleTarget("prefix");
       setEntryPreview(s);
     }
-  }, [config.entryStyle, config.entrySamples, officialEntryStyles, openStyleModal]);
+  }, [activeEntryStyle, config.entrySamples, officialEntryStyles, openStyleModal]);
 
   // 点击视频文件名：解析当前朝向实际使用的视频路径，探测时长；>30s 才打开设置模态框
   const openSegmentModal = useCallback(
@@ -1730,7 +1741,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 style={{ cursor: "pointer" }}
               >
                 <span>{manualOpen ? "▼" : "▶"}</span>
-                <span>如果一键添加失败，请按照下方指示手动添加</span>
+                <span>如果一键添加失败，请展开本行指示，手动添加</span>
               </button>
               {manualOpen && (
                 <>
@@ -2153,10 +2164,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               <button
                 type="button"
                 role="radio"
-                aria-checked={config.entryStyle === "particle"}
+                aria-checked={activeEntryStyle === "particle"}
                 onClick={() => selectEntryStyle("particle")}
                 className={`cursor-pointer rounded-full px-2.5 py-1 text-xs transition ${
-                  config.entryStyle === "particle"
+                  activeEntryStyle === "particle"
                     ? "bg-blue-600 text-white shadow"
                     : "text-black/55 hover:bg-white/80"
                 }`}
@@ -2168,11 +2179,11 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   key={s.id}
                   type="button"
                   role="radio"
-                  aria-checked={config.entryStyle === s.id}
+                  aria-checked={activeEntryStyle === s.id}
                   onClick={() => selectEntryStyle(s.id)}
                   title={s.name}
                   className={`max-w-40 cursor-pointer truncate rounded-full px-2.5 py-1 text-xs transition ${
-                    config.entryStyle === s.id
+                    activeEntryStyle === s.id
                       ? "bg-blue-600 text-white shadow"
                       : "text-black/55 hover:bg-white/80"
                   }`}
@@ -2186,7 +2197,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               type="button"
               onClick={onEntryAction}
               title={
-                config.entryStyle === "particle"
+                activeEntryStyle === "particle"
                   ? "设置粒子聚散方式与配色"
                   : "设置官方入场动画的昵称样本"
               }

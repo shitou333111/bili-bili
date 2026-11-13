@@ -942,7 +942,12 @@ html.ios-web .bottom-dock {
   border: var(--pill-border-w) solid transparent;
   border-radius: 9999px;
   background: transparent;
-  color: #000;
+  /* 白色文字 + 较窄的黑色描边：直播画面明暗/杂色不定，纯黑字会糊进背景，
+     纯白字在高亮处又会被"吃掉"，描边让两种背景都能分辨。
+     描边宽度 1.5u（≈字号的 4.5%），窄描边但足够压住背景。 */
+  color: #fff;
+  -webkit-text-stroke: calc(1.5 * var(--u)) #000;
+  paint-order: stroke fill;
   font-size: calc(33 * var(--u));
   font-weight: 900;
   line-height: 1.15;

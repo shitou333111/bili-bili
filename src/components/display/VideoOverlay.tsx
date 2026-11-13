@@ -62,10 +62,15 @@ import {
 } from "@/lib/display/types";
 import { srcWithFragment } from "@/lib/display/video";
 import { PortalFX } from "@/lib/portal/portal";
+import { serverFetch } from "@/lib/server-api";
 import VolumeIcon from "@/components/VolumeIcon";
 
 /** 播放片段结束检测容差（秒）：timeupdate 约 4Hz，留出一次触发间隔的余量 */
 const END_EPSILON = 0.12;
+/** 结尾头像昵称（渐显渐隐/传送门/彩虹圈）提前量（秒）：视频结束前就开始，
+ *  与视频自身 1s 渐隐重叠，避免"视频播完才突然出现"的割裂感。
+ *  黑幕闭合不走这个提前量——它的闭合动画本就在结束点恰好闭合。 */
+const ENDING_CUE_SEC = 1;
 /** 闭合起点提前量（秒）：抵消 timeupdate 采样间隔，保证闭合动画尽早启动 */
 const CLOSE_LEAD = 0.05;
 /** 头像+昵称的保持时长（ms）：所有结尾方式共用，随后整体淡出 */
@@ -157,38 +162,105 @@ function normalizeFaceUrl(url: string): string {
  *  避免整段动画结尾都退化成首字母头像。 */
 const AVATAR_RETRY = 2;
 
+/** uid → 头像地址（只缓存成功结果）：同一用户反复触发动画时不重复查询 */
+const faceByUidCache = new Map<number, string>();
+
+/** 同 URL 重试会命中浏览器对「失败响应」的缓存（图片 404/超时也会被记成一次失败），
+ *  追加时间戳参数强制发起新请求，才能真正穿透缓存拿到头像。 */
+function cacheBust(url: string, n: number): string {
+  return `${url}${url.includes("?") ? "&" : "?"}_r=${n}`;
+}
+
+/** 按 uid 补查头像（服务端 user-info，带 forceRefresh）。
+ *  注意必须 refresh=1：服务端 getUserInfoByUid 会把查询失败的 { face: "" } 缓存进内存，
+ *  不强制刷新就永远返回空 → 只靠"重试同一个坏地址"是修不好的。 */
+async function fetchFaceByUid(uid: number): Promise<string> {
+  if (!uid) return "";
+  const hit = faceByUidCache.get(uid);
+  if (hit) return hit;
+  try {
+    const res = await serverFetch<{ data?: Record<number, { name?: string; face?: string }> }>(
+      `/api/tools/user-info?uids=${uid}&refresh=1`,
+    );
+    const face = normalizeFaceUrl(res?.data?.[uid]?.face ?? "");
+    if (face) faceByUidCache.set(uid, face);
+    return face;
+  } catch {
+    /* 网络/服务不可用：保持空，下次动画再试 */
+    return "";
+  }
+}
+
 /** 头像：face 缺失/加载失败时回退为昵称首字渐变圆（与 EntryBadge 的 Avatar 同视觉）。
  *  className/style 可覆盖：传送门模式改尺寸/位置/clip-path，渐显渐隐模式加绿边圆框。 */
 function AnimeAvatar({
   face,
+  uid,
   uname,
   className,
   style,
 }: {
   face: string;
+  /** 进场用户 uid：face 为空或加载失败时按 uid 补查（名单里可能存着历史查询失败的空值） */
+  uid?: number;
   uname: string;
   className?: string;
   style?: CSSProperties;
 }) {
-  const src = normalizeFaceUrl(face);
+  const [src, setSrc] = useState(() => normalizeFaceUrl(face));
   const [attempt, setAttempt] = useState(0);
-  const [failed, setFailed] = useState(!src);
+  const [failed, setFailed] = useState(!normalizeFaceUrl(face));
+  // 按 uid 补查在本次挂载内只做一次（避免失败后无限重查）
+  const lookedUpRef = useRef(false);
   // 注：调用处用 key={face} 挂载，face 变化时整组件重挂载，状态自然复位
+
+  // face 为空（或名单里是 noface/非法地址）→ 挂载即按 uid 补查一次
+  useEffect(() => {
+    if (src || !uid || lookedUpRef.current) return;
+    lookedUpRef.current = true;
+    let alive = true;
+    void fetchFaceByUid(uid).then((f) => {
+      if (!alive || !f) return;
+      setSrc(f);
+      setAttempt(0);
+      setFailed(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [src, uid]);
+
+  const handleError = () => {
+    if (attempt < AVATAR_RETRY) {
+      // 换 key + 加时间戳参数重新挂载 <img>，穿透"失败响应缓存"重新请求
+      setTimeout(() => setAttempt((n) => n + 1), 300);
+      return;
+    }
+    // 重试仍失败：按 uid 补查一次（换新地址），拿不到才退回首字母
+    if (!lookedUpRef.current && uid) {
+      lookedUpRef.current = true;
+      void fetchFaceByUid(uid).then((f) => {
+        if (!f || f === src) {
+          setFailed(true);
+          return;
+        }
+        setSrc(f);
+        setAttempt(0);
+        setFailed(false);
+      });
+      return;
+    }
+    setFailed(true);
+  };
+
   return (
     <div className={className ? `anime-avatar ${className}` : "anime-avatar"} style={style}>
       {!failed && src ? (
         <img
-          key={attempt}
-          src={src}
+          key={`${src}|${attempt}`}
+          src={attempt > 0 ? cacheBust(src, attempt) : src}
           alt=""
-          onError={() => {
-            if (attempt < AVATAR_RETRY) {
-              // 换 key 重新挂载 <img>，让浏览器重新发起一次请求
-              setTimeout(() => setAttempt((n) => n + 1), 300);
-            } else {
-              setFailed(true);
-            }
-          }}
+          onError={handleError}
         />
       ) : (
         (uname || "?").slice(0, 1)
@@ -763,7 +835,10 @@ export default function VideoOverlay({
                 }
                 // 兜底结束检测：媒体片段在部分内核下暂停而不派发 ended，
                 // currentTime 到达结束点附近时同样进入收尾（保持1s/淡出1s/释放）
-                if (el.currentTime >= end - END_EPSILON) {
+                // - 黑幕闭合：闭合动画本来就在结束点恰好闭合，保持到结束点再收尾
+                // - 头像昵称/传送门/彩虹圈：提前 ENDING_CUE_SEC 开始，与视频渐隐重叠
+                const cueSec = endingMode === "curtain" ? END_EPSILON : ENDING_CUE_SEC;
+                if (el.currentTime >= end - cueSec) {
                   handleEnd();
                 }
               }}
@@ -789,7 +864,7 @@ export default function VideoOverlay({
                 className="anime-content"
                 style={{ maskImage: contentMask, WebkitMaskImage: contentMask }}
               >
-                <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
+                <AnimeAvatar key={anime.user.face} face={anime.user.face} uid={anime.user.uid} uname={anime.user.uname} />
               </div>
             </>
           )}
@@ -801,6 +876,7 @@ export default function VideoOverlay({
               <AnimeAvatar
                 key={anime.user.face}
                 face={anime.user.face}
+                uid={anime.user.uid}
                 uname={anime.user.uname}
                 style={{
                   width: `calc(76 * var(--u))`,
@@ -838,7 +914,7 @@ export default function VideoOverlay({
               <div className="anime-rainbow-halo" aria-hidden="true">
                 <div className="anime-rainbow-band" />
               </div>
-              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
+              <AnimeAvatar key={anime.user.face} face={anime.user.face} uid={anime.user.uid} uname={anime.user.uname} />
               <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
                 {anime.user.uname}
               </div>
@@ -861,7 +937,7 @@ export default function VideoOverlay({
                   <div className="anime-rainbow-band" />
                 </div>
               </div>
-              <AnimeAvatar key={anime.user.face} face={anime.user.face} uname={anime.user.uname} />
+              <AnimeAvatar key={anime.user.face} face={anime.user.face} uid={anime.user.uid} uname={anime.user.uname} />
               <div className="anime-name-pill" style={{ top: `calc(50% + 10 * var(--u))`, ...namePillStyle }}>
                 {anime.user.uname}
               </div>

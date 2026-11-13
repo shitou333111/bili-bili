@@ -16,6 +16,61 @@
 import { useEffect } from "react";
 import DisplayCanvas from "@/components/display/DisplayCanvas";
 
+/**
+ * 自愈看门狗（模块级启动，不依赖 React 生命周期）。
+ *
+ * 背景：直播姬/浏览器源偶尔会「整体失效」——画面停在某一帧不动，跑马灯/特效全不刷新，
+ * 隐藏再显示源也没用，只能删掉源重新添加。这类状态通常是页面渲染主循环（rAF）已经停了
+ * 或 React 树被异常卸载（子组件 render 抛错会让整棵树卸载，且没有任何日志），此时
+ * 页面自身的定时器还活着，但 React 的 effect 已全部清理——所以看门狗必须跑在 React 之外，
+ * 才能在「整棵树已死」的情况下把页面重载回来。
+ *
+ * 判定：页面可见（document.visibilityState === "visible"，源被隐藏时不误判）且连续
+ * STALL_MS 没有 rAF 心跳 → 判定渲染主循环卡死 → location.reload()。
+ * 60s 内最多重载一次（sessionStorage 记录），避免极端情况下反复刷新闪烁。
+ */
+function startDisplayWatchdog() {
+  const w = window as unknown as { __displayWatchdog?: boolean };
+  if (w.__displayWatchdog) return;
+  w.__displayWatchdog = true;
+
+  const STALL_MS = 12000; // 连续停帧判定阈值：正常 rAF 间隔 16ms，12s 已是彻底的假死
+  const CHECK_MS = 4000;
+  const RELOAD_GAP_MS = 60000;
+
+  let lastBeat = performance.now();
+  const beat = (now: number) => {
+    lastBeat = now;
+    requestAnimationFrame(beat);
+  };
+  requestAnimationFrame(beat);
+
+  // 源被隐藏时 rAF 本来就会停：恢复可见时重置基准，避免把"隐藏期"误判成卡死
+  document.addEventListener("visibilitychange", () => {
+    lastBeat = performance.now();
+  });
+
+  setInterval(() => {
+    if (document.visibilityState !== "visible") {
+      lastBeat = performance.now();
+      return;
+    }
+    const gap = performance.now() - lastBeat;
+    if (gap < STALL_MS) return;
+    try {
+      const lastReload = Number(window.sessionStorage.getItem("__displayWatchdogReload") || 0);
+      if (lastReload && Date.now() - lastReload < RELOAD_GAP_MS) return;
+      window.sessionStorage.setItem("__displayWatchdogReload", String(Date.now()));
+    } catch {
+      /* 隐私模式禁用 storage：忽略，仍执行一次重载 */
+    }
+    console.warn(`[展示] 看门狗：渲染主循环已停帧 ${Math.round(gap)}ms，自动重载页面自愈`);
+    window.location.reload();
+  }, CHECK_MS);
+}
+
+if (typeof window !== "undefined") startDisplayWatchdog();
+
 export default function DisplayPage() {
   // 调试辅助：把本页面（浏览器源画布）的 console 日志转发到主进程（经 WS）。
   // 逐条高频日志易丢，这里内存缓冲 + 定时批量 flush，保证阶段性日志零丢失地送达。
