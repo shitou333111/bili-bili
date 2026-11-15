@@ -69,3 +69,4 @@ TRAE dialog/
 next-env.d.ts
 
 
+deploy/nginx.conf.example

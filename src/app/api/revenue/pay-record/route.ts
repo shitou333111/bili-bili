@@ -228,9 +228,10 @@ export async function GET(request: Request) {
       }
     } catch {}
 
-    // 无缓存数据可降级，返回需要重新登录
+    // 无缓存可降级：这不是凭证问题（凭证已在上面校验过），不能回 needs-relogin 把用户踢下线，
+    // 返回 -1 让前端保留现状（大账号拉取偶发失败时还会自动重试）
     return NextResponse.json<ApiResponse<null>>(
-      { code: 0, message: "needs-relogin", data: null },
+      { code: -1, message: err instanceof Error ? err.message : "获取消费记录失败", data: null },
       { status: 200 },
     );
   } finally {

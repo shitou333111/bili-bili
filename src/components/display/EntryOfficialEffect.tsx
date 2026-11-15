@@ -209,13 +209,10 @@ export default function EntryOfficialEffect({
     /** 遮罩采样缓冲（复用） */
     const maskCanvas = document.createElement("canvas");
     const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
-    /** alpha 区采样缓冲 / 输出帧缓冲（复用）：旧实现每帧新建 canvas + getContext + getImageData，
-     *  大尺寸动画下每秒产生几十 MB 垃圾，直播姬（CEF）里极易卡顿、甚至让整个浏览器源假死。
-     *  这里只在尺寸变化时重建，逐帧复用同一批缓冲。 */
+    /** alpha 区采样缓冲（复用）：只读"透明通道小图"（如 360x640，几百 KB），
+     *  避免每帧新建 canvas（这是直播姬 CEF 里卡顿/浏览器源假死的诱因之一）。 */
     const alphaCanvas = document.createElement("canvas");
     let alphaCtx: CanvasRenderingContext2D | null = null;
-    const frameCanvas = document.createElement("canvas");
-    let frameCtx: CanvasRenderingContext2D | null = null;
 
     let ended = false;
     let raf: number | null = null;
@@ -452,33 +449,32 @@ export default function EntryOfficialEffect({
           onMeasureRef.current?.(outW);
         }
 
-        // 2. 取 alpha 区 R 通道写 alpha（透明区尺寸即输出尺寸，逐像素同 GiftEffect）。
-        //    RGB 也先画进离屏帧缓冲：主画布（上屏）不做 getImageData，避免 GPU 回读同步；
-        //    所有缓冲只在尺寸变化时重建，逐帧零新建。
-        let composed = false;
+        // 1. 绘制 RGB 画面区（2 倍超采样 → 缩到 outW×outH）
+        //    必须直接画到主画布：曾经把 RGB 先画进 willReadFrequently 的离屏 canvas 再贴回，
+        //    直播姬（CEF）里视频帧拷进软件 canvas 会得到空帧 → 只剩昵称模板层、视频特效整段不见。
+        ctx.clearRect(0, 0, outW, outH);
+        ctx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
+
+        // 2. 取 alpha 区 R 通道写 alpha（逐像素，同 GiftEffect）
         try {
           if (!alphaCtx || alphaCanvas.width !== aw || alphaCanvas.height !== ah) {
             alphaCanvas.width = aw;
             alphaCanvas.height = ah;
             alphaCtx = alphaCanvas.getContext("2d", { willReadFrequently: true });
           }
-          if (frameCanvas.width !== outW || frameCanvas.height !== outH) {
-            frameCanvas.width = outW;
-            frameCanvas.height = outH;
-            frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
-          }
-          if (alphaCtx && frameCtx) {
+          if (alphaCtx) {
             alphaCtx.clearRect(0, 0, aw, ah);
             alphaCtx.drawImage(video, ax, ay, aw, ah, 0, 0, aw, ah);
-            const alphaData = alphaCtx.getImageData(0, 0, aw, ah);
-            frameCtx.clearRect(0, 0, outW, outH);
-            frameCtx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
-            const frameData = frameCtx.getImageData(0, 0, outW, outH);
-            const ad = alphaData.data;
+            const ad = alphaCtx.getImageData(0, 0, aw, ah).data;
+            const frameData = ctx.getImageData(0, 0, outW, outH);
             const fd = frameData.data;
-            // 最近的 alpha 行/列下标预先算好，内层循环只做查表
+            // 最近邻的 alpha 行/列下标预先算好，内层循环只做查表（不再每像素两次浮点除法）。
+            // 注意 ad 是 RGBA 四通道数组：行首偏移必须是 row * aw * 4（漏乘 4 会让采样整体上移/错位，
+            // 取到的 alpha 几乎全为 0 → RGB 画面被整段抹透明，只剩模板层的昵称/头像）。
             const rowMap = new Int32Array(outH);
-            for (let y = 0; y < outH; y++) rowMap[y] = Math.min(ah - 1, Math.floor((y / outH) * ah)) * aw;
+            for (let y = 0; y < outH; y++) {
+              rowMap[y] = Math.min(ah - 1, Math.floor((y / outH) * ah)) * aw * 4;
+            }
             const colMap = new Int32Array(outW);
             for (let x = 0; x < outW; x++) colMap[x] = Math.min(aw - 1, Math.floor((x / outW) * aw)) * 4;
             for (let y = 0; y < outH; y++) {
@@ -488,18 +484,10 @@ export default function EntryOfficialEffect({
                 fd[idx] = ad[rowBase + colMap[x]];
               }
             }
-            frameCtx.putImageData(frameData, 0, 0);
-            ctx.clearRect(0, 0, outW, outH);
-            ctx.drawImage(frameCanvas, 0, 0);
-            composed = true;
+            ctx.putImageData(frameData, 0, 0);
           }
         } catch {
           /* 跨域读像素失败：保持 RGB 原样绘制（掩膜与合成退化） */
-        }
-        // 1'. 合成失败（跨域污染等）时直接铺 RGB，至少画面正确
-        if (!composed) {
-          ctx.clearRect(0, 0, outW, outH);
-          ctx.drawImage(video, rx, ry, rw, rh, 0, 0, outW, outH);
         }
 
         // 3. 模板层（头像/昵称）：帧号取 0 基视频帧序号，对应 JSON frame[].i

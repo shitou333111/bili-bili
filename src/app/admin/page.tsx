@@ -484,6 +484,9 @@ export default function AdminPage() {
   // 全局访问开关：disabled=true 时切断所有客户端对 /api/* 的访问（放行 /api/admin/*），用于出 BUG 时紧急止损
   const [globalSwitchDisabled, setGlobalSwitchDisabled] = useState(false);
   const [globalSwitchToggling, setGlobalSwitchToggling] = useState(false);
+  // 网页端开关：webDisabled=true 时浏览器访问网页端只显示「请下载客户端」提示页（客户端不受影响）
+  const [webSwitchDisabled, setWebSwitchDisabled] = useState(false);
+  const [webSwitchToggling, setWebSwitchToggling] = useState(false);
   // 主播信息查询：输入 UID，一次并行调用直播间状态 + 昵称两个公开接口，整合去重后统一展示
   const [anchorUid, setAnchorUid] = useState("");
   const [anchorQuerying, setAnchorQuerying] = useState(false);
@@ -842,7 +845,10 @@ export default function AdminPage() {
       try {
         const res = await adminFetch(serverApiUrl("/api/admin/switch"));
         const data = await res.json();
-        if (data.code === 0) setGlobalSwitchDisabled(data.data?.disabled === true);
+        if (data.code === 0) {
+          setGlobalSwitchDisabled(data.data?.disabled === true);
+          setWebSwitchDisabled(data.data?.webDisabled === true);
+        }
       } catch { /* 全局开关读取失败不影响其他模块 */ }
     })();
   }, [adminLoggedIn]);
@@ -1124,6 +1130,32 @@ export default function AdminPage() {
       window.alert("网络错误，操作失败");
     } finally {
       setGlobalSwitchToggling(false);
+    }
+  };
+
+  /**
+   * 切换网页端开关：webDisabled=true 时浏览器打开网页端只显示「请下载客户端」提示页。
+   * 客户端加载本地页面，不经过服务器文档请求，因此不受影响。
+   */
+  const toggleWebSwitch = async (webDisabled: boolean) => {
+    setWebSwitchToggling(true);
+    try {
+      const res = await adminFetch(serverApiUrl("/api/admin/switch"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ webDisabled }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        setWebSwitchDisabled(data.data?.webDisabled === true);
+        if (data.data?.disabled === true) setGlobalSwitchDisabled(true);
+      } else {
+        window.alert(data.message || "操作失败");
+      }
+    } catch {
+      window.alert("网络错误，操作失败");
+    } finally {
+      setWebSwitchToggling(false);
     }
   };
 
@@ -3759,33 +3791,66 @@ export default function AdminPage() {
 
         {/* 全局访问开关（kill switch）：左侧按钮一键切断/恢复
             「所有客户端对服务器 API 的访问」（放行 /api/admin/*，管理后台始终可用），
-            右侧为状态与文字说明。发布后出 BUG 时的紧急止损保底措施。 */}
+            右侧为状态与文字说明。发布后出 BUG 时的紧急止损保底措施。
+            同一行右侧为网页端开关：关闭后浏览器打开网页端只显示下载客户端提示页。 */}
         <div className="mb-8 rounded-xl border border-black/10 bg-white/80 p-2">
-          <div className="flex items-stretch gap-3">
-            <button
-              type="button"
-              onClick={() => toggleGlobalSwitch(!globalSwitchDisabled)}
-              disabled={globalSwitchToggling}
-              className={`flex-shrink-0 h-16 w-16 rounded-full border text-[11px] leading-tight font-medium transition active:scale-95 disabled:opacity-60 ${
-                globalSwitchDisabled
-                  ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
-                  : "border-black/10 bg-white text-black/70 hover:bg-black/5"
-              }`}
-            >
-              {globalSwitchToggling ? "处理中…" : globalSwitchDisabled ? "恢复访问" : "切断访问"}
-            </button>
-            <div className="min-w-0 flex-1 flex flex-col justify-center">
-              <div className="flex items-center gap-1.5 text-xs font-medium">
-                全局访问开关
-                <span className={globalSwitchDisabled ? "text-[#e74c3c]" : "text-[#2ecc71]"}>
-                  {globalSwitchDisabled ? "已切断" : "正常"}
-                </span>
+          <div className="flex flex-wrap items-stretch gap-3">
+            <div className="min-w-[220px] flex-1 flex items-stretch gap-3">
+              <button
+                type="button"
+                onClick={() => toggleGlobalSwitch(!globalSwitchDisabled)}
+                disabled={globalSwitchToggling}
+                className={`flex-shrink-0 h-16 w-16 rounded-full border text-[11px] leading-tight font-medium transition active:scale-95 disabled:opacity-60 ${
+                  globalSwitchDisabled
+                    ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
+                    : "border-black/10 bg-white text-black/70 hover:bg-black/5"
+                }`}
+              >
+                {globalSwitchToggling ? "处理中…" : globalSwitchDisabled ? "恢复访问" : "切断访问"}
+              </button>
+              <div className="min-w-0 flex-1 flex flex-col justify-center">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  全局访问开关
+                  <span className={globalSwitchDisabled ? "text-[#e74c3c]" : "text-[#2ecc71]"}>
+                    {globalSwitchDisabled ? "已切断" : "正常"}
+                  </span>
+                </div>
+                <p className="text-[10px] text-black/40 mt-0.5">
+                  {globalSwitchDisabled
+                    ? "所有客户端对服务器 API 的访问已切断（管理后台仍可用）。点击按钮恢复。"
+                    : "切断后所有客户端无法访问服务器 API（管理后台仍可用），用于出 BUG 时紧急止损。"}
+                </p>
               </div>
-              <p className="text-[10px] text-black/40 mt-0.5">
-                {globalSwitchDisabled
-                  ? "所有客户端对服务器 API 的访问已切断（管理后台仍可用）。点击按钮恢复。"
-                  : "切断后所有客户端无法访问服务器 API（管理后台仍可用），用于出 BUG 时紧急止损。"}
-              </p>
+            </div>
+
+            <div className="hidden w-px bg-black/10 sm:block" />
+
+            <div className="min-w-[220px] flex-1 flex items-stretch gap-3">
+              <button
+                type="button"
+                onClick={() => toggleWebSwitch(!webSwitchDisabled)}
+                disabled={webSwitchToggling}
+                className={`flex-shrink-0 h-16 w-16 rounded-full border text-[14px] font-semibold transition active:scale-95 disabled:opacity-60 ${
+                  webSwitchDisabled
+                    ? "border-[#e74c3c]/40 bg-[#e74c3c] text-white hover:brightness-105"
+                    : "border-black/10 bg-white text-black/70 hover:bg-black/5"
+                }`}
+              >
+                {webSwitchToggling ? "处理中…" : "web"}
+              </button>
+              <div className="min-w-0 flex-1 flex flex-col justify-center">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  网页端
+                  <span className={webSwitchDisabled ? "text-[#e74c3c]" : "text-[#2ecc71]"}>
+                    {webSwitchDisabled ? "已关闭" : "开放"}
+                  </span>
+                </div>
+                <p className="text-[10px] text-black/40 mt-0.5">
+                  {webSwitchDisabled
+                    ? "浏览器打开网页端只显示「请下载客户端」提示页，客户端不受影响。点击按钮恢复。"
+                    : "关闭后浏览器打开网页端只显示下载客户端提示页（缓解官方限流），客户端不受影响。"}
+                </p>
+              </div>
             </div>
           </div>
         </div>

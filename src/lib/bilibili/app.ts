@@ -91,6 +91,33 @@ function buildPayRecordUrl(session: AuthSession, nextId?: number) {
   };
 }
 
+const REQUEST_RETRY_COUNT = 3;
+const REQUEST_BACKOFF_MS = 500;
+const RATE_LIMIT_COOLDOWN_MS = 10_000;
+
+/**
+ * 单页请求带重试。
+ * 大账号要连续翻数百页（如 2 万条 ≈ 406 页），结尾任意一页网络抖动/412 限流
+ * 都不应让整批已拉到的数据前功尽弃（表现为消费记录归零）。
+ */
+async function fetchPayRecordPageWithRetry(url: string, cookie: string): Promise<PayRecordResponse> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= REQUEST_RETRY_COUNT; attempt++) {
+    try {
+      return await fetchBilibiliJson<PayRecordResponse>({ url, cookie, mobile: true });
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt < REQUEST_RETRY_COUNT) {
+        const delay = message.includes("412") ? RATE_LIMIT_COOLDOWN_MS : REQUEST_BACKOFF_MS * Math.pow(2, attempt);
+        console.warn(`[PayRecord] 第 ${attempt + 1} 次请求失败，${delay}ms 后重试：${message}`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export async function fetchRealPayRecordSnapshot(
   session: AuthSession,
   _nextId?: number,
@@ -121,11 +148,7 @@ export async function fetchRealPayRecordSnapshot(
     }
 
     const { url, cookie } = buildPayRecordUrl(session, nextId);
-    const response = await fetchBilibiliJson<PayRecordResponse>({
-      url,
-      cookie,
-      mobile: true,
-    });
+    const response = await fetchPayRecordPageWithRetry(url, cookie);
 
     if (response.code !== 0 || !response.data?.list) {
       throw new Error(response.message || "payRecord request failed");

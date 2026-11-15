@@ -155,6 +155,58 @@ server {
         add_header Pragma "no-cache" always;
     }
 
+    # ---- 长耗时 API：消费记录 ----
+    # 注意：下面的 proxy_pass 写的是 http://127.0.0.1:3000（本示例没有定义 upstream）。
+    # 如果你的配置里有 upstream（如 upstream bili_bili_app { server 127.0.0.1:3000; keepalive 32; }），
+    # 请统一换成 proxy_pass http://bili_bili_app; 并加上 proxy_set_header Connection "";
+    # 两者等价，但用 upstream 才能复用连接；不要一个 location 用 upstream、另一个用字面地址。
+    # 大账号消费记录可达 2 万条（≈ 400+ 页），服务端要连续翻几百页才能返回。
+    # nginx 默认 proxy_read_timeout 仅 60s，会把这类请求在"快拉完"时掐断 —— 前端拿到
+    # 504/半截响应后解析失败，表现为"在结尾中断、消费记录显示 0"。这里单独放宽到 15 分钟。
+    location ^~ /api/revenue/pay-record {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+        proxy_buffering off;
+    }
+
+    # ---- 长耗时 API：主播礼物流水（probe / refresh）----
+    # 扫码登录后的首次全量探测（probe=true）与手动刷新（refresh=true）会按月份逐个探测、
+    # 再逐页拉取（每页还会带限流退避），单次响应同样可能长达数分钟；
+    # 前端 dataFetch 已把它当长任务放宽到 15 分钟，nginx 这里必须对齐，
+    # 否则会在 60s 被掐断，表现为"礼物流水只拉到一部分/刷新后数据不全"。
+    location ^~ /api/anchor/gifts {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+        proxy_buffering off;
+    }
+
+    # ---- 长耗时 API：礼物流水回放 ----
+    # 回放单个直播片段时会按时间范围翻页拉取（上限 500 页）并补齐用户信息，
+    # 长直播 + 低门槛阈值时可能超过 60s。
+    location ^~ /api/anchor/gift-replay {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+    }
+
     # ---- 反向代理到 Next.js（pm2 启动的 server.js，监听 127.0.0.1:3000）----
     location / {
         proxy_pass http://127.0.0.1:3000;

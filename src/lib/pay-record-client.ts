@@ -73,9 +73,35 @@ const DEFAULT_APP_SECRET = "560c52ccd288fed045859ed18bffd973";
 // 设 50 即为接口能返回的最大值，总请求数约为 20/页 的 1/2.5。
 const PAGE_SIZE = 50;
 const MAX_PAGES = 1000;
+/** 大账号（数百页）拉取时的落盘间隔：每 N 页把手头记录写盘并记录断点，中断后不必从头再来 */
+const CHECKPOINT_PAGES = 20;
 const REQUEST_RETRY_COUNT = 3;
-const REQUEST_BACKOFF_MS = 500;
-const RATE_LIMIT_COOLDOWN_MS = 30_000;
+/** 网络瞬时失败重试间隔：1s → 2s → 4s（限流加强后，短间隔重试只会更快撞墙） */
+const REQUEST_BACKOFF_MS = 1000;
+/**
+ * 412 限流：账号级封禁（实测同一出口 IP 的其他账号正常，只有被限流的账号持续 412，
+ * 封禁约 18 分钟自动解除，期间继续请求不会延长封禁）。
+ * 冷却 8 分钟 → 15 分钟，最多 2 次；仍失败就先落盘已拉数据，下次刷新从断点续拉。
+ */
+const RATE_LIMIT_RETRY_COUNT = 2;
+const RATE_LIMIT_COOLDOWN_MS = 8 * 60_000;
+const RATE_LIMIT_MAX_COOLDOWN_MS = 15 * 60_000;
+/**
+ * 翻页节流（实测数据，账号 I-2-3，281 页 / 13987 条，从零全量）：
+ * - 200ms/页（旧值，约 5 次/秒）：触发账号级 412 封禁，约 18 分钟自动解除；
+ * - 500ms/页：全量 173s，0 次 412；
+ * - 1000ms/页：全量 316s，0 次 412；
+ * - 1500ms/页：全量 447s，0 次 412。
+ * 取其 1000ms 作为默认值（比验证过的 500ms 再留一倍余量，代价只多 2.5 分钟；
+ * 全量只在首次拉取，慢一点可以接受）。想更快可改回 500。
+ */
+const PAGE_INTERVAL_MS = 500;
+/** 本轮已触发过 412 后，剩余翻页改用更保守的间隔 */
+const PAGE_INTERVAL_AFTER_412_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ==================== 签名函数 ====================
 
@@ -165,39 +191,72 @@ function buildSnapshot(records: PayRecordItem[], month: string): PayRecordSnapsh
 
 // ==================== 主函数 ====================
 
+/** B站 风控/限流业务码：HTTP 200 但 code 非 0，冷却重试即可恢复，不能直接判死整批拉取 */
+const RISK_LIMIT_CODES = new Set([-352, -412, -509, -799]);
+
 /**
  * 带重试的 payRecord 请求。
- * 网络瞬时失败（如 Tauri HTTP 插件连接/TLS 抖动）时指数退避重试；
- * 412 限流时冷却后重试，避免一次性丢弃整个增量拉取。
+ * - 网络瞬时失败（Tauri HTTP 插件连接/TLS 抖动）指数退避，最多 3 次；
+ * - 限流（HTTP 412 或 code -352/-412/-509/-799 风控）是账号级封禁（实测持续约 18 分钟），
+ *   短间隔重试没有意义：长冷却后最多再试 2 次，仍失败就先落盘、下次刷新从断点续拉；
+ * - onRateLimit 让调用方降低后续翻页速率，并把等待状态展示给用户。
  */
 async function fetchPayRecordPageWithRetry(
   platform: Platform,
   url: string,
   cookie: string,
+  onRateLimit?: (message: string) => void,
 ): Promise<PayRecordResponse> {
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= REQUEST_RETRY_COUNT; attempt++) {
+  let networkAttempt = 0;
+  let rateLimitHits = 0;
+
+  const coolDown = async (reason: string): Promise<boolean> => {
+    rateLimitHits++;
+    if (rateLimitHits > RATE_LIMIT_RETRY_COUNT) {
+      onRateLimit?.(`${reason}，已停止本次拉取（已拉到的记录已保存，下次刷新继续）`);
+      return false;
+    }
+    const cooldown = Math.min(
+      RATE_LIMIT_COOLDOWN_MS * Math.pow(2, rateLimitHits - 1),
+      RATE_LIMIT_MAX_COOLDOWN_MS,
+    );
+    console.warn(
+      `[PayRecordClient] ${reason}（第 ${rateLimitHits}/${RATE_LIMIT_RETRY_COUNT} 次），冷却 ${cooldown}ms 后重试`,
+    );
+    onRateLimit?.(`${reason}，等待约 ${Math.round(cooldown / 60_000)} 分钟后自动重试（已拉取的数据不会丢失）`);
+    await sleep(cooldown);
+    return true;
+  };
+
+  for (;;) {
     try {
       const response = await platform.fetchBilibiliJson<PayRecordResponse>({
         url,
         cookie,
         mobile: true,
       });
-      // 已拿到业务响应（无论 code 是否 0），交由调用方处理，不再重试
+      // 风控/限流业务码：冷却重试同一页，而不是把它当业务错误整批丢弃
+      if (RISK_LIMIT_CODES.has(response.code)) {
+        const retry = await coolDown(`触发限流/风控 code=${response.code} ${response.message || ""}`);
+        if (retry) continue;
+      }
+      // 其他情况（含 0 / 未登录 / 真业务错误）交由调用方处理
       return response;
     } catch (err: any) {
       lastErr = err;
-      const isRateLimit = err?.message?.includes("412");
-      if (isRateLimit) {
-        console.warn(`[PayRecordClient] 第 ${attempt + 1} 次请求触发412限流，冷却 ${RATE_LIMIT_COOLDOWN_MS}ms 后重试`);
-        await new Promise((r) => setTimeout(r, RATE_LIMIT_COOLDOWN_MS));
-      } else {
-        const delay = REQUEST_BACKOFF_MS * Math.pow(2, attempt);
-        if (attempt < REQUEST_RETRY_COUNT) {
-          console.warn(`[PayRecordClient] 请求失败，等待 ${delay}ms 后重试 ${attempt + 1}/${REQUEST_RETRY_COUNT + 1}: ${err?.message || err}`);
-          await new Promise((r) => setTimeout(r, delay));
-        }
+      if (err?.message?.includes("412")) {
+        const retry = await coolDown("触发 412 限流");
+        if (retry) continue;
+        break;
       }
+      networkAttempt++;
+      if (networkAttempt > REQUEST_RETRY_COUNT) break;
+      const delay = REQUEST_BACKOFF_MS * Math.pow(2, networkAttempt - 1);
+      console.warn(
+        `[PayRecordClient] 请求失败，等待 ${delay}ms 后重试 ${networkAttempt}/${REQUEST_RETRY_COUNT}: ${err?.message || err}`,
+      );
+      await sleep(delay);
     }
   }
   throw lastErr;
@@ -242,20 +301,25 @@ export async function fetchPayRecords(
   const dataDir = `${await platform.getDataDir()}/uid_${session.mid}`;
   const recordsPath = `${dataDir}/pay-records.json`;
 
-  // 读取已有记录
+  // 读取已有记录 + 上次中断留下的"续拉游标"（pullCursor.nextId）
   let existingRecords: PayRecordItem[] = [];
+  let pendingCursor = 0;
   try {
     if (await platform.exists(recordsPath)) {
       const raw = await platform.readFile(recordsPath);
       const parsed = JSON.parse(raw);
       existingRecords = Array.isArray(parsed) ? parsed : (parsed.records ?? []);
+      if (!Array.isArray(parsed)) pendingCursor = Number(parsed?.pullCursor?.nextId) || 0;
     }
   } catch {
     // 文件不存在或解析失败，从头开始
   }
 
   const existingMaxId = getMaxId(existingRecords);
-  console.log(`[PayRecordClient] 已有 ${existingRecords.length} 条记录，最新id=${existingMaxId}`);
+  console.log(
+    `[PayRecordClient] 已有 ${existingRecords.length} 条记录，最新id=${existingMaxId}` +
+      (pendingCursor > 0 ? `，待续拉游标=${pendingCursor}` : ""),
+  );
 
   // 回溯窗口：活动退款（标记"已退回"）是在原时期的消费记录上原地修改，不是新建记录。
   // 因此增量更新时，首先按原方案确定"上次更新点"（本地最大 id 对应记录），
@@ -277,109 +341,206 @@ export async function fetchPayRecords(
       : { code: 0, message: "empty cached", data: cachedSnapshot };
   }
 
-  try {
-    // 从 B站 获取新数据（增量）
-    const allRecords: PayRecordItem[] = [];
-    let nextId: number | undefined;
-    let month = "";
-    let pageCount = 0;
-    const seenIds = new Set<number>();
+  // 本次已拉到的记录 / 月份 / 断点游标：catch 中也要用（中断时先落盘再降级）
+  const allRecords: PayRecordItem[] = [];
+  let month = "";
+  let resumeCursor = pendingCursor;
+  const seenIds = new Set<number>();
+  let pageCount = 0;
+  /** 翻页间隔（触发 412 后自动加大，两段拉取共用） */
+  let pageInterval = PAGE_INTERVAL_MS;
 
-    do {
-      pageCount++;
-      if (pageCount > MAX_PAGES) {
-        console.log(`[PayRecordClient] 已达到最大页数限制 ${MAX_PAGES}，停止翻页`);
-        break;
-      }
-
-      const url = buildPayRecordUrl(cookie, nextId);
-      const response = await fetchPayRecordPageWithRetry(platform, url, cookie);
-
-      // B站 SESSDATA 失效：返回特殊 code 和 message，让上层（fetchData）调 handleAuthExpired 跳 /login
-      // 不在这里 throw，避免 Promise.all 整体 reject 吃掉 accountsRes 的结果
-      if (response.code === -101 || response.code === 3 || (response.message && response.message.includes("未登录"))) {
-        console.warn(`[PayRecordClient] B站凭证失效（code=${response.code}, msg=${response.message}），需重新登录`);
-        return { code: -101, message: "needs-relogin" };
-      }
-
-      if (response.code !== 0 || !response.data?.list) {
-        throw new Error(response.message || "payRecord request failed");
-      }
-
-      const list = response.data.list;
-      if (list.length === 0) break;
-
-      if (!month) {
-        month = response.data.params?.month || "";
-      }
-
-      let hasNewRecord = false;
-      let reachedCutoff = false;
-      for (const item of list) {
-        // 记录按时间倒序返回（新在前）。已回溯超过 1 周窗口（timestamp 早于截止时间），
-        // 后续只会更旧，无需再拉取，停止翻页。
-        if (cutoffTimestamp > 0 && item.timestamp < cutoffTimestamp) {
-          reachedCutoff = true;
-          break;
-        }
-        if (seenIds.has(item.id)) continue;
-        seenIds.add(item.id);
-        allRecords.push(item);
-        hasNewRecord = true;
-      }
-
-      if (reachedCutoff) {
-        console.log(`[PayRecordClient] 第 ${pageCount} 页已回溯超过 1 周窗口，停止翻页（增量+回溯完成）`);
-        break;
-      }
-
-      if (!hasNewRecord) {
-        console.log(`[PayRecordClient] 第 ${pageCount} 页全部重复，停止翻页`);
-        break;
-      }
-
-      nextId = response.data.params?.next_id;
-      console.log(`[PayRecordClient] 第 ${pageCount} 页: ${list.length} 条, nextId=${nextId}`);
-      onProgress?.({
-        text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
-        current: allRecords.length,
-        total: 0,
-      });
-    } while (nextId);
-
-    // 合并：新记录在前，已有记录在后
-    const mergedRecords = existingMaxId > 0
-      ? [...allRecords, ...existingRecords]
-      : allRecords;
-
-    // 去重
-    const seenIds2 = new Set<number>();
-    const dedupedRecords = mergedRecords.filter((r) => {
-      if (seenIds2.has(r.id)) return false;
-      seenIds2.add(r.id);
+  /** 合并本次拉到的新记录与本地已有记录（新在前、按 id 去重、时间倒序）。 */
+  const mergeFetched = (fresh: PayRecordItem[]): PayRecordItem[] => {
+    const merged = existingMaxId > 0 ? [...fresh, ...existingRecords] : fresh;
+    const seen = new Set<number>();
+    const list = merged.filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
       return true;
     });
+    // 断点续拉会把更早的记录追加在后面，统一按时间倒序保证"新 → 旧"
+    list.sort((a, b) => b.timestamp - a.timestamp);
+    return list;
+  };
 
-    // 保存到本地文件
+  /** 落盘（cursor > 0 = 还有更深处没拉完，下次刷新从这里续拉）。 */
+  const persistRecords = async (list: PayRecordItem[], cursor: number) => {
     await platform.mkdir(dataDir);
-    const totalCoins = dedupedRecords.reduce((sum, r) => {
+    const totalCoins = list.reduce((sum, r) => {
       const coins = Number((r.pay_coin || r.coin).replace(/,/g, "")) || 0;
       return sum + coins;
     }, 0);
-    const fileData = {
-      exportedAt: new Date().toISOString(),
-      totalRecords: dedupedRecords.length,
-      totalCoins,
-      records: dedupedRecords,
+    await platform.writeFile(
+      recordsPath,
+      JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          totalRecords: list.length,
+          totalCoins,
+          records: list,
+          ...(cursor > 0 ? { pullCursor: { nextId: cursor } } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  };
+
+  try {
+    /**
+     * 翻页拉取。
+     * @param startNextId 起始游标（undefined = 从最新记录开始）
+     * @param useCutoff 是否在回溯窗口处停止；续拉历史阶段必须关掉
+     *                  （深处的记录本来就早于窗口，否则一进循环就停，永远补不完）
+     */
+    const fetchPages = async (
+      startNextId: number | undefined,
+      useCutoff: boolean,
+    ): Promise<"ok" | "auth"> => {
+      let nextId: number | undefined = startNextId;
+      let prevNextId: number | undefined;
+      do {
+        pageCount++;
+        if (pageCount > MAX_PAGES) {
+          console.log(`[PayRecordClient] 已达到最大页数限制 ${MAX_PAGES}，停止翻页`);
+          return "ok";
+        }
+
+        // 页间主动降速：几百页连打最容易触发 412，一旦被限流整批拉取就得降级成部分数据
+        if (pageCount > 1 && pageInterval > 0) await sleep(pageInterval);
+
+        const url = buildPayRecordUrl(cookie, nextId);
+        const response = await fetchPayRecordPageWithRetry(platform, url, cookie, (message) => {
+          pageInterval = PAGE_INTERVAL_AFTER_412_MS;
+          onProgress?.({ text: message, current: allRecords.length, total: 0 });
+        });
+
+        // B站 SESSDATA 失效：返回特殊 code 和 message，让上层（fetchData）调 handleAuthExpired 跳 /login
+        // 不在这里 throw，避免 Promise.all 整体 reject 吃掉 accountsRes 的结果
+        if (response.code === -101 || response.code === 3 || (response.message && response.message.includes("未登录"))) {
+          console.warn(`[PayRecordClient] B站凭证失效（code=${response.code}, msg=${response.message}），需重新登录`);
+          return "auth";
+        }
+
+        if (response.code !== 0 || !response.data?.list) {
+          throw new Error(response.message || "payRecord request failed");
+        }
+
+        const list = response.data.list;
+        if (list.length === 0) {
+          resumeCursor = 0;
+          return "ok";
+        }
+
+        if (!month) {
+          month = response.data.params?.month || "";
+        }
+
+        let hasNewRecord = false;
+        let reachedCutoff = false;
+        for (const item of list) {
+          // 记录按时间倒序返回（新在前）。已回溯超过 1 周窗口（timestamp 早于截止时间），
+          // 后续只会更旧，无需再拉取，停止翻页。
+          if (useCutoff && cutoffTimestamp > 0 && item.timestamp < cutoffTimestamp) {
+            reachedCutoff = true;
+            break;
+          }
+          if (seenIds.has(item.id)) continue;
+          seenIds.add(item.id);
+          allRecords.push(item);
+          hasNewRecord = true;
+        }
+
+        const next = response.data.params?.next_id;
+        resumeCursor = next ?? 0;
+
+        // 游标原地打转（B站 偶发返回同一个 next_id）：说明已经翻到尽头，再请求只会重复
+        if (next && next === prevNextId) {
+          console.log(`[PayRecordClient] 第 ${pageCount} 页 next_id 未变化（${next}），已到末尾，停止翻页`);
+          resumeCursor = 0;
+          return "ok";
+        }
+        prevNextId = next;
+
+        if (reachedCutoff) {
+          console.log(`[PayRecordClient] 第 ${pageCount} 页已回溯超过 1 周窗口，停止翻页（增量+回溯完成）`);
+          resumeCursor = 0;
+          return "ok";
+        }
+        if (!next) return "ok";
+        if (!hasNewRecord) {
+          console.log(`[PayRecordClient] 第 ${pageCount} 页全部重复，停止翻页`);
+          resumeCursor = 0;
+          return "ok";
+        }
+
+        console.log(`[PayRecordClient] 第 ${pageCount} 页: ${list.length} 条, nextId=${next}`);
+        onProgress?.({
+          text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
+          current: allRecords.length,
+          total: 0,
+        });
+
+        // 大账号（数百页）：每 20 页落盘一次。中途失败/退出也不必从零重来，界面更不会归零
+        if (pageCount % CHECKPOINT_PAGES === 0) {
+          await persistRecords(mergeFetched(allRecords), resumeCursor);
+        }
+
+        nextId = next;
+      } while (nextId);
+
+      return "ok";
     };
-    await platform.writeFile(recordsPath, JSON.stringify(fileData, null, 2));
 
-    console.log(`[PayRecordClient] 新增 ${allRecords.length} 条，合并后共 ${dedupedRecords.length} 条`);
+    // 第一段：从最新记录开始做增量（带 1 周回溯窗口）
+    if ((await fetchPages(undefined, cutoffTimestamp > 0)) === "auth") {
+      return { code: -101, message: "needs-relogin" };
+    }
 
-    const snapshot = buildSnapshot(dedupedRecords, month);
+    // 第二段：上次在更深处中断过 → 从断点继续把历史补齐（不带窗口限制）
+    if (pendingCursor > 0) {
+      resumeCursor = pendingCursor;
+      console.log(`[PayRecordClient] 从断点 nextId=${pendingCursor} 继续补拉历史记录`);
+      if ((await fetchPages(pendingCursor, false)) === "auth") {
+        return { code: -101, message: "needs-relogin" };
+      }
+    }
+
+    const mergedRecords = mergeFetched(allRecords);
+    await persistRecords(mergedRecords, resumeCursor);
+
+    console.log(
+      `[PayRecordClient] 新增 ${allRecords.length} 条，合并后共 ${mergedRecords.length} 条` +
+        (resumeCursor > 0 ? `（历史仍未拉完，已记录断点 nextId=${resumeCursor}）` : ""),
+    );
+
+    const snapshot = buildSnapshot(
+      mergedRecords,
+      month || new Date().toISOString().slice(0, 7).replace("-", ""),
+    );
     return { code: 0, message: "real snapshot", data: snapshot };
   } catch (err) {
     console.error("[PayRecordClient] 获取数据失败:", err);
+
+    // 中断降级：本次已拉到的记录先落盘并返回，绝不因为尾部失败把整批数据丢掉（大账号 400+ 页尤其可惜）
+    if (allRecords.length > 0) {
+      try {
+        const mergedRecords = mergeFetched(allRecords);
+        await persistRecords(mergedRecords, resumeCursor);
+        const snapshot = buildSnapshot(
+          mergedRecords,
+          month || new Date().toISOString().slice(0, 7).replace("-", ""),
+        );
+        console.warn(
+          `[PayRecordClient] 已中断，先把已拉到的 ${mergedRecords.length} 条落盘返回` +
+            (resumeCursor > 0 ? `，下次从 nextId=${resumeCursor} 续拉` : ""),
+        );
+        return { code: 0, message: "partial snapshot", data: snapshot };
+      } catch (saveErr) {
+        console.error("[PayRecordClient] 中断记录落盘失败:", saveErr);
+      }
+    }
 
     // 降级：返回已有数据
     if (existingRecords.length > 0) {
