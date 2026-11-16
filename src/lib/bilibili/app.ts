@@ -99,7 +99,7 @@ const REQUEST_BACKOFF_MS = 1000;
  * 这里取 1000ms 留一倍余量。全量只在首次拉取，慢一点可以接受（406 页 ≈ 7 分钟，
  * 与 nginx 对 /api/revenue/pay-record 放的 900s 超时匹配）。
  */
-const PAGE_INTERVAL_MS = 500;
+const PAGE_INTERVAL_MS = 1000;
 /** 本轮已触发过 412 后，剩余翻页改用更保守的间隔 */
 const PAGE_INTERVAL_AFTER_412_MS = 3000;
 /**

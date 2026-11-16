@@ -95,7 +95,7 @@ const RATE_LIMIT_MAX_COOLDOWN_MS = 15 * 60_000;
  * 取其 1000ms 作为默认值（比验证过的 500ms 再留一倍余量，代价只多 2.5 分钟；
  * 全量只在首次拉取，慢一点可以接受）。想更快可改回 500。
  */
-const PAGE_INTERVAL_MS = 500;
+const PAGE_INTERVAL_MS = 1000;
 /** 本轮已触发过 412 后，剩余翻页改用更保守的间隔 */
 const PAGE_INTERVAL_AFTER_412_MS = 3000;
 
