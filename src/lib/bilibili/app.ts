@@ -92,27 +92,80 @@ function buildPayRecordUrl(session: AuthSession, nextId?: number) {
 }
 
 const REQUEST_RETRY_COUNT = 3;
-const REQUEST_BACKOFF_MS = 500;
-const RATE_LIMIT_COOLDOWN_MS = 10_000;
+const REQUEST_BACKOFF_MS = 1000;
+/**
+ * 翻页节流（与客户端 src/lib/pay-record-client.ts 保持一致）：
+ * 实测 200ms/页会触发账号级 412 封禁（约 18 分钟自动解除），500ms/页 可安全跑完 281 页，
+ * 这里取 1000ms 留一倍余量。全量只在首次拉取，慢一点可以接受（406 页 ≈ 7 分钟，
+ * 与 nginx 对 /api/revenue/pay-record 放的 900s 超时匹配）。
+ */
+const PAGE_INTERVAL_MS = 500;
+/** 本轮已触发过 412 后，剩余翻页改用更保守的间隔 */
+const PAGE_INTERVAL_AFTER_412_MS = 3000;
+/**
+ * 412 冷却：短冷却（之前 10s × 3 次）在账号级封禁（实测 ~18 分钟）面前毫无意义，
+ * 改成 8 分钟 → 15 分钟，最多 2 次，期间不放弃本次拉取。
+ */
+const RATE_LIMIT_RETRY_COUNT = 2;
+const RATE_LIMIT_COOLDOWN_MS = 8 * 60_000;
+const RATE_LIMIT_MAX_COOLDOWN_MS = 15 * 60_000;
+/** B站 风控/限流业务码：HTTP 200 但 code 非 0，冷却重试同一页即可恢复 */
+const RISK_LIMIT_CODES = new Set([-352, -412, -509, -799]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * 单页请求带重试。
- * 大账号要连续翻数百页（如 2 万条 ≈ 406 页），结尾任意一页网络抖动/412 限流
- * 都不应让整批已拉到的数据前功尽弃（表现为消费记录归零）。
+ * - 网络抖动：1s/2s/4s 指数退避，最多 3 次；
+ * - 412 / 风控业务码：账号级限流，冷却 8~15 分钟后再试（最多 2 次），
+ *   并通过 onRateLimit 让调用方降低后续翻页速率。
+ * 大账号要连续翻数百页（如 2 万条 ≈ 406 页），结尾任意一页失败都不应让整批已拉到的数据前功尽弃。
  */
-async function fetchPayRecordPageWithRetry(url: string, cookie: string): Promise<PayRecordResponse> {
+async function fetchPayRecordPageWithRetry(
+  url: string,
+  cookie: string,
+  onRateLimit?: () => void,
+): Promise<PayRecordResponse> {
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= REQUEST_RETRY_COUNT; attempt++) {
+  let networkAttempt = 0;
+  let rateLimitHits = 0;
+
+  const coolDown = async (reason: string): Promise<boolean> => {
+    rateLimitHits++;
+    onRateLimit?.();
+    if (rateLimitHits > RATE_LIMIT_RETRY_COUNT) return false;
+    const cooldown = Math.min(
+      RATE_LIMIT_COOLDOWN_MS * Math.pow(2, rateLimitHits - 1),
+      RATE_LIMIT_MAX_COOLDOWN_MS,
+    );
+    console.warn(
+      `[PayRecord] ${reason}（第 ${rateLimitHits}/${RATE_LIMIT_RETRY_COUNT} 次），冷却 ${Math.round(cooldown / 1000)}s 后重试`,
+    );
+    await sleep(cooldown);
+    return true;
+  };
+
+  for (;;) {
     try {
-      return await fetchBilibiliJson<PayRecordResponse>({ url, cookie, mobile: true });
+      const response = await fetchBilibiliJson<PayRecordResponse>({ url, cookie, mobile: true });
+      if (RISK_LIMIT_CODES.has(response.code)) {
+        if (await coolDown(`触发限流/风控 code=${response.code} ${response.message || ""}`)) continue;
+      }
+      return response;
     } catch (err) {
       lastErr = err;
       const message = err instanceof Error ? err.message : String(err);
-      if (attempt < REQUEST_RETRY_COUNT) {
-        const delay = message.includes("412") ? RATE_LIMIT_COOLDOWN_MS : REQUEST_BACKOFF_MS * Math.pow(2, attempt);
-        console.warn(`[PayRecord] 第 ${attempt + 1} 次请求失败，${delay}ms 后重试：${message}`);
-        await new Promise((r) => setTimeout(r, delay));
+      if (message.includes("412")) {
+        if (await coolDown("触发 412 限流")) continue;
+        break;
       }
+      networkAttempt++;
+      if (networkAttempt > REQUEST_RETRY_COUNT) break;
+      const delay = REQUEST_BACKOFF_MS * Math.pow(2, networkAttempt - 1);
+      console.warn(`[PayRecord] 请求失败，等待 ${delay}ms 后重试 ${networkAttempt}/${REQUEST_RETRY_COUNT}：${message}`);
+      await sleep(delay);
     }
   }
   throw lastErr;
@@ -136,6 +189,8 @@ export async function fetchRealPayRecordSnapshot(
   let pageCount = 0;
   let actualPageSize = 0; // 首页实际返回条数：作为"每页容量"基准，避免 B站 忽略 page_size 时误判末页
   const seenIds = new Set<number>();
+  /** 本轮是否已触发过限流：触发后剩余翻页降速 */
+  let sawRateLimit = false;
 
   // 自动翻页，直到没有更多记录
   do {
@@ -148,7 +203,9 @@ export async function fetchRealPayRecordSnapshot(
     }
 
     const { url, cookie } = buildPayRecordUrl(session, nextId);
-    const response = await fetchPayRecordPageWithRetry(url, cookie);
+    const response = await fetchPayRecordPageWithRetry(url, cookie, () => {
+      sawRateLimit = true;
+    });
 
     if (response.code !== 0 || !response.data?.list) {
       throw new Error(response.message || "payRecord request failed");
@@ -214,6 +271,10 @@ export async function fetchRealPayRecordSnapshot(
       console.log(`[PayRecord] 本页不足${actualPageSize}条，已到最后一页`);
       break;
     }
+
+    // 页间主动降速：连续数百次请求是触发 412 的主因（见 PAGE_INTERVAL_MS 注释）。
+    // 放在所有 break 判断之后，最后一页无需再等。
+    await sleep(sawRateLimit ? PAGE_INTERVAL_AFTER_412_MS : PAGE_INTERVAL_MS);
   } while (nextId && nextId > 0);
 
   // 按时间戳降序排列（最新在前）
