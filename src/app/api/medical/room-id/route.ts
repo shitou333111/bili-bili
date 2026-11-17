@@ -1,34 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchRoomInfoByUid } from "@/lib/bili-room";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/medical/room-id?mid=<uid>
- * 代理 B站 getRoomInfoOld，返回直播间 roomid。
- * 该接口为公开接口，无需登录凭证。
+ * 返回直播间 roomid / roomStatus。B站主接口对机房 IP 风控 412 时会自动走兜底接口
+ * （见 bili-room.ts），不再把风控失败误报成"查不到房间"。
  */
 export async function GET(request: NextRequest) {
-  const mid = request.nextUrl.searchParams.get("mid");
+  const mid = Number((request.nextUrl.searchParams.get("mid") ?? "").replace(/[^\d]/g, ""));
   if (!mid) {
     return NextResponse.json({ code: -1, message: "缺少 mid 参数" }, { status: 400 });
   }
-  try {
-    const url = `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${encodeURIComponent(mid)}`;
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://live.bilibili.com/",
-      },
-      cache: "no-store",
-    });
-    const data = await res.json();
-    if (data?.code !== 0) {
-      return NextResponse.json({ code: data?.code ?? -1, message: data?.message ?? "获取房间信息失败" });
-    }
-    return NextResponse.json({ code: 0, data: { roomid: data?.data?.roomid ?? 0, roomStatus: data?.data?.roomStatus ?? 0 } });
-  } catch (err) {
-    console.error("[Medical] 获取房间信息失败:", err);
-    return NextResponse.json({ code: -1, message: "获取房间信息失败" }, { status: 500 });
+
+  const { ok, room } = await fetchRoomInfoByUid(mid);
+  if (!ok) {
+    return NextResponse.json({ code: -1, message: "B站接口暂时不可用（风控或网络异常），请稍后重试" });
   }
+  const roomid = room?.roomId ?? 0;
+  return NextResponse.json({ code: 0, data: { roomid, roomStatus: roomid > 0 ? 1 : 0 } });
 }

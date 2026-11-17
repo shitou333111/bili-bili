@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     .map((r) =>
       buildEntry(r, config, draws, locks, uid, anchor.uname, roomId, monthKeyFor(Number(r.pk_start_time) || 0), now),
     )
-    // 流局 / 计划时长不足 30 分钟的记录直接不展示
+    // 流局 / 计划时长不足配置下限的记录直接不展示
     .filter((e) => e.state !== "void" && e.state !== "skipped")
     .sort((a, b) => b.startAt - a.startAt);
 

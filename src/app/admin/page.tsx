@@ -262,6 +262,8 @@ type MicroLightConfigData = {
   seasonAuto: boolean;
   seasonId: number;
   drawWindowHours: number;
+  /** 参与活动的最短 PK 计划时长（分钟）：短于该值的场次（如 10 分钟竞技局）不展示、不可抽 */
+  minPkMinutes: number;
   monthlyWinCap: number;
   /** 本月奖金上限（电池）：本月累计中奖礼物价值超过该值时活动自动暂停；0 = 不限制 */
   monthlyBatteryCap: number;
@@ -3334,6 +3336,7 @@ export default function AdminPage() {
 
                   <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                     {[
+                      { label: "最短局时长(分钟)", key: "minPkMinutes" as const, step: 1 },
                       { label: "有效期(小时)", key: "drawWindowHours" as const, step: 1 },
                       { label: "每月中奖上限", key: "monthlyWinCap" as const, step: 1 },
                       { label: "本月奖金上限(电池)", key: "monthlyBatteryCap" as const, step: 100 },
@@ -3353,7 +3356,7 @@ export default function AdminPage() {
                     ))}
                   </div>
                   <p className="text-[10px] leading-4 text-black/40">
-                    不再按名次/人数判定抽奖资格：只要不是流局（第 2 名票数低于「流局阈值」），该局所有主播都可以抽；流局记录与计划时长不足 30 分钟的场次在页面直接隐藏。有效期从 PK 开始时间起算。特别奖、安慰奖概率固定；8 个普通奖按该局第二名票数动态分配，期望值 = min(第二名票数, 5.5万) ÷ 中奖期望分母，取整数。本月累计中奖礼物价值超过「本月奖金上限」时活动会自动暂停（填 0 表示不限制）。
+                    不再按名次/人数判定抽奖资格：只要不是流局（第 2 名票数低于「流局阈值」），该局所有主播都可以抽；流局记录与计划时长短于「最短局时长」的场次（如 10 分钟竞技局，可设为 10 纳入）在页面直接隐藏。有效期从 PK 开始时间起算。特别奖、安慰奖概率固定；8 个普通奖按该局第二名票数动态分配，期望值 = min(第二名票数, 5.5万) ÷ 中奖期望分母，取整数。本月累计中奖礼物价值超过「本月奖金上限」时活动会自动暂停（填 0 表示不限制）。
                   </p>
 
                   {/* 10 个奖品 */}

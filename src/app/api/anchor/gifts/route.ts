@@ -8,6 +8,7 @@ import { getEffectiveBlindBoxConfig } from "@/lib/config-override";
 import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/blind-box-db";
 import { checkBlindBox, getUserInfoByUid } from "@/lib/bilibili/gift-api";
 import { getBuvidCookie } from "@/lib/bilibili/client";
+import { fetchRoomInfoByUid } from "@/lib/bili-room";
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -68,27 +69,21 @@ type RecordsMetaData = {
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const GIFT_STREAM_API = "https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream";
-const ROOM_INFO_API = "https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld";
 
 /** 浪漫城堡礼物 ID（心动盲盒内的特殊大奖） */
 const CASTLE_GIFT_ID = 32132;
 
-/** 判断该 mid 是否有直播间（是否为主播）。getRoomInfoOld 为公开接口，无需登录凭证。 */
+/**
+ * 判断该 mid 是否有直播间（是否为主播）。
+ * 查询失败（风控/网络异常）时视为可能有房，不阻断（宁可多拉也不漏）——注意不能把
+ * 412 当成"无房"，否则服务器 IP 被风控时会把真实主播的收益拉取整体跳过。
+ */
 async function checkAnchorHasRoom(mid: number): Promise<boolean> {
   try {
-    const res = await fetch(`${ROOM_INFO_API}?mid=${encodeURIComponent(String(mid))}`, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://live.bilibili.com/",
-      },
-      cache: "no-store",
-    });
-    const data = await res.json();
-    // roomStatus: 0 无房 / 1 有房
-    return data?.code === 0 && (data?.data?.roomStatus === 1 || (data?.data?.roomid ?? 0) > 0);
+    const { ok, room } = await fetchRoomInfoByUid(mid);
+    if (!ok) return true;
+    return !!room && room.roomId > 0;
   } catch (err) {
-    // 查询失败（网络/接口异常）→ 视为可能有房，不阻断（幂等兜底：宁可多拉也不漏）
     console.error(`[AnchorGifts] 检查房间失败，默认视为有房:`, err);
     return true;
   }

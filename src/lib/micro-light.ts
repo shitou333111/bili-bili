@@ -12,17 +12,14 @@
 
 import { promises as fs } from "fs";
 import path from "path";
+import { BILI_LIVE, BILI_UA, fetchRoomInfoByUid, getBiliCookie } from "@/lib/bili-room";
 
 const STATE_DIR = path.join(process.cwd(), ".data");
 const CONFIG_FILE = path.join(STATE_DIR, "micro-light-config.json");
 const RECORDS_FILE = path.join(STATE_DIR, "micro-light-records.json");
 
-const BILI_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const BILI_LIVE = "https://api.live.bilibili.com";
-
-/** 计划 PK 时长下限：短于 30 分钟的场次不参与活动 */
-const SHORT_PK_SECONDS = 30 * 60;
+/** 计划 PK 时长下限默认值（分钟）：admin 未配置时沿用 30 分钟 */
+const DEFAULT_MIN_PK_MINUTES = 30;
 
 /** 中奖期望计算的票数上限：第二名票数超过 5.5 万时按 5.5 万计算 */
 export const EXPECTATION_VOTES_CAP = 55_000;
@@ -83,6 +80,11 @@ export type MicroLightConfig = {
   seasonId: number;
   /** 每条记录的有效期（小时），以 pk_start_time 起算 */
   drawWindowHours: number;
+  /**
+   * 参与活动的最短 PK 计划时长（分钟）：短于该值的场次（如 10 分钟竞技局）不展示、不可抽。
+   * 由 admin 后台「备用药」模块配置，用于控制纳入活动的局的范围。
+   */
+  minPkMinutes: number;
   /** 每自然月最多抽中多少次非安慰奖 */
   monthlyWinCap: number;
   /** 本月奖金上限（电池）：本月累计中奖礼物价值超过该值时活动自动暂停；0 = 不限制 */
@@ -167,7 +169,7 @@ export type MicroLightAnchor = {
 export type EntryState =
   | "drawable" // 未流局，局内任意主播都可抽
   | "void" // 流局（内部用于拦截抽奖，页面不展示）
-  | "skipped" // 计划时长不足 30 分钟（页面不展示）
+  | "skipped" // 计划时长不足配置下限（页面不展示）
   | "drawn" // 本人已抽
   | "locked" // 已被其他主播先抽
   | "expired" // 超过有效期
@@ -228,6 +230,7 @@ export const DEFAULT_CONFIG: MicroLightConfig = {
   seasonAuto: true,
   seasonId: 103,
   drawWindowHours: 24,
+  minPkMinutes: DEFAULT_MIN_PK_MINUTES,
   monthlyWinCap: 3,
   monthlyBatteryCap: 0,
   voidScoreThreshold: 1000,
@@ -291,6 +294,7 @@ export function normalizeConfig(raw: unknown): MicroLightConfig {
     seasonAuto: r.seasonAuto !== false,
     seasonId: Number(r.seasonId) > 0 ? Number(r.seasonId) : DEFAULT_CONFIG.seasonId,
     drawWindowHours: Math.min(168, Math.max(1, Number(r.drawWindowHours) || 24)),
+    minPkMinutes: Math.min(180, Math.max(1, Number(r.minPkMinutes) || DEFAULT_MIN_PK_MINUTES)),
     monthlyWinCap: Math.min(10, Math.max(1, Number(r.monthlyWinCap) || 3)),
     monthlyBatteryCap: Math.max(0, Number(r.monthlyBatteryCap) || 0),
     voidScoreThreshold: Math.max(0, Number(r.voidScoreThreshold) || 1000),
@@ -413,34 +417,6 @@ export async function resetDraw(id: string): Promise<{ id: string; pkId: number 
 
 type BiliResp<T> = { code?: number; data?: T } | null;
 
-/**
- * 匿名调用 B站接口时附带的 buvid 风控 cookie。
- * 服务器（尤其是机房 IP）不带 cookie 时容易被风控返回 412 "request was banned"，
- * 表现为"查不到直播间"。这里模拟真实浏览器先取一次 buvid3/buvid4，进程内复用 6 小时。
- */
-let biliCookie = "";
-let biliCookieAt = 0;
-
-async function getBiliCookie(): Promise<string> {
-  if (biliCookie && Date.now() - biliCookieAt < 6 * 3600_000) return biliCookie;
-  try {
-    const res = await fetch("https://api.bilibili.com/x/frontend/finger/spi", {
-      headers: { "User-Agent": BILI_UA, Referer: "https://www.bilibili.com/" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000),
-    });
-    const json = (await res.json()) as { data?: { b_3?: string; b_4?: string } };
-    const b3 = json?.data?.b_3;
-    if (b3) {
-      biliCookie = `buvid3=${b3}${json.data?.b_4 ? `; buvid4=${json.data.b_4}` : ""}`;
-      biliCookieAt = Date.now();
-    }
-  } catch {
-    /* 取不到就退回无 cookie 请求，不影响主流程 */
-  }
-  return biliCookie;
-}
-
 async function biliJson<T>(url: string): Promise<BiliResp<T>> {
   const cookie = await getBiliCookie();
   const headers: Record<string, string> = {
@@ -469,7 +445,7 @@ async function biliJson<T>(url: string): Promise<BiliResp<T>> {
   return null;
 }
 
-/** uid -> room_id：主接口 getRoomInfoOld，失败时用主播信息接口兜底 */
+/** uid -> room_id：统一走 bili-room（主接口 + 兜底，避免机房 IP 风控） */
 const roomIdCache = new Map<number, number>();
 
 export async function resolveRoomIdEx(uid: number): Promise<{ roomId: number; reachable: boolean }> {
@@ -478,29 +454,13 @@ export async function resolveRoomIdEx(uid: number): Promise<{ roomId: number; re
 
   // reachable 用于区分"接口本身不可用（风控/网络）"与"该 UID 确实没有直播间"，
   // 避免把风控失败误报成 UID 错误
-  let reachable = false;
-
-  const info = await biliJson<{ roomid?: number }>(`${BILI_LIVE}/room/v1/Room/getRoomInfoOld?mid=${uid}`);
-  const infoOk = info?.code === 0;
-  if (infoOk) reachable = true;
-  let roomId = infoOk ? Number(info?.data?.roomid) || 0 : 0;
-
-  if (!roomId) {
-    // 备用接口：主播信息（同样公开，风控策略与上面不同，互为兜底）
-    // 注意：room_id 在 data.room_id 上，不在 data.info 里（data.info 只有 uid/uname/face）
-    const master = await biliJson<{ room_id?: number; info?: { room_id?: number } }>(
-      `${BILI_LIVE}/live_user/v1/Master/info?uid=${uid}`,
-    );
-    const masterOk = master?.code === 0;
-    if (masterOk) reachable = true;
-    roomId = Number(master?.data?.room_id) || Number(master?.data?.info?.room_id) || 0;
-  }
-
+  const { ok, room } = await fetchRoomInfoByUid(uid);
+  const roomId = room?.roomId ?? 0;
   if (roomId > 0) {
     if (roomIdCache.size > 5000) roomIdCache.clear();
     roomIdCache.set(uid, roomId);
   }
-  return { roomId, reachable };
+  return { roomId, reachable: ok };
 }
 
 export async function resolveRoomId(uid: number): Promise<number> {
@@ -674,9 +634,10 @@ export function evaluateRecord(
     secondVotes,
   };
 
-  // 计划时长（结束时间 - 开始时间）短于 30 分钟的直接排除（例如 10 分钟场次）
-  if (duration > 0 && duration < SHORT_PK_SECONDS) {
-    return { ...base, baseState: "skipped", baseReason: "计划时长不足 30 分钟，不参与活动" };
+  // 计划时长（结束时间 - 开始时间）短于配置下限的直接排除（例如 10 分钟竞技局）
+  const minPkMinutes = config.minPkMinutes || DEFAULT_MIN_PK_MINUTES;
+  if (duration > 0 && duration < minPkMinutes * 60) {
+    return { ...base, baseState: "skipped", baseReason: `计划时长不足 ${minPkMinutes} 分钟，不参与活动` };
   }
   // 流局：第二名票数低于阈值（此类记录一律不在页面展示）
   // 必须优先于「已过期」判断，否则过期后会以「已过期」重新出现在页面上
@@ -772,7 +733,7 @@ export function buildEntry(
     if (target) target.drawn = true;
   }
 
-  // 计划时长不足 30 分钟的场次一律不展示（即使历史上已被抽过也不显示）
+  // 计划时长不足配置下限的场次一律不展示（即使历史上已被抽过也不显示）
   if (baseState === "skipped") {
     return { ...rest, anchors, state: "skipped", reason: baseReason };
   }

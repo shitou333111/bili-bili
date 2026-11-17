@@ -17,6 +17,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { fetchBilibiliJson, getBuvidCookie } from "./bilibili/client";
 import { ensureGiftCatalogLoaded, getGiftList, getGiftPrice } from "./gift-catalog";
+import { fetchRoomInfoByUid } from "./bili-room";
 import { md5 } from "./md5";
 
 const STATE_DIR = path.join(process.cwd(), ".data");
@@ -821,24 +822,13 @@ async function fetchHotPartitionRooms(limit: number): Promise<ScanRoom[]> {
   return out;
 }
 
-type RoomInfoOld = {
-  roomid?: number;
-  uid?: number;
-  liveStatus?: number;
-  live_status?: number;
-  title?: string;
-};
-
-/** 通过 UID 查询直播间信息（公开接口，无需登录） */
+/** 通过 UID 查询直播间信息（公开接口，无需登录；主接口被风控时自动走兜底） */
 export async function resolveRoomByUid(uid: number): Promise<{ roomid: number; uname: string; face: string; title: string; live: boolean } | null> {
-  const res = await biliGet<RoomInfoOld>(
-    `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${uid}`,
-    await anonCookie(),
-  );
-  const roomid = num(res?.data?.roomid);
-  if (!res || res.code !== 0 || roomid <= 0) return null;
-  const live = num(res.data?.liveStatus ?? res.data?.live_status) === 1;
-  let uname = `UID${uid}`;
+  const { ok, room } = await fetchRoomInfoByUid(uid);
+  if (!ok || !room || room.roomId <= 0) return null;
+  const roomid = room.roomId;
+  const live = room.liveStatus === 1;
+  let uname = room.uname || `UID${uid}`;
   let face = "";
   const card = await biliGet<{ uname?: string; face?: string }>(
     `https://api.live.bilibili.com/live_user/v1/card/card_up?uid=${uid}&browser=0`,
@@ -848,7 +838,7 @@ export async function resolveRoomByUid(uid: number): Promise<{ roomid: number; u
     uname = card.data.uname || uname;
     face = fixFaceUrl(card.data.face ?? "");
   }
-  return { roomid, uname, face, title: String(res.data?.title ?? ""), live };
+  return { roomid, uname, face, title: room.title, live };
 }
 
 /** 常发红包直播间：先确认在播，未开播略过 */
@@ -858,20 +848,15 @@ async function collectHistoryRooms(): Promise<ScanRoom[]> {
   const now = Date.now();
   // 近年热度高的优先收集（单轮房间数有上限，冷门直播间可能轮不到）
   for (const h of [...e.history].sort((a, b) => effectiveHot(b, now) - effectiveHot(a, now))) {
-    const res = await biliGet<RoomInfoOld>(
-      `https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${h.uid}`,
-      await anonCookie(),
-    );
-    if (!res || res.code !== 0) continue;
-    const live = num(res.data?.liveStatus ?? res.data?.live_status) === 1;
-    if (!live) continue;
-    const roomid = num(res.data?.roomid) || h.roomid;
+    const { ok, room } = await fetchRoomInfoByUid(h.uid);
+    if (!ok || !room) continue;
+    if (room.liveStatus !== 1) continue;
     out.push({
-      roomid,
+      roomid: room.roomId || h.roomid,
       uid: h.uid,
-      uname: h.uname || `UID${h.uid}`,
+      uname: room.uname || h.uname || `UID${h.uid}`,
       face: h.face,
-      title: String(res.data?.title ?? ""),
+      title: room.title,
       source: "history",
     });
   }
