@@ -845,7 +845,8 @@ jobs:
     # 发布条件：
     #   - push：commit 含 exe/apk/ipa/hot 才发布，且含 nopublish 时只构建不发布；
     #   - workflow_dispatch：由 publish 勾选项控制（默认勾选 = 发布）。
-    if: "${{ always() && (github.event_name == 'workflow_dispatch' ? inputs.publish == true : (contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot'))) && !contains(github.event.head_commit.message || '', 'nopublish') }}"
+    # 注意：GitHub Actions 表达式不支持三元运算符（? :），只能用 && / || 组合。
+    if: "${{ always() && ((github.event_name == 'workflow_dispatch' && inputs.publish == true) || (github.event_name != 'workflow_dispatch' && (contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot')))) && !contains(github.event.head_commit.message || '', 'nopublish') }}"
     needs: [build-exe, build-apk, build-ipa, build-hot-update]
     runs-on: ubuntu-latest
     steps:
