@@ -481,16 +481,19 @@ export async function resolveRoomIdEx(uid: number): Promise<{ roomId: number; re
   let reachable = false;
 
   const info = await biliJson<{ roomid?: number }>(`${BILI_LIVE}/room/v1/Room/getRoomInfoOld?mid=${uid}`);
-  if (info) reachable = true;
-  let roomId = Number(info?.data?.roomid) || 0;
+  const infoOk = info?.code === 0;
+  if (infoOk) reachable = true;
+  let roomId = infoOk ? Number(info?.data?.roomid) || 0 : 0;
 
   if (!roomId) {
     // 备用接口：主播信息（同样公开，风控策略与上面不同，互为兜底）
-    const master = await biliJson<{ info?: { room_id?: number } }>(
+    // 注意：room_id 在 data.room_id 上，不在 data.info 里（data.info 只有 uid/uname/face）
+    const master = await biliJson<{ room_id?: number; info?: { room_id?: number } }>(
       `${BILI_LIVE}/live_user/v1/Master/info?uid=${uid}`,
     );
-    if (master) reachable = true;
-    roomId = Number(master?.data?.info?.room_id) || 0;
+    const masterOk = master?.code === 0;
+    if (masterOk) reachable = true;
+    roomId = Number(master?.data?.room_id) || Number(master?.data?.info?.room_id) || 0;
   }
 
   if (roomId > 0) {
