@@ -25,82 +25,97 @@ function ShareIcon() {
 }
 
 /**
- * PWA 安装引导卡片（仅移动端网页显示，见 use-pwa-install 的显示条件）。
- * 悬浮在底部托盘栏上方，iOS 风格白色毛玻璃卡片 + 黑色文字，可关闭。
+ * PWA 安装引导弹窗（仅移动端网页显示，见 use-pwa-install 的显示条件）。
+ *
+ * 挂在登录页：必须在扫码登录之前弹出。因为"添加到主屏幕"后的独立 PWA 有自己
+ * 独立的本地存储，先扫码登录再安装，用户还得在 PWA 里重新扫一次；先安装、
+ * 再从桌面图标打开登录，才能一次扫码长期有效。
+ *
+ * 安装成功后弹窗保留一条"请从桌面图标打开"的确认提示，避免用户停留在
+ * 当前浏览器标签页里继续登录。
  */
-export default function PwaInstallPrompt() {
-  const { visible, mode, install, dismiss } = usePwaInstall();
+export default function PwaInstallPrompt({ delayMs }: { delayMs?: number }) {
+  const { visible, mode, installed, install, dismiss } = usePwaInstall({ delayMs });
   if (!visible || !mode) return null;
 
-  const canPrompt = mode === "prompt";
+  const canPrompt = mode === "prompt" && !installed;
 
   return (
     <div
-      className="fixed left-0 right-0 z-[9990] flex justify-center px-3 pointer-events-none"
-      style={{ bottom: "calc(var(--dock-bottom, 16px) + var(--dock-safe, 0px) + 76px)" }}
+      className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="安装到主屏幕"
     >
-      <div className="pointer-events-auto relative w-full max-w-[420px] rounded-[20px] border border-black/[0.06] bg-white/95 px-4 py-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.22)] backdrop-blur-xl">
+      <div className="relative w-full max-w-[360px] rounded-[26px] border border-black/[0.06] bg-white px-5 pb-5 pt-6 text-[#1f1c17] shadow-[0_26px_80px_rgba(0,0,0,0.4)]">
         <button
+          type="button"
           onClick={dismiss}
           aria-label="关闭安装引导"
-          className="absolute right-2.5 top-2.5 flex h-6 w-6 items-center justify-center rounded-full text-black/35 transition-colors hover:bg-black/[0.06] hover:text-black/60"
+          className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-black/35 transition-colors hover:bg-black/[0.06] hover:text-black/60"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
             <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
           </svg>
         </button>
 
-        <div className="min-w-0 pr-5">
-          {/* 标题行：缩小后的头像与标题同行 */}
-          <div className="flex items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/icon-192.png"
-              alt="B瓜"
-              width={24}
-              height={24}
-              className="h-6 w-6 shrink-0 rounded-[7px] shadow-[0_2px_8px_rgba(0,0,0,0.16)]"
-            />
-            <p className="truncate text-[15px] font-semibold leading-5 text-[#1f1c17]">强烈建议把B瓜添加到主屏幕</p>
-          </div>
-          <p className="mt-1.5 text-[12.5px] leading-[18px] text-black/55">
-              {mode === "ios" ? (
-                <>
-                  使用苹果系统浏览器Safari，点击浏览器工具栏的共享按钮
-                  <ShareIcon />
-                  ，点击「查看更多」，再选择「添加到主屏幕」。这样可以不用安装APP，又能像App一样在桌面直接打开，数据长期保存在本机，无需每次输入网址。
-                </>
-              ) : mode === "prompt" ? (
-                "添加到桌面：轻量安装后像App一样使用，数据长期保存在本机，无需每次输入网址。"
-              ) : (
-                "点击浏览器 ⋮ 菜单，选择「添加到主屏幕」或「安装应用」。轻量安装后像App一样使用，数据长期保存在本机，无需每次输入网址。"
-              )}
-            </p>
-            <div className="mt-2.5 flex items-center gap-2">
-              {canPrompt ? (
-                <>
-                  <button
-                    onClick={install}
-                    className="rounded-full bg-[#1f1c17] px-4 py-1.5 text-[13px] font-medium text-white transition-transform active:scale-[0.97]"
-                  >
-                    立即安装
-                  </button>
-                  <button
-                    onClick={dismiss}
-                    className="rounded-full px-3 py-1.5 text-[13px] font-medium text-black/45 transition-colors hover:bg-black/[0.05]"
-                  >
-                    以后再说
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={dismiss}
-                  className="rounded-full bg-[#1f1c17] px-4 py-1.5 text-[13px] font-medium text-white transition-transform active:scale-[0.97]"
-                >
-                  知道了
-                </button>
-              )}
-            </div>
+        <div className="flex items-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/icon-192.png"
+            alt="B瓜"
+            width={32}
+            height={32}
+            className="h-8 w-8 shrink-0 rounded-[9px] shadow-[0_2px_8px_rgba(0,0,0,0.16)]"
+          />
+          <p className="text-[16px] font-semibold leading-6">
+            {installed ? "已添加到主屏幕" : "先安装 B瓜，再扫码登录"}
+          </p>
+        </div>
+
+        <p className="mt-2.5 text-[12.5px] leading-[19px] text-black/60">
+          {installed ? (
+            "请关闭本页面，从桌面图标打开「B瓜」后再扫码登录。这样登录一次就能长期使用，数据也保存在这个 App 里，不用重复扫码。"
+          ) : mode === "ios" ? (
+            <>
+              使用苹果系统浏览器 Safari，点击工具栏的共享按钮
+              <ShareIcon />
+              ，选择「添加到主屏幕」。安装后请从桌面图标打开 B瓜 再扫码登录，避免安装后又要重新扫码。
+            </>
+          ) : mode === "prompt" ? (
+            "添加到主屏幕后像 App 一样使用，数据长期保存在本机。建议先安装，再从桌面图标打开 B瓜 并扫码登录，避免安装后需要重新扫码。"
+          ) : (
+            "点击浏览器 ⋮ 菜单，选择「添加到主屏幕」或「安装应用」。安装后请从桌面图标打开 B瓜 再扫码登录，避免安装后又要重新扫码。"
+          )}
+        </p>
+
+        <div className="mt-5 flex items-center gap-2">
+          {canPrompt ? (
+            <>
+              <button
+                type="button"
+                onClick={install}
+                className="rounded-full bg-[#1f1c17] px-5 py-2 text-[13px] font-medium text-white transition-transform active:scale-[0.97]"
+              >
+                立即安装
+              </button>
+              <button
+                type="button"
+                onClick={dismiss}
+                className="rounded-full px-3 py-2 text-[13px] font-medium text-black/45 transition-colors hover:bg-black/[0.05]"
+              >
+                以后再说
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={dismiss}
+              className="rounded-full bg-[#1f1c17] px-5 py-2 text-[13px] font-medium text-white transition-transform active:scale-[0.97]"
+            >
+              知道了
+            </button>
+          )}
         </div>
       </div>
     </div>

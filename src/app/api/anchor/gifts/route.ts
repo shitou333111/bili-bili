@@ -492,9 +492,18 @@ function paceRequest(): Promise<void> {
   return wait > 0 ? new Promise((r) => setTimeout(r, wait)) : Promise.resolve();
 }
 
-/** 伪空重试间隔：page0 返回 total_page=0 时，按这些递增间隔再查，
- *  把"软限流/冷缓存导致的假空"从"真无数据"里区分出来。 */
+/** 伪空重试间隔：仅用于 noRevenue 短路前的抽样二次确认。 */
 const EMPTY_RETRY_INTERVAL_MS = [5000, 15000, 30000];
+
+/** ready=0（B站按需构建该月份）的统一就绪等待时刻：累计 30/60/120/180/240/300 秒，共 6 次复查。
+ *  实测同一账号×月份首次查询后一般几十秒内 ready 变 1，这里按 300 秒窗口等待；
+ *  超时仍未就绪则本轮放弃（记未知/空档），由下一轮补拉。 */
+const READY_RETRY_AT_SEC = [30, 60, 120, 180, 240, 300];
+
+/** 距第 idx 个 ready 复查时刻还需等待的毫秒数（时刻已过则返回 0）。 */
+function readyWaitMs(startedAt: number, idx: number): number {
+  return Math.max(0, startedAt + READY_RETRY_AT_SEC[idx] * 1000 - Date.now());
+}
 
 /** 可疑空月份连续判定上限：同一空月份连续 N 次运行都被判空 → 视为真无数据并放行 end_date，
  *  保证修复不会因真·空月份导致 end_date 永不推进（死循环）。
@@ -659,7 +668,12 @@ async function probeMonthOnce(
   end: string,
 ): Promise<{ hasData: boolean; failed: boolean; credentialExpired: boolean; firstPage?: BiliGiftStreamResponse; failInfo?: string }> {
   let failInfo = "未知（未收到响应）";
-  for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
+  // ready=0 使用独立的"就绪等待"预算（累计 20/60/120/180/240/300 秒，共 6 次）；
+  // 其他失败（网络/API code）仍按原有 5 次指数退避，两者互不占用次数。
+  const readyStartedAt = Date.now();
+  let readyWaits = 0;
+  let errRetries = 0;
+  while (true) {
     // 本轮已撞到配额窗口（412）：继续探测只会拿到同样的 412，立即放弃交上层收尾
     if (_quotaHitThisRun) {
       return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
@@ -676,8 +690,12 @@ async function probeMonthOnce(
         if (result.data?.ready === 1) {
           return { hasData: false, failed: false, credentialExpired: false, firstPage: result };
         }
-        failInfo = "ready=0 未就绪伪空（total_page=0 但数据未就绪）";
-        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+        // ready=0：B站正在按需构建该月份（实测一般几十秒内变为 1）→ 按就绪节奏等待
+        failInfo = "ready=0 未就绪（B站按需构建中）";
+        if (readyWaits >= READY_RETRY_AT_SEC.length) break;
+        const wait = readyWaitMs(readyStartedAt, readyWaits);
+        readyWaits++;
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
         continue;
       }
       // B站凭证失效：交由上层立即返回 needs-relogin
@@ -691,14 +709,18 @@ async function probeMonthOnce(
         return { hasData: false, failed: true, credentialExpired: false, firstPage: result, failInfo: "code=1301000 参数/时间窗错误" };
       }
       failInfo = `code=${result.code} ${result.message ?? ""}`.trim();
-      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+      if (errRetries >= PAGE0_RETRY_COUNT) break;
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, errRetries)));
+      errRetries++;
     } catch (err) {
       failInfo = err instanceof Error ? err.message : String(err);
       // 412 → 配额窗口已满：同窗口内重试无效，立即返回失败（不再冷却等待），由上层收尾
       if (_quotaHitThisRun) {
         return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
       }
-      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+      if (errRetries >= PAGE0_RETRY_COUNT) break;
+      await new Promise(r => setTimeout(r, 500 * Math.pow(2, errRetries)));
+      errRetries++;
     }
   }
   return { hasData: false, failed: true, credentialExpired: false, failInfo };
@@ -892,10 +914,13 @@ export async function GET(request: Request) {
       // - ready=1 且 total_page=0 才是可信空，仅在 retryEmpty（值得怀疑的月份）做兜底复查，
       //   开播前/停播后的大段空白不值得逐月白等。
       if (totalPages === 0 && (retryEmpty || firstPage.data?.ready !== 1)) {
-        for (const delay of EMPTY_RETRY_INTERVAL_MS) {
-          await new Promise(r => setTimeout(r, delay));
+        // 统一就绪等待：累计 20/60/120/180/240/300 秒共 6 次复查
+        const readyStartedAt = Date.now();
+        for (let i = 0; i < READY_RETRY_AT_SEC.length; i++) {
+          const wait = readyWaitMs(readyStartedAt, i);
+          if (wait > 0) await new Promise(r => setTimeout(r, wait));
           const retried = await fetchPageWithRetry(0, PAGE0_RETRY_COUNT);
-          // 恢复判据：要么恢复出数据，要么给出 ready=1 的可信空结论（未就绪伪空不算结论，继续等）
+          // 恢复判据：要么恢复出数据，要么给出 ready=1 的可信空结论（未就绪不算结论，继续等）
           if (retried && retried.code === 0 && ((retried.data?.total_page ?? 0) > 0 || retried.data?.ready === 1)) {
             firstPage = retried;
             totalPages = firstPage.data?.total_page ?? 0;
@@ -912,10 +937,10 @@ export async function GET(request: Request) {
           console.log(`[AnchorGifts] ${begin}~${end} 空月份：${retryEmpty ? "复查后仍 total_page=0 且 ready=1" : "ready=1 可信空（不在伪空复查范围内）"}（标记 empty，交由上层判定）`);
           return { records: [], pages: 0, ready: firstPage.data?.ready, empty: true };
         }
-        // 复查后数据仍未就绪（ready≠1）：没有任何可信结论，绝不可当空。
+        // 等待 300 秒后数据仍未就绪（ready≠1）：没有任何可信结论，绝不可当空。
         // 抛 MonthFetchError（非 partial）→ 上层记 unknownStarts / empty_counts 钉住 end_date，下轮补拉。
-        console.warn(`[AnchorGifts] ${begin}~${end} ready=0 未就绪伪空：复查后数据仍未就绪，本轮不判空，留待下轮补拉`);
-        throw new MonthFetchError(begin, end, "ready=0 未就绪伪空（复查后数据仍未就绪）");
+        console.warn(`[AnchorGifts] ${begin}~${end} ready=0 未就绪：等待 300 秒后仍未就绪，本轮不判空，留待下轮补拉`);
+        throw new MonthFetchError(begin, end, "ready=0 未就绪（等待 300 秒后仍未就绪）");
       }
 
       const listLen = firstPage.data?.list?.length ?? 0;
@@ -1140,16 +1165,18 @@ export async function GET(request: Request) {
       // 全部月份均无数据 → 该账号无收益：置 noRevenue 并保存后立即终止，不再扫描历史月份。
       // 注意：仅"零记录"账号适用（有记录的账号即使近期无数据也不得判无收益）。
       if (probe && existingRecords.length === 0) {
-        // 首探固定"串行 + 压低速率"（与客户端一致）：一次探完全部月份是本轮请求最密集的时段，
+        // 首探压低速率（与客户端一致）：一次探完全部月份是本轮请求最密集的时段，
         // 且跑在最前面——连发极易踩中 B站 软限流（各月份被静默返回伪空），整轮"是否有收益"
         // 的结论就会是错的并被永久写成 noRevenue。探测结束即恢复原速率，不影响后续翻页。
-        console.log(`[AnchorGifts] ${validSession.mid} 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}）（串行 · ${PROBE_MAX_RATE}req/s）`);
+        console.log(`[AnchorGifts] ${validSession.mid} 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}）（全月并行 · 请求受 ${PROBE_MAX_RATE}req/s 节拍限制）`);
         _rateOverride = PROBE_MAX_RATE;
         let probeResults: Array<Awaited<ReturnType<typeof probeMonthOnce>>>;
         try {
+          // 并行探测：ready=0 的等待（累计 30~300 秒）在各月份间重叠，
+          // 整轮首探墙钟 ≈ 300 秒，而不是"月份数 × 300 秒"；实际请求仍由全局节拍器压到 2req/s。
           probeResults = (await runWithConcurrency(
             chunks,
-            1,
+            chunks.length,
             (c) => probeMonthOnce(biliCookie, csrf, buvidCookie, c.start, c.end),
           )).results;
         } finally {

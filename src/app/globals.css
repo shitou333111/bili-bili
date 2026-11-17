@@ -93,6 +93,24 @@ body:has(> .page-main) {
   overscroll-behavior: none;
 }
 
+/* ===== 登录首屏：整个窗口不可滚动 =====
+   登录页内容全部收敛在 100svh 内（轮播图最多占可用空间的 90%），这里再把文档本身锁死：
+   各平台视口差异（地址栏展开/收起、安全区、窄屏缩放）都可能让 100svh 之外多出几像素，
+   只要文档还能滚，就会表现为"首屏可以上下拖"。锁死 html/body 后，任何多余高度都被裁掉，
+   页面绝不产生纵向滚动。仅作用于登录页，不影响主应用与官网首页。 */
+html:has(main.login-screen) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+body:has(> main.login-screen) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* 必须放入 @layer base：Tailwind 工具类位于 @layer utilities，
    未分层的 a{color:inherit} 会覆盖 .text-white 等工具类，
    导致深色按钮上 <Link> 文字颜色继承为深色而不可见 */
@@ -395,6 +413,31 @@ html.ios-web .bottom-dock {
   animation: dot-blink 1s infinite ease-in-out;
 }
 
+/* 官网首页 / 登录页共用的功能轮播图：
+   - 等比缩放，宽或高先到窗口可用区域的 90% 即停止，另一边按原比例自适应；
+   - 圆角直接加在图片元素上（而不是用父容器 overflow 裁剪），边缘更自然。 */
+.landing-slide-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(90vw, 100%);
+  max-height: calc(90svh - 8rem); /* 预留顶部标题栏、文案与内边距，避免出现上下滚动 */
+  border-radius: 20px;
+  object-fit: contain;
+}
+
+/* 登录首屏：90% 的尺寸约束已加在「文字 + 图片」整体上（见 SloganRotator 的 fitViewport），
+   图片只需在文字下方的剩余空间内等比撑满，因此宽高都取 100% 上限。 */
+.landing-slide-img-fit {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 20px;
+  object-fit: contain;
+}
+
 /* 不定进度条（总月份未知时来回滑动） */
 @keyframes progress-slide {
   0% { transform: translateX(-100%); }
@@ -438,6 +481,12 @@ html.ios-web .bottom-dock {
 @keyframes anti-kill-tip-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* 数据初始化遮罩：无进度阶段的三个点依次闪烁 */
+@keyframes init-dot {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
 }
 
 /* ===== 模态框下载/关闭按钮统一样式（胶囊状、紧凑、点击动效） ===== */

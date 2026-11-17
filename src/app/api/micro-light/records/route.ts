@@ -7,7 +7,7 @@ import {
   monthlyWinCount,
   readConfig,
   readDraws,
-  resolveRoomId,
+  resolveRoomIdEx,
   seasonIdFor,
 } from "@/lib/micro-light";
 import { promises as fs } from "fs";
@@ -40,9 +40,15 @@ export async function GET(request: NextRequest) {
   }
 
   const config = await readConfig();
-  const roomId = await resolveRoomId(uid);
+  const { roomId, reachable } = await resolveRoomIdEx(uid);
   if (!roomId) {
-    return NextResponse.json({ code: -1, message: "未找到该 UID 的直播间，请确认 UID 是否正确" });
+    // 区分"B站接口被风控/网络异常"与"该 UID 确实没有直播间"，避免把风控失败误报成 UID 错误
+    return NextResponse.json({
+      code: -1,
+      message: reachable
+        ? "未找到该 UID 的直播间，请确认 UID 是否正确"
+        : "B站接口暂时不可用（风控或网络异常），请稍后重试",
+    });
   }
 
   const seasonId = config.seasonAuto ? seasonIdFor() : config.seasonId;

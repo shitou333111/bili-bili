@@ -6,7 +6,7 @@ import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl } from "@/lib/server-api";
-import { dataFetch } from "@/lib/client-fetch";
+import { dataFetch, type FetchProgress } from "@/lib/client-fetch";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg } from "@/lib/layout";
 import { ensureGiftCatalogLoaded, getGiftImgByName } from "@/lib/gift-catalog-client";
@@ -367,8 +367,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
   isServerAccount = false,
   /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
   syncing = false,
-  /** 组件自身首次加载遮罩（true=显示"加载中..."全屏 spinner），与 syncing 解耦 */
-  syncLoading = false,
   /** 页面级最后一次刷新时间（父组件维护，所有模块共享），按钮空闲时显示 */
   lastRefreshTime = "",
   /** 本机是否持有该账号的 B站 登录凭证；无凭证时按钮禁用 */
@@ -395,8 +393,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
   isServerAccount?: boolean;
   /** 页面统一刷新信号：true=全局正在同步（粉丝+主播一起刷），按钮显示三点动画 */
   syncing?: boolean;
-  /** 组件自身首次加载遮罩（与 syncing 解耦，互不影响） */
-  syncLoading?: boolean;
   /** 页面级最后一次刷新时间（父组件维护，所有模块共享） */
   lastRefreshTime?: string;
   /** 本机是否持有该账号的 B站 登录凭证；无凭证时按钮禁用 */
@@ -408,7 +404,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
   /** toast 提示 */
   showToast?: (msg: string) => void;
   /** 收益拉取进度上报（透传给父级全屏遮罩） */
-  onFetchProgress?: (p: { text: string; ratio?: number; anchorGift?: boolean } | null) => void;
+  onFetchProgress?: (p: FetchProgress | null) => void;
   /** 无收益判定回调（响应 noRevenue=true 时触发，父级据此立即隐藏"主播"选项卡） */
   onNoRevenue?: () => void;
   /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「活动素材下载」之后 */
@@ -416,8 +412,6 @@ const AnchorDataModule = memo(function AnchorDataModule({
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
-  // 收益记录按月获取进度（首次拉取时展示进度条）
-  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number; anchorGift?: boolean } | null>(null);
   const [activeTab, setActiveTab] = useState<"revenue" | "blindbox" | "display" | "gift_screenshot" | "other">("revenue");
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
@@ -546,11 +540,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
     fetchingRef.current = true;
     setLoading(true);
     setAuthError(null);
-    setFetchProgress(null);
-    // 统一起始提示：模块内部遮罩与父级全屏遮罩都立即显示"正在获取主播收益..."
-    // （dataFetch 只在实际拉取月份时有进度回调，前置一个起始提示避免只显示"加载中"）
+    // 统一起始提示：进度直接透传给父级全屏遮罩（dataFetch 只在真正拉取月份时才有回调，
+    // 前置一个起始提示，避免遮罩中途空着）
     const startHint = { text: "正在获取主播收益...", ratio: undefined, anchorGift: true } as const;
-    setFetchProgress(startHint);
     onFetchProgress?.(startHint);
     // 重置盲盒筛选条件
     setBlindBoxDateFilter("all");
@@ -584,9 +576,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
       // 必须带 refresh=true：否则会被客户端/服务器当作"打开页面"的本地直出（不拉 B站），
       // 导致冷启动/手动刷新永远拿不到新数据。筛选切换等页面内交互走独立请求，不带此参数。
       const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts?refresh=true", { cache: "no-store" }, (p) => {
-        // 模块内进度条 + 透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
-        setFetchProgress({ text: p.text, ratio: p.ratio, anchorGift: p.anchorGift });
-        onFetchProgress?.({ text: p.text, ratio: p.ratio, anchorGift: p.anchorGift });
+        // 进度透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
+        onFetchProgress?.(p);
       });
       const data = await res.json();
       if (data.message === "needs-relogin") {
@@ -976,30 +967,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
         </div>
       )}
 
-      {/* Loading state：仅父组件 syncLoading（首次/重建全屏遮罩）驱动加载遮罩；
-          正常重开时的后台同步（syncLoading=false）不展示遮罩，属于静默加载 */}
-      {/* fetchData() 开头已设置统一起始提示（"正在获取主播收益..."），后续由月份进度回调更新，
-          因此这里不再重复写死的"加载中..."文字，全部统一走 fetchProgress 提示 */}
-      {syncLoading && !stats && (
-        <div className="flex-1 flex items-center justify-center px-8 min-h-[55vh]">
-          <div className="flex flex-col items-center gap-3 w-full max-w-[300px]">
-            <div className="w-8 h-8 border-2 border-[#1f1c17] border-t-transparent rounded-full animate-spin"></div>
-            {fetchProgress ? (
-              <div className="w-full">
-                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
-                  <div
-                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
-                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
-                  ></div>
-                </div>
-                <p className="mt-2 text-xs text-black/55 text-center">{fetchProgress.text}</p>
-              </div>
-            ) : (
-              <p className="text-sm text-black/45">加载中...</p>
-            )}
-          </div>
-        </div>
-      )}
+      {/* 首次/重建的加载进度统一由页面级全屏遮罩（DataInitOverlay）展示，
+          这里不再维护模块内的第二套加载遮罩 */}
 
       {/* Content - scrollable */}
       {stats && (

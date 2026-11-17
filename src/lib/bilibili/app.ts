@@ -175,13 +175,14 @@ export async function fetchRealPayRecordSnapshot(
   session: AuthSession,
   _nextId?: number,
   cutoffTimestamp?: number,
-  onProgress?: (p: { text: string; current?: number; total?: number }) => void,
+  onProgress?: (p: { text?: string; current?: number; total?: number; page?: number }) => void,
 ): Promise<PayRecordSnapshot> {
   if (!session.biliSessdata) {
     throw new Error("SESSDATA 不能为空");
   }
 
-  const MAX_PAGES = 1000;
+  // 页数上限仅防 next_id 异常打转的死循环，不是数据量上限（10000 页 × 50 条 = 50 万条）
+  const MAX_PAGES = 10_000;
   const allRecords: PayRecordItem[] = [];
   let nextId: number | undefined = _nextId;
   let prevNextId: number | undefined;
@@ -247,11 +248,11 @@ export async function fetchRealPayRecordSnapshot(
 
     console.log(`[PayRecord] 第${pageCount}页获取完成，本页${list.length}条（新增${newCount}条），累计${allRecords.length}条，nextId=${nextId ?? "无"}`);
 
-    // 上报页级进度（WEB 端经 pay-record-progress 内存表 + 轮询抵达前端，文案与 APP 一致）
+    // 上报页级进度（WEB 端经 pay-record-progress 内存表 + 轮询抵达前端）
+    // 只上报结构化字段，文案由前端遮罩统一拼「已下载m页（n条）」
     onProgress?.({
-      text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
       current: allRecords.length,
-      total: 0,
+      page: pageCount,
     });
 
     // 如果没有新记录，说明已经获取完所有数据

@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import DownloadSection from "./DownloadSection";
 import SloganRotator from "./SloganRotator";
 import WindowTitleBar from "@/components/WindowTitleBar";
+import { APP_NAME, APP_DESCRIPTION } from "@/lib/landing-content";
 
 export const metadata: Metadata = {
-  title: "B瓜 · B站直播消费数据分析工具",
-  description:
-    "B瓜 是专为 Bilibili 直播打造的个人消费数据分析工具。扫码登录即可自动抓取并长期保存你的送礼、盲盒、合成活动等消费记录，多维度统计盈亏，支持 Windows / Android / iOS 客户端使用。",
+  title: `${APP_NAME} · B站直播消费数据分析工具`,
+  description: APP_DESCRIPTION,
 };
 
 // 页面为纯静态：版本日期与下载计数由客户端组件（DownloadSection）在浏览器中实时拉取，

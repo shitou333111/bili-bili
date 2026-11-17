@@ -680,15 +680,7 @@ type BlindBoxProfit = {
  * @param fan 粉丝 uid 过滤（逗号分隔）
  */
 /** 获取进度回调：用于首屏/刷新时按月份显示进度条 */
-export type FetchProgressHandler = (p: {
-  text: string;
-  ratio?: number;
-  current?: number;
-  total?: number;
-  /** 显式标记：本进度来自"主播收益"拉取。界面据此决定是否追加收益相关的 4 行提示，
-   *  不再依赖对 text 做正则匹配（文案一变就失效，已踩过坑）。 */
-  anchorGift?: boolean;
-}) => void;
+export type FetchProgressHandler = (p: import("./client-fetch").FetchProgress) => void;
 
 // 模块级防重入锁：不依赖组件 ref，HMR 重挂载也不会失效
 let _fetchingGlobal = false;
@@ -1008,25 +1000,25 @@ export async function fetchAnchorGifts(
       for (const v of monthPlan.values()) n += v.status === "data" ? Math.max(v.pages, 1) : 1;
       return n;
     };
-    /** 剩余耗时文案（尚未探明任何月份时返回空串，不做假估算）。 */
+    /** 剩余耗时文案（尚未探明任何月份时返回空串，不做假估算）。统一走紧凑写法。 */
     const fmtRemain = () => {
       const planned = plannedRequests();
       if (planned <= 0 || _requestsIssued <= 0) return "";
       const left = planned - _requestsIssued;
       if (left <= 0) return "即将完成";
       const sec = Math.round(left / _fetchRate);
-      if (sec < 60) return "约剩不到 1 分钟";
-      if (sec < 3600) return `约剩 ${Math.round(sec / 60)} 分钟`;
-      return `约剩 ${Math.floor(sec / 3600)} 小时 ${Math.round((sec % 3600) / 60)} 分钟`;
+      if (sec < 60) return "小于1分钟";
+      if (sec < 3600) return `剩${Math.round(sec / 60)}分钟`;
+      const hours = Math.floor(sec / 3600);
+      const mins = Math.round((sec % 3600) / 60);
+      return `剩${hours}小时${mins}分钟`;
     };
     /** 月级进度（月内页级进度由 processChunk 上报）。 */
     const emitMonthProgress = (ym: string) => {
       const remain = fmtRemain();
       onProgress?.({
-        text: `正在获取收益记录 ${ym}（${validDone}/${totalValidMonths}）${remain ? " · " + remain : ""}`,
+        text: `已下载${ym}（${validDone}/${totalValidMonths}）${remain ? " · " + remain : ""}`,
         ratio: Math.min(1, validDone / totalValidMonths),
-        current: validDone,
-        total: totalValidMonths,
         anchorGift: true,
       });
     };
@@ -1067,7 +1059,7 @@ export async function fetchAnchorGifts(
       // 的结论就会是错的并被永久写成 noRevenue。探测结束即恢复原速率，不影响后续翻页。
       const probeRate = Math.min(_fetchRate, PROBE_MAX_RATE);
       console.log(`[AnchorGifts-Tauri] 首探：一次探测全部 ${chunks.length} 个月（${startDate} ~ ${yesterdayStr}），用于固定进度分母与 ETA（串行 · ${probeRate}req/s）`);
-      onProgress?.({ text: "正在探测收益记录（首次全量扫描）...", current: 0, total: 0, anchorGift: true });
+      onProgress?.({ anchorGift: true, probe: true });
       const probePrevRate = _fetchRate;
       _fetchRate = probeRate;
       let probeResults: Array<Awaited<ReturnType<typeof probeMonthOnce>>>;
@@ -1143,7 +1135,7 @@ export async function fetchAnchorGifts(
       _quotaWaitReporter = ({ attempt, remainMs }) => {
         const sec = Math.max(0, Math.ceil(remainMs / 1000));
         onProgress?.({
-          text: `正在获取收益记录：已抓 ${allRecords.length} 条 · 第 ${attempt + 1}/${QUOTA_BACKOFF_MS.length} 次退避 · 等待限流恢复 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`,
+          text: `已下载 ${allRecords.length} 条 · 第 ${attempt + 1}/${QUOTA_BACKOFF_MS.length} 次退避 · 等待限流恢复 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`,
           anchorGift: true,
         });
       };
@@ -1336,12 +1328,16 @@ export async function fetchAnchorGifts(
         const emitPageProgress = (page: number) => {
           if (!reportPages) return;
           const remain = fmtRemain();
+          const month = `${chunk.start.slice(0, 4)}-${chunk.start.slice(4, 6)}`;
           onProgress?.({
-            text: `正在获取收益记录 ${chunk.start.slice(0, 6)} 第 ${page}/${totalPages} 页${remain ? " · " + remain : ""}`,
+            text: `已下载${month} 第${page}/${totalPages}页${remain ? " · " + remain : ""}`,
             ratio: totalValidMonths > 0 ? Math.min(1, validDone / totalValidMonths) : undefined,
-            current: validDone,
-            total: totalValidMonths,
             anchorGift: true,
+            // 结构化字段：标题栏用它拼「已下载2025-08 第2/546页 · 剩25分钟」
+            page,
+            pages: totalPages,
+            month,
+            remain,
           });
         };
         emitPageProgress(startPage);

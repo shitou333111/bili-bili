@@ -54,12 +54,23 @@ function buildBlindBoxFilters(query: URLSearchParams): Record<number, { ruid: nu
 
 /** 数据获取进度回调（消费/收益记录拉取时按月份或页数上报） */
 export type FetchProgress = {
-  text: string;
+  /** 兜底文案：结构化字段无法拼出进度时才会展示（如"正在获取主播收益..."） */
+  text?: string;
   ratio?: number;
   current?: number;
   total?: number;
   /** 来自"主播收益"拉取的显式标记（见 anchor-gifts-client 的 FetchProgressHandler） */
   anchorGift?: boolean;
+  /** 消费记录：已请求页数（该阶段没有百分比，只展示页数/条数） */
+  page?: number;
+  /** 收益记录：当前月份的总页数 */
+  pages?: number;
+  /** 收益记录：当前月份（YYYY-MM），用于标题栏的紧凑进度文案 */
+  month?: string;
+  /** 收益记录：剩余耗时短文案（如「剩25分钟」），无可靠估算时为空 */
+  remain?: string;
+  /** 收益记录：首次全量探测阶段（此时进度未知，没有百分比） */
+  probe?: boolean;
 };
 
 async function dispatchNative(
@@ -241,12 +252,12 @@ export async function dataFetch(
     // 打 B站 的全量/增量拉取是分钟级长任务：Next.js 路由要等整个拉取完成后才返回响应头，
     // 通用 6 秒超时会把客户端请求掐断（服务端仍会继续跑完并落盘，但首次响应已丢失），
     // 表现为"重建/首次初始化获取完数据后界面仍显示 0，需再点一次绿色刷新按钮才正常"。
-    // 对此类长任务放宽到 15 分钟，其余请求保持 6 秒快速失败。
+    // 对此类长任务放宽到 30 分钟（5 万条消费记录 ≈ 1000 页 × 1s ≈ 17 分钟），其余请求保持 6 秒快速失败。
     const isLongPull =
       (pathname === "/api/revenue/pay-record" && query.get("fast") !== "1") ||
       (pathname === "/api/anchor/gifts" && (query.get("probe") === "true" || query.get("refresh") === "true"));
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), isLongPull ? 15 * 60 * 1000 : 6000);
+    const timer = setTimeout(() => ctrl.abort(), isLongPull ? 30 * 60 * 1000 : 6000);
     // WEB 端长任务没有原生进度回调：服务端把每页进度写进内存表（pay-record-progress），
     // 这里生成 ticket 随主请求带上，并每秒轮询进度接口转发给调用方，
     // 使 WEB 端的进度文案/进度条与 Tauri 端完全一致。
@@ -266,7 +277,7 @@ export async function dataFetch(
             { cache: "no-store" },
           );
           const data = await res.json();
-          if (data?.data?.text) report(data.data);
+          if (data?.data) report(data.data);
         } catch {
           // 轮询失败静默忽略：进度是锦上添花，不能影响主请求
         }

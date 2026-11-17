@@ -72,12 +72,26 @@ const DEFAULT_APP_SECRET = "560c52ccd288fed045859ed18bffd973";
 // 每页请求条数：B站上限 50（实测 page_size=100 也只会返回 50 条/页）。
 // 设 50 即为接口能返回的最大值，总请求数约为 20/页 的 1/2.5。
 const PAGE_SIZE = 50;
-const MAX_PAGES = 1000;
+/**
+ * 单次拉取的页数上限，仅作为「B站 next_id 异常打转」时的死循环保险，不是数据量上限。
+ * 10000 页 × 50 条 = 50 万条，远超已知最大账号（5 万条 = 1000 页，旧值正好把它截断）。
+ */
+const MAX_PAGES = 10_000;
 /** 大账号（数百页）拉取时的落盘间隔：每 N 页把手头记录写盘并记录断点，中断后不必从头再来 */
 const CHECKPOINT_PAGES = 20;
-const REQUEST_RETRY_COUNT = 3;
-/** 网络瞬时失败重试间隔：1s → 2s → 4s（限流加强后，短间隔重试只会更快撞墙） */
+/**
+ * 网络瞬时失败重试：1s → 2s → 4s → 8s → 16s（共 5 次）。
+ * 大账号翻到第 300+ 页时一次网络抖动就整批中断太可惜，多给几次机会。
+ */
+const REQUEST_RETRY_COUNT = 5;
 const REQUEST_BACKOFF_MS = 1000;
+const REQUEST_BACKOFF_MAX_MS = 16_000;
+/**
+ * 单页请求硬超时：Tauri HTTP 插件默认既不设连接超时也不设总超时，
+ * 链路半死（丢包但未 RST）时单页请求会无限挂起 —— 表现为进度条卡住、无任何报错。
+ * 30s 足够覆盖正常页面（通常 <300ms），超时按「网络错误」走重试。
+ */
+const PAGE_REQUEST_TIMEOUT_MS = 30_000;
 /**
  * 412 限流：账号级封禁（实测同一出口 IP 的其他账号正常，只有被限流的账号持续 412，
  * 封禁约 18 分钟自动解除，期间继续请求不会延长封禁）。
@@ -231,11 +245,22 @@ async function fetchPayRecordPageWithRetry(
 
   for (;;) {
     try {
-      const response = await platform.fetchBilibiliJson<PayRecordResponse>({
-        url,
-        cookie,
-        mobile: true,
+      // 单页硬超时：请求与定时器赛跑，结束后清掉定时器，避免几百页各留一个挂空定时器
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`请求超时（${PAGE_REQUEST_TIMEOUT_MS / 1000}s 无响应）`)),
+          PAGE_REQUEST_TIMEOUT_MS,
+        );
       });
+      const response = await Promise.race([
+        platform.fetchBilibiliJson<PayRecordResponse>({
+          url,
+          cookie,
+          mobile: true,
+        }),
+        timeoutPromise,
+      ]).finally(() => clearTimeout(timer));
       // 风控/限流业务码：冷却重试同一页，而不是把它当业务错误整批丢弃
       if (RISK_LIMIT_CODES.has(response.code)) {
         const retry = await coolDown(`触发限流/风控 code=${response.code} ${response.message || ""}`);
@@ -252,7 +277,7 @@ async function fetchPayRecordPageWithRetry(
       }
       networkAttempt++;
       if (networkAttempt > REQUEST_RETRY_COUNT) break;
-      const delay = REQUEST_BACKOFF_MS * Math.pow(2, networkAttempt - 1);
+      const delay = Math.min(REQUEST_BACKOFF_MS * Math.pow(2, networkAttempt - 1), REQUEST_BACKOFF_MAX_MS);
       console.warn(
         `[PayRecordClient] 请求失败，等待 ${delay}ms 后重试 ${networkAttempt}/${REQUEST_RETRY_COUNT}: ${err?.message || err}`,
       );
@@ -265,7 +290,7 @@ async function fetchPayRecordPageWithRetry(
 export async function fetchPayRecords(
   platform: Platform,
   refresh?: boolean,
-  onProgress?: (p: { text: string; ratio?: number; current?: number; total?: number }) => void,
+  onProgress?: (p: import("./client-fetch").FetchProgress) => void,
 ): Promise<{ code: number; message: string; data?: PayRecordSnapshot }> {
   const state = await platform.getSessionState();
   const sid = state.currentSid;
@@ -400,10 +425,22 @@ export async function fetchPayRecords(
     ): Promise<"ok" | "auth"> => {
       let nextId: number | undefined = startNextId;
       let prevNextId: number | undefined;
+      let duplicatePages = 0;
+      let cursorStalled = false;
       do {
         pageCount++;
         if (pageCount > MAX_PAGES) {
-          console.log(`[PayRecordClient] 已达到最大页数限制 ${MAX_PAGES}，停止翻页`);
+          // 必须保留断点：否则下次刷新又从最新记录重翻 MAX_PAGES 页，
+          // 永远走不到更深处（5 万条账号卡住不动的直接原因）。
+          resumeCursor = nextId ?? resumeCursor;
+          console.warn(
+            `[PayRecordClient] 达到单次页数上限 ${MAX_PAGES}，暂停（已拉 ${allRecords.length} 条），断点 nextId=${resumeCursor}`,
+          );
+          onProgress?.({
+            text: `已达单次最大页数 ${MAX_PAGES}，已保存 ${allRecords.length} 条，下次刷新将继续`,
+            current: allRecords.length,
+            total: 0,
+          });
           return "ok";
         }
 
@@ -455,12 +492,20 @@ export async function fetchPayRecords(
         const next = response.data.params?.next_id;
         resumeCursor = next ?? 0;
 
-        // 游标原地打转（B站 偶发返回同一个 next_id）：说明已经翻到尽头，再请求只会重复
+        // 游标原地打转（B站 偶发返回同一个 next_id）：先按同一游标再请求一次确认，
+        // 仍不变才判定到底（此时继续请求也只会拿到同一页，不会丢数据）。
         if (next && next === prevNextId) {
-          console.log(`[PayRecordClient] 第 ${pageCount} 页 next_id 未变化（${next}），已到末尾，停止翻页`);
+          if (!cursorStalled) {
+            cursorStalled = true;
+            console.warn(`[PayRecordClient] 第 ${pageCount} 页 next_id 未变化（${next}），同一游标再请求一次确认`);
+            nextId = next;
+            continue;
+          }
+          console.log(`[PayRecordClient] 第 ${pageCount} 页 next_id 仍为 ${next}，判定已到末尾`);
           resumeCursor = 0;
           return "ok";
         }
+        cursorStalled = false;
         prevNextId = next;
 
         if (reachedCutoff) {
@@ -470,21 +515,33 @@ export async function fetchPayRecords(
         }
         if (!next) return "ok";
         if (!hasNewRecord) {
-          console.log(`[PayRecordClient] 第 ${pageCount} 页全部重复，停止翻页`);
-          resumeCursor = 0;
-          return "ok";
+          duplicatePages++;
+          // 单页全重复可能是 B站 分页错位（返回了与上页重叠/相同的内容），不一定是真到末尾。
+          // 连续 3 页都重复才认为翻完；并且保留断点，万一判断错，下次刷新还能从这继续补。
+          if (duplicatePages >= 3) {
+            console.warn(
+              `[PayRecordClient] 连续 ${duplicatePages} 页全部重复（已拉 ${allRecords.length} 条），停止翻页` +
+                (next ? `，保留断点 nextId=${next}` : ""),
+            );
+            resumeCursor = next;
+            return "ok";
+          }
+        } else {
+          duplicatePages = 0;
         }
 
         console.log(`[PayRecordClient] 第 ${pageCount} 页: ${list.length} 条, nextId=${next}`);
+        // 文案由遮罩按结构化字段拼（已下载m页（n条）），这里不再重复拼接字符串
         onProgress?.({
-          text: `正在获取消费记录，已请求 ${pageCount} 页（${allRecords.length} 条）`,
           current: allRecords.length,
-          total: 0,
+          page: pageCount,
         });
 
         // 大账号（数百页）：每 20 页落盘一次。中途失败/退出也不必从零重来，界面更不会归零
         if (pageCount % CHECKPOINT_PAGES === 0) {
-          await persistRecords(mergeFetched(allRecords), resumeCursor);
+          // 增量段写盘时不能把「尚未消费的深层断点」清掉：
+          // 增量段正常结束会把 resumeCursor 置 0，若此时直接落盘，历史断点就永久丢失了。
+          await persistRecords(mergeFetched(allRecords), resumeCursor > 0 ? resumeCursor : pendingCursor);
         }
 
         nextId = next;
@@ -527,15 +584,21 @@ export async function fetchPayRecords(
     if (allRecords.length > 0) {
       try {
         const mergedRecords = mergeFetched(allRecords);
-        await persistRecords(mergedRecords, resumeCursor);
+        await persistRecords(mergedRecords, resumeCursor > 0 ? resumeCursor : pendingCursor);
         const snapshot = buildSnapshot(
           mergedRecords,
           month || new Date().toISOString().slice(0, 7).replace("-", ""),
         );
         console.warn(
           `[PayRecordClient] 已中断，先把已拉到的 ${mergedRecords.length} 条落盘返回` +
-            (resumeCursor > 0 ? `，下次从 nextId=${resumeCursor} 续拉` : ""),
+            (resumeCursor > 0 ? `，下次从 nextId=${resumeCursor} 续拉` : "") +
+            `（原因：${err instanceof Error ? err.message : String(err)}）`,
         );
+        onProgress?.({
+          text: `本次中断（${err instanceof Error ? err.message : "未知错误"}），已保存 ${mergedRecords.length} 条，下次刷新自动续拉`,
+          current: mergedRecords.length,
+          total: 0,
+        });
         return { code: 0, message: "partial snapshot", data: snapshot };
       } catch (saveErr) {
         console.error("[PayRecordClient] 中断记录落盘失败:", saveErr);

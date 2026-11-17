@@ -12,9 +12,11 @@
  */
 
 export type PayRecordProgress = {
-  text: string;
+  text?: string;
   current?: number;
   total?: number;
+  /** 已请求页数（前端遮罩据此拼「已下载m页（n条）」） */
+  page?: number;
   at: number;
 };
 

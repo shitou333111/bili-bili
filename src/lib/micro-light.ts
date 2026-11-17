@@ -413,22 +413,95 @@ export async function resetDraw(id: string): Promise<{ id: string; pkId: number 
 
 type BiliResp<T> = { code?: number; data?: T } | null;
 
-async function biliJson<T>(url: string): Promise<BiliResp<T>> {
+/**
+ * 匿名调用 B站接口时附带的 buvid 风控 cookie。
+ * 服务器（尤其是机房 IP）不带 cookie 时容易被风控返回 412 "request was banned"，
+ * 表现为"查不到直播间"。这里模拟真实浏览器先取一次 buvid3/buvid4，进程内复用 6 小时。
+ */
+let biliCookie = "";
+let biliCookieAt = 0;
+
+async function getBiliCookie(): Promise<string> {
+  if (biliCookie && Date.now() - biliCookieAt < 6 * 3600_000) return biliCookie;
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": BILI_UA, Referer: "https://live.bilibili.com/" },
+    const res = await fetch("https://api.bilibili.com/x/frontend/finger/spi", {
+      headers: { "User-Agent": BILI_UA, Referer: "https://www.bilibili.com/" },
       cache: "no-store",
+      signal: AbortSignal.timeout(8000),
     });
-    return (await res.json()) as BiliResp<T>;
+    const json = (await res.json()) as { data?: { b_3?: string; b_4?: string } };
+    const b3 = json?.data?.b_3;
+    if (b3) {
+      biliCookie = `buvid3=${b3}${json.data?.b_4 ? `; buvid4=${json.data.b_4}` : ""}`;
+      biliCookieAt = Date.now();
+    }
   } catch {
-    return null;
+    /* 取不到就退回无 cookie 请求，不影响主流程 */
   }
+  return biliCookie;
 }
 
-/** uid -> room_id（getRoomInfoOld，公开） */
+async function biliJson<T>(url: string): Promise<BiliResp<T>> {
+  const cookie = await getBiliCookie();
+  const headers: Record<string, string> = {
+    "User-Agent": BILI_UA,
+    Referer: "https://live.bilibili.com/",
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+  };
+  if (cookie) headers.Cookie = cookie;
+  // 风控 412 是概率性的：失败后短暂等待重试一次
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as BiliResp<T>;
+      if (data?.code === -412) throw new Error("banned");
+      return data;
+    } catch (err) {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 250));
+        continue;
+      }
+      console.warn("[micro-light] B站接口请求失败:", url, err instanceof Error ? err.message : err);
+    }
+  }
+  return null;
+}
+
+/** uid -> room_id：主接口 getRoomInfoOld，失败时用主播信息接口兜底 */
+const roomIdCache = new Map<number, number>();
+
+export async function resolveRoomIdEx(uid: number): Promise<{ roomId: number; reachable: boolean }> {
+  const cached = roomIdCache.get(uid);
+  if (cached) return { roomId: cached, reachable: true };
+
+  // reachable 用于区分"接口本身不可用（风控/网络）"与"该 UID 确实没有直播间"，
+  // 避免把风控失败误报成 UID 错误
+  let reachable = false;
+
+  const info = await biliJson<{ roomid?: number }>(`${BILI_LIVE}/room/v1/Room/getRoomInfoOld?mid=${uid}`);
+  if (info) reachable = true;
+  let roomId = Number(info?.data?.roomid) || 0;
+
+  if (!roomId) {
+    // 备用接口：主播信息（同样公开，风控策略与上面不同，互为兜底）
+    const master = await biliJson<{ info?: { room_id?: number } }>(
+      `${BILI_LIVE}/live_user/v1/Master/info?uid=${uid}`,
+    );
+    if (master) reachable = true;
+    roomId = Number(master?.data?.info?.room_id) || 0;
+  }
+
+  if (roomId > 0) {
+    if (roomIdCache.size > 5000) roomIdCache.clear();
+    roomIdCache.set(uid, roomId);
+  }
+  return { roomId, reachable };
+}
+
 export async function resolveRoomId(uid: number): Promise<number> {
-  const data = await biliJson<{ roomid?: number }>(`${BILI_LIVE}/room/v1/Room/getRoomInfoOld?mid=${uid}`);
-  return Number(data?.data?.roomid) || 0;
+  return (await resolveRoomIdEx(uid)).roomId;
 }
 
 /**

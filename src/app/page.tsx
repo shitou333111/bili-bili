@@ -7,7 +7,7 @@ import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 import { toPng } from "html-to-image";
 import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl, serverPost, pageUrl, isTauri } from "@/lib/server-api";
-import { dataFetch } from "@/lib/client-fetch";
+import { dataFetch, type FetchProgress } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
 import { cacheGet, cacheSet, cacheClearMid, cacheKeys } from "@/lib/idb-cache";
 import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "@/lib/blind-box-calc";
@@ -18,10 +18,10 @@ import { getPlatform } from "@/lib/platform";
 import { refreshGiftData } from "@/lib/gift-local-store";
 import SynthesisActivityCard from "@/components/SynthesisActivityCard";
 import AnchorDataModule from "@/components/AnchorDataModule";
+import DataInitOverlay from "@/components/DataInitOverlay";
 import AutostartCard from "@/components/AutostartCard";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import BottomDock, { type DockTabKey } from "@/components/BottomDock";
-import PwaInstallPrompt from "@/components/PwaInstallPrompt";
 import PieTooltip from "@/components/PieTooltip";
 import VolumeIcon from "@/components/VolumeIcon";
 import { showToast } from "@/lib/toast";
@@ -992,7 +992,7 @@ export default function HomePage() {
   // 礼物清单搜索：选中的礼物名称（null=未选中，按月份/主播筛选显示）
   const [giftSearchName, setGiftSearchName] = useState<string | null>(null);
   // 首次获取消费/收益记录时的进度提示（text: 说明文字, ratio: 0~1 可选）
-  const [fetchProgress, setFetchProgress] = useState<{ text: string; ratio?: number; anchorGift?: boolean } | null>(null);
+  const [fetchProgress, setFetchProgress] = useState<FetchProgress | null>(null);
   const [bubbleChartData, setBubbleChartData] = useState<{ items: BubbleItem[]; title: string; loading?: boolean; loadingText?: string } | null>(null);
   const [anchorFaces, setAnchorFaces] = useState<Record<number, string>>({});
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1304,6 +1304,13 @@ export default function HomePage() {
         // 否则删光记录后（无 records、无 end_date 基线）冷启动路径会 skipPull，
         // 导致重建后不再重新获取主播收益记录。
         localStorage.setItem("bili_live_anchor_probe", "1");
+        // 标记本次重新加载是"重建数据"：进入页面后直接显示初始化全屏遮罩，
+        // 不再先闪一下中间态的"加载中..."（由 initLocalFirst 读取并在初始化完成后清除）
+        try {
+          sessionStorage.setItem("bili_live_init_overlay", "1");
+        } catch {
+          /* 隐私模式不可写时忽略 */
+        }
         // 稍等片刻让 Toast 显示，然后重新加载页面从空数据启动初始化流程
         setTimeout(() => {
           window.location.reload();
@@ -2098,6 +2105,15 @@ export default function HomePage() {
       return;
     }
     // 返回用户：先快速显示本地数据（不发 B站），再后台静默同步（不阻塞界面）
+    // 扫码登录 / 重建数据后，本地必然为空：直接进入初始化全屏遮罩，
+    // 不再先经过 RevenueModuleContent 的"加载中..."中间态
+    let initOverlayPending = false;
+    try {
+      initOverlayPending = sessionStorage.getItem("bili_live_init_overlay") === "1";
+    } catch {
+      /* 隐私模式不可读时忽略 */
+    }
+    if (initOverlayPending) setIsFirstTime(true);
     setSyncing(true);
     setLoading(false);
     try {
@@ -2116,6 +2132,12 @@ export default function HomePage() {
       await fetchData(true); // background：仅刷新按钮动画，无阻塞遮罩
     } finally {
       setSyncing(false);
+      // 初始化结束（含失败）：清掉一次性标记，后续正常重开不再进入初始化遮罩
+      try {
+        sessionStorage.removeItem("bili_live_init_overlay");
+      } catch {
+        /* 忽略 */
+      }
     }
   }
 
@@ -2295,7 +2317,15 @@ export default function HomePage() {
     try {
       const [accountsRes, snapshotRes] = await Promise.all([
         dataFetch("/api/auth/accounts", { cache: "no-store" }),
-        dataFetch("/api/revenue/pay-record", { cache: "no-store" }, (p) => setFetchProgress({ text: p.text, ratio: p.ratio })),
+        dataFetch("/api/revenue/pay-record", { cache: "no-store" }, (p) =>
+          setFetchProgress({
+            text: p.text,
+            ratio: p.ratio,
+            current: p.current,
+            total: p.total,
+            page: p.page,
+          }),
+        ),
       ]);
 
       const accountsData = await accountsRes.json();
@@ -3769,38 +3799,9 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* 首次初始化提示：无本地数据、正在后台拉取时全屏提示 */}
+      {/* 首次初始化 / 重建数据：全屏遮罩，标题栏展示当前阶段与进度，下方为功能轮播 */}
       {isFirstTime && syncing && createPortal(
-        <div className="fixed inset-0 z-[9999] bg-[#f5f5f5]/95 backdrop-blur flex items-center justify-center px-6">
-          <div className="text-center max-w-xs w-full">
-            <div className="w-10 h-10 border-[3px] border-[#1f1c17] border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
-            <p className="text-base font-semibold text-[#1f1c17] mb-3">获取数据中...</p>
-            <p className="text-sm leading-6 text-black/55">首次登录，初始化耗时较长，请耐心等待。</p>
-            <p className="text-sm leading-6 text-black/55 mt-1">每个账号只初始化一次，以后使用会很快。</p>
-
-            {fetchProgress && (
-              <div className="mt-5">
-                <div className="h-2 w-full overflow-hidden rounded-full bg-black/10">
-                  <div
-                    className={`h-full rounded-full bg-[#1f1c17] transition-all duration-300 ${fetchProgress.ratio === undefined ? "w-1/3 progress-indeterminate" : ""}`}
-                    style={fetchProgress.ratio !== undefined ? { width: `${Math.max(4, Math.round(fetchProgress.ratio * 100))}%` } : undefined}
-                  ></div>
-                </div>
-                <p className="mt-2 text-xs text-black/55">{fetchProgress.text}</p>
-                {/* 获取主播收益阶段：用显式标记判断（不再对文案做正则匹配——文案一改就失效）。
-                    全程显示，从"正在获取主播收益"起始提示到月级/页级进度、412 退避提示都覆盖。 */}
-                {fetchProgress.anchorGift && (
-                  <div className="mt-2 text-center">
-                    <p className="text-sm leading-6 text-black/55">播的久数据多的主播，要先检查数据是否完整。</p>
-                    <p className="text-sm leading-6 text-black/55">看数据日期范围，看收入是否符合自己的估计。</p>
-                    <p className="text-sm leading-6 text-black/55">如果数据不全，先尝试点击绿色圆圈按钮刷新。</p>
-                    <p className="text-sm leading-6 text-black/55">如果仍然不全，就点击帮助里的重建数据按钮。</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>,
+        <DataInitOverlay progress={fetchProgress} />,
         document.body
       )}
 
@@ -3973,16 +3974,15 @@ export default function HomePage() {
           isServerAccount={currentAccount?.source === "server"}
           syncing={syncing}
           activityMaterials={anchorMaterials}
-          // 仅首次/重建初始化（isFirstTime）才用主 loading 顶起主播页的加载遮罩；
-          // 正常重开（非首次，已有本地数据）时主 loading 在整个启动增量拉取期间恒为 true，
-          // 会让"本就该静默的后台同步"在主播放展示一个不必要的更新遮罩。
-          syncLoading={isFirstTime ? loading : false}
           lastRefreshTime={lastRefreshTime}
           isLocalAccount={isLocalAccount}
           onFetchRequest={anchorRefreshRef}
           onRefresh={handleRefresh}
           showToast={showToast}
-          onFetchProgress={(p) => setFetchProgress(p)}
+          onFetchProgress={(p) =>
+            // 退避/等待类事件可能不带宽高比：沿用上一次的百分比，避免圆球水位突然归零
+            setFetchProgress((prev) => (p ? { ...p, ratio: p.ratio ?? prev?.ratio } : null))
+          }
           onNoRevenue={() => {
             // 登录探测判定该账号无收益：置位标记，"主播"页面改为显示客户端下载引导提示。
             // 不再额外轻提示：切换到下载引导页本身已经足够明显，再弹提示纯属打扰。
@@ -5029,9 +5029,6 @@ export default function HomePage() {
       </div>
 
       </div> {/* End of scrollable content area */}
-
-      {/* PWA 安装引导（仅移动端网页；客户端/桌面网页不显示，判断在 hook 内部） */}
-      <PwaInstallPrompt />
 
       {/* iOS 苹果风格悬浮底部托盘导航栏（fixed 定位相对视口，无需 Portal 绕过 transform） */}
       <BottomDock

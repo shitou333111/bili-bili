@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * PWA「添加到主屏幕」安装引导（仅移动端浏览器网页）。
@@ -80,15 +80,31 @@ function markDismissed() {
 export interface PwaInstallController {
   visible: boolean;
   mode: PwaInstallMode | null;
+  /** 用户刚刚通过系统安装对话框完成安装（用于提示"请从桌面图标打开"） */
+  installed: boolean;
   /** 调用系统安装对话框（仅 mode === "prompt" 时有效） */
   install: () => void;
   /** 用户关闭卡片：写入冷却时间并隐藏 */
   dismiss: () => void;
 }
 
-export function usePwaInstall(): PwaInstallController {
+export interface PwaInstallOptions {
+  /** 页面加载后延迟出现，默认 SHOW_DELAY_MS（登录页可提前到 1s 左右） */
+  delayMs?: number;
+}
+
+export function usePwaInstall(options: PwaInstallOptions = {}): PwaInstallController {
+  const delayMs = options.delayMs ?? SHOW_DELAY_MS;
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<PwaInstallMode | null>(null);
+  const [installed, setInstalled] = useState(false);
+  // 是否由本组件发起安装：安装成功后 appinstalled 会紧跟着触发，
+  // 需要保留弹窗展示"请从桌面图标打开"的确认文案，而不是直接关掉。
+  const installingRef = useRef(false);
+  // 用户已经关闭过引导：即使 beforeinstallprompt 迟到，也不再弹回来
+  const dismissedRef = useRef(false);
+  // 安装已被接受：appinstalled 可能晚于 userChoice 回调，需要保住"请从桌面图标打开"的提示
+  const installedRef = useRef(false);
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) return; // 客户端不显示
@@ -103,7 +119,7 @@ export function usePwaInstall(): PwaInstallController {
 
     // 允许"手动指引"随后升级为系统安装按钮（beforeinstallprompt 迟到的情况）
     const show = (m: PwaInstallMode) => {
-      if (disposed || shownMode === "prompt") return;
+      if (disposed || dismissedRef.current || shownMode === "prompt") return;
       if (shownMode === m) return;
       shownMode = m;
       setMode(m);
@@ -117,7 +133,12 @@ export function usePwaInstall(): PwaInstallController {
     const onInstalled = () => {
       window.__bguaguaInstallPrompt = null;
       shownMode = "prompt"; // 不再展示任何引导
-      setVisible(false);
+      if (installingRef.current || installedRef.current) {
+        setInstalled(true);
+        setVisible(true);
+      } else {
+        setVisible(false);
+      }
     };
 
     window.addEventListener("bguagua:pwa-installable", onInstallable);
@@ -133,7 +154,7 @@ export function usePwaInstall(): PwaInstallController {
           if (shownMode) return;
           show(ios ? "ios" : "android-manual");
         },
-        SHOW_DELAY_MS + (ios ? 0 : PROMPT_GRACE_MS),
+        delayMs + (ios ? 0 : PROMPT_GRACE_MS),
       ),
     );
 
@@ -143,31 +164,43 @@ export function usePwaInstall(): PwaInstallController {
       window.removeEventListener("bguagua:pwa-installable", onInstallable);
       window.removeEventListener("appinstalled", onInstalled);
     };
-  }, []);
+  }, [delayMs]);
 
   const install = useCallback(() => {
     const ev = window.__bguaguaInstallPrompt;
     if (!ev) return;
+    installingRef.current = true;
     void (async () => {
       try {
         await ev.prompt();
         const choice = await ev.userChoice;
         // 事件只能用一次，无论用户选什么都释放掉
         window.__bguaguaInstallPrompt = null;
-        setVisible(false);
-        if (choice?.outcome !== "accepted") markDismissed();
+        if (choice?.outcome === "accepted") {
+          installedRef.current = true;
+          setInstalled(true);
+          setVisible(true);
+        } else {
+          setVisible(false);
+          dismissedRef.current = true;
+          markDismissed();
+        }
       } catch {
         // 某些浏览器在事件过期后调用会抛错：退化为隐藏卡片
         window.__bguaguaInstallPrompt = null;
         setVisible(false);
+      } finally {
+        installingRef.current = false;
       }
     })();
   }, []);
 
   const dismiss = useCallback(() => {
+    dismissedRef.current = true;
+    installedRef.current = false;
     markDismissed();
     setVisible(false);
   }, []);
 
-  return { visible, mode, install, dismiss };
+  return { visible, mode, installed, install, dismiss };
 }

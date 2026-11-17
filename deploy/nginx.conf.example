@@ -160,9 +160,10 @@ server {
     # 如果你的配置里有 upstream（如 upstream bili_bili_app { server 127.0.0.1:3000; keepalive 32; }），
     # 请统一换成 proxy_pass http://bili_bili_app; 并加上 proxy_set_header Connection "";
     # 两者等价，但用 upstream 才能复用连接；不要一个 location 用 upstream、另一个用字面地址。
-    # 大账号消费记录可达 2 万条（≈ 400+ 页），服务端要连续翻几百页才能返回。
+    # 大账号消费记录可达 5 万条（≈ 1000 页），服务端要连续翻几千页才能返回（页间 1s 节流）。
     # nginx 默认 proxy_read_timeout 仅 60s，会把这类请求在"快拉完"时掐断 —— 前端拿到
-    # 504/半截响应后解析失败，表现为"在结尾中断、消费记录显示 0"。这里单独放宽到 15 分钟。
+    # 504/半截响应后解析失败，表现为"在结尾中断、消费记录显示 0"。这里单独放宽到 30 分钟
+    # （与前端 dataFetch 的 30 分钟长任务超时对齐）。
     location ^~ /api/revenue/pay-record {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -170,15 +171,15 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 900s;
-        proxy_send_timeout 900s;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
         proxy_buffering off;
     }
 
     # ---- 长耗时 API：主播礼物流水（probe / refresh）----
     # 扫码登录后的首次全量探测（probe=true）与手动刷新（refresh=true）会按月份逐个探测、
     # 再逐页拉取（每页还会带限流退避），单次响应同样可能长达数分钟；
-    # 前端 dataFetch 已把它当长任务放宽到 15 分钟，nginx 这里必须对齐，
+    # 前端 dataFetch 已把它当长任务放宽到 30 分钟，nginx 这里必须对齐，
     # 否则会在 60s 被掐断，表现为"礼物流水只拉到一部分/刷新后数据不全"。
     location ^~ /api/anchor/gifts {
         proxy_pass http://127.0.0.1:3000;
@@ -187,8 +188,8 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 900s;
-        proxy_send_timeout 900s;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
         proxy_buffering off;
     }
 

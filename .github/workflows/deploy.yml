@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: "发布安装包到服务器（取消勾选则只构建，产物仅留在 Actions Artifacts 供下载自测）"
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: deploy-build-${{ github.ref }}
@@ -28,6 +33,9 @@ concurrency:
 #   ipa    -> iOS IPA
 # 例如 "exe apk" 会同时构建 EXE 和 APK。
 # 关键词 "debug" 使所有客户端构建使用 Debug 包（对 server 部署无影响）。
+# 关键词 "nopublish" -> 只构建不发布：APK/EXE/IPA 仍会构建并上传到 Actions Artifacts，
+#   但跳过 publish-artifacts（不上传安装包到服务器、不更新 webapp 热更新包）。
+#   例："apk nopublish" = 只出 APK 供自己下载测试。
 #
 # 服务器地址优先级（仅客户端构建用）：
 #   1. commit 含 "local" 关键字 → 强制使用 http://192.168.1.2:3000（本地开发）
@@ -138,36 +146,59 @@ jobs:
           curl -sf http://127.0.0.1:3999/api/pwa/version | grep -q "\"seq\":${NEXT_PUBLIC_BUILD_SEQ}"
           curl -sf http://127.0.0.1:3999/api/pwa/version | grep -q "\"label\":\"V"
 
+      # 用 rsync 代替 appleboy/scp-action：后者底层是无心跳的 SSH 长连接，
+      # 链路一旦静默丢包（跨洋线路常见）就会一直阻塞，表现为"upload dist to server
+      # 卡 50 分钟"，而它的 timeout/command_timeout 对写阻塞并不总能生效。
+      # rsync 方案：
+      #   - ServerAliveInterval/ServerAliveCountMax：15s 心跳 ×4，链路死掉约 1 分钟内断开；
+      #   - --timeout=120：I/O 无进展 120s 即失败；
+      #   - 三次重试，每次间隔 15s；
+      #   - 步骤级 timeout-minutes 兜底，绝不允许再挂几十分钟。
       - name: Upload dist to server
-        id: scp-dist
-        uses: appleboy/scp-action@v0.1.7
-        continue-on-error: true
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: deploy-dist/*
-          target: /tmp/bili_live-deploy
-          overwrite: true
-          strip_components: 1
-          timeout: 120s
-          command_timeout: 120s
-
-      - name: Retry upload dist (wait 15s)
-        if: steps.scp-dist.outcome == 'failure'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: deploy-dist/*
-          target: /tmp/bili_live-deploy
-          overwrite: true
-          strip_components: 1
-          timeout: 120s
-          command_timeout: 120s
+        timeout-minutes: 12
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o TCPKeepAlive=yes"
+          REMOTE="$SSH_USER@$SSH_HOST"
+          TARGET_DIR="/tmp/bili_live-deploy"
+          # 服务器没装 rsync 时退回 tar over ssh（仅依赖 tar），不至于让部署直接失败
+          if ssh $SSH_OPTS -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" "$REMOTE" 'command -v rsync >/dev/null 2>&1'; then
+            echo "远端有 rsync，使用增量同步"
+            for attempt in 1 2 3; do
+              echo "第 ${attempt}/3 次上传 dist（rsync）..."
+              if rsync -az --delete --partial --timeout=120 \
+                -e "ssh $SSH_OPTS -i $HOME/.ssh/deploy_key -p $SSH_PORT" \
+                deploy-dist/ "$REMOTE:${TARGET_DIR}/"; then
+                echo "上传成功"
+                exit 0
+              fi
+              echo "上传失败，15 秒后重试"
+              sleep 15
+            done
+          else
+            echo "远端无 rsync，退回 tar over ssh"
+            for attempt in 1 2 3; do
+              echo "第 ${attempt}/3 次上传 dist（tar）..."
+              if tar -czf - -C deploy-dist . \
+                | ssh $SSH_OPTS -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" "$REMOTE" \
+                    "mkdir -p ${TARGET_DIR} && find ${TARGET_DIR} -mindepth 1 -delete && tar -xzf - -C ${TARGET_DIR}"; then
+                echo "上传成功"
+                exit 0
+              fi
+              echo "上传失败，15 秒后重试"
+              sleep 15
+            done
+          fi
+          echo "三次上传均失败"
+          exit 1
 
       # 在 runner 上解析版本名（GITHUB_RUN_ID/ATTEMPT 只存在于 runner，
       # 不能直接在 ssh 脚本里用 ${GITHUB_RUN_ID}，否则到服务器上被展开为空值，
@@ -811,7 +842,10 @@ jobs:
   # 构建时间戳取本次 workflow run 的 created_at（同一 run 内所有作业共享同一值），
   # 与 deploy-server 的 .releases 原子版本管理同一模式；旧版本只保留最近 5 个。
   publish-artifacts:
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot')) }}
+    # 发布条件：
+    #   - push：commit 含 exe/apk/ipa/hot 才发布，且含 nopublish 时只构建不发布；
+    #   - workflow_dispatch：由 publish 勾选项控制（默认勾选 = 发布）。
+    if: "${{ always() && (github.event_name == 'workflow_dispatch' ? inputs.publish == true : (contains(github.event.head_commit.message, 'exe') || contains(github.event.head_commit.message, 'apk') || contains(github.event.head_commit.message, 'ipa') || contains(github.event.head_commit.message, 'hot'))) && !contains(github.event.head_commit.message || '', 'nopublish') }}"
     needs: [build-exe, build-apk, build-ipa, build-hot-update]
     runs-on: ubuntu-latest
     steps:
@@ -927,43 +961,51 @@ jobs:
       - name: Upload artifacts to server (staging)
         id: scp-artifacts
         if: steps.prepare.outputs.HAS_FILES == 'true'
-        uses: appleboy/scp-action@v0.1.7
-        continue-on-error: true
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: publish/*
+        timeout-minutes: 15
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o TCPKeepAlive=yes"
+          REMOTE="$SSH_USER@$SSH_HOST"
           # 每次 run 用独立的 staging 目录（BUILD_TS 唯一）：
-          # scp-action 只增量覆盖、不清理目标目录，固定目录会让上一次 run 的
-          # 旧产物残留在服务器 /tmp 里，被后续 release 目录 cp -a 带入，
-          # 导致"未构建的平台"被误判为已构建（current_* 指向含旧包的目录），
-          # versions.json 上报新版本号但实际下载的是旧包（iOS 死循环更新的根源）。
-          target: /tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}
-          overwrite: true
-          strip_components: 1
-          timeout: 120s
-          command_timeout: 120s
-          # 传输慢排查用：打印底层 tar/scp 命令与更多过程细节（含耗时线索）。
-          # 排查完建议改回 false，否则日志会很冗长。
-          debug: true
-
-      - name: Retry upload artifacts (wait 15s)
-        if: steps.prepare.outputs.HAS_FILES == 'true' && steps.scp-artifacts.outcome == 'failure'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: publish/*
-          target: /tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}
-          overwrite: true
-          strip_components: 1
-          timeout: 120s
-          command_timeout: 120s
-          debug: true
+          # 固定目录会让上一次 run 的旧产物残留，被后续 release 目录 cp -a 带入，
+          # 导致"未构建的平台"被误判为已构建（iOS 死循环更新的根源）。
+          TARGET_DIR="/tmp/bili_live-artifacts-${{ steps.ts.outputs.BUILD_TS }}"
+          if ssh $SSH_OPTS -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" "$REMOTE" 'command -v rsync >/dev/null 2>&1'; then
+            for attempt in 1 2 3; do
+              echo "第 ${attempt}/3 次上传 artifacts（rsync → ${TARGET_DIR}）..."
+              if rsync -az --delete --partial --timeout=120 \
+                -e "ssh $SSH_OPTS -i $HOME/.ssh/deploy_key -p $SSH_PORT" \
+                publish/ "$REMOTE:${TARGET_DIR}/"; then
+                echo "上传成功"
+                exit 0
+              fi
+              echo "上传失败，15 秒后重试"
+              sleep 15
+            done
+          else
+            echo "远端无 rsync，退回 tar over ssh"
+            for attempt in 1 2 3; do
+              echo "第 ${attempt}/3 次上传 artifacts（tar）..."
+              if tar -czf - -C publish . \
+                | ssh $SSH_OPTS -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" "$REMOTE" \
+                    "mkdir -p ${TARGET_DIR} && find ${TARGET_DIR} -mindepth 1 -delete && tar -xzf - -C ${TARGET_DIR}"; then
+                echo "上传成功"
+                exit 0
+              fi
+              echo "上传失败，15 秒后重试"
+              sleep 15
+            done
+          fi
+          echo "三次上传均失败"
+          exit 1
 
       - name: Atomic publish on server
         id: ssh-publish

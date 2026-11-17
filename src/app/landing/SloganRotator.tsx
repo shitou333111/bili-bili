@@ -4,45 +4,13 @@ import { Swiper, SwiperSlide } from "swiper/react";
 import { Autoplay } from "swiper/modules";
 import type { Swiper as SwiperType } from "swiper";
 import "swiper/css";
+import { LANDING_SLIDES } from "@/lib/landing-content";
 
 // ==================== 宣传语轮播（Swiper·文字在上·图片在下·仅文字霓虹光晕） ====================
-// 一句宣传语配一张配图（public/landing_slides/N.jpg，编号即句子顺序，严格 1,2,3…）。
+// 文案/配图/配色统一来自 @/lib/landing-content（登录页也复用同一份内容）。
 // 每张图片与其文字是一个独立 slide（slide 内文字在上、图片在下），仅文字带霓虹光晕，图片无光晕。
 // 采用 Swiper slides-per-view 自适应：手机 1 张，平板 2 张，宽屏 3 张；
 // 整页翻动（slidesPerGroup = 每屏张数），每批停留 = 单张 5s × 每屏张数，循环自动播放。
-const SLOGANS = [
-  "想回顾你和爱播的甜蜜送礼瞬间？",
-  "与爱播闹崩，看花了多少冤枉钱？",
-  "想看给哪些主播，分别刷了多少？",
-  "想看看盲盒盈亏，出了多少个堡？",
-  "想看合成活动亏了多少赚了多少？",
-  "抢到的最香，想看中了多少天选？",
-  "爱播到底是哪位？时间会给出答案",
-  "主播想看每个月都收了什么礼物？",
-  "被粉丝骚扰？列清单不惯他臭毛病",
-  "自己直播间白不白？城堡说了才算",
-  "大礼物忘了录屏，想补礼物截图？",
-  "陪伴很重要，常来的粉丝是哪些？",
-  "想解锁所有礼物，体验神豪视角？",
-  "新出的合成活动，想上手玩一玩？",
-  "大哥大姐们想批量清理无关粉丝？",
-  "清理粉丝牌，被迫单个强制等待？",
-  "守医药费，想知道有没有掉地上？",
-  "发医药费，不想再统计在哪个群？",
-  "爱播没开播，新活动找不到入口？",
-];
-
-
-// 霓虹色板：每张独立取色循环（无绿色，绿色在浅色背景上易看不清）
-const NEON = [
-  "#ff2d78", // 霓虹粉
-  "#00d9ff", // 霓虹青
-  "#b967ff", // 霓虹紫
-  "#ff5722", // 橙红
-  "#ff9800", // 橙
-  "#ff3d81", // 荧光红
-  "#7c4dff", // 蓝紫
-];
 
 const PER_SLIDE_MS = 8000; // 单张基础停留时长
 const SPEED_MS = 900; // 划动动画时长（更长更顺滑）
@@ -53,9 +21,23 @@ function applyAutoplayDelay(swiper: SwiperType) {
   if (swiper.params.autoplay) swiper.params.autoplay.delay = PER_SLIDE_MS * perView;
 }
 
-export default function SloganRotator() {
+export default function SloganRotator({
+  fitViewport = false,
+  count,
+}: {
+  fitViewport?: boolean;
+  /** 只展示前 count 张（数据初始化遮罩用来占位；不传则展示全部） */
+  count?: number;
+}) {
+  const slides = count ? LANDING_SLIDES.slice(0, count) : LANDING_SLIDES;
   return (
-    <div className="mx-auto mt-8 w-full max-w-5xl sm:mt-12">
+    <div
+      className={
+        fitViewport
+          ? "mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col px-3 sm:px-4"
+          : "mx-auto mt-8 w-full max-w-5xl sm:mt-12"
+      }
+    >
       <Swiper
         modules={[Autoplay]}
         speed={SPEED_MS}
@@ -76,27 +58,59 @@ export default function SloganRotator() {
           // 宽屏 3 张（整页翻动 3 张）
           1280: { slidesPerView: 3, slidesPerGroup: 3, spaceBetween: 40 },
         }}
-        className="w-full [&_.swiper-wrapper]:items-stretch"
+        className={
+          fitViewport
+            ? "h-full min-h-0 w-full [&_.swiper-wrapper]:items-stretch"
+            : "w-full [&_.swiper-wrapper]:items-stretch"
+        }
       >
-        {SLOGANS.map((text, i) => {
-          const color = NEON[i % NEON.length]; // 每张独立取色
+        {slides.map((slide, i) => {
+          const color = slide.color;
           return (
-            <SwiperSlide key={i} className="!h-auto">
-              <div className="relative flex h-full w-full flex-col items-center px-2 pt-6 pb-4">
-                {/* 文字在上 */}
-                <span
-                  className="flex min-h-10 w-full items-start justify-center px-1 text-center text-[17px] font-semibold leading-snug sm:text-[17px]"
-                  style={{ color }}
+            <SwiperSlide key={i} className={fitViewport ? "!h-full" : "!h-auto"}>
+              <div
+                className={
+                  fitViewport
+                    ? "flex h-full w-full items-center justify-center"
+                    : "flex h-full w-full flex-col items-center"
+                }
+              >
+                <div
+                  className={
+                    fitViewport
+                      ? // 首屏模式：文字 + 图片作为一个整体，最多占可用空间（标题栏以下）的 90%，
+                        // 由外层 flex 水平/竖直居中；文字与图片之间保持固定的紧凑间距。
+                        "flex h-[90%] w-full max-w-[90%] flex-col items-center gap-2"
+                      : "relative flex h-full w-full flex-col items-center px-2 pt-6 pb-4"
+                  }
                 >
-                  {text}
-                </span>
-                {/* 图片在下：宽度占满 slide、高度按纵横比自然延伸 */}
-                <img
-                  src={`/landing_slides/${i + 1}.jpg`}
-                  alt=""
-                  loading="lazy"
-                  className="w-full object-contain"
-                />
+                  {/* 文字在上 */}
+                  <span
+                    className="flex min-h-10 w-full shrink-0 items-start justify-center px-1 text-center text-[17px] font-semibold leading-snug sm:text-[17px]"
+                    style={{ color }}
+                  >
+                    {slide.text}
+                  </span>
+                  {fitViewport ? (
+                    // 图片在文字下方的剩余空间内等比自适应，撑满这 90% 的区域
+                    <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+                      <img
+                        src={slide.image}
+                        alt=""
+                        loading="lazy"
+                        className="landing-slide-img-fit"
+                      />
+                    </div>
+                  ) : (
+                    // 官网首页：等比缩放，宽或高最多占窗口的 90%，并直接带圆角
+                    <img
+                      src={slide.image}
+                      alt=""
+                      loading="lazy"
+                      className="landing-slide-img mx-auto"
+                    />
+                  )}
+                </div>
               </div>
             </SwiperSlide>
           );

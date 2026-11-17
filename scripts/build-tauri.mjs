@@ -11,7 +11,7 @@
  *   2. 创建 .env.local 文件：NEXT_PUBLIC_SERVER_URL=http://...
  */
 import { execSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, rmSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -80,6 +80,21 @@ execSync("node scripts/patch-particle-effect-button.mjs", { stdio: "inherit", cw
 // 保持幂等，保证 CI 构建产物一定包含。
 console.log("[build-tauri] 应用 bilibili-live-ws 补丁...");
 execSync("node scripts/patch-bilibili-ws.mjs", { stdio: "inherit", cwd: root });
+
+// next dev 与 next build 共用 .next 目录：dev 进程异常退出会留下被截断的
+// .next/dev/types/*.ts（例如 validator.ts 只剩文件头），而 tsconfig 的 include
+// 显式包含了 ".next/dev/types/**/*.ts"，于是构建期类型检查把它当源码读入，
+// 报 "Cannot find name 'AppRoutes'" 并直接中断构建。
+// 这里在构建前清掉 dev 生成物，幂等且不影响 build 自己的缓存。
+const devTypesDir = path.join(root, ".next", "dev");
+if (existsSync(devTypesDir)) {
+  try {
+    rmSync(devTypesDir, { recursive: true, force: true });
+    console.log("[build-tauri] 已清理 .next/dev（dev 残留的生成类型）");
+  } catch (err) {
+    console.warn(`[build-tauri] 清理 .next/dev 失败（可忽略）: ${err?.message || err}`);
+  }
+}
 
 console.log("[build-tauri] 开始构建前端（output: export, 排除 API routes）...");
 

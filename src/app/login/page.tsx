@@ -1,50 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Swiper, SwiperSlide } from "swiper/react";
+import { Autoplay, EffectFade } from "swiper/modules";
+import "swiper/css";
+import "swiper/css/effect-fade";
 import { authApi } from "@/lib/api";
 import { pageUrl } from "@/lib/server-api";
+import { APP_NAME, LANDING_SLIDES } from "@/lib/landing-content";
 import WindowTitleBar from "@/components/WindowTitleBar";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
+import PwaInstallPrompt from "@/components/PwaInstallPrompt";
+import SloganRotator from "@/app/landing/SloganRotator";
 
-type QRGenerateResponse = {
-  code: number;
-  message: string;
-  data?: {
-    qrcode_key: string;
-    url: string;
-    image: string;
-  };
-};
-
-type QRPollResponse = {
-  code: number;
-  message: string;
-  data?: {
-    code: number;
-    message: string;
-    url: string;
-    refresh_token: string;
-    timestamp: number;
-    sid?: string;
-    userToken?: string;
-  };
-};
+const AUTOPLAY_MS = 6500;
+const SLIDE_COUNT = LANDING_SLIDES.length;
 
 export default function LoginPage() {
   const [qrImage, setQrImage] = useState("");
   const [status, setStatus] = useState("正在生成登录二维码...");
   const [error, setError] = useState("");
-  const [qrKey, setQrKey] = useState("");
   const [countdown, setCountdown] = useState(0);
-  const [hasLoginUser, setHasLoginUser] = useState(false);
+  const [hasLoginUser] = useState(
+    // 是否已有登录用户：首次使用（无任何登录凭证）时不显示"取消登录"；
+    // 有登录用户时显示，点击返回"帮助"页面。
+    // 初始登录弹窗未打开，这里读 localStorage 不影响首屏渲染，也不会造成水合不一致。
+    () => typeof window !== "undefined" && !!localStorage.getItem("bili_live_sid"),
+  );
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const pollTimerRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
-
-  // 是否已有登录用户：首次使用（无任何登录凭证）时不显示"取消登录"；
-  // 有登录用户时显示，点击返回"帮助"页面。
-  useEffect(() => {
-    setHasLoginUser(!!localStorage.getItem("bili_live_sid"));
-  }, []);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -60,8 +46,8 @@ export default function LoginPage() {
   const pollLogin = useCallback((key: string) => {
     clearPollTimer();
     let pollCount = 0;
-    const maxPolls = 120;  // 180秒 / 1.5秒 = 120次
-    const totalSeconds = 180;  // B站二维码有效期约180秒
+    const maxPolls = 120; // 180秒 / 1.5秒 = 120次
+    const totalSeconds = 180; // B站二维码有效期约180秒
     setCountdown(totalSeconds);
 
     countdownTimerRef.current = window.setInterval(() => {
@@ -98,6 +84,13 @@ export default function LoginPage() {
             // 有容错的全量探测（仅此一次，消费后即清除），无收益则置位 noRevenue；
             // 冷启动/绿色刷新不再重复全量探测。
             localStorage.setItem("bili_live_anchor_probe", "1");
+            // 标记本次是在新会话下首次拉取数据：主页进入后直接显示初始化全屏遮罩，
+            // 不再先闪一下中间态的"加载中..."（初始化完成后自动清除）
+            try {
+              sessionStorage.setItem("bili_live_init_overlay", "1");
+            } catch {
+              /* 隐私模式不可写时忽略 */
+            }
           }
           setStatus("登录成功！正在跳转...");
           setTimeout(() => {
@@ -156,8 +149,10 @@ export default function LoginPage() {
           throw new Error(data.message || "二维码生成失败");
         }
 
-        setQrKey(data.data.qrcode_key);
-        setQrImage(data.data.image || `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(data.data.url)}`);
+        setQrImage(
+          data.data.image ||
+            `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(data.data.url)}`,
+        );
         setStatus("请使用哔哩哔哩 APP 扫码登录");
         pollLogin(data.data.qrcode_key);
         return;
@@ -173,141 +168,200 @@ export default function LoginPage() {
     }
   }, [clearPollTimer, pollLogin]);
 
-  const downloadQRCode = useCallback(async () => {
-    if (!qrImage) return;
+  const openLogin = useCallback(() => {
+    setLoginOpen(true);
+    void loadQR();
+  }, [loadQR]);
 
-    try {
-      // 方案一：优先使用 Web Share API（iOS Safari、Android Chrome）
-      const response = await fetch(qrImage);
-      const blob = await response.blob();
-      const file = new File([blob], 'bilibili-login-qr.png', { type: blob.type });
-
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: '保存二维码图片',
-        });
-        return;
-      }
-    } catch (err) {
-      console.log('Web Share API 不可用或失败，降级使用全屏展示');
-    }
-
-    // 方案二：全屏弹窗展示，提示长按保存（兼容所有浏览器，包括微信）
-    const newWindow = window.open("", "_blank");
-    if (newWindow) {
-      newWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>登录二维码</title>
-          <style>
-            body { margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #1a1a1a; }
-            img { max-width: 90vw; max-height: 70vh; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
-            .hint { margin-bottom: 20px; font-size: 18px; color: #fff; text-align: center; padding: 0 20px; font-weight: 500; }
-            .close-btn { position: absolute; top: 20px; right: 20px; color: #fff; font-size: 24px; cursor: pointer; padding: 10px; }
-          </style>
-        </head>
-        <body>
-          <button class="close-btn" onclick="window.close()">✕</button>
-          <p class="hint">长按图片保存到相册</p>
-          <img src="${qrImage}" alt="登录二维码" />
-        </body>
-        </html>
-      `);
-      newWindow.document.close();
-    }
-  }, [qrImage]);
+  const closeLogin = useCallback(() => {
+    clearPollTimer();
+    setLoginOpen(false);
+    setQrImage("");
+    setCountdown(0);
+    setError("");
+    setStatus("正在生成登录二维码...");
+  }, [clearPollTimer]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      void loadQR();
-    });
+    return () => clearPollTimer();
+  }, [clearPollTimer]);
 
-    return () => {
-      window.cancelAnimationFrame(frame);
-      clearPollTimer();
+  // Esc 关闭登录弹窗
+  useEffect(() => {
+    if (!loginOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeLogin();
     };
-  }, [loadQR, clearPollTimer]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [loginOpen, closeLogin]);
+
+  // 背景大图按"当前 ±1"懒加载：6MB 宣传图不会在首屏一次性全部下载
+  const shouldLoad = (i: number) => {
+    const diff = Math.abs(i - active);
+    return Math.min(diff, SLIDE_COUNT - diff) <= 1;
+  };
 
   return (
     <main
-      className="min-h-screen bg-[#f5f5f5] px-4 pb-10 text-[#1f1c17]"
-      style={{ paddingTop: "calc(var(--safe-top, 0px) + 3rem)" }}
+      className="login-screen relative flex h-[100svh] flex-col overflow-hidden bg-[#f2f2f4] text-[#1f1c17]"
+      style={{ paddingTop: "var(--safe-top, 0px)" }}
     >
       <SafeAreaStyler />
       <WindowTitleBar />
-      <section className="mx-auto w-full max-w-md">
-        <article className="rounded-[2rem] border border-black/10 bg-white/82 p-8 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
-          <h1 className="font-[family-name:var(--font-inter)] text-3xl font-semibold tracking-tight text-center">
-            扫码登录 B 站账号
-          </h1>
-          <p className="mt-4 text-sm leading-6 text-justify text-black/65">
-            使用哔哩哔哩手机APP扫码，在手机上确认登录。登录凭证存在本机，没有安全问题。
-          </p>
 
-          <div className="mt-8 flex justify-center">
-            <div className="max-w-[280px] w-full rounded-[1.75rem] border border-black/10 bg-[#111111] p-4 flex items-center justify-center">
-              <div className="w-full aspect-square rounded-3xl bg-white p-2 overflow-hidden flex items-center justify-center">
-                {qrImage ? (
-                  <img src={qrImage} alt="Bilibili login QR code" className="w-full h-full object-contain" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-sm text-white/65">二维码加载中...</div>
-                )}
-              </div>
-            </div>
-          </div>
+      {/* ============ 背景：官网宣传图轮播 + 深色遮罩 ============ */}
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <Swiper
+          className="h-full w-full !z-0"
+          modules={[Autoplay, EffectFade]}
+          effect="fade"
+          fadeEffect={{ crossFade: true }}
+          speed={1200}
+          slidesPerView={1}
+          loop
+          autoplay={{ delay: AUTOPLAY_MS, disableOnInteraction: false }}
+          onSlideChange={(s) => setActive(s.realIndex)}
+        >
+          {LANDING_SLIDES.map((slide, i) => (
+            <SwiperSlide key={slide.image} className="!h-full overflow-hidden">
+              {shouldLoad(i) ? (
+                <img
+                  src={slide.image}
+                  alt=""
+                  className="h-full w-full scale-110 object-cover object-top opacity-40 blur-[18px]"
+                />
+              ) : null}
+            </SwiperSlide>
+          ))}
+        </Swiper>
+        {/* 浅色遮罩：把背景图压成灰白色氛围，保证上方深色文字与轮播内容清晰 */}
+        <div className="absolute inset-0 bg-gradient-to-b from-[#f7f7f8]/88 via-[#f3f3f5]/82 to-[#f2f2f4]/96" />
+        {/* 强调光晕跟随当前功能取色，让每一屏都有自己的氛围色 */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background: `radial-gradient(120% 80% at 18% 0%, ${LANDING_SLIDES[active].color}22, transparent 62%)`,
+          }}
+        />
+      </div>
 
-          <div className="mt-6 text-center">
-            <div className="text-lg font-medium text-black/80">
-              {status}
-              {status === "等待扫码中..." && countdown > 0 && (
-                <span className="ml-2 text-sm text-black/50">({Math.floor(countdown / 60)}分{countdown % 60}秒)</span>
-              )}
-            </div>
-            {error ? (
-              <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
-                <p className="text-sm text-red-600">{error}</p>
-              </div>
-            ) : null}
-          </div>
+      <div className="relative z-10 flex min-h-0 w-full flex-1 flex-col">
+        {/* ============ 顶部：图标 + 标题 + 扫码登录 ============ */}
+        {/* 标题栏只用少量下内边距，让下方轮播尽量贴近顶部，避免首屏出现大块空白 */}
+        <header className="mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3 px-5 pb-1 pt-3 sm:px-8 sm:pb-1.5 sm:pt-4">
+          <img
+            src="/orig_icon.png"
+            alt={APP_NAME}
+            width={40}
+            height={40}
+            className="h-9 w-9 rounded-[11px] shadow-lg sm:h-10 sm:w-10"
+          />
+          <div className="text-[17px] font-semibold leading-tight">{APP_NAME}</div>
+          <button
+            type="button"
+            onClick={openLogin}
+            className="ml-auto inline-flex items-center rounded-full bg-[#1b1b1f] px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_6px_20px_rgba(0,0,0,0.18)] transition hover:bg-[#2b2b32] active:scale-[0.98] sm:px-5 sm:py-2 sm:text-[13px]"
+          >
+            扫码登录
+          </button>
+        </header>
 
-          <div className="mt-2 text-center">
-            <p className="text-xs text-black/40">长按上面的二维码图片保存或截屏</p>
-          </div>
+        {/* ============ 官网首页同款功能轮播，占据页面主体 ============ */}
+        <div className="relative flex min-h-0 w-full flex-1 flex-col pb-2 sm:pb-3">
+          <SloganRotator fitViewport />
+        </div>
+      </div>
 
-          <div className="mt-6 flex justify-center">
+      {/* ============ 扫码登录弹窗 ============ */}
+      {loginOpen && (
+        <div
+          className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="扫码登录"
+          onClick={closeLogin}
+        >
+          <div
+            className="relative w-full max-w-[360px] rounded-[26px] bg-white p-6 text-[#1f1c17] shadow-[0_30px_90px_rgba(0,0,0,0.5)]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               type="button"
-              onClick={loadQR}
-              className="rounded-full bg-[#1f1c17] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+              onClick={closeLogin}
+              aria-label="关闭登录"
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-black/35 transition hover:bg-black/[0.06] hover:text-black/60"
             >
-              重新生成二维码
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d="M3 3l8 8M11 3l-8 8" />
+              </svg>
             </button>
-          </div>
 
-          {/* 已有登录用户时显示"取消登录"：返回帮助页（不清除现有登录会话） */}
-          {hasLoginUser && (
-            <div className="mt-6 flex justify-center">
+            <h2 className="text-center text-xl font-semibold">扫码登录 B 站账号</h2>
+            <p className="mt-2 text-center text-[12px] leading-5 text-black/55">
+              使用哔哩哔哩手机 APP 扫码，登录凭证只保存在本机
+            </p>
+
+            <div className="mt-5 flex justify-center">
+              <div className="w-full max-w-[248px] rounded-[22px] border border-black/10 bg-[#111111] p-3">
+                <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-white p-2">
+                  {qrImage ? (
+                    <img src={qrImage} alt="Bilibili login QR code" className="h-full w-full object-contain" />
+                  ) : (
+                    <span className="text-xs text-black/40">二维码生成中...</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <p className="mt-4 text-center text-[13px] font-medium leading-5 text-black/80">
+              {status}
+              {status === "等待扫码中..." && countdown > 0 && (
+                <span className="ml-1 text-[11px] font-normal text-black/45">
+                  ({Math.floor(countdown / 60)}分{countdown % 60}秒)
+                </span>
+              )}
+            </p>
+
+            {error ? (
+              <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-center text-[12px] text-red-600">{error}</p>
+            ) : null}
+
+            <div className="mt-4 flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  clearPollTimer();
-                  // 记录返回目标，跳回主页后由主页恢复"帮助"模块
-                  sessionStorage.setItem("bili_live_return", "help");
-                  window.location.href = pageUrl("/");
-                }}
-                className="flex items-center gap-1 rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black/50 transition hover:bg-black/5"
+                onClick={() => void loadQR()}
+                className="rounded-full bg-[#1f1c17] px-4 py-2.5 text-[13px] font-medium text-white transition hover:opacity-90"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                取消登录
+                重新生成二维码
               </button>
+              {hasLoginUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeLogin();
+                    // 记录返回目标，跳回主页后由主页恢复"帮助"模块
+                    sessionStorage.setItem("bili_live_return", "help");
+                    window.location.href = pageUrl("/");
+                  }}
+                  className="flex items-center justify-center gap-1 rounded-full border border-black/10 px-4 py-2 text-[13px] font-medium text-black/50 transition hover:bg-black/5"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  取消登录
+                </button>
+              )}
             </div>
-          )}
-        </article>
-      </section>
+
+            <p className="mt-3 text-center text-[10px] text-black/35">二维码约 3 分钟有效，可长按图片保存或截屏</p>
+          </div>
+        </div>
+      )}
+
+      {/* PWA 安装引导：在扫码登录之前提示，避免装到桌面后还要在 PWA 里重新扫码。
+          仅移动端浏览器网页显示（判断在 hook 内部），客户端/桌面已安装环境自动隐藏。 */}
+      {!loginOpen && <PwaInstallPrompt delayMs={1200} />}
     </main>
   );
 }
