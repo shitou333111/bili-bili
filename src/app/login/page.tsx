@@ -21,13 +21,12 @@ export default function LoginPage() {
   const [status, setStatus] = useState("正在生成登录二维码...");
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(0);
-  const [hasLoginUser] = useState(
-    // 是否已有登录用户：首次使用（无任何登录凭证）时不显示"取消登录"；
-    // 有登录用户时显示，点击返回"帮助"页面。
-    // 初始登录弹窗未打开，这里读 localStorage 不影响首屏渲染，也不会造成水合不一致。
-    () => typeof window !== "undefined" && !!localStorage.getItem("bili_live_sid"),
-  );
+  // 是否已有登录用户：首次使用（无任何登录凭证）时不显示“取消登录”；
+  // 有登录用户时显示，点击返回“帮助”页面。
+  // 初始值固定 false（保证服务端 HTML 与首帧一致，避免水合不一致），挂载后再读本机凭证。
+  const [hasLoginUser, setHasLoginUser] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const autoQrRef = useRef(false);
   const [active, setActive] = useState(0);
   const pollTimerRef = useRef<number | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
@@ -186,6 +185,11 @@ export default function LoginPage() {
     return () => clearPollTimer();
   }, [clearPollTimer]);
 
+  // 挂载后读取本机登录凭证，决定顶部是否显示“取消登录”
+  useEffect(() => {
+    setHasLoginUser(!!localStorage.getItem("bili_live_sid"));
+  }, []);
+
   // Esc 关闭登录弹窗
   useEffect(() => {
     if (!loginOpen) return;
@@ -196,6 +200,14 @@ export default function LoginPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [loginOpen, closeLogin]);
 
+  // 主页「添加新账号」跳转而来（/login?qr=1）：直接打开扫码面板，用户可立即扫码。
+  // ref 守卫避免开发模式 StrictMode 下 effect 重复执行造成二维码重复生成。
+  useEffect(() => {
+    if (autoQrRef.current) return;
+    autoQrRef.current = true;
+    if (new URLSearchParams(window.location.search).get("qr") === "1") openLogin();
+  }, [openLogin]);
+
   // 背景大图按"当前 ±1"懒加载：6MB 宣传图不会在首屏一次性全部下载
   const shouldLoad = (i: number) => {
     const diff = Math.abs(i - active);
@@ -204,8 +216,8 @@ export default function LoginPage() {
 
   return (
     <main
-      className="login-screen relative flex h-[100svh] flex-col overflow-hidden bg-[#f2f2f4] text-[#1f1c17]"
-      style={{ paddingTop: "var(--safe-top, 0px)" }}
+      className="login-screen relative mx-auto flex h-[100svh] w-full flex-col overflow-hidden bg-[#f2f2f4] text-[#1f1c17]"
+      style={{ paddingTop: "var(--safe-top, 0px)", maxWidth: "var(--page-max-width, 500px)" }}
     >
       <SafeAreaStyler />
       <WindowTitleBar />
@@ -258,13 +270,29 @@ export default function LoginPage() {
             className="h-9 w-9 rounded-[11px] shadow-lg sm:h-10 sm:w-10"
           />
           <div className="text-[17px] font-semibold leading-tight">{APP_NAME}</div>
-          <button
-            type="button"
-            onClick={openLogin}
-            className="ml-auto inline-flex items-center rounded-full bg-[#1b1b1f] px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_6px_20px_rgba(0,0,0,0.18)] transition hover:bg-[#2b2b32] active:scale-[0.98] sm:px-5 sm:py-2 sm:text-[13px]"
-          >
-            扫码登录
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {hasLoginUser && (
+              <button
+                type="button"
+                onClick={() => {
+                  closeLogin();
+                  // 与弹窗里的"取消登录"一致：返回主页并恢复"帮助"模块
+                  sessionStorage.setItem("bili_live_return", "help");
+                  window.location.href = pageUrl("/");
+                }}
+                className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1.5 text-[12px] font-semibold text-black/55 backdrop-blur transition hover:bg-white active:scale-[0.98] sm:px-4 sm:py-2 sm:text-[13px]"
+              >
+                取消登录
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={openLogin}
+              className="inline-flex items-center rounded-full bg-[#1b1b1f] px-4 py-1.5 text-[12px] font-semibold text-white shadow-[0_6px_20px_rgba(0,0,0,0.18)] transition hover:bg-[#2b2b32] active:scale-[0.98] sm:px-5 sm:py-2 sm:text-[13px]"
+            >
+              扫码登录
+            </button>
+          </div>
         </header>
 
         {/* ============ 官网首页同款功能轮播，占据页面主体 ============ */}
@@ -276,7 +304,8 @@ export default function LoginPage() {
       {/* ============ 扫码登录弹窗 ============ */}
       {loginOpen && (
         <div
-          className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[9998] mx-auto flex w-full items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          style={{ maxWidth: "var(--page-max-width, 500px)" }}
           role="dialog"
           aria-modal="true"
           aria-label="扫码登录"

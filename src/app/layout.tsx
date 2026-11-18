@@ -27,7 +27,6 @@ export const metadata: Metadata = {
         appleWebApp: {
           capable: true,
           title: "B瓜",
-          statusBarStyle: "black-translucent" as const,
         },
         formatDetection: { telephone: false },
         // Next 16 只把 capable 渲染成标准 mobile-web-app-capable，

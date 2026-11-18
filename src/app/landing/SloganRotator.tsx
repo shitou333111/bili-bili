@@ -45,6 +45,13 @@ export default function SloganRotator({
         slidesPerGroup={1}
         spaceBetween={16}
         loop
+        // 断点以「轮播自身容器宽度」计算：登录页等内容被 --page-max-width 限制在 500px，
+        // 若仍按窗口宽度（桌面 ≥768/1280）取 2/3 张，会被挤成一张张小图。
+        // 官网首页不传 fitViewport，保持按窗口宽度自适应（宽屏 3 张）。
+        breakpointsBase={fitViewport ? "container" : "window"}
+        // 19 张图片不能被 2/3 整除时，Swiper 默认会补「空白 slide」凑满最后一组，
+        // 表现为最后 1~2 个位置只有空白背景。关闭该补位（循环会用两端预留的 slide 填满）。
+        loopAddBlankSlides={false}
         autoplay={{ delay: PER_SLIDE_MS, disableOnInteraction: false }}
         onInit={applyAutoplayDelay}
         onBreakpoint={(s) => {

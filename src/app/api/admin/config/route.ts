@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateAdminSession, getAdminSid } from "@/lib/auth/admin";
-import { readAdminConfig, writeAdminConfig, normalizeBlindBoxItem, normalizeOfficialEntryStyle, type AdminConfig } from "@/lib/admin-config";
+import { readAdminConfig, writeAdminConfig, normalizeBlindBoxItem, normalizeOfficialEntryStyle, normalizeSpecialGiftItem, type AdminConfig, type SpecialGiftItem } from "@/lib/admin-config";
+import { getEffectiveRedPocketGifts } from "@/lib/red-pocket-gifts";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export async function GET(request: Request) {
         anchor_activity_materials: [],
         wechat_qr_url: "",
         official_entry_styles: [],
+        red_pocket_gifts: await getEffectiveRedPocketGifts(),
       },
     });
   }
@@ -52,6 +54,7 @@ export async function GET(request: Request) {
       anchor_activity_materials: adminConfig.anchor_activity_materials ?? [],
       wechat_qr_url: adminConfig.wechat_qr_url ?? "",
       official_entry_styles: adminConfig.official_entry_styles ?? [],
+      red_pocket_gifts: adminConfig.red_pocket_gifts ?? [],
     },
   });
 }
@@ -122,6 +125,12 @@ export async function POST(request: Request) {
           .filter((m: { url: string }) => m.url.trim())
       : [],
     wechat_qr_url: typeof body.wechat_qr_url === "string" ? body.wechat_qr_url : "",
+    // 红包礼物列表：admin 手动维护
+    red_pocket_gifts: Array.isArray(body.red_pocket_gifts)
+      ? body.red_pocket_gifts
+          .map((g: unknown) => normalizeSpecialGiftItem(g))
+          .filter((g: SpecialGiftItem) => g.id > 0)
+      : [],
     // 官方入场提示：名称 + 视频地址 + JSON 地址（视频/JSON 缺一不可；name 缺省给占位名）
     official_entry_styles: Array.isArray(body.official_entry_styles)
       ? body.official_entry_styles

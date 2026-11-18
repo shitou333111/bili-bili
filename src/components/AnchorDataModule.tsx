@@ -12,8 +12,10 @@ import { getBlindBoxCardBg } from "@/lib/layout";
 import { ensureGiftCatalogLoaded, getGiftImgByName } from "@/lib/gift-catalog-client";
 import { buildGiftSummary } from "@/lib/gift-summary";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
+import { reportAnchorLeaderboard } from "@/lib/leaderboard-report";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
+import LeaderboardLink from "@/components/LeaderboardLink";
 import GiftReplayPanel from "@/components/GiftReplayPanel";
 import RawRecordPanel from "@/components/RawRecordPanel";
 import PieTooltip from "@/components/PieTooltip";
@@ -47,7 +49,7 @@ type AnchorBlindBoxProfit = {
   totalHamster: number;
   cost: number;
   profit: number;
-  gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
+  gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string; price?: number }>;
   img: string;
   blindPrice: number;
   anchors: Array<{ ruid: number; rname: string; count: number }>;
@@ -602,6 +604,15 @@ const AnchorDataModule = memo(function AnchorDataModule({
         // 盲盒盈亏数据独立存储，与收入统计解耦
         setBlindBoxProfits(data.data.blindBoxProfits);
         setBlindBoxProfitStats(data.data.blindBoxProfitStats);
+        // 全站黑白榜（主播榜）：上报本主播房间的活动期盈亏，并补拉今天/上周五快照（静默）
+        if (mid && Array.isArray(data.data.blindBoxProfits) && data.data.blindBoxProfits.length > 0) {
+          void reportAnchorLeaderboard({
+            uid: mid,
+            name: uname || anchorName || `UID ${mid}`,
+            face: anchorFace || undefined,
+            all: data.data.blindBoxProfits,
+          });
+        }
         // 首次加载时保存完整粉丝列表，供筛选下拉框使用
         if (data.data.blindBoxProfits) {
           const anchors: Record<number, Array<{ ruid: number; rname: string; count: number }>> = {};
@@ -1568,6 +1579,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
               {/* 盲盒盈亏 tab */}
               {activeTab === "blindbox" && (
                 <>
+                  <LeaderboardLink />
                   {blindBoxProfits && blindBoxProfits.length > 0 ? (
                     <div className="space-y-4">
                       {blindBoxProfits.map((bb, idx) => {

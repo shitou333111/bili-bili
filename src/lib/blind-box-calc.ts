@@ -75,7 +75,7 @@ export type BlindBoxCalcResult = {
   /** 全部记录的主播列表（按送出个数降序） */
   anchors: Array<{ ruid: number; rname: string; count: number }>;
   /** 当前筛选条件 */
-  filter: { ruid: number | null; dateRange: string };
+  filter: { ruid: number | null; dateRange: string; dateKey?: string };
   gifts: Array<{
     gift_id: number;
     gift_name: string;
@@ -93,6 +93,11 @@ export type BlindBoxCalcResult = {
 export type BlindBoxCalcFilter = {
   ruid?: number | null;
   dateRange?: string;
+  /**
+   * 精确到某一天（北京时间 YYYY-MM-DD）的筛选，优先于 dateRange。
+   * 黑白榜的「今天 / 上周五」用它做时区无关的日期过滤。
+   */
+  dateKey?: string;
 };
 
 export type BlindBoxCalcInput = {
@@ -178,11 +183,16 @@ function filterRecords(
   records: BlindBoxCalcRecord[],
   ruid: number | null,
   dateRange: string,
+  dateKey?: string,
 ): BlindBoxCalcRecord[] {
   let filtered = records;
 
   if (ruid !== null) {
     filtered = filtered.filter((r) => r.ruid === ruid);
+  }
+
+  if (dateKey) {
+    return filtered.filter((r) => r.timestamp.slice(0, 10) === dateKey);
   }
 
   const range = getDateRangeFilter(dateRange);
@@ -423,13 +433,14 @@ export function computeBlindBoxFromRecords(input: BlindBoxCalcInput): BlindBoxCa
   const { blindBoxId, records, anchorNames, giftMeta, blindPrice, blindBoxName, blindBoxImg } = input;
   const ruid = input.filter?.ruid ?? null;
   const dateRangeKey = input.filter?.dateRange ?? "all";
+  const dateKey = input.filter?.dateKey;
 
   // 主播下拉列表只按日期筛选（不受主播筛选影响）
-  const dateOnlyFiltered = filterRecords(records, null, dateRangeKey);
+  const dateOnlyFiltered = filterRecords(records, null, dateRangeKey, dateKey);
   const anchors = buildAnchorList(dateOnlyFiltered, anchorNames);
 
   // 按筛选条件过滤记录（含主播筛选，用于盈亏明细）
-  const filteredRecords = filterRecords(records, ruid, dateRangeKey);
+  const filteredRecords = filterRecords(records, ruid, dateRangeKey, dateKey);
 
   // 统计每种爆出礼物的数量和价值
   const giftStats = new Map<number, { count: number; totalValue: number }>();
@@ -476,7 +487,10 @@ export function computeBlindBoxFromRecords(input: BlindBoxCalcInput): BlindBoxCa
       // 主播筛选：奖励礼物归属主播需与当前筛选一致
       if (ruid !== null && g.ruid !== ruid) continue;
       // 消费记录来源按送出时间筛选（包裹来源无 timestamp，恒定计入）
-      if (g.timestamp && range) {
+      if (dateKey) {
+        // 精确日期筛选（黑白榜「今天 / 上周五」）：包裹来源是当前持快照，不属于某一天，排除
+        if (!g.timestamp || g.timestamp.slice(0, 10) !== dateKey) continue;
+      } else if (g.timestamp && range) {
         const t = new Date(g.timestamp).getTime();
         if (t < range.start.getTime() || t >= range.end.getTime()) continue;
       }
@@ -530,7 +544,7 @@ export function computeBlindBoxFromRecords(input: BlindBoxCalcInput): BlindBoxCa
     recordCount: filteredRecords.length,
     dateRange: getDateRange(records),
     anchors,
-    filter: { ruid, dateRange: dateRangeKey },
+    filter: { ruid, dateRange: dateRangeKey, dateKey },
     gifts,
     castleStats,
     castleGift,

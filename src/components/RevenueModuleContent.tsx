@@ -9,6 +9,7 @@ import ChartFullscreenModal from "@/components/ChartFullscreenModal";
 import PieTooltip from "@/components/PieTooltip";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
+import LeaderboardLink from "@/components/LeaderboardLink";
 import { sendDanmaku } from "@/lib/barrage";
 import { fetchMedicalRoomId } from "@/lib/medical-client";
 import { type ToastKind } from "@/lib/toast";
@@ -1379,6 +1380,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           {/* Blind box tab */}
           {activeTab === "blindbox" && (
             <>
+              <LeaderboardLink />
               {blindBoxStats ? (
                 <div className="space-y-4">
                   {blindBoxStats.map((stat, boxIndex) => {
@@ -1560,6 +1562,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
             <>
               {/* 黑抽卡片固定在合成页最上方；即使统计数据还在加载也先展示入口 */}
               {synthesisToolsExtra}
+              <LeaderboardLink />
               {synthesisStats ? (
                 <>
               {synthesisStats.activities.length > 0 ? (
@@ -1639,7 +1642,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                     {/* 红包礼物列表 */}
                     {synthesisStats.redPocketGifts && synthesisStats.redPocketGifts.length > 0 && (
                       <div className="mb-3 text-xs text-black/70">
-                        <span className="font-medium">当前红包礼物列表（{synthesisStats.redPocketGifts.length}个）：</span>
+                        <span className="font-medium">红包礼物列表（{synthesisStats.redPocketGifts.length}个）：</span>
                         {synthesisStats.redPocketGifts.map((g) => (
                           <span key={g.id} className="ml-1 inline-block rounded bg-red-50 px-1.5 py-0.5">
                             id:{g.id} {g.name}

@@ -556,13 +556,11 @@ export async function readAccountStreamerStatus(mid: number, uname: string): Pro
   return "unknown";
 }
 
-// ====== 天选/红包礼物 ID 持久化存储（全局共享：列表对所有用户一致） ======
+// ====== 天选礼物 ID 持久化存储（全局共享：列表对所有用户一致） ======
 
 interface SpecialGiftDB {
   tianxuan_gift_ids?: number[];
   last_tianxuan_update?: string;
-  red_pocket_gift_ids?: number[];
-  last_red_pocket_update?: string;
 }
 
 function specialGiftDbFile(): string {
@@ -580,7 +578,7 @@ async function readSpecialGiftDB(): Promise<SpecialGiftDB> {
 
 /**
  * special-gift-ids.json 的读改写并发锁。
- * 天选/红包 ID 是全站共享文件，多个请求同时「读→改→写」会互相覆盖，这里把写操作串行化。
+ * 天选 ID 是全站共享文件，多个请求同时「读→改→写」会互相覆盖，这里把写操作串行化。
  */
 let specialGiftLock: Promise<void> = Promise.resolve();
 function withSpecialGiftLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -616,27 +614,6 @@ export async function getAccumulatedTianxuanGiftIds(currentIds: number[]): Promi
     }
 
     console.log(`[getAccumulatedTianxuanGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
-    return merged;
-  });
-}
-
-/**
- * 获取所有红包礼物 ID（全局累积 + 当前 API 返回的合并）
- */
-export async function getAccumulatedRedPocketGiftIds(currentIds: number[]): Promise<number[]> {
-  return withSpecialGiftLock(async () => {
-    const db = await readSpecialGiftDB();
-    const historicalIds = db.red_pocket_gift_ids || [];
-    const merged = [...new Set([...historicalIds, ...currentIds])];
-
-    // 仅当集合确实增长时才写盘（同上，避免每次开页都落盘）。
-    if (merged.length > historicalIds.length) {
-      db.red_pocket_gift_ids = merged;
-      db.last_red_pocket_update = new Date().toISOString();
-      await writeSpecialGiftDB(db);
-    }
-
-    console.log(`[getAccumulatedRedPocketGiftIds] 历史:${historicalIds.length} + 当前:${currentIds.length} = 合并:${merged.length}`);
     return merged;
   });
 }

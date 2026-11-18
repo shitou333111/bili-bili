@@ -11,6 +11,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import { BLIND_BOX_CONFIG } from "./config";
+import { dateKeyForRange } from "./leaderboard-time";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftImgByName } from "./gift-catalog-client";
 import { buildGiftSummary } from "./gift-summary";
 import {
@@ -1017,7 +1018,7 @@ export async function fetchAnchorGifts(
     const emitMonthProgress = (ym: string) => {
       const remain = fmtRemain();
       onProgress?.({
-        text: `已下载${ym}（${validDone}/${totalValidMonths}）${remain ? " · " + remain : ""}`,
+        text: `已下载 ${ym}（${validDone}/${totalValidMonths}）${remain ? " · " + remain : ""}`,
         ratio: Math.min(1, validDone / totalValidMonths),
         anchorGift: true,
       });
@@ -1330,7 +1331,7 @@ export async function fetchAnchorGifts(
           const remain = fmtRemain();
           const month = `${chunk.start.slice(0, 4)}-${chunk.start.slice(4, 6)}`;
           onProgress?.({
-            text: `已下载${month} 第${page}/${totalPages}页${remain ? " · " + remain : ""}`,
+            text: `已下载 ${month} 第${page}/${totalPages}页${remain ? " · " + remain : ""}`,
             ratio: totalValidMonths > 0 ? Math.min(1, validDone / totalValidMonths) : undefined,
             anchorGift: true,
             // 结构化字段：标题栏用它拼「已下载2025-08 第2/546页 · 剩25分钟」
@@ -1594,12 +1595,16 @@ export async function fetchAnchorGifts(
     // ==================== 统计 ====================
 
     const dateFilter = getDateRangeFilter(dateRange);
+    // today / lastFriday 按北京时间日期键精确过滤，避免客户端时区差异
+    const dateKeyFilter = dateKeyForRange(dateRange);
     const fanUids = fan
       ? fan.split(",").map((s) => Number(s.trim())).filter((n) => !isNaN(n))
       : [];
 
     const filteredRecords = allRecords.filter((r) => {
-      if (dateFilter) {
+      if (dateKeyFilter) {
+        if (r.time.slice(0, 10) !== dateKeyFilter) return false;
+      } else if (dateFilter) {
         const t = new Date(r.time).getTime();
         if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) return false;
       }
@@ -1829,7 +1834,7 @@ export async function fetchAnchorGifts(
       const rewardGiftIds = rewardGiftIdsByBox.get(blindBoxId);
 
       // 奖励礼物名称后标注（奖励）
-      const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }> = [];
+      const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string; price: number }> = [];
       const giftCountMap = blindBoxGiftCountMap.get(blindBoxId);
       if (info?.gifts) {
         for (const g of info.gifts) {
@@ -1841,6 +1846,7 @@ export async function fetchAnchorGifts(
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
             img: g.gift_img,
+            price: g.price ?? 0,
           });
         }
       }

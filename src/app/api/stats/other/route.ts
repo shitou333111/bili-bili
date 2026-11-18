@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { readPayRecords, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds } from "@/lib/user-data";
-import { fetchTianxuanGiftList, fetchRedPocketGiftList } from "@/lib/bilibili/gift-api";
+import { readPayRecords, getAccumulatedTianxuanGiftIds } from "@/lib/user-data";
+import { fetchTianxuanGiftList } from "@/lib/bilibili/gift-api";
+import { getEffectiveRedPocketGifts } from "@/lib/red-pocket-gifts";
 import { isOffline } from "@/lib/offline";
 import type { RawGiftRecord } from "@/lib/revenue";
 import type { ApiResponse } from "@/lib/bilibili/types";
@@ -212,8 +213,13 @@ export async function GET(request: Request) {
     tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(tianxuanGifts.map(g => g.id));
 
     let redPocketGiftIds: number[] = [];
-    const redPocketGifts = offline ? [] : await fetchRedPocketGiftList("").catch(() => []);
-    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(redPocketGifts.map(g => g.id));
+    try {
+      // 红包礼物列表由 admin 手动维护（B站无稳定接口），未配置时回退历史累积 ID
+      const redPocketGifts = await getEffectiveRedPocketGifts();
+      redPocketGiftIds = redPocketGifts.map((g) => g.id);
+    } catch (err) {
+      console.error("[OtherStats] 读取红包礼物列表失败:", err);
+    }
 
     const records = await readPayRecords(session.mid, session.uname || "");
 

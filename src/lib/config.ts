@@ -53,11 +53,6 @@ export const TIANXUAN_CONFIG = {
   url: "https://api.live.bilibili.com/xlive/general-interface/v1/guardBenefit/GiftPanel",
 } as const;
 
-// ====== 红包礼物列表接口 ======
-export const RED_POCKET_CONFIG = {
-  url: "https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDetail",
-} as const;
-
 // ====== 盲盒检测接口 ======
 export const BLIND_BOX_API = {
   // 盲盒信息检测（获取盲盒内礼物列表）

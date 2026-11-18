@@ -119,10 +119,15 @@ export function createSessionInput(input: Omit<AuthSession, "sid" | "createdAt" 
 export async function saveSession(session: AuthSession): Promise<AuthSession> {
   const effectiveSession = await withWriteLock(async () => {
     const state = await readState();
-    // 先按 sid 找，找不到再按 mid（B站用户ID）找，避免同一账号重复
+    // 先按 sid 找；找不到再按「mid + 设备令牌」找（同一浏览器重复登录同一账号时复用会话）。
+    // 绝不能只按 mid 去重：不同设备（网页 / PWA / 客户端）登录同一 B站 账号时，
+    // 各自需要保留自己的 userToken，否则后登录的一端会把另一端的令牌覆盖掉，
+    // 那台设备就再也查不到自己的账号（表现为「账号列表只剩一个，无法切换」）。
     let index = state.sessions.findIndex((item) => item.sid === session.sid);
     if (index < 0) {
-      index = state.sessions.findIndex((item) => item.mid === session.mid);
+      index = state.sessions.findIndex(
+        (item) => item.mid === session.mid && (item.userToken ?? "") === (session.userToken ?? ""),
+      );
     }
     let result: AuthSession;
     if (index >= 0) {
@@ -180,6 +185,29 @@ export async function getSessionsByUserToken(userToken: string | null | undefine
   if (!userToken) return [];
   const state = await readState();
   return state.sessions.filter((item) => item.userToken === userToken);
+}
+
+/**
+ * 把一个会话的归属令牌改为当前浏览器的令牌（自愈）。
+ *
+ * 仅用于「浏览器已经持有该会话的 sid Cookie」的场景：
+ *   - 早期版本创建的会话没有 userToken 字段，永远匹配不到任何设备；
+ *   - 历史版本按 mid 去重时，令牌曾被其他设备覆盖过（令牌漂移）。
+ * 能带着 sid 的 httpOnly Cookie 发请求，就足以证明该会话属于这台浏览器，
+ * 因此在这里把归属纠正回来，避免账号从列表中消失。不会跨设备抢账号。
+ */
+export async function adoptSessionUserToken(sid: string, userToken: string): Promise<AuthSession | null> {
+  if (!sid || !userToken.trim()) return null;
+  return withWriteLock(async () => {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.sid === sid);
+    if (!session) return null;
+    if (session.userToken === userToken) return session;
+    session.userToken = userToken;
+    await ensureStateFile();
+    await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+    return session;
+  });
 }
 
 /**

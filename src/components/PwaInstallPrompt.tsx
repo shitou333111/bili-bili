@@ -42,7 +42,8 @@ export default function PwaInstallPrompt({ delayMs }: { delayMs?: number }) {
 
   return (
     <div
-      className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[9990] mx-auto flex w-full items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+      style={{ maxWidth: "var(--page-max-width, 500px)" }}
       role="dialog"
       aria-modal="true"
       aria-label="安装到主屏幕"
@@ -69,7 +70,7 @@ export default function PwaInstallPrompt({ delayMs }: { delayMs?: number }) {
             className="h-8 w-8 shrink-0 rounded-[9px] shadow-[0_2px_8px_rgba(0,0,0,0.16)]"
           />
           <p className="text-[16px] font-semibold leading-6">
-            {installed ? "已添加到主屏幕" : "先安装 B瓜，再扫码登录"}
+            {installed ? "已添加到主屏幕" : "建议先添加到主屏幕，再扫码使用"}
           </p>
         </div>
 
@@ -83,13 +84,13 @@ export default function PwaInstallPrompt({ delayMs }: { delayMs?: number }) {
               ，选择「添加到主屏幕」。安装后请从桌面图标打开 B瓜 再扫码登录，避免安装后又要重新扫码。
             </>
           ) : mode === "prompt" ? (
-            "添加到主屏幕后像 App 一样使用，数据长期保存在本机。建议先安装，再从桌面图标打开 B瓜 并扫码登录，避免安装后需要重新扫码。"
+            "添加到主屏幕后，再从桌面图标打开。不用安装，但又能像 App 一样使用，数据长期保存在本机。"
           ) : (
             "点击浏览器 ⋮ 菜单，选择「添加到主屏幕」或「安装应用」。安装后请从桌面图标打开 B瓜 再扫码登录，避免安装后又要重新扫码。"
           )}
         </p>
 
-        <div className="mt-5 flex items-center gap-2">
+        <div className="mt-5 flex items-center justify-center gap-2">
           {canPrompt ? (
             <>
               <button
@@ -97,7 +98,7 @@ export default function PwaInstallPrompt({ delayMs }: { delayMs?: number }) {
                 onClick={install}
                 className="rounded-full bg-[#1f1c17] px-5 py-2 text-[13px] font-medium text-white transition-transform active:scale-[0.97]"
               >
-                立即安装
+                立即添加
               </button>
               <button
                 type="button"

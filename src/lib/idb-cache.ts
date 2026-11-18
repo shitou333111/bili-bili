@@ -142,3 +142,31 @@ export async function cacheClearMid(mid: number): Promise<void> {
     // 静默
   }
 }
+
+/**
+ * 本机缓存过的账号 mid 列表。
+ * 用途：浏览器侧账号归属自愈——早期版本创建的会话没有 userToken，
+ * 在设备令牌丢失/漂移后会被 /api/auth/accounts 过滤掉，导致"账号只剩一个、无法切换"。
+ * 只有本机确实缓存过该 mid 的数据时才会上报，服务端据此把无归属的旧会话认领回来。
+ */
+export async function cacheCachedMids(): Promise<number[]> {
+  try {
+    const db = await openDb();
+    if (!db) return [];
+    const keys = await new Promise<string[]>((resolve) => {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).getAllKeys();
+      req.onsuccess = () => resolve((req.result as IDBValidKey[]).map((k) => String(k)));
+      req.onerror = () => resolve([]);
+      tx.onabort = () => resolve([]);
+    });
+    const mids = new Set<number>();
+    for (const key of keys) {
+      const match = /^snapshot:(\d+)$/.exec(key);
+      if (match) mids.add(Number(match[1]));
+    }
+    return [...mids];
+  } catch {
+    return [];
+  }
+}

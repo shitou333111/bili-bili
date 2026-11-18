@@ -109,7 +109,7 @@ export default function DataInitOverlay({ progress }: { progress: FetchProgress 
   if (!isAnchor) {
     // 消费记录：没有百分比，只展示页数与条数
     if (progress?.page !== undefined) {
-      text = `已下载${progress.page}页（${progress.current ?? 0}条）`;
+      text = `已下载 ${progress.page} 页（${progress.current ?? 0}条）`;
     } else if (progress?.text) {
       text = progress.text;
     }
@@ -130,10 +130,11 @@ export default function DataInitOverlay({ progress }: { progress: FetchProgress 
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex h-[100svh] flex-col overflow-hidden bg-[#f2f2f4] text-[#1f1c17]"
+      className="fixed inset-0 z-[9999] mx-auto flex h-[100svh] w-full flex-col overflow-hidden bg-[#f2f2f4] text-[#1f1c17]"
       // 桌面客户端的自定义窗口标题栏（decorations:false）固定在顶部，--safe-top 即其高度；
       // 移动端则是状态栏安全区。与登录页一致，顶部留出这段距离，避免标题栏被遮挡。
-      style={{ paddingTop: "var(--safe-top, 0px)" }}
+      // 宽度与页面主体一致（--page-max-width），避免网页端/宽窗口下遮罩被拉得过宽。
+      style={{ paddingTop: "var(--safe-top, 0px)", maxWidth: "var(--page-max-width, 500px)" }}
     >
       {/* 背景光晕：与登录页同色系（浅色灰白底上的淡色氛围） */}
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">

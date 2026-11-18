@@ -221,40 +221,12 @@ html.ios-web .page-scroll-area {
   overflow: visible;
 }
 
-/* ===== iOS 独立 PWA：吸顶导航条避让状态栏 =====
-   文档级滚动后，sticky 的 top 相对「可视区顶部」：
-     · Safari 标签页里可视区顶部本就在地址栏之下（顶部那段由浏览器自己绘制），top:0 正好；
-     · 独立 PWA 没有地址栏，可视区顶部 = 屏幕物理顶边，状态栏（时间/电量）就压在上面，
-       于是分段导航条一吸顶就钻进状态栏区域。
-   这里只在独立 PWA 把吸顶位置下移到顶部安全区（与 .page-main 的 padding-top 同一来源）。
-   只作用于打了 .nav-sticky 标记的两个分段导航条；表格里的 sticky 表头在各自的滚动容器内，
-   top 相对的是那个容器而不是可视区，不受影响。 */
-@media (display-mode: standalone) {
-  html.ios-web .nav-sticky {
-    top: var(--safe-top, 0px);
-  }
-}
-
-/* ===== iOS 独立 PWA：状态栏那一条的固定底色 =====
-   吸顶导航条让开状态栏之后，滚动中的页面内容会从状态栏那一条缝里穿过。这里固定一条与页面
-   同色的底（#f5f5f5，和页面背景、吸顶条的 bg-[#f5f5f5]/95 一致），让这条缝看起来像原生
-   状态栏区域。
-   层级放在 .page-scroll-area 自己的层叠上下文内（它 z-index:0），取 40 —— 高于普通内容和
-   吸顶条（z-10），低于弹窗（z-50，全屏弹窗顶部不会被切掉）。pointer-events:none 让顶部
-   区域的点击/点状态栏回顶不受影响。仅在独立 PWA 生效。 */
-@media (display-mode: standalone) {
-  html.ios-web .page-scroll-area::before {
-    content: "";
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: var(--safe-top, 0px);
-    background: #f5f5f5;
-    pointer-events: none;
-    z-index: 40;
-  }
-}
+/* ===== iOS 独立 PWA：顶部不再需要额外补条 =====
+   早期为了让状态栏（Liquid Glass 玻璃）压住页面内容才开启 black-translucent，
+   再补一条固定底色 + 把吸顶条下移到安全区。该键已被 WebKit 废弃（且 iOS 26 上会
+   出现视口与 safe-area 双重内缩），现改为默认状态栏样式：状态栏由系统占据在 Web
+   视口之外并按页面主题色着色，视口顶部即内容顶部，因此 SafeAreaStyler 里 iOS Web 的
+   --safe-top 恒为 0，吸顶条 top:0、顶部补条高度 0，都不再需要单独处理。 */
 
 /* 2. 苹果毛玻璃胶囊托盘（完全参照参考代码改编） */
 .bottom-dock {
@@ -487,6 +459,16 @@ html.ios-web .bottom-dock {
 @keyframes init-dot {
   0%, 80%, 100% { opacity: 0.2; }
   40% { opacity: 1; }
+}
+
+/* 帮助页「分享本软件」复制成功：对号图标弹一下 */
+@keyframes share-copied-pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  55% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.share-copied-pop {
+  animation: share-copied-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* ===== 模态框下载/关闭按钮统一样式（胶囊状、紧凑、点击动效） ===== */

@@ -20,6 +20,20 @@ import type { StreamerInfo } from "./liveStream";
 const COMBO_TIMEOUT = 5000; // 5秒连击窗口
 const QUICK_GIFT_ID = 33988; // 人气票
 
+/**
+ * 模拟器静态礼物数据（同一页面会话内共享）。
+ * 礼物目录 / 特效绑定 / 特效 JSON 配置在进程运行期间不变：冷启动时已由全局礼物数据仓
+ * （Tauri 本地仓 / Web 服务器 12h 缓存）统一加载，进入模拟器只需解析一次，
+ * 反复进出不再触发全量礼物列表与全部特效配置的拉取。
+ */
+type SimulatorStaticData = {
+  gifts: Gift[];
+  tabGifts: Record<string, Gift[] | BagGift[]>;
+  effectInfoMap: Map<number, GiftEffectInfo>;
+  blindboxConfig: Record<string, any>;
+};
+let simulatorStaticData: SimulatorStaticData | null = null;
+
 export default function BiliSimulator({ onBack, userName, userFace, streamerInfo, muted }: { onBack: () => void; userName?: string; userFace?: string; streamerInfo?: StreamerInfo | null; muted?: boolean }) {
   const [giftPanelOpen, setGiftPanelOpen] = useState(false);
   const [currentGift, setCurrentGift] = useState<Gift | null>(null);
@@ -74,6 +88,17 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
   useEffect(() => {
     async function loadData() {
       try {
+        // 命中页面会话缓存：直接复用，不再请求全量礼物列表 / 特效配置
+        if (simulatorStaticData) {
+          const cached = simulatorStaticData;
+          setGifts(cached.gifts);
+          giftsRef.current = cached.gifts;
+          setTabGifts(cached.tabGifts);
+          setBlindboxConfig(cached.blindboxConfig);
+          setEffectInfoMap(cached.effectInfoMap);
+          setLoading(false);
+          return;
+        }
         // 礼物列表 + 特效绑定表：与全 APP 共用同一自动更新数据源
         // （gift-catalog / gift-effects，冷启动更新），不再读取 public/ 下手动维护的静态快照。
         let list: any[] = [];
@@ -157,13 +182,21 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
         // 基础礼物立即显示，额外礼物稍后异步合并进来。
         const giftTabGifts = pickByIds(goldIds);
         const giftTabIds = new Set(giftTabGifts.map((g) => g.id));
-        setTabGifts({
+        const baseTabGifts = {
           gift: giftTabGifts,
           fans: pickByIds(fansIds).filter((g) => !giftTabIds.has(g.id)),
           voyage: pickByIds(voyageIds),
           bag: [],
           all: allGifts,
-        });
+        };
+        setTabGifts(baseTabGifts);
+        // 本次加载结果稍后写入会话缓存（额外礼物/盲盒配置会异步补齐）
+        const staticData: SimulatorStaticData = {
+          gifts: parsedGifts,
+          tabGifts: baseTabGifts,
+          effectInfoMap: new Map(),
+          blindboxConfig: {},
+        };
 
         // 额外礼物 ID（gift-extra-ids）异步合并到"礼物"选项卡：
         // - Tauri：优先从服务器拉取并落盘缓存；服务器不可达时最多等 8s 后回退本地缓存/打包静态文件
@@ -175,11 +208,13 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
             const extraGifts = pickByIds(extraGiftIds).filter((g) => !existingIds.has(g.id));
             if (!extraGifts.length) return prev;
             const extraIdSet = new Set(extraGifts.map((g) => g.id));
-            return {
+            const next = {
               ...prev,
               gift: [...(prev.gift as Gift[]), ...extraGifts],
               fans: (prev.fans as Gift[]).filter((g) => !extraIdSet.has(g.id)),
             };
+            staticData.tabGifts = next;
+            return next;
           });
         };
         if (isTauriRuntime() && platform) {
@@ -198,7 +233,11 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
         // 加载盲盒配置
         try {
           const bbRes = await fetch("/gift-blindbox.json");
-          if (bbRes.ok) setBlindboxConfig(await bbRes.json());
+          if (bbRes.ok) {
+            const bbConfig = await bbRes.json();
+            staticData.blindboxConfig = bbConfig;
+            setBlindboxConfig(bbConfig);
+          }
         } catch (e) {
           console.warn("加载盲盒配置失败:", e);
         }
@@ -241,6 +280,8 @@ export default function BiliSimulator({ onBack, userName, userFace, streamerInfo
           }
         });
 
+        staticData.effectInfoMap = eMap;
+        simulatorStaticData = staticData;
         setEffectInfoMap(eMap);
       } catch (err) {
         console.error("加载礼物数据失败:", err);

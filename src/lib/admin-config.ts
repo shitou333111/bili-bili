@@ -89,6 +89,9 @@ export function normalizeAdminConfig(raw: AdminConfig): AdminConfig {
     official_entry_styles: Array.isArray(raw.official_entry_styles)
       ? raw.official_entry_styles.map(normalizeOfficialEntryStyle)
       : [],
+    red_pocket_gifts: Array.isArray(raw.red_pocket_gifts)
+      ? raw.red_pocket_gifts.map(normalizeSpecialGiftItem).filter((g) => g.id > 0)
+      : undefined,
   };
 }
 
@@ -140,6 +143,23 @@ export type SimulatorActivityConfig = {
   algorithmParams?: SimulatorAlgorithmParams;
 };
 
+/** 红包礼物分类条目（管理员在 admin 页手动维护，用于标记消费记录中的红包礼物） */
+export type SpecialGiftItem = {
+  /** 礼物 gift_id */
+  id: number;
+  /** 礼物名称（从礼物目录联想选择，也可手动输入） */
+  name: string;
+};
+
+/** 归一化单个红包礼物条目（容错任意输入；幂等、不抛错） */
+export function normalizeSpecialGiftItem(raw: unknown): SpecialGiftItem {
+  const g = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: Number(g.id) || 0,
+    name: String(g.name ?? "").trim(),
+  };
+}
+
 /** 帮助页「常见问题」条目（管理员在 admin 页维护） */
 export type FaqItem = {
   /** 问题 */
@@ -179,6 +199,9 @@ export type AdminConfig = {
   /** 官方入场提示列表（管理员在 admin 页「官方入场提示」模块编辑：
    *  名称 + 视频地址（web_mp4）+ JSON 地址（web_mp4_json），主播面板「入场提示」单选使用） */
   official_entry_styles?: OfficialEntryStyle[];
+  /** 红包礼物列表（管理员在 admin 页手动维护；系统按 gift_id 标记消费记录中的红包礼物，
+   *  计算合成盈亏时扣除，并用于「其他」页天选/红包礼物统计。未配置时回退历史累积 ID） */
+  red_pocket_gifts?: SpecialGiftItem[];
 };
 
 async function ensureConfigFile() {

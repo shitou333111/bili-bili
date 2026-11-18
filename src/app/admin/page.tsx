@@ -228,6 +228,14 @@ type AdminConfigData = {
   wechat_qr_url: string;
   /** 官方入场提示列表（名称 + 视频地址 + JSON 地址），主播面板「入场提示」单选使用 */
   official_entry_styles: OfficialEntryItemData[];
+  /** 红包礼物列表（管理员手动维护；用于标记消费记录中的红包礼物） */
+  red_pocket_gifts: RedPocketGiftItemData[];
+};
+
+/** admin「红包礼物列表」条目：gift_id + 名称（从礼物目录联想选择） */
+type RedPocketGiftItemData = {
+  id: number;
+  name: string;
 };
 
 /** admin「官方入场提示」条目：B站官方入场动画（视频 + 配套 JSON） */
@@ -458,6 +466,10 @@ export default function AdminPage() {
   const [materialsCollapsed, setMaterialsCollapsed] = useState(true);
   // 官方入场提示列表（名称/视频地址/JSON 地址）：默认收起
   const [officialEntryCollapsed, setOfficialEntryCollapsed] = useState(true);
+  // 红包礼物列表（手动维护）：默认收起
+  const [redPocketCollapsed, setRedPocketCollapsed] = useState(true);
+  // 红包礼物名称搜索建议（当前展开的行）
+  const [redPocketGiftSearch, setRedPocketGiftSearch] = useState<number | null>(null);
   // 公告 / 微信群二维码 / 黑抽 / 推荐主播：保持原有默认展开状态
   const [announcementCollapsed, setAnnouncementCollapsed] = useState(false);
   const [wechatQrCollapsed, setWechatQrCollapsed] = useState(false);
@@ -723,6 +735,12 @@ export default function AdminPage() {
                   video: String(o.video ?? ""),
                   json: String(o.json ?? ""),
                 };
+              })
+            : [],
+          red_pocket_gifts: Array.isArray(data.red_pocket_gifts)
+            ? data.red_pocket_gifts.map((g: unknown): RedPocketGiftItemData => {
+                const o = (g ?? {}) as Record<string, unknown>;
+                return { id: Number(o.id) || 0, name: String(o.name ?? "") };
               })
             : [],
           simulator_activities: simActs.map((a: any) => ({
@@ -1704,6 +1722,36 @@ export default function AdminPage() {
   const selectGiftForProduct = (actIndex: number, productIndex: number, name: string) => {
     updateActivityProduct(actIndex, productIndex, name);
     setProductSearch(null);
+  };
+
+  // ====== 红包礼物列表（B站无稳定接口，管理员手动维护） ======
+  const addRedPocketGift = () => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      red_pocket_gifts: [...(config.red_pocket_gifts ?? []), { id: 0, name: "" }],
+    });
+    setRedPocketCollapsed(false);
+  };
+
+  const updateRedPocketGift = (index: number, patch: Partial<RedPocketGiftItemData>) => {
+    if (!config) return;
+    const list = [...(config.red_pocket_gifts ?? [])];
+    list[index] = { ...list[index], ...patch };
+    setConfig({ ...config, red_pocket_gifts: list });
+  };
+
+  const removeRedPocketGift = (index: number) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      red_pocket_gifts: (config.red_pocket_gifts ?? []).filter((_, i) => i !== index),
+    });
+  };
+
+  const selectRedPocketGift = (index: number, gift: { id: number; name: string; img: string }) => {
+    updateRedPocketGift(index, { id: gift.id, name: gift.name });
+    setRedPocketGiftSearch(null);
   };
 
   // ====== 产物配置（可独立增删，与素材无一一对应关系）=======
@@ -2942,6 +2990,76 @@ export default function AdminPage() {
                           ))}
                         </div>
                         </div>
+                  </div>
+                ))}
+              </div>
+            </ConfigCard>
+
+            {/* 红包礼物列表（管理员手动维护） */}
+            <ConfigCard
+              title="红包礼物列表"
+              collapsed={redPocketCollapsed}
+              onToggle={() => setRedPocketCollapsed((v) => !v)}
+              onSave={handleSaveConfig}
+              saved={configSaved}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[10px] text-black/40 flex-1">
+                  用于标记消费记录中的红包礼物：计算合成盈亏时会扣除这些礼物，「其他」页也按此列表统计天选/红包礼物。
+                  B站已无稳定接口获取新红包礼物，因此由管理员在此手动维护；客户端会从服务器读取这份列表。
+                </p>
+                <button onClick={addRedPocketGift} className="text-xs text-[#00a1d6] hover:underline shrink-0">+ 添加礼物</button>
+              </div>
+              {(config.red_pocket_gifts ?? []).length === 0 && (
+                <p className="text-[10px] text-black/30">暂无红包礼物，点击「添加礼物」后输入名称搜索选择</p>
+              )}
+              <div className="space-y-1">
+                {(config.red_pocket_gifts ?? []).map((gift, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <div className="relative flex-1 min-w-[100px]">
+                      <input
+                        type="text"
+                        value={gift.name}
+                        onChange={(e) => {
+                          updateRedPocketGift(i, { name: e.target.value });
+                          setRedPocketGiftSearch(i);
+                        }}
+                        onFocus={() => setRedPocketGiftSearch(i)}
+                        onBlur={() => setTimeout(() => setRedPocketGiftSearch(null), 200)}
+                        placeholder="礼物名称（输入后选择候选）"
+                        className="w-full rounded border border-black/10 px-2 py-1 text-[11px] focus:outline-none focus:border-black/30"
+                      />
+                      {redPocketGiftSearch === i && gift.name.trim() && (
+                        <div className="absolute z-10 mt-1 w-full rounded-lg border border-black/10 bg-white shadow-lg max-h-40 overflow-y-auto">
+                          {searchGiftsByName(gift.name).length > 0 ? (
+                            searchGiftsByName(gift.name).map((g) => (
+                              <button
+                                key={g.id}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  selectRedPocketGift(i, g);
+                                }}
+                                className="flex items-center gap-2 w-full px-2 py-1.5 text-left hover:bg-black/5 text-[11px]"
+                              >
+                                {g.img && <img src={g.img} alt="" className="w-5 h-5 rounded shrink-0" />}
+                                <span className="truncate">{g.name}</span>
+                                <span className="ml-auto text-black/40 shrink-0">id:{g.id}</span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-2 py-1.5 text-[11px] text-black/40">未找到匹配的礼物</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      value={gift.id || ""}
+                      onChange={(e) => updateRedPocketGift(i, { id: Number(e.target.value) || 0 })}
+                      placeholder="gift_id"
+                      className="w-[80px] rounded border border-black/10 px-1.5 py-1 text-[11px] focus:outline-none focus:border-black/30 shrink-0"
+                    />
+                    <button onClick={() => removeRedPocketGift(i)} className="text-[11px] text-[#e74c3c] hover:underline shrink-0">×</button>
                   </div>
                 ))}
               </div>

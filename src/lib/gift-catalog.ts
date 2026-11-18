@@ -104,12 +104,15 @@ async function fetchFromBili(): Promise<GiftCatalogData | null> {
 
 /**
  * 确保礼物目录已加载。缓存有效直接用；否则从 B站 拉取；失败时回退到 .data 落盘文件。
+ * @param options.allowNetwork 是否允许请求 B站（默认 true；统计链路传 false，仅读本地缓存，避免离线/慢网阻塞）
  */
-export async function ensureGiftCatalogLoaded(): Promise<void> {
+export async function ensureGiftCatalogLoaded(options?: { allowNetwork?: boolean }): Promise<void> {
   if (isCacheValid()) return;
-  const catalog = await fetchFromBili();
-  if (catalog) return;
-  // 网络失败，回退到上次落盘的数据
+  if (options?.allowNetwork !== false) {
+    const catalog = await fetchFromBili();
+    if (catalog) return;
+  }
+  // 网络失败或不允许联网时，回退到上次落盘的数据
   try {
     if (existsSync(CACHE_FILE)) {
       const raw = readFileSync(CACHE_FILE, "utf-8");

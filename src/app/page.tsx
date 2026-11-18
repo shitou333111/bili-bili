@@ -9,8 +9,9 @@ import { isMobileDevice } from "@/lib/device";
 import { serverApiUrl, serverPost, pageUrl, isTauri } from "@/lib/server-api";
 import { dataFetch, type FetchProgress } from "@/lib/client-fetch";
 import { uploadAllUserData } from "@/lib/stats-client";
-import { cacheGet, cacheSet, cacheClearMid, cacheKeys } from "@/lib/idb-cache";
+import { cacheGet, cacheSet, cacheClearMid, cacheCachedMids, cacheKeys } from "@/lib/idb-cache";
 import { computeBlindBoxFromRecords, type BlindBoxCalcRecord, type BlindBoxGiftMeta, type BlindBoxRewardBagGift } from "@/lib/blind-box-calc";
+import { reportUserLeaderboard } from "@/lib/leaderboard-report";
 import { useOnlineStatus } from "@/lib/use-online";
 import { BLIND_BOX_CONFIG } from "@/lib/config";
 import { getBlindBoxCardBg, HISTORICAL_PNL_BG } from "@/lib/layout";
@@ -107,6 +108,16 @@ function fmtAgo(ts: number): string {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr} 小时前`;
   return `${Math.floor(hr / 24)} 天前`;
+}
+
+/**
+ * 账号列表请求路径：附带本机缓存过的 mid（浏览器 IndexedDB）。
+ * 服务端据此认领"无归属"的旧会话（早期版本没有 userToken），
+ * 避免设备令牌丢失后旧账号从列表中消失、无法切换。
+ */
+async function accountsApiPath(): Promise<string> {
+  const mids = await cacheCachedMids();
+  return mids.length ? `/api/auth/accounts?_mids=${mids.join(",")}` : "/api/auth/accounts";
 }
 
 type Account = {
@@ -1615,6 +1626,8 @@ export default function HomePage() {
   // 重建数据库确认弹窗
   const [showRebuildDbConfirm, setShowRebuildDbConfirm] = useState(false);
   const [rebuildDbLoading, setRebuildDbLoading] = useState(false);
+  // 帮助页「分享本软件」：复制成功后的短暂反馈（图标动画 + 文案切换）
+  const [shareCopied, setShareCopied] = useState(false);
   // B站 抓取速率（req/s）：初值用常量避免 SSR/首帧与持久化值不一致（挂载后再同步真实值）
   const [fetchRate, setFetchRateState] = useState(DEFAULT_FETCH_RATE);
   // 自定义档位输入框的文本（仅"自定义"被选中时显示）
@@ -1833,6 +1846,8 @@ export default function HomePage() {
   const [offlineCacheAt, setOfflineCacheAt] = useState(0);
   // 当前账号 mid 的同步引用：供异步回调写穿缓存（state 闭包可能滞后）
   const currentMidRef = useRef<number | null>(null);
+  // 当前账号的同步引用：首次加载/手动刷新时 state 闭包仍是旧值，黑白榜上报必须读 ref
+  const currentAccountRef = useRef<Account | null>(null);
   // 本次启动是否成功用浏览器缓存展示过数据（用于服务器不可达且无任何缓存时给出提示）
   const browserCacheHitRef = useRef(false);
   // 最近一次“无筛选”的盲盒响应（含原始记录与元数据）。
@@ -2086,6 +2101,7 @@ export default function HomePage() {
       const accountsCached = await cacheGet<Account[]>(cacheKeys.accounts);
       if (accountsCached?.data) setAccounts(accountsCached.data);
       setCurrentAccount(acct);
+      currentAccountRef.current = acct;
       setIsLocalAccount(!!last?.data?.isLocalAccount);
       currentMidRef.current = acct.mid;
       browserCacheHitRef.current = await loadMidCache(acct.mid);
@@ -2145,7 +2161,7 @@ export default function HomePage() {
   async function loadCachedQuick() {
     try {
       const [accountsRes, snapshotRes, statusRes] = await Promise.all([
-        dataFetch("/api/auth/accounts", { cache: "no-store" }),
+        dataFetch(await accountsApiPath(), { cache: "no-store" }),
         dataFetch("/api/revenue/pay-record?fast=1", { cache: "no-store" }),
         dataFetch("/api/auth/status", { cache: "no-store" }),
       ]);
@@ -2181,6 +2197,7 @@ export default function HomePage() {
           noRevenue: matched?.noRevenue,
         };
         setCurrentAccount(acct);
+        currentAccountRef.current = acct;
         // 是否本机登录：accounts 仅返回本机登录账号（/api/auth/accounts 已按设备令牌过滤）
         setIsLocalAccount(!!matched);
         setApiLoggedIn(true);
@@ -2316,7 +2333,7 @@ export default function HomePage() {
     if (!background) setLoading(true);
     try {
       const [accountsRes, snapshotRes] = await Promise.all([
-        dataFetch("/api/auth/accounts", { cache: "no-store" }),
+        dataFetch(await accountsApiPath(), { cache: "no-store" }),
         dataFetch("/api/revenue/pay-record", { cache: "no-store" }, (p) =>
           setFetchProgress({
             text: p.text,
@@ -2356,6 +2373,7 @@ export default function HomePage() {
           noRevenue: matched?.noRevenue,
         };
         setCurrentAccount(acct);
+        currentAccountRef.current = acct;
         currentMidRef.current = acct.mid;
         // 写穿浏览器缓存：账号列表 + 当前账号（WEB 端生效，客户端内部跳过）
         cacheSet(cacheKeys.accounts, accountsData.data?.accounts || []);
@@ -2491,6 +2509,21 @@ export default function HomePage() {
       if (synthesisData.code === 0) {
         setSynthesisStats(synthesisData.data);
         if (currentMidRef.current) cacheSet(cacheKeys.synthesis(currentMidRef.current), synthesisData.data);
+      }
+      // 全站黑白榜：统计成功后上报当前账号的绝对值快照（静默、失败不影响主流程）
+      // 注意用 ref 读取账号：首次加载时 currentAccount state 尚未生效
+      // 盲盒 / 合成任一统计成功都上报，避免单边失败导致整份数据缺失
+      const acct = currentAccountRef.current;
+      const blindBoxOk = blindBoxData.code === 0;
+      const synthesisOk = synthesisData.code === 0;
+      if ((blindBoxOk || synthesisOk) && currentMidRef.current && acct) {
+        void reportUserLeaderboard({
+          uid: currentMidRef.current,
+          name: acct.uname,
+          face: acct.face,
+          blindBoxes: blindBoxOk && Array.isArray(blindBoxData.data) ? blindBoxData.data : [],
+          synthesis: synthesisOk ? synthesisData.data : null,
+        });
       }
     } catch {
       // stats may not be available yet
@@ -3132,34 +3165,38 @@ export default function HomePage() {
         body: JSON.stringify({ sid }),
       });
       const data = await res.json();
-      if (data.code === 0) {
-        // 同步 localStorage，确保 admin 页依据最新 sid 标记当前激活用户
-        localStorage.setItem("bili_live_sid", sid);
-        // 切换账号：先清空上一账号的内存数据，避免目标账号数据到达前界面串号
-        setSnapshot(null);
-        setBlindBoxStats(null);
-        blindBoxRawRef.current = null;
-        setSynthesisStats(null);
-        setOtherStats(null);
-        setCertifications([]);
-        setOfflineCacheAt(0);
-        // 本地优先：先展示目标账号的浏览器缓存（WEB 端），再后台静默同步
-        const target = accounts.find((a) => a.sid === sid) || null;
-        if (target?.mid) {
-          currentMidRef.current = target.mid;
-          setCurrentAccount(target);
-          await loadMidCache(target.mid);
-        }
-        setSyncing(true);
-        try {
-          await loadCachedQuick();
-          await fetchData(true);
-        } finally {
-          setSyncing(false);
-        }
+      if (data.code !== 0) {
+        // 以前这里是静默失败，用户会以为"点了没反应/不能切换"，必须给出提示
+        showToast(data.message || "切换账号失败，请稍后重试");
+        return;
+      }
+      localStorage.setItem("bili_live_sid", sid);
+      // 切换账号：先清空上一账号的内存数据，避免目标账号数据到达前界面串号
+      setSnapshot(null);
+      setBlindBoxStats(null);
+      blindBoxRawRef.current = null;
+      setSynthesisStats(null);
+      setOtherStats(null);
+      setCertifications([]);
+      setOfflineCacheAt(0);
+      // 本地优先：先展示目标账号的浏览器缓存（WEB 端），再后台静默同步
+      const target = accounts.find((a) => a.sid === sid) || null;
+      if (target?.mid) {
+        currentMidRef.current = target.mid;
+        setCurrentAccount(target);
+        currentAccountRef.current = target;
+        await loadMidCache(target.mid);
+      }
+      setSyncing(true);
+      try {
+        await loadCachedQuick();
+        await fetchData(true);
+      } finally {
+        setSyncing(false);
       }
     } catch (error) {
       console.error("Failed to switch account:", error);
+      showToast("切换账号失败，请稍后重试");
     }
   }
 
@@ -3172,6 +3209,7 @@ export default function HomePage() {
     // 清除本地会话并回到登录页
     localStorage.removeItem("bili_live_sid");
     setCurrentAccount(null);
+    currentAccountRef.current = null;
     setApiLoggedIn(false);
     setSnapshot(null);
     setBlindBoxStats(null);
@@ -3187,6 +3225,7 @@ export default function HomePage() {
     } catch { /* ignore */ }
     localStorage.removeItem("bili_live_sid");
     setCurrentAccount(null);
+    currentAccountRef.current = null;
     setApiLoggedIn(false);
     setSnapshot(null);
     setBlindBoxStats(null);
@@ -3986,7 +4025,11 @@ export default function HomePage() {
           onNoRevenue={() => {
             // 登录探测判定该账号无收益：置位标记，"主播"页面改为显示客户端下载引导提示。
             // 不再额外轻提示：切换到下载引导页本身已经足够明显，再弹提示纯属打扰。
-            setCurrentAccount((prev) => (prev ? { ...prev, noRevenue: true } : prev));
+            setCurrentAccount((prev) => {
+              const next = prev ? { ...prev, noRevenue: true } : prev;
+              currentAccountRef.current = next;
+              return next;
+            });
             setHasLiveRoom(false);
             setLiveRoomChecked(true);
           }}
@@ -4005,8 +4048,8 @@ export default function HomePage() {
                 {/* 公告卡片：管理员在 admin 页编辑，置顶显示 */}
                 {helpAnnouncement.trim() && (
                   <div className="rounded-xl border border-[#f39c12]/25 bg-[#fdf6ec] p-3 shadow-[0_20px_80px_rgba(31,28,23,0.06)]">
-                    <div className="flex items-center gap-1.5 mb-1.5 text-xs font-semibold text-[#d68910]">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                    <div className="flex items-center justify-center gap-2 mb-2 text-base font-bold text-[#d68910]">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
                       公告
                     </div>
                     <p className="text-xs leading-relaxed text-black/70 whitespace-pre-wrap">{helpAnnouncement}</p>
@@ -4227,6 +4270,75 @@ export default function HomePage() {
                     )}
                   </div>
                 )}
+                {/* 分享本软件：左侧圆形标识（仅展示，不可点击）+ 网站地址 + 复制按钮 */}
+                <div className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                  <div className="flex items-center gap-4">
+                    <div className="shrink-0 w-16 h-16 rounded-full flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white shadow-md select-none bg-gradient-to-br from-[#ff6ec4] to-[#7873f5]">
+                      <span>分享</span>
+                      <span>B瓜</span>
+                    </div>
+                    <div className="min-w-0 flex-1 flex justify-center">
+                      <a
+                        href="https://bili-bili.icu"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex max-w-full items-center justify-center truncate rounded-full border border-[#ece5f8] bg-[#f6f2fc] px-4 py-2 text-lg font-semibold text-[#5b3fa8] shadow-[inset_0_1px_rgba(255,255,255,0.9)] transition hover:bg-[#efe8fa] active:scale-95"
+                      >
+                        bili-bili.icu
+                      </a>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const url = "https://bili-bili.icu";
+                        let copied = false;
+                        try {
+                          await navigator.clipboard.writeText(url);
+                          copied = true;
+                        } catch {
+                          // 部分 WebView/权限受限环境下 Clipboard API 不可用，退回 execCommand
+                          try {
+                            const ta = document.createElement("textarea");
+                            ta.value = url;
+                            ta.style.position = "fixed";
+                            ta.style.opacity = "0";
+                            document.body.appendChild(ta);
+                            ta.select();
+                            copied = document.execCommand("copy");
+                            document.body.removeChild(ta);
+                          } catch {
+                            copied = false;
+                          }
+                        }
+                        if (!copied) {
+                          showToast("复制失败，请手动复制");
+                          return;
+                        }
+                        setShareCopied(true);
+                        window.setTimeout(() => setShareCopied(false), 1600);
+                      }}
+                      aria-live="polite"
+                      className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold text-white transition ${shareCopied ? "bg-emerald-500" : "bg-[#1f1c17] hover:bg-black active:scale-95"}`}
+                    >
+                      {shareCopied ? (
+                        <>
+                          <svg className="share-copied-pop h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M20 6 9 17l-5-5" />
+                          </svg>
+                          已复制
+                        </>
+                      ) : (
+                        <>
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="9" y="9" width="11" height="11" rx="2.5" />
+                            <path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9" />
+                          </svg>
+                          复制
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
                 {HELP_TOOLS.map((tool) => {
                   // 默认隐藏的工具（点赞/天选）：连击版本卡片 10 次解锁后（adminUsed）才显示
                   if (!adminUsed && HIDDEN_BY_DEFAULT_TOOLS.has(tool.title)) return null;
@@ -4401,7 +4513,7 @@ export default function HomePage() {
                       })}
                     </div>
                     <div className="flex gap-2 mt-3">
-                      <Link href="/login" className="flex-1 rounded-lg border border-black/10 py-2 text-center text-sm text-black/70 hover:bg-black/5 transition">
+                      <Link href="/login?qr=1" className="flex-1 rounded-lg border border-black/10 py-2 text-center text-sm text-black/70 hover:bg-black/5 transition">
                         添加新账号
                       </Link>
                       <button onClick={logout} className="flex-1 rounded-lg border border-red-200 py-2 text-center text-sm text-red-600 hover:bg-red-50 transition">

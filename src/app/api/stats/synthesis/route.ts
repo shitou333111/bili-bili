@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveSessionFromCookie, getSessionCookieName } from "@/lib/auth/session";
 import { ensureValidCredential } from "@/lib/bilibili/cookie-refresh";
-import { fetchTianxuanGiftList, fetchRedPocketGiftList, fetchBagList, getUserNameByUid, type BagGiftItem } from "@/lib/bilibili/gift-api";
+import { fetchTianxuanGiftList, fetchBagList, getUserNameByUid, type BagGiftItem } from "@/lib/bilibili/gift-api";
 import {
   calcHistoricalSynthesisProfit,
   calcPayRecordActivityProfit,
@@ -9,7 +9,8 @@ import {
   type SynthesisActivityProfitResult,
   type SynthesisActivityStats,
 } from "@/lib/gift-db";
-import { readPayRecords, getAccumulatedTianxuanGiftIds, getAccumulatedRedPocketGiftIds } from "@/lib/user-data";
+import { readPayRecords, getAccumulatedTianxuanGiftIds } from "@/lib/user-data";
+import { getEffectiveRedPocketGifts } from "@/lib/red-pocket-gifts";
 import type { SynthesisActivityConfig } from "@/lib/config";
 import { getEffectiveSynthesisConfig } from "@/lib/config-override";
 import { isOffline } from "@/lib/offline";
@@ -84,18 +85,13 @@ export async function GET(request: Request) {
 
     let redPocketGiftIds: number[] = [];
     let redPocketGiftList: { id: number; name: string }[] = [];
-    if (offline) {
-      // 离线模式：仅用本地累积的红包礼物 ID
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds([]);
-    } else {
-      try {
-        const redPocketGifts = await fetchRedPocketGiftList(biliCookie);
-        const currentRedPocketIds = redPocketGifts.map(g => g.id);
-        redPocketGiftList = redPocketGifts.map(g => ({ id: g.id, name: g.name }));
-        redPocketGiftIds = await getAccumulatedRedPocketGiftIds(currentRedPocketIds);
-      } catch (err) {
-        console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
-      }
+    try {
+      // 红包礼物列表由 admin 手动维护（B站无稳定接口），未配置时回退历史累积 ID
+      const redPocketGifts = await getEffectiveRedPocketGifts();
+      redPocketGiftList = redPocketGifts.map(g => ({ id: g.id, name: g.name }));
+      redPocketGiftIds = redPocketGifts.map(g => g.id);
+    } catch (err) {
+      console.error("[SynthesisStats] 读取红包礼物列表失败:", err);
     }
 
     // 历史总盈亏：基于消费记录(pay-records)按主播/直播间独立累计。

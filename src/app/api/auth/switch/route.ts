@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionBySid, getSessionCookieName, getUserTokenCookieName, setCurrentSession } from "@/lib/auth/session";
+import {
+  adoptSessionUserToken,
+  getSessionBySid,
+  getSessionCookieName,
+  getUserTokenCookieName,
+  setCurrentSession,
+} from "@/lib/auth/session";
 import type { ApiResponse } from "@/lib/bilibili/types";
 
 export const dynamic = "force-dynamic";
@@ -32,10 +38,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 验证用户只能切换自己的账号
+  // 验证用户只能切换自己的账号。
+  // 令牌来源：cookie → query → 当前 sid 会话（旧版本会话可能没有 userToken）。
+  const currentSid = request.cookies.get(getSessionCookieName())?.value ?? null;
+  const currentSession = await getSessionBySid(currentSid);
   let userToken = request.cookies.get(getUserTokenCookieName())?.value;
   if (!userToken) userToken = url.searchParams.get("_user_token") ?? undefined;
-  if (userToken !== session.userToken) {
+  if (!userToken) userToken = currentSession?.userToken || undefined;
+  // 自愈：浏览器持有当前会话的 sid Cookie，说明令牌只是漂移/缺失，按当前令牌纠正归属，
+  // 否则该浏览器的账号列表与切换都会永久失效。
+  if (currentSession && userToken && currentSession.userToken !== userToken) {
+    await adoptSessionUserToken(currentSession.sid, userToken);
+  }
+
+  // 令牌存在时按令牌校验；令牌完全缺失（极旧数据）时只允许切换到同样没有令牌的会话。
+  const ownsSession = userToken ? session.userToken === userToken : !session.userToken;
+  if (!ownsSession) {
     return NextResponse.json<ApiResponse<{ success: boolean }>>(
       {
         code: 1,

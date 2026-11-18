@@ -22,7 +22,6 @@ import {
   BLIND_BOX_API,
   SYNTHESIS_CONFIG,
   TIANXUAN_CONFIG,
-  RED_POCKET_CONFIG,
   type SynthesisActivityConfig,
 } from "./config";
 
@@ -191,11 +190,10 @@ async function saveSynthesisActivityInfo(platform: Platform, activityId: string,
   await platform.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
-// ==================== 天选/红包礼物 ID 累积（全局共享：列表对所有用户一致） ====================
+// ==================== 天选礼物 ID 累积（全局共享：列表对所有用户一致） ====================
 
 type SpecialGiftDb = {
   tianxuan_gift_ids?: number[];
-  red_pocket_gift_ids?: number[];
 };
 
 async function specialGiftDbPath(platform: Platform): Promise<string> {
@@ -268,17 +266,6 @@ async function getAccumulatedTianxuanGiftIds(platform: Platform, currentIds: num
   // 仅当集合确实增长时才写盘：列表稳定后绝大多数请求只读不写，避免每次开页都落盘。
   if (merged.length > historicalIds.length) {
     db.tianxuan_gift_ids = merged;
-    await writeSpecialGiftDb(platform, db);
-  }
-  return merged;
-}
-
-async function getAccumulatedRedPocketGiftIds(platform: Platform, currentIds: number[]): Promise<number[]> {
-  const db = await readSpecialGiftDb(platform);
-  const historicalIds = db.red_pocket_gift_ids || [];
-  const merged = [...new Set([...historicalIds, ...currentIds])];
-  if (merged.length > historicalIds.length) {
-    db.red_pocket_gift_ids = merged;
     await writeSpecialGiftDb(platform, db);
   }
   return merged;
@@ -729,12 +716,11 @@ export async function getEffectiveBlindBoxConfig(platform: Platform): Promise<Ef
 
 // ==================== B站 API 请求（平台层） ====================
 
-// 天选/红包活动列表在 B站 侧更新极慢，原先每次打开「粉丝/其他」页都会各请求一次 B站。
+// 天选活动列表在 B站 侧更新极慢，原先每次打开「粉丝/其他」页都会各请求一次 B站。
 // 这里加进程内 TTL 缓存：缓存 1 天，即每天才向上游刷新一次；抓取失败时回退到上次结果。
 const SPECIAL_GIFT_LIST_TTL_MS = 24 * 60 * 60 * 1000;
 
 let tianxuanListCache: { at: number; list: Array<{ id: number; name: string }> } | null = null;
-let redPocketListCache: { at: number; list: Array<{ id: number; name: string }> } | null = null;
 
 async function fetchTianxuanGiftList(platform: Platform, cookie: string): Promise<Array<{ id: number; name: string }>> {
   if (tianxuanListCache && Date.now() - tianxuanListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
@@ -756,37 +742,16 @@ async function fetchTianxuanGiftList(platform: Platform, cookie: string): Promis
   }
 }
 
-async function fetchRedPocketGiftList(platform: Platform, cookie: string): Promise<Array<{ id: number; name: string }>> {
-  if (redPocketListCache && Date.now() - redPocketListCache.at < SPECIAL_GIFT_LIST_TTL_MS) {
-    return redPocketListCache.list;
-  }
-  try {
-    const url = `${RED_POCKET_CONFIG.url}?room_id=23915535&ruid=488750234&platform=pc&rp_type=1`;
-    const response = await platform.fetchBilibiliJson<{
-      code: number;
-      data?: {
-        item?: Array<{ award_info?: Array<{ award_id: number; award_name: string }> }>;
-      } | null;
-    }>({ url, cookie });
-    if (response.code === 0 && response.data?.item) {
-      const giftMap = new Map<number, string>();
-      for (const item of response.data.item) {
-        if (item.award_info) {
-          for (const award of item.award_info) {
-            if (award.award_id && !giftMap.has(award.award_id)) {
-              giftMap.set(award.award_id, award.award_name);
-            }
-          }
-        }
-      }
-      const list = Array.from(giftMap.entries()).map(([id, name]) => ({ id, name }));
-      if (list.length > 0) redPocketListCache = { at: Date.now(), list };
-      return list;
-    }
-    return redPocketListCache?.list ?? [];
-  } catch {
-    return redPocketListCache?.list ?? [];
-  }
+/**
+ * 红包礼物列表：唯一来源是 admin 后台配置（客户端从远程配置读取，不再调用 B站 红包接口）。
+ */
+async function getEffectiveRedPocketGifts(platform: Platform): Promise<Array<{ id: number; name: string }>> {
+  const adminConfig = (await platform.fetchRemoteConfig()) as {
+    red_pocket_gifts?: Array<{ id?: unknown; name?: unknown }>;
+  } | null;
+  return (adminConfig?.red_pocket_gifts ?? [])
+    .map((g) => ({ id: Number(g?.id) || 0, name: String(g?.name ?? "").trim() }))
+    .filter((g) => g.id > 0);
 }
 
 // ---- 包裹礼物 ----
@@ -1549,12 +1514,12 @@ export async function fetchSynthesisStats(
     let redPocketGiftIds: number[] = [];
     let redPocketGiftList: { id: number; name: string }[] = [];
     try {
-      const redPocketGifts = await fetchRedPocketGiftList(platform, cookie);
-      const currentRedPocketIds = redPocketGifts.map((g) => g.id);
+      // 红包礼物列表由 admin 手动维护，从远程配置读取（旧配置回退本机累积 ID）
+      const redPocketGifts = await getEffectiveRedPocketGifts(platform);
       redPocketGiftList = redPocketGifts.map((g) => ({ id: g.id, name: g.name }));
-      redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, currentRedPocketIds);
+      redPocketGiftIds = redPocketGifts.map((g) => g.id);
     } catch (err) {
-      console.error("[SynthesisStats] 获取红包礼物列表失败:", err);
+      console.error("[SynthesisStats] 读取红包礼物列表失败:", err);
     }
 
     let historical: SynthesisProfitResult;
@@ -1974,8 +1939,13 @@ export async function fetchOtherStats(
     tianxuanGiftIds = await getAccumulatedTianxuanGiftIds(platform, tianxuanGifts.map((g) => g.id));
 
     let redPocketGiftIds: number[] = [];
-    const redPocketGifts = await fetchRedPocketGiftList(platform, cookie).catch(() => []);
-    redPocketGiftIds = await getAccumulatedRedPocketGiftIds(platform, redPocketGifts.map((g) => g.id));
+    try {
+      // 红包礼物列表由 admin 手动维护，从远程配置读取（旧配置回退本机累积 ID）
+      const redPocketGifts = await getEffectiveRedPocketGifts(platform);
+      redPocketGiftIds = redPocketGifts.map((g) => g.id);
+    } catch (err) {
+      console.error("[OtherStats] 读取红包礼物列表失败:", err);
+    }
 
     const records = await readPayRecords(platform, session.mid, session.uname || "");
 

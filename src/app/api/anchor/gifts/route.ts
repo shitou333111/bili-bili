@@ -9,6 +9,7 @@ import { getAllBlindBoxInfo, saveBlindBoxInfo, type BlindBoxInfo } from "@/lib/b
 import { checkBlindBox, getUserInfoByUid } from "@/lib/bilibili/gift-api";
 import { getBuvidCookie } from "@/lib/bilibili/client";
 import { fetchRoomInfoByUid } from "@/lib/bili-room";
+import { dateKeyForRange } from "@/lib/leaderboard-time";
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -1457,12 +1458,16 @@ export async function GET(request: Request) {
 
     // 应用筛选
     const dateFilter = getDateRangeFilter(dateRangeFilter);
+    // today / lastFriday 按北京时间日期键精确过滤，避免服务器时区差异
+    const dateKeyFilter = dateKeyForRange(dateRangeFilter);
     const fanUids = fanFilter
       ? fanFilter.split(",").map(s => Number(s.trim())).filter(n => !isNaN(n))
       : [];
 
     const filteredRecords = allRecords.filter(r => {
-      if (dateFilter) {
+      if (dateKeyFilter) {
+        if (r.time.slice(0, 10) !== dateKeyFilter) return false;
+      } else if (dateFilter) {
         const t = new Date(r.time).getTime();
         if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) return false;
       }
@@ -1706,7 +1711,7 @@ export async function GET(request: Request) {
       totalHamster: number;
       cost: number;
       profit: number;
-      gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }>;
+      gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string; price: number }>;
       img: string;
       blindPrice: number;
       anchors: Array<{ ruid: number; rname: string; count: number }>;
@@ -1747,7 +1752,7 @@ export async function GET(request: Request) {
       const rewardGiftIds = rewardGiftIdsByBox.get(blindBoxId);
 
       // 礼物列表：从盲盒信息中获取，实际数量从收益记录中统计；奖励礼物名称后标注（奖励）
-      const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string }> = [];
+      const gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string; price: number }> = [];
       const giftCountMap = blindBoxGiftCountMap.get(blindBoxId);
       if (info?.gifts) {
         for (const g of info.gifts) {
@@ -1759,6 +1764,7 @@ export async function GET(request: Request) {
             num: actualCount?.num ?? 0,
             hamster: actualCount?.hamster ?? 0,
             img: g.gift_img,
+            price: g.price ?? 0,
           });
         }
       }

@@ -63,7 +63,13 @@ export default function SafeAreaStyler() {
       }
     } else {
       if (isIOS || isAndroid) {
-        safeTop = "env(safe-area-inset-top, 24px)";
+        // iOS Web（Safari 标签页与主屏独立 PWA 都是）：状态栏由系统占据在 Web 视口之外
+        // （已移除已废弃的 apple-mobile-web-app-status-bar-style=black-translucent，
+        //  状态栏改为按页面主题色自动着色，不再以半透明玻璃压在页面内容上）。
+        // 因此视口顶部就是内容顶部，顶部安全区恒为 0；若再叠加 env(safe-area-inset-top)
+        // （独立 PWA 下约 62px），内容会整体下移，顶部就出现一条被系统状态栏玻璃模糊的空白带。
+        // 安卓仍需按 edge-to-edge 安全区避让。
+        safeTop = isIOS ? "0px" : "env(safe-area-inset-top, 24px)";
         safeBottom = "env(safe-area-inset-bottom, 8px)";
         // 独立 PWA（主屏 Web App）没有 Safari 地址栏，可视区一直铺到屏幕物理底边，
         // 托盘若沿用 Safari 的 16px 就会压到 Home Indicator 上（"过于靠下"）。

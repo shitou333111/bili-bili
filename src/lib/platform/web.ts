@@ -182,7 +182,9 @@ export const webPlatform: Platform = {
 
   async fetchRemoteConfig(): Promise<Record<string, unknown> | null> {
     try {
-      const resp = await fetch("/api/admin/config");
+      // 公开配置接口：网页端本地模式也需要读取 admin 配置（红包礼物列表等），
+      // /api/admin/config 需要 admin 权限，普通用户会 403。
+      const resp = await fetch("/api/config");
       const data = await resp.json();
       return (data.code === 0 && data.data) ? data.data : null;
     } catch {

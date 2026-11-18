@@ -84,7 +84,8 @@ export async function GET(req: Request) {
         `-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;` +
         `background-image:radial-gradient(120% 80% at 50% 0%,#3a2f7a 0%,rgba(27,21,51,0) 60%),` +
         `radial-gradient(95% 70% at 50% 100%,#2a2456 0%,rgba(27,21,51,0) 55%)}` +
-        `.card{width:min(440px,100%);padding:36px 30px 32px;border-radius:22px;text-align:center;` +
+        `.wrap{display:flex;flex-direction:column;align-items:center;gap:20px;width:100%;max-width:440px}` +
+        `.card{width:100%;padding:36px 30px 32px;border-radius:22px;text-align:center;` +
         `background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);` +
         `box-shadow:0 24px 60px rgba(0,0,0,.45);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);` +
         `animation:rise .5s cubic-bezier(.22,1,.36,1) both}` +
@@ -97,11 +98,30 @@ export async function GET(req: Request) {
         `.lead{margin-bottom:16px;padding-bottom:16px;font-size:15.5px;font-weight:600;color:#fff;letter-spacing:.2px;` +
         `border-bottom:1px solid rgba(255,255,255,.1)}` +
         `.body{color:rgba(255,255,255,.76)}` +
+        `.home{display:inline-flex;align-items:center;gap:10px;padding:12px 24px;border-radius:999px;` +
+        `background:#221d24;color:#fff;font-size:13px;font-weight:600;text-decoration:none;` +
+        `box-shadow:0 14px 30px -14px rgba(34,29,36,.75);transition:transform .18s ease,background .18s ease,box-shadow .18s ease}` +
+        `.home:hover{background:#2f2831;transform:translateY(-2px)}` +
+        `.home:active{transform:scale(.95)}` +
+        `.home .ic{display:flex;align-items:center;justify-content:center;width:24px;height:24px;flex:0 0 auto;` +
+        `border-radius:50%;background:rgba(255,255,255,.1);color:#9df0cf}` +
+        `.home .ic svg{width:14px;height:14px}` +
+        `.home .domain{font-size:12px;font-weight:500;color:rgba(255,255,255,.6)}` +
+        `.home .arrow{font-size:14px;color:rgba(255,255,255,.7)}` +
         `</style></head><body>` +
+        `<div class="wrap">` +
         `<div class="card">` +
         `<div class="mark"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2l1.9 5.6L19.5 9.5l-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/></svg></div>` +
         `<p class="lead">本次合成活动，逻辑清晰，简单易懂，没有模拟。</p>` +
         `<p class="body">其实，经过多次模拟活动发现，每个活动每一步的盈亏基本都是持平的，都是官方设计好的。也就是说在每一步继续还是收手，没有更赚更亏的说法，完全就是拼运气看心情。所以之后可能不会每次都模拟，只会模拟一些有意思的合成活动。</p>` +
+        `</div>` +
+        `<a class="home" href="https://bili-bili.icu" target="_blank" rel="noreferrer">` +
+        `<span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">` +
+        `<path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M9.5 20v-5.5h5V20"/></svg></span>` +
+        `返回网站首页` +
+        `<span class="domain">bili-bili.icu</span>` +
+        `<span class="arrow">→</span>` +
+        `</a>` +
         `</div></body></html>`,
       { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } }
     );
