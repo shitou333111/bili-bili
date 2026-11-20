@@ -24,6 +24,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_ENTRY_COLORS,
   DEFAULT_ENTRY_SAMPLE,
+  INFO_PANEL_RANK_LABELS,
   GIFT_BAR_SLOTS,
   GIFT_FLIP_MAX_OPTIONS,
   GIFT_FLIP_MAX_TEXT_LEN,
@@ -47,6 +48,9 @@ import {
   type GiftFlipOption,
   type GiftFlipPhase,
   type GiftHighlight,
+  type InfoPanelConfig,
+  type InfoPanelOvertimeConfig,
+  type InfoPanelRankKey,
   type ScreenOrientation,
 } from "@/lib/display/types";
 import { type GiftFlipFanRecord } from "@/lib/display/gift-flip";
@@ -87,6 +91,15 @@ import ColorBoard from "./ColorBoard";
 import GiftSearchInput, { type GiftPick } from "./GiftSearchInput";
 import GiftFlipCarousel, { GIFT_FLIP_STAGE } from "./GiftFlipCarousel";
 import GiftFlipReveal, { type GiftFlipActive } from "./GiftFlipReveal";
+
+/** 信息面板 · 榜一日期勾选项顺序（与画布渲染顺序一致） */
+const INFO_PANEL_CHECK_KEYS: InfoPanelRankKey[] = [
+  "yesterday",
+  "thisWeek",
+  "lastWeek",
+  "thisMonth",
+  "lastMonth",
+];
 
 /** 「设置样式」模态框内的实时预览用演示用户（真实 EntryBadge，跑完整粒子聚散循环） */
 const COLOR_PREVIEW_USER: DisplayEntryPayload = {
@@ -325,6 +338,143 @@ function Switch({
   );
 }
 
+/** 时 : 分 输入（两个输入框，冒号固定加粗；显示两位补零，失焦时按格式回显）。 */
+function TimeField({
+  minutes,
+  onChange,
+  label = "初始",
+}: {
+  minutes: number;
+  onChange: (minutes: number) => void;
+  label?: string;
+}) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const [draft, setDraft] = useState({
+    h: String(h).padStart(2, "0"),
+    m: String(m).padStart(2, "0"),
+  });
+  const [editing, setEditing] = useState(false);
+  // 非编辑期间跟随外部值（编辑时让位于用户输入，避免光标/输入被覆盖）
+  if (!editing) {
+    const hh = String(h).padStart(2, "0");
+    const mm = String(m).padStart(2, "0");
+    if (draft.h !== hh || draft.m !== mm) setDraft({ h: hh, m: mm });
+  }
+  const commit = (nextH: string, nextM: string) => {
+    // 上限 999 分钟（16 小时 39 分）
+    const hv = Math.max(0, Math.min(16, Math.round(Number(nextH)) || 0));
+    const mv = Math.max(0, Math.min(59, Math.round(Number(nextM)) || 0));
+    onChange(Math.min(999, hv * 60 + mv));
+  };
+  const input = "w-9 text-center";
+  return (
+    <label className="flex items-center gap-2">
+      <span className="shrink-0 text-xs text-black/55">{label}</span>
+      <input
+        value={draft.h}
+        inputMode="numeric"
+        spellCheck={false}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => {
+          const v = e.target.value.replace(/\D/g, "").slice(0, 2);
+          setDraft((d) => ({ ...d, h: v }));
+          commit(v, draft.m);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          commit(draft.h, draft.m);
+        }}
+        className={`${inputFlat} ${input}`}
+      />
+      <span className="text-sm font-black leading-none text-black/70">:</span>
+      <input
+        value={draft.m}
+        inputMode="numeric"
+        spellCheck={false}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => {
+          const v = e.target.value.replace(/\D/g, "").slice(0, 2);
+          setDraft((d) => ({ ...d, m: v }));
+          commit(draft.h, v);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          commit(draft.h, draft.m);
+        }}
+        className={`${inputFlat} ${input}`}
+      />
+    </label>
+  );
+}
+
+/** 加班机「现在」时刻：每秒跟随服务剩余时间刷新，也可直接编辑；
+ *  右侧「归零」把当前倒计时清零，再右侧为「暂停 / 开始」按钮（暂停时冻结剩余、礼物不生效）。 */
+function NowTimeField({ overtime }: { overtime: InfoPanelOvertimeConfig }) {
+  const [minutes, setMinutes] = useState(() =>
+    displayDanmaku.getOvertimeRemainMinutes(overtime),
+  );
+  const [paused, setPaused] = useState(() => displayDanmaku.isOvertimePaused());
+  useEffect(() => {
+    const tick = () => {
+      setMinutes(displayDanmaku.getOvertimeRemainMinutes(overtime));
+      setPaused(displayDanmaku.isOvertimePaused());
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [overtime]);
+  return (
+    <div className="flex items-center gap-1.5">
+      <TimeField
+        label="现在"
+        minutes={minutes}
+        onChange={(m) => {
+          setMinutes(m);
+          void displayDanmaku.setOvertimeRemainMinutes(m);
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => {
+          setMinutes(0);
+          void displayDanmaku.setOvertimeRemainMinutes(0);
+        }}
+        className="shrink-0 rounded-md bg-white/70 px-1.5 py-0.5 text-[11px] text-black/60 transition hover:bg-white hover:text-black/80"
+      >
+        归零
+      </button>
+      <button
+        type="button"
+        title={paused ? "继续计时" : "暂停计时"}
+        aria-label={paused ? "继续计时" : "暂停计时"}
+        onClick={() => {
+          const next = !paused;
+          setPaused(next);
+          void displayDanmaku.setOvertimePaused(next, overtime);
+        }}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/70 transition hover:bg-white"
+      >
+        {paused ? (
+          // 暂停中 → 绿色三角「开始」
+          <span
+            style={{
+              width: 0,
+              height: 0,
+              borderTop: "5px solid transparent",
+              borderBottom: "5px solid transparent",
+              borderLeft: "8px solid #16a34a",
+            }}
+          />
+        ) : (
+          // 计时中 → 红色方块「暂停」
+          <span className="h-2.5 w-2.5 rounded-[1px] bg-red-600" />
+        )}
+      </button>
+    </div>
+  );
+}
+
 /** 醒目留言（SC）小图标：与画布礼物条同款——圆形纯色背景（按电池价位取色）+ "SC"/电池数 两行文字。
  *  SC 无礼物图标，列表里也要用它替代 <img>（否则空 src 会触发浏览器告警）。 */
 function ScMiniIcon({ battery }: { battery: number }) {
@@ -399,10 +549,13 @@ function Check({
   checked,
   onChange,
   label,
+  muted,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
-  label: string;
+  label: ReactNode;
+  /** 子级复选框：选中态用深灰色（区别于上一层级的主复选框黑色） */
+  muted?: boolean;
 }) {
   return (
     <label
@@ -415,7 +568,9 @@ function Check({
       <span
         className={`relative flex items-center justify-center w-4 h-4 rounded-[5px] border transition ${
           checked
-            ? "bg-[#1f1c17] border-[#1f1c17]"
+            ? muted
+              ? "bg-black/45 border-black/45"
+              : "bg-[#1f1c17] border-[#1f1c17]"
             : "bg-white border-black/25 group-hover:border-black/45"
         }`}
       >
@@ -444,7 +599,7 @@ function Card({
 }) {
   return (
     <section
-      className={`rounded-2xl ${bg} ${border} border p-4 shadow-[0_1px_2px_rgba(31,28,23,0.04)] ${className}`}
+      className={`rounded-2xl ${bg} ${border} border p-3.5 shadow-[0_1px_2px_rgba(31,28,23,0.04)] ${className}`}
     >
       {children}
     </section>
@@ -466,10 +621,16 @@ function ModuleTitle({
   onToggle?: (next: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-center gap-2.5 mb-2.5 select-none">
+    <div className="flex items-center justify-center gap-2 mb-1.5 select-none">
       <h3 className="text-sm font-bold text-black/75">{title}</h3>
       {onToggle && (
-        <Switch checked={!!checked} disabled={disabled} onToggle={onToggle} onColor={onColor} />
+        <Switch
+          size="sm"
+          checked={!!checked}
+          disabled={disabled}
+          onToggle={onToggle}
+          onColor={onColor}
+        />
       )}
     </div>
   );
@@ -834,6 +995,33 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       if (patch.gift && mid) void displayDanmaku.pushGiftUpdate(mid);
     },
     [update, syncService, mid],
+  );
+
+  // 信息面板：合并最新磁盘配置后保存，再同步服务（开启即自动拉起监听）并广播给画布。
+  // 榜一子项用 rank 对象做局部合并，避免勾选一个日期时把其他勾选覆盖掉。
+  const updateInfoPanel = useCallback(
+    async (
+      patch: Partial<Omit<InfoPanelConfig, "rank" | "overtime">> & {
+        rank?: Partial<InfoPanelConfig["rank"]>;
+        overtime?: Partial<InfoPanelConfig["overtime"]>;
+      },
+    ) => {
+      const latest = await loadDisplayConfig(mid);
+      const cur = latest.infoPanel;
+      const next: InfoPanelConfig = {
+        ...cur,
+        ...patch,
+        rank: { ...cur.rank, ...(patch.rank ?? {}) },
+        overtime: { ...cur.overtime, ...(patch.overtime ?? {}) },
+      };
+      const saved = await update({ infoPanel: next });
+      await syncService(saved);
+      await displayDanmaku.broadcastFlags();
+      // 只改透明度 / 停留秒数等纯样式项时不需要重新拉取数据
+      const onlyStyle = Object.keys(patch).every((k) => k === "opacity" || k === "dwellSeconds");
+      await displayDanmaku.broadcastInfoPanelConfig(next, !onlyStyle);
+    },
+    [mid, update, syncService],
   );
 
   // 盲盒盈亏 · 弹幕查询开关：不显示在画布上、不参与派生 master，但它的查询依赖弹幕监听，
@@ -1800,6 +1988,210 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           onClose={() => setEditOpen(false)}
         />
       )}
+
+      {/* 信息面板：横向半透明长条，位于「收到的礼物展示」上方。
+          三个元素各自可勾选；榜一内部 5 个日期也可分别勾选。数据由主进程自动拉取。 */}
+      <section>
+        <ModuleTitle
+          title="信息面板"
+          onColor="bg-cyan-600"
+          checked={config.infoPanel.enabled}
+          onToggle={(v) => void updateInfoPanel({ enabled: v })}
+        />
+        <Card bg="bg-cyan-200" border="border-cyan-400">
+          {/* 样式行：说明 + 透明度（数值紧跟标签）+ 停留秒数 */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <p className="text-xs text-black/45 leading-relaxed">勾选的信息循环显示</p>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0 text-xs text-black/55">透明度</span>
+              <span className="w-5 shrink-0 text-right text-xs tabular-nums text-black/70">
+                {config.infoPanel.opacity}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={config.infoPanel.opacity}
+                disabled={!config.infoPanel.enabled}
+                onChange={(e) => void updateInfoPanel({ opacity: Number(e.target.value) })}
+                className="h-1.5 w-16 cursor-pointer accent-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
+              />
+              <span className="mx-1 h-4 w-px bg-black/15" />
+              <span className="shrink-0 text-xs text-black/55">停留</span>
+              <input
+                type="number"
+                min={1}
+                max={600}
+                value={config.infoPanel.dwellSeconds}
+                disabled={!config.infoPanel.enabled}
+                onChange={(e) =>
+                  void updateInfoPanel({
+                    dwellSeconds: Math.max(1, Math.min(600, Math.round(Number(e.target.value)) || 1)),
+                  })
+                }
+                className={`${inputFlat} ${noSpin} w-12 text-center disabled:opacity-40`}
+              />
+              <span className="text-xs text-black/55">秒</span>
+            </div>
+          </div>
+
+          {/* 每个信息各占一行 */}
+          <div className="mt-2.5 flex flex-col gap-y-2">
+            {/* 榜一信息：总开关 + 5 个日期子项 */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <Check
+                checked={config.infoPanel.rank.enabled}
+                label="榜一信息："
+                onChange={(v) => void updateInfoPanel({ rank: { enabled: v } })}
+              />
+              <div
+                className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 ${
+                  config.infoPanel.rank.enabled ? "" : "pointer-events-none opacity-40"
+                }`}
+              >
+                {INFO_PANEL_CHECK_KEYS.map((key) => (
+                  <Check
+                    key={key}
+                    muted
+                    checked={config.infoPanel.rank[key]}
+                    label={INFO_PANEL_RANK_LABELS[key].replace("榜一", "")}
+                    onChange={(v) => void updateInfoPanel({ rank: { [key]: v } })}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <Check
+              checked={config.infoPanel.pk}
+              label={
+                <>
+                  PK任务
+                  <span className="text-black/40">
+                    （显示首胜/有效/胜场，处于PK时显示对方首胜状况）
+                  </span>
+                </>
+              }
+              onChange={(v) => void updateInfoPanel({ pk: v })}
+            />
+
+            <Check
+              checked={config.infoPanel.blindBox}
+              label={
+                <>
+                  心动盲盒
+                  <span className="text-black/40">（平时显示收集进度，周五显示盈亏）</span>
+                </>
+              }
+              onChange={(v) => void updateInfoPanel({ blindBox: v })}
+            />
+
+            {/* 加班机：开关 + 初始时长 + 现在时刻 + 归零（HH : MM，冒号固定加粗） */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <Check
+                checked={config.infoPanel.overtime.enabled}
+                label="加班机"
+                onChange={(v) => void updateInfoPanel({ overtime: { enabled: v } })}
+              />
+              <TimeField
+                minutes={config.infoPanel.overtime.initialMinutes}
+                onChange={(m) =>
+                  void updateInfoPanel({ overtime: { initialMinutes: Math.max(1, m) } })
+                }
+              />
+              <NowTimeField overtime={config.infoPanel.overtime} />
+            </div>
+
+            {/* 加班机礼物：红色「–」/ 绿色「+」标记减少 / 增加时长（始终可配置） */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 text-base font-black leading-none text-red-600">–</span>
+                <GiftSearchInput
+                  giftName={config.infoPanel.overtime.decreaseGiftName}
+                  onPick={(g) =>
+                    void updateInfoPanel({
+                      overtime: {
+                        decreaseGiftId: g.id,
+                        decreaseGiftName: g.name,
+                        decreaseGiftIcon: g.img,
+                      },
+                    })
+                  }
+                  className="w-[90px]"
+                  dropdownWidth={224}
+                />
+                {config.infoPanel.overtime.decreaseGiftIcon ? (
+                  <img
+                    src={config.infoPanel.overtime.decreaseGiftIcon}
+                    alt=""
+                    className="h-5 w-5 shrink-0 rounded"
+                  />
+                ) : null}
+                <input
+                  type="number"
+                  min={1}
+                  max={999}
+                  value={config.infoPanel.overtime.decreaseMinutes}
+                  onChange={(e) =>
+                    void updateInfoPanel({
+                      overtime: {
+                        decreaseMinutes: Math.max(
+                          1,
+                          Math.min(999, Math.round(Number(e.target.value)) || 1),
+                        ),
+                      },
+                    })
+                  }
+                  className={`${inputFlat} ${noSpin} w-12 text-center`}
+                />
+                <span className="shrink-0 text-xs text-black/55">分</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 text-base font-black leading-none text-green-600">+</span>
+                <GiftSearchInput
+                  giftName={config.infoPanel.overtime.increaseGiftName}
+                  onPick={(g) =>
+                    void updateInfoPanel({
+                      overtime: {
+                        increaseGiftId: g.id,
+                        increaseGiftName: g.name,
+                        increaseGiftIcon: g.img,
+                      },
+                    })
+                  }
+                  className="w-[90px]"
+                  dropdownWidth={224}
+                />
+                {config.infoPanel.overtime.increaseGiftIcon ? (
+                  <img
+                    src={config.infoPanel.overtime.increaseGiftIcon}
+                    alt=""
+                    className="h-5 w-5 shrink-0 rounded"
+                  />
+                ) : null}
+                <input
+                  type="number"
+                  min={1}
+                  max={999}
+                  value={config.infoPanel.overtime.increaseMinutes}
+                  onChange={(e) =>
+                    void updateInfoPanel({
+                      overtime: {
+                        increaseMinutes: Math.max(
+                          1,
+                          Math.min(999, Math.round(Number(e.target.value)) || 1),
+                        ),
+                      },
+                    })
+                  }
+                  className={`${inputFlat} ${noSpin} w-12 text-center`}
+                />
+                <span className="shrink-0 text-xs text-black/55">分</span>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </section>
 
       {/* 模块1：收到的礼物展示 */}
       <section>

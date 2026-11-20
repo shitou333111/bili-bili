@@ -39,7 +39,7 @@ async function webPost<T>(path: string, body?: unknown): Promise<T> {
   return res.json();
 }
 
-// ==================== 认证 API ====================
+// ==================== 其他统计 API ====================
 
 export const authApi = {
   /** 获取账号列表 */
@@ -140,9 +140,6 @@ export const revenueApi = {
 export const statsApi = {
   async getSynthesis(): Promise<unknown> {
     return webFetch("/api/stats/synthesis");
-  },
-  async getCertification(): Promise<unknown> {
-    return webFetch("/api/stats/certification");
   },
   async getOther(): Promise<unknown> {
     return webFetch("/api/stats/other");

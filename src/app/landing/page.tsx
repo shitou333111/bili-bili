@@ -112,6 +112,7 @@ export default function LandingPage() {
               app.bili-bili.icu
             </a>
             <div className="space-y-1.5 text-center text-[16px] leading-6 text-[#6b6b6b]">
+              <p>若手机打开网页，先添加到主屏幕，能当APP用。</p>
               <p>推荐第二种方式，下载安装使用，体验好更安全。</p>
               <p>主播功能必须下载安装客户端使用，推荐电脑版。</p>
             </div>

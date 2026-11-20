@@ -35,11 +35,14 @@ import {
   type GiftFlipConfig,
   type GiftFlipPhase,
   type GiftHighlight,
+  type InfoPanelConfig,
+  type InfoPanelData,
   type LayoutElementId,
   type MovableRect,
   type ScreenOrientation,
   DEFAULT_DISPLAY_LAYOUT,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_INFO_PANEL_CONFIG,
   DEFAULT_ENTRY_COLORS,
   DEFAULT_ENTRY_SAMPLE,
   GIFT_BAR_SLOTS,
@@ -56,6 +59,7 @@ import GiftEffect from "./GiftEffect";
 import VideoOverlay from "./VideoOverlay";
 import MovableBox from "./MovableBox";
 import BannerButton from "./BannerButton";
+import InfoPanel from "./InfoPanel";
 import GiftFlipCarousel from "./GiftFlipCarousel";
 import GiftFlipReveal, { type GiftFlipActive } from "./GiftFlipReveal";
 
@@ -196,6 +200,9 @@ type ServerMsg =
       giftHighlight: GiftHighlight;
       /** 礼物翻卡/抽奖模块配置（选项/触发礼物/是否显示文字） */
       giftFlip: GiftFlipConfig;
+      /** 信息面板（榜一 / PK任务 / 心动盲盒）配置与数据 */
+      infoPanel?: InfoPanelConfig;
+      infoPanelData?: InfoPanelData | null;
       flags: DisplayFlags;
     }
   | { type: "event"; payload: DisplayEvent }
@@ -219,6 +226,8 @@ type ServerMsg =
   | { type: "giftHighlight"; giftHighlight: GiftHighlight }
   | { type: "giftFlipConfig"; v: GiftFlipConfig }
   | { type: "giftFlipReset" }
+  | { type: "infoPanelConfig"; infoPanel: InfoPanelConfig }
+  | { type: "infoPanelData"; infoPanelData: InfoPanelData }
   | { type: "celebrate" };
 
 /** 入场队列条目：进场用户 + 可选官方动画负载（entryStyle 选中官方项时由服务端随事件附带） */
@@ -420,6 +429,11 @@ export default function DisplayCanvas() {
   const [giftHighlight, setGiftHighlight] = useState<GiftHighlight>({});
   // 礼物翻卡/抽奖模块配置（init/giftFlipConfig 消息下发）
   const [giftFlipCfg, setGiftFlipCfg] = useState<GiftFlipConfig>(DEFAULT_DISPLAY_CONFIG.giftFlip);
+  // 信息面板：配置（透明度/各元素开关，面板修改后经 WS 同步）与数据（主进程定时/事件拉取）
+  const [infoPanelCfg, setInfoPanelCfg] = useState<InfoPanelConfig>(
+    DEFAULT_DISPLAY_CONFIG.infoPanel ?? DEFAULT_INFO_PANEL_CONFIG,
+  );
+  const [infoPanelData, setInfoPanelData] = useState<InfoPanelData | null>(null);
   // 待播放的一次翻卡（event:giftFlip 下发；播完回执 giftFlipDone 并清空）
   const [flipPlay, setFlipPlay] = useState<
     ({ fan: { uid: number; uname: string; face: string }; optionIndex: number } & { seq: number }) | null
@@ -441,6 +455,7 @@ export default function DisplayCanvas() {
   // 各模块显示开关（主进程广播）：总开关关闭 → 浏览器源整体不渲染；各模块开关关闭 → 隐藏对应元素
   const [flags, setFlags] = useState<DisplayFlags>({
     master: true,
+    infoPanel: true,
     entry: true,
     gift: true,
     anime: true,
@@ -576,6 +591,8 @@ export default function DisplayCanvas() {
           msg.giftHighlight && typeof msg.giftHighlight === "object" ? msg.giftHighlight : {},
         );
         setGiftFlipCfg(msg.giftFlip ?? DEFAULT_DISPLAY_CONFIG.giftFlip);
+        setInfoPanelCfg(msg.infoPanel ?? DEFAULT_INFO_PANEL_CONFIG);
+        setInfoPanelData(msg.infoPanelData ?? null);
         if (msg.flags) setFlags(msg.flags);
       } else if (msg.type === "event") {
         applyEventRef.current(msg.payload);
@@ -627,6 +644,10 @@ export default function DisplayCanvas() {
         setGiftHighlight(msg.giftHighlight ?? {});
       } else if (msg.type === "giftFlipConfig") {
         setGiftFlipCfg(msg.v ?? DEFAULT_DISPLAY_CONFIG.giftFlip);
+      } else if (msg.type === "infoPanelConfig") {
+        setInfoPanelCfg(msg.infoPanel ?? DEFAULT_INFO_PANEL_CONFIG);
+      } else if (msg.type === "infoPanelData") {
+        setInfoPanelData(msg.infoPanelData ?? null);
       } else if (msg.type === "giftFlipReset") {
         // 面板「重置」：仅清空面板侧记录；画布侧待播/播放中的翻卡不作处理（主进程已复位调度）
       } else if (msg.type === "celebrate") {
@@ -1315,6 +1336,21 @@ export default function DisplayCanvas() {
               </div>
             )}
           </div>
+        </MovableBox>
+      )}
+
+      {/* 信息面板：榜一 / PK任务 / 心动盲盒，横向半透明长条（默认位于礼物展示上方）。
+          编辑模式常驻显示便于摆放；运行时有数据才显示。 */}
+      {flags.infoPanel && (isEdit || infoPanelData) && (
+        <MovableBox
+          id="infoPanel"
+          rect={layouts.infoPanel[orientation]}
+          onCommit={commitLayout("infoPanel")}
+          editable={isEdit}
+          zIndex={3}
+          {...selectProps("infoPanel")}
+        >
+          <InfoPanel config={infoPanelCfg} data={infoPanelData} placeholder={isEdit} />
         </MovableBox>
       )}
 

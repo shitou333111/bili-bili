@@ -4,7 +4,6 @@
  *
  * 逻辑与以下服务器 route 对应，但运行在客户端（自包含实现，不依赖 Node fs/crypto）：
  *  - src/app/api/stats/synthesis/route.ts
- *  - src/app/api/stats/certification/route.ts
  *  - src/app/api/stats/other/route.ts
  *  - src/app/api/stats/blind-box/route.ts
  *
@@ -982,19 +981,6 @@ type SynthesisActivityProfitResult = {
   detailedRecords: SynthesisDetailedRecord[];
 };
 
-type SynthesisCertification = {
-  type: "lucky" | "unlucky" | "rich";
-  ruid: number;
-  rname: string;
-  gift_name: string;
-  gift_price: number;
-  gift_img: string;
-  spent: number;
-  profit: number;
-  date: string;
-  count?: number;
-};
-
 type SynthesisActivityStats = {
   id: string;
   type?: string;
@@ -1003,7 +989,6 @@ type SynthesisActivityStats = {
   start_time?: number;
   end_time?: number;
   profit: SynthesisActivityProfitResult;
-  certifications: SynthesisCertification[];
 };
 
 
@@ -1568,7 +1553,6 @@ export async function fetchSynthesisStats(
           start_time: activity.start_time,
           end_time: activity.end_time,
           profit,
-          certifications: [],
         });
       } catch (err) {
         console.error(`[SynthesisStats] 获取活动 ${activity.id} 失败:`, err);
@@ -1588,7 +1572,6 @@ export async function fetchSynthesisStats(
             anchors: [],
             detailedRecords: [],
           },
-          certifications: [],
         });
       }
     }
@@ -1637,135 +1620,8 @@ export async function fetchSynthesisStats(
   }
 }
 
-// ==================== 主导出：认证统计 ====================
-
-const XINDONG_ID = 32251;
+/** 心动盲盒「浪漫城堡」礼物 id（盲盒奖励口径） */
 const CASTLE_ID = 32132;
-const XINDONG_PRICE = 150;
-
-export type Certification = {
-  date: string;
-  type: "lucky" | "unlucky" | "rich";
-  drawCount: number;
-  castleCount: number;
-  profit: number;
-  spent: number;
-  earned: number;
-  userName: string;
-  blindBoxName: string;
-  blindBoxImg: string;
-  castleName: string;
-  castleImg: string;
-};
-
-export type CertificationResponse = {
-  certifications: Certification[];
-  hasCertification: boolean;
-};
-
-export async function fetchCertificationStats(
-  platform: Platform,
-): Promise<ClientResponse<CertificationResponse | null>> {
-  const session = await resolveSession(platform);
-  if (!session) {
-    return { code: 0, message: "needs-relogin", data: null };
-  }
-
-  try {
-    await ensureGiftCatalogLoaded(platform);
-    const records = await readBlindBoxRecords(platform, session.mid, session.uname, XINDONG_ID);
-
-    if (records.length === 0) {
-      return { code: 0, message: "ok", data: { certifications: [], hasCertification: false } };
-    }
-
-    const dailyMap = new Map<string, { drawCount: number; castleCount: number; earned: number }>();
-    for (const record of records) {
-      const date = record.timestamp.split(" ")[0];
-      let daily = dailyMap.get(date);
-      if (!daily) {
-        daily = { drawCount: 0, castleCount: 0, earned: 0 };
-        dailyMap.set(date, daily);
-      }
-      daily.drawCount += record.gift_num;
-      if (record.gift_id === CASTLE_ID) daily.castleCount += record.gift_num;
-      const price = getCatalogGiftPrice(record.gift_id);
-      daily.earned += price * record.gift_num;
-    }
-
-    const certifications: Certification[] = [];
-    const blindBoxImg = getCatalogGiftImg(XINDONG_ID);
-    const castleImg = getCatalogGiftImg(CASTLE_ID);
-    const castleName = getCatalogGiftName(CASTLE_ID) || "浪漫城堡";
-
-    for (const [date, daily] of dailyMap) {
-      const spent = daily.drawCount * XINDONG_PRICE;
-      const profit = daily.earned - spent;
-
-      if (daily.castleCount >= 1 && daily.drawCount / daily.castleCount < 100) {
-        certifications.push({
-          date,
-          type: "lucky",
-          drawCount: daily.drawCount,
-          castleCount: daily.castleCount,
-          profit,
-          spent,
-          earned: daily.earned,
-          userName: session.uname,
-          blindBoxName: "心动盲盒",
-          blindBoxImg,
-          castleName,
-          castleImg,
-        });
-      }
-
-      if (daily.drawCount > 1000 && daily.castleCount === 0) {
-        certifications.push({
-          date,
-          type: "unlucky",
-          drawCount: daily.drawCount,
-          castleCount: 0,
-          profit,
-          spent,
-          earned: daily.earned,
-          userName: session.uname,
-          blindBoxName: "心动盲盒",
-          blindBoxImg,
-          castleName,
-          castleImg,
-        });
-      }
-
-      if (daily.castleCount >= 6) {
-        certifications.push({
-          date,
-          type: "rich",
-          drawCount: daily.drawCount,
-          castleCount: daily.castleCount,
-          profit,
-          spent,
-          earned: daily.earned,
-          userName: session.uname,
-          blindBoxName: "心动盲盒",
-          blindBoxImg,
-          castleName,
-          castleImg,
-        });
-      }
-    }
-
-    certifications.sort((a, b) => b.date.localeCompare(a.date));
-
-    return {
-      code: 0,
-      message: "ok",
-      data: { certifications, hasCertification: certifications.length > 0 },
-    };
-  } catch (err) {
-    console.error("[Certification] 获取认证数据失败:", err);
-    return { code: 500, message: "获取认证数据失败", data: null };
-  }
-}
 
 // ==================== 主导出：其他统计 ====================
 

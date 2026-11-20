@@ -135,10 +135,6 @@ async function dispatchNative(
       const { fetchSynthesisStats } = await import("./stats-client");
       return jsonResponse(await fetchSynthesisStats(platform));
     }
-    case "/api/stats/certification": {
-      const { fetchCertificationStats } = await import("./stats-client");
-      return jsonResponse(await fetchCertificationStats(platform));
-    }
     case "/api/stats/other": {
       const { fetchOtherStats } = await import("./stats-client");
       return jsonResponse(await fetchOtherStats(platform));

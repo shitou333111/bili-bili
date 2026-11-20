@@ -578,6 +578,8 @@ async function probeMonthOnce(
 ): Promise<{ hasData: boolean; failed: boolean; credentialExpired: boolean; firstPage?: BiliGiftStreamResponse; failInfo?: string }> {
   let failInfo = "未知（未收到响应）";
   for (let attempt = 0; attempt <= PAGE0_RETRY_COUNT; attempt++) {
+    // 用户已中止：不再重试，直接向上抛出中止信号
+    throwIfCancelled();
     // 本轮已撞到配额窗口（412）：继续探测只会拿到同样的 412，立即放弃交上层收尾
     if (_quotaHitThisRun) {
       return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
@@ -611,6 +613,8 @@ async function probeMonthOnce(
       failInfo = `code=${result.code} ${result.message ?? ""}`.trim();
       await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
     } catch (err) {
+      // 用户中止时不要把它当成普通失败吞掉，否则会继续退避重试、拖慢中止
+      throwIfCancelled();
       failInfo = err instanceof Error ? err.message : String(err);
       if (_quotaHitThisRun) {
         return { hasData: false, failed: true, credentialExpired: false, failInfo: "412 限流退避耗尽" };
@@ -641,6 +645,7 @@ async function confirmProbeNoRevenue(
   for (const sample of samples) {
     // 每个样本最多探 3 次：首次 + 按伪空间隔递增（5s/15s）复查，给软限流恢复留时间
     for (let attempt = 0; attempt <= 2; attempt++) {
+      throwIfCancelled();
       if (_quotaHitThisRun) return { confirmed: false, credentialExpired: false };
       const r = await probeMonthOnce(platform, cookie, csrf, buvidCookie, sample);
       if (r.credentialExpired) return { confirmed: false, credentialExpired: true };
@@ -729,7 +734,24 @@ async function acquireLock(): Promise<boolean> {
 let _pacerNextAt = 0;
 /** 本轮已发出的 B站 请求数（含重试/伪空重试/探测），用于结合 plannedRequests 估算剩余耗时。 */
 let _requestsIssued = 0;
+
+// 用户主动中止（全量下载过于耗时时）：只对当前正在进行的这一轮生效
+let _cancelRequested = false;
+
+/** 中止本轮流水获取（客户端/桌面端由本地长任务执行，无法靠 AbortSignal 打断） */
+export function cancelAnchorGiftsFetch(): void {
+  _cancelRequested = true;
+}
+
+/** 在中止后尽快抛出，让请求循环停止并走统一的取消返回 */
+function throwIfCancelled(): void {
+  if (_cancelRequested) {
+    throw new DOMException("anchor gifts fetch cancelled", "AbortError");
+  }
+}
+
 function paceRequest(): Promise<void> {
+  throwIfCancelled();
   const now = Date.now();
   const at = Math.max(_pacerNextAt, now);
   _pacerNextAt = at + 1000 / _fetchRate;
@@ -744,6 +766,7 @@ function paceRequest(): Promise<void> {
 async function sleepBackoff(ms: number, attempt: number): Promise<void> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
+    throwIfCancelled();
     if (_fetchingGlobal) _fetchingGlobalAt = Date.now();
     _quotaWaitReporter?.({ attempt, remainMs: end - Date.now() });
     await new Promise((r) => setTimeout(r, 1000));
@@ -767,6 +790,8 @@ export async function fetchAnchorGifts(
     acquired = true;
     // 每轮开始清空"限流"标记，只反映本轮是否撞到 412
     _quotaHitThisRun = false;
+    // 新一轮开始：清除上一轮残留的中止标记
+    _cancelRequested = false;
     // 节拍器复位：上一轮结束后残留的 _pacerNextAt 不应把本轮的起步时间提前
     _pacerNextAt = 0;
     _requestsIssued = 0;
@@ -1225,6 +1250,8 @@ export async function fetchAnchorGifts(
             lastFailInfo = `code=${result.code} ${result.message ?? ""}`.trim();
             await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
           } catch (err: any) {
+            // 用户中止：立即向上抛出，不再退避重试
+            throwIfCancelled();
             // 412 → 配额窗口已满：同窗口内重试无效，立即跳出（不再空转等待），由上层收尾
             lastFailInfo = _quotaHitThisRun ? "412 限流退避耗尽" : (err?.message ?? String(err));
             if (_quotaHitThisRun) break;
@@ -1270,6 +1297,7 @@ export async function fetchAnchorGifts(
         if (totalPages === 0 && (!monthReady || shouldRetryEmptyMonth(chunk.start))) {
           for (const delay of EMPTY_RETRY_INTERVAL_MS) {
             await new Promise((r) => setTimeout(r, delay));
+            throwIfCancelled();
             try {
               const retried = await fetchGiftStreamPage(platform, cookie, csrf, 0, chunk.start, chunk.end, buvidCookie);
               // 恢复判据：要么恢复出数据，要么给出 ready=1 的可信空结论（未就绪伪空不算结论，继续等）
@@ -1281,7 +1309,7 @@ export async function fetchAnchorGifts(
                 }
                 break;
               }
-            } catch { /* 重试失败则继续等下一个间隔 */ }
+            } catch { throwIfCancelled(); /* 重试失败则继续等下一个间隔 */ }
           }
           if (totalPages === 0 && firstPage.data?.ready === 1) {
             // 复查后拿到 ready=1 的可信空：这才可以判定"可疑空月份"，交给上层用 empty_counts 决定是否补拉
@@ -1369,6 +1397,8 @@ export async function fetchAnchorGifts(
               }
               lastPageFailInfo = `page=${p} code=${result.code} ${result.message ?? ""}`.trim();
             } catch (err: any) {
+              // 用户中止：立即向上抛出，不再退避重试
+              throwIfCancelled();
               lastPageFailInfo = `page=${p} ${err?.message ?? String(err)}`;
               if (_quotaHitThisRun) break; // 412：不再重试，交由上层收尾
               await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
@@ -1943,6 +1973,7 @@ export async function fetchAnchorGifts(
       .sort((a, b) => b.totalDays - a.totalDays);
 
     const allConsecutive = calcMaxConsecutive(sortedDates);
+    throwIfCancelled();
 
     const yesterdayDate = yesterdayStr.slice(0, 4) + "-" + yesterdayStr.slice(4, 6) + "-" + yesterdayStr.slice(6, 8);
     // 优先采用 B站 API 的 ready 标识；未拉取到昨日分段时回退到本地记录判断
@@ -1983,10 +2014,16 @@ export async function fetchAnchorGifts(
 
     return { code: 0, message: "ok", data };
   } catch (err: any) {
+    if (_cancelRequested) {
+      console.log("[AnchorGifts-Tauri] 流水获取已被用户中止");
+      return { code: 0, message: "cancelled", data: null };
+    }
     console.error("[AnchorGifts-Tauri] 获取礼物流水失败:", err?.message || err);
     return { code: 500, message: `获取礼物流水失败: ${err?.message || String(err)}`, data: null };
   }
   } finally {
+    // 注意：不在这里清除 _cancelRequested —— 中止后可能仍有并发批次在退避等待，
+    // 若立刻复位，它们会在下一次节拍继续抓取。标志只在新一轮开始时清除（见函数开头）。
     _quotaWaitReporter = null;
     if (acquired) _fetchingGlobal = false;
   }

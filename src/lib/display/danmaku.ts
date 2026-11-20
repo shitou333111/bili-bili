@@ -25,6 +25,12 @@ import {
   type GiftFlipConfig,
   type GiftBarWidth,
   type GiftHighlight,
+  type InfoPanelConfig,
+  type InfoPanelData,
+  type InfoPanelOvertimeConfig,
+  type InfoPanelPkData,
+  type InfoPanelRankData,
+  type InfoPanelRankKey,
   type LayoutElementId,
   type MovableRect,
   type OfficialEntryStyle,
@@ -44,6 +50,20 @@ import {
   loadRecentQualifyingGifts,
   tryHandleBlindBoxQuery,
 } from "./gift-db";
+import {
+  EMPTY_INFO_PANEL_DATA,
+  buildCollectView,
+  buildFridayView,
+  buildPkView,
+  fetchFridayData,
+  fetchPkBattleMain,
+  fetchRankTop1,
+  getFridayLocalStats,
+  isFridayNow,
+  pkFirstWinDone,
+  type FridayData,
+  type PkBattleMain,
+} from "./info-panel";
 import {
   accumulateGiftFlip,
   listFanRecords,
@@ -257,6 +277,22 @@ function summarizeRaw(cmd: string, raw: any): any {
     /* 精简失败则回退原始对象 */
   }
   return raw;
+}
+
+/** PK 相关原始包精简：PRE_NEW 带对手信息与 match_type，START_NEW 带 match_info。 */
+function summarizePk(raw: any): any {
+  const d = raw?.data ?? {};
+  return {
+    pk_id: raw?.pk_id,
+    pk_status: raw?.pk_status,
+    battle_type: d.battle_type,
+    match_type: d.match_type,
+    uid: d.uid,
+    uname: d.uname,
+    room_id: d.room_id,
+    match_room_id: d.match_info?.room_id,
+    init_room_id: d.init_info?.room_id,
+  };
 }
 
 // ==================== protobuf 最小解码（SEND_GIFT_V2 专用） ====================
@@ -648,6 +684,40 @@ const VERSION_QUERY_KEYWORD = "B瓜版本";
  *  只需回复一次；同时兜底防刷（B站发送本身另有 5s 冷却，见 barrage.ts）。 */
 const VERSION_REPLY_COOLDOWN_MS = 10_000;
 
+// ---- 信息面板 ----
+/** 榜一日期顺序（与面板复选框顺序一致） */
+const INFO_PANEL_RANK_KEYS: InfoPanelRankKey[] = [
+  "yesterday",
+  "thisWeek",
+  "lastWeek",
+  "thisMonth",
+  "lastMonth",
+];
+/** 信息面板定时刷新间隔：PK/榜单内部各自节流 */
+const INFO_PANEL_TICK_MS = 30_000;
+/** 榜单刷新间隔（榜一变化不快，5 分钟足够） */
+const INFO_PANEL_RANK_REFRESH_MS = 5 * 60_000;
+/** PK 任务定时兜底间隔：对方首胜在 PK 开始时就已确定、自己任务只在 PK 结束时变化，
+ *  因此无需高频轮询，定时器只做低频兜底（5 分钟）。 */
+const INFO_PANEL_PK_IDLE_REFRESH_MS = 5 * 60_000;
+/** 随机PK判定：PK_BATTLE_PRE_NEW.data.match_type === 1。
+ *  依据线上「大乱斗随机匹配」样本（battle_type=1 / match_type=1 / pk_votes_name=乱斗值）；
+ *  若后续真实弹幕显示指定PK也为 1，再按实际字段修正（用户会补充抓包）。 */
+const RANDOM_PK_MATCH_TYPES = new Set([1]);
+/** PK 相关弹幕命令（raw 层监听） */
+const PK_RAW_CMDS = [
+  "PK_BATTLE_PRE_NEW",
+  "PK_BATTLE_START_NEW",
+  "PK_BATTLE_END",
+  "PK_BATTLE_SETTLE_NEW",
+  "PK_BATTLE_SETTLE_V2",
+  "PK_BATTLE_PUNISH_END",
+];
+/** 心动盲盒礼物名（收到时触发一次官方接口刷新） */
+const BLIND_BOX_GIFT_NAME = "心动盲盒";
+/** 心动盲盒收集上限：达到后不再请求接口 */
+const BLIND_BOX_COLLECT_MAX = 120;
+
 class DisplayDanmakuService {
   private roomId = 0;
   /** 当前监听的主播 uid（供画布就绪后补推礼物清单） */
@@ -709,6 +779,33 @@ class DisplayDanmakuService {
   private debugPersistChain: Promise<void> = Promise.resolve();
   /** 「入场动画声音」变更订阅者（面板订阅，画布侧点击静音按钮时同步面板「声音」开关状态） */
   private animeMutedListeners = new Set<(v: boolean) => void>();
+  // ---- 信息面板（榜一 / PK任务 / 心动盲盒） ----
+  /** 信息面板定时刷新器 */
+  private infoPanelTimer: ReturnType<typeof setInterval> | null = null;
+  /** 最近一次组装好的信息面板数据（新画布连入时随 init 补推） */
+  private infoPanelData: InfoPanelData = EMPTY_INFO_PANEL_DATA;
+  private infoPanelLastRankAt = 0;
+  private infoPanelLastPkAt = 0;
+  /** 拉取串行锁：避免定时器与礼物触发并发请求 */
+  private infoPanelBusy = false;
+  /** 随机PK对手（PRE_NEW 解析；PK结束时清空） */
+  private pkOpponent: { uid: number; roomId: number; name: string; face: string } | null = null;
+  /** 自己的每日PK任务缓存（接口偶发失败时保留上一次进度） */
+  private pkMainCache: PkBattleMain | null = null;
+  /** PRE_NEW 后等待 START_NEW 的兜底定时器：超时未真正开PK则清除对手，避免残留 */
+  private pkPendingTimer: ReturnType<typeof setTimeout> | null = null;
+  /** PK 结束球的合并刷新定时器（END/SETTLE 连发时只刷新一次） */
+  private pkEndRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 周五活动数据缓存（当天只请求一次） */
+  private fridayCache: { day: string; data: FridayData } | null = null;
+  /** 加班机：下播时间戳（毫秒）；0=尚未初始化 */
+  private overtimeEndsAt = 0;
+  /** 加班机：初始化所属的本地日期（跨天重置为初始时长） */
+  private overtimeDay = "";
+  /** 加班机：是否暂停计时（暂停时冻结剩余时间，礼物不再增减） */
+  private overtimePaused = false;
+  /** 加班机：暂停时冻结的剩余毫秒 */
+  private overtimePausedRemainMs = 0;
 
   subscribe(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
@@ -987,8 +1084,11 @@ class DisplayDanmakuService {
       entryOfficial: await this.resolveOfficialEntryPayload(cfg.entryStyle),
       giftHighlight: this.giftHighlight,
       giftFlip: cfg.giftFlip,
+      infoPanel: cfg.infoPanel,
+      infoPanelData: this.infoPanelData,
       flags: {
         master: displayMaster(cfg),
+        infoPanel: !!cfg.infoPanel?.enabled,
         entry: cfg.entry,
         gift: cfg.gift,
         anime: cfg.anime,
@@ -1014,6 +1114,7 @@ class DisplayDanmakuService {
       type: "flags",
       flags: {
         master: displayMaster(cfg),
+        infoPanel: !!cfg.infoPanel?.enabled,
         entry: cfg.entry,
         gift: cfg.gift,
         anime: cfg.anime,
@@ -1223,6 +1324,8 @@ class DisplayDanmakuService {
       this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
 
       this.bindHandlers(mid);
+      // 信息面板：配置已开启时启动定时拉取（榜一/PK/盲盒），关闭时不做任何请求
+      void this.startInfoPanelLoop();
       this.live.onOpen(() => {
         this.retry = 0;
         this.wsConnectedAt = Date.now();
@@ -1271,6 +1374,25 @@ class DisplayDanmakuService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopInfoPanelLoop();
+    this.infoPanelData = EMPTY_INFO_PANEL_DATA;
+    this.pkOpponent = null;
+    this.pkMainCache = null;
+    this.fridayCache = null;
+    this.overtimeEndsAt = 0;
+    this.overtimeDay = "";
+    this.overtimePaused = false;
+    this.overtimePausedRemainMs = 0;
+    if (this.pkPendingTimer) {
+      clearTimeout(this.pkPendingTimer);
+      this.pkPendingTimer = null;
+    }
+    if (this.pkEndRefreshTimer) {
+      clearTimeout(this.pkEndRefreshTimer);
+      this.pkEndRefreshTimer = null;
+    }
+    this.infoPanelLastRankAt = 0;
+    this.infoPanelLastPkAt = 0;
     this.stopListeners();
     this.emitStatus({ state: "idle" });
   }
@@ -1312,6 +1434,19 @@ class DisplayDanmakuService {
         this.live.onRawMessage(cmd, (raw: any) => {
           // 面板展示精简字段，落盘保存原始消息全字段（便于深层排查）
           this.pushDebug(cmd, "raw", summarizeRaw(cmd, raw), raw);
+        }),
+      );
+    }
+
+    // ---- PK：识别随机PK / 结束后恢复 ----
+    // 信息面板「PK任务」在平常状态显示自己的每日任务；随机PK时改为显示对方首胜状态。
+    // 随机PK判定见 RANDOM_PK_MATCH_TYPES 注释（先按 match_type===1，后续可用真实弹幕校准）。
+    for (const cmd of PK_RAW_CMDS) {
+      this.removeHandlers.push(
+        this.live.onRawMessage(cmd, async (raw: any) => {
+          if (!this.active) return;
+          this.pushDebug("pk", cmd, summarizePk(raw), raw);
+          await this.handlePkMessage(cmd, raw);
         }),
       );
     }
@@ -1822,6 +1957,348 @@ class DisplayDanmakuService {
     this.emitTo({ type: "giftEffect", giftId: id, giftName, videoSrc: bind.web_mp4, config });
   }
 
+  // ==================== 信息面板（榜一 / PK任务 / 心动盲盒） ====================
+
+  /** 开启信息面板刷新循环（配置关闭时不做任何请求）。 */
+  private async startInfoPanelLoop() {
+    if (!this.mid || !this.isNative()) return;
+    const cfg = await loadDisplayConfig(this.mid);
+    if (!cfg.infoPanel?.enabled) {
+      this.stopInfoPanelLoop();
+      return;
+    }
+    if (!this.infoPanelTimer) {
+      this.infoPanelTimer = setInterval(() => void this.refreshInfoPanel("tick"), INFO_PANEL_TICK_MS);
+    }
+    await this.refreshInfoPanel("init");
+  }
+
+  private stopInfoPanelLoop() {
+    if (this.infoPanelTimer) {
+      clearInterval(this.infoPanelTimer);
+      this.infoPanelTimer = null;
+    }
+  }
+
+  /**
+   * 面板修改「信息面板」配置后调用：广播新配置；关闭时停止定时请求并清空画布数据，
+   * 开启时立即拉取一次并按需启动定时器。
+   */
+  async broadcastInfoPanelConfig(v: InfoPanelConfig, refreshData = true): Promise<void> {
+    await this.broadcast({ type: "infoPanelConfig", infoPanel: v });
+    if (!v.enabled) {
+      this.stopInfoPanelLoop();
+      this.infoPanelData = EMPTY_INFO_PANEL_DATA;
+      this.pkMainCache = null;
+      this.pkOpponent = null;
+      this.fridayCache = null;
+      this.overtimeEndsAt = 0;
+      this.overtimeDay = "";
+      this.overtimePaused = false;
+      this.overtimePausedRemainMs = 0;
+      await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+      return;
+    }
+    if (!this.infoPanelTimer && this.mid && this.isNative()) {
+      this.infoPanelTimer = setInterval(() => void this.refreshInfoPanel("tick"), INFO_PANEL_TICK_MS);
+    }
+    // 仅透明度等纯样式变化时不必重新请求接口，直接把当前数据回推给画布
+    if (refreshData) await this.refreshInfoPanel("config");
+    else await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+  }
+
+  /**
+   * 收到「心动盲盒」礼物时触发：只刷新盲盒进度（收集期达到 120 个后不再请求接口）。
+   */
+  async refreshInfoPanelBlindBox(): Promise<void> {
+    if (!this.mid || !this.roomId || !this.isNative()) return;
+    const cfg = await loadDisplayConfig(this.mid);
+    if (!cfg.infoPanel?.enabled || !cfg.infoPanel.blindBox) return;
+    if (!isFridayNow() && (this.infoPanelData.blindBox?.collected ?? 0) >= BLIND_BOX_COLLECT_MAX) {
+      return;
+    }
+    await this.refreshBlindBox(true);
+    await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+  }
+
+  /** 组装并广播信息面板数据；reason=pk 时只刷新 PK（随机PK开始/结束事件触发）。 */
+  private async refreshInfoPanel(reason: "init" | "tick" | "config" | "pk"): Promise<void> {
+    if (!this.mid || !this.roomId || !this.isNative()) return;
+    const cfg = await loadDisplayConfig(this.mid);
+    const ip = cfg.infoPanel;
+    if (!ip?.enabled) {
+      this.stopInfoPanelLoop();
+      return;
+    }
+    // 加班机是纯本地状态：先更新并广播，不能排在榜单/PK/盲盒等网络请求之后——
+    // 网络请求慢或卡住时，后面的逻辑不会执行，画布轮换到加班机只能拿到初始倒计时。
+    await this.syncOvertime(ip.overtime);
+    if (this.infoPanelBusy) return;
+    this.infoPanelBusy = true;
+    try {
+      const now = Date.now();
+
+      // ---- 榜一 ----
+      if (reason !== "pk" && ip.rank?.enabled) {
+        const needRank =
+          reason !== "tick" || now - this.infoPanelLastRankAt >= INFO_PANEL_RANK_REFRESH_MS;
+        if (needRank) {
+          const keys = INFO_PANEL_RANK_KEYS.filter((k) => ip.rank[k]);
+          const prev = new Map<InfoPanelRankKey, InfoPanelRankData>(
+            this.infoPanelData.ranks.map((r) => [r.key, r]),
+          );
+          const results = await Promise.all(
+            keys.map((k) => fetchRankTop1(this.roomId, this.mid, k).catch(() => null)),
+          );
+          for (const r of results) if (r) prev.set(r.key, r);
+          this.infoPanelLastRankAt = now;
+          this.infoPanelData = {
+            ...this.infoPanelData,
+            ranks: keys.map((k) => prev.get(k)).filter((r): r is InfoPanelRankData => !!r),
+          };
+        }
+      }
+
+      // ---- PK任务 ----
+      // 触发时机：启动/勾选(PK) 首次读取；随机 PK 开始、PK 结束立即读取（reason=pk）；
+      // 其余时间每 5 分钟兜底一次。
+      if (ip.pk) {
+        const needPk =
+          reason === "pk" ||
+          reason !== "tick" ||
+          now - this.infoPanelLastPkAt >= INFO_PANEL_PK_IDLE_REFRESH_MS;
+        if (needPk) {
+          const own = await fetchPkBattleMain(this.roomId, this.mid).catch(() => null);
+          if (own) this.pkMainCache = own;
+          this.infoPanelLastPkAt = now;
+          let opponent: InfoPanelPkData["opponent"] | undefined;
+          if (this.pkOpponent) {
+            const oppData = await fetchPkBattleMain(
+              this.pkOpponent.roomId,
+              this.pkOpponent.uid,
+            ).catch(() => null);
+            opponent = {
+              uid: this.pkOpponent.uid,
+              name: this.pkOpponent.name,
+              face: this.pkOpponent.face,
+              firstWin: pkFirstWinDone(oppData),
+            };
+          }
+          if (this.pkMainCache || opponent) {
+            this.infoPanelData = {
+              ...this.infoPanelData,
+              pk: buildPkView(this.pkMainCache, opponent),
+            };
+          }
+        }
+      }
+
+      // ---- 心动盲盒（定时器不重复拉取；收集期由礼物触发，周五当天只拉一次） ----
+      // 例外：跨天（周四→周五 / 周五→周六）时显示模式需要切换，定时器也要主动刷新一次。
+      if (reason !== "pk" && ip.blindBox) {
+        const modeMismatch = isFridayNow() !== (this.infoPanelData.blindBox?.mode === "friday");
+        if (reason !== "tick" || modeMismatch) {
+          await this.refreshBlindBox(true);
+        }
+      }
+
+      // 加班机已在函数入口先行更新/广播（见 syncOvertime），这里直接带上最终数据
+      await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+    } finally {
+      this.infoPanelBusy = false;
+    }
+  }
+
+  /**
+   * 刷新盲盒数据：
+   * - 周五：接口当天只请求一次（爆率/限额固定），开盒数/盈亏/城堡数用本地弹幕记录实时统计；
+   * - 收集期：每次触发请求官方进度（达到 120 上限后由调用方停止触发）。
+   */
+  private async refreshBlindBox(fetchApi: boolean): Promise<void> {
+    if (!this.mid || !this.roomId) return;
+    const now = new Date();
+    const today = localDayStr(now);
+    if (isFridayNow(now)) {
+      if (!this.fridayCache || this.fridayCache.day !== today) {
+        if (!fetchApi) return;
+        const data = await fetchFridayData(this.roomId, this.mid).catch(() => null);
+        if (!data) return;
+        this.fridayCache = { day: today, data };
+      }
+      const cache = this.fridayCache;
+      const blindId = Number(cache.data.blind_gift_id) || 0;
+      const castleId = Number(cache.data.grand_prize_gift_id) || 0;
+      const stats = await getFridayLocalStats(this.mid, blindId, castleId);
+      this.infoPanelData = {
+        ...this.infoPanelData,
+        blindBox: buildFridayView(cache.data, stats),
+      };
+      return;
+    }
+
+    if (!fetchApi) return;
+    const prev = this.infoPanelData.blindBox;
+    if (prev?.mode === "collect" && prev.collected >= BLIND_BOX_COLLECT_MAX) return;
+    const data = await fetchFridayData(this.roomId, this.mid).catch(() => null);
+    if (!data) return;
+    this.infoPanelData = { ...this.infoPanelData, blindBox: buildCollectView(data) };
+  }
+
+  /**
+   * 加班机：计算剩余分钟并写入 infoPanelData；有变化时立即广播。
+   * 纯本地计算，不依赖榜单/PK/盲盒接口，因此放在网络刷新之前调用，
+   * 保证画布上每次轮换到加班机时拿到的都是当前剩余时间而不是初始值。
+   */
+  private async syncOvertime(otCfg: InfoPanelOvertimeConfig | undefined): Promise<void> {
+    const remain = otCfg?.enabled
+      ? this.overtimePaused
+        ? Math.max(0, Math.round(this.overtimePausedRemainMs / 60000))
+        : Math.max(0, Math.round((this.ensureOvertime(otCfg) - Date.now()) / 60000))
+      : null;
+    const prev = this.infoPanelData.overtime?.remainMinutes ?? -1;
+    const next = remain ?? -1;
+    this.infoPanelData = {
+      ...this.infoPanelData,
+      overtime: remain === null ? null : { remainMinutes: remain },
+    };
+    if (prev !== next) {
+      await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+    }
+  }
+
+  /** 初始化 / 跨天重置加班机倒计时，返回下播时间戳（毫秒）。 */
+  private ensureOvertime(ot: InfoPanelOvertimeConfig): number {
+    const day = localDayStr(new Date());
+    if (!this.overtimeEndsAt || this.overtimeDay !== day) {
+      this.overtimeDay = day;
+      this.overtimeEndsAt = Date.now() + Math.max(1, ot.initialMinutes) * 60000;
+    }
+    return this.overtimeEndsAt;
+  }
+
+  /** 加班机：当前剩余分钟（只读，不初始化；尚未开始时返回初始时长）。
+   *  设置面板的「现在」时刻每秒读取它，避免面板一打开就锁定旧的初始值。 */
+  getOvertimeRemainMinutes(ot: InfoPanelOvertimeConfig): number {
+    if (this.overtimePaused) {
+      return Math.max(0, Math.round(this.overtimePausedRemainMs / 60000));
+    }
+    const day = localDayStr(new Date());
+    if (!this.overtimeEndsAt || this.overtimeDay !== day) {
+      return Math.max(1, Math.round(ot.initialMinutes) || 1);
+    }
+    return Math.max(0, Math.round((this.overtimeEndsAt - Date.now()) / 60000));
+  }
+
+  /** 加班机：是否处于暂停计时状态。 */
+  isOvertimePaused(): boolean {
+    return this.overtimePaused;
+  }
+
+  /** 加班机：暂停 / 继续计时。暂停时冻结当前剩余；继续时从冻结值接着走，礼物重新生效。 */
+  async setOvertimePaused(paused: boolean, ot: InfoPanelOvertimeConfig): Promise<void> {
+    if (paused) {
+      if (this.overtimePaused) return;
+      this.overtimePausedRemainMs = Math.max(0, this.ensureOvertime(ot) - Date.now());
+      this.overtimePaused = true;
+    } else {
+      if (!this.overtimePaused) return;
+      this.overtimePaused = false;
+      this.overtimeDay = localDayStr(new Date());
+      this.overtimeEndsAt = Date.now() + this.overtimePausedRemainMs;
+    }
+    const remain = this.overtimePaused
+      ? Math.max(0, Math.round(this.overtimePausedRemainMs / 60000))
+      : Math.max(0, Math.round((this.overtimeEndsAt - Date.now()) / 60000));
+    this.infoPanelData = { ...this.infoPanelData, overtime: { remainMinutes: remain } };
+    await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+  }
+
+  /** 加班机：直接设置当前剩余分钟（设置面板「现在」输入 / 归零用；暂停中修改仍保持暂停）。 */
+  async setOvertimeRemainMinutes(minutes: number): Promise<void> {
+    const remain = Math.max(0, Math.round(Number(minutes) || 0));
+    this.overtimeDay = localDayStr(new Date());
+    this.overtimeEndsAt = Date.now() + remain * 60000;
+    if (this.overtimePaused) this.overtimePausedRemainMs = remain * 60000;
+    this.infoPanelData = { ...this.infoPanelData, overtime: { remainMinutes: remain } };
+    await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+  }
+
+  /** 加班机：收到增加/减少时长的礼物，按「单位分钟 × 礼物数量」调整并立即广播。
+   *  暂停期间忽略礼物（不改变时间）。
+   *  以「当前剩余」为基准计算：剩余为 0 时减分不再生效（不会变成负数），加分则从 0 重新起算。 */
+  private async adjustOvertime(deltaMinutes: number, ot: InfoPanelOvertimeConfig): Promise<void> {
+    if (this.overtimePaused) return;
+    const remainMs = Math.max(0, this.ensureOvertime(ot) - Date.now());
+    const nextMs = Math.max(0, remainMs + deltaMinutes * 60000);
+    this.overtimeEndsAt = Date.now() + nextMs;
+    this.infoPanelData = {
+      ...this.infoPanelData,
+      overtime: { remainMinutes: Math.max(0, Math.round(nextMs / 60000)) },
+    };
+    await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+  }
+
+  /**
+   * PK 弹幕处理：
+   * - PK_BATTLE_PRE_NEW：match_type 命中随机PK判定 → 记录对手 uid/room_id 并刷新；
+   * - PK_BATTLE_START_NEW：补全对手房间号（match_info.room_id）后再刷新；
+   * - END / SETTLE / PUNISH_END：清除对手，恢复显示自己的每日任务。
+   */
+  private async handlePkMessage(cmd: string, raw: any): Promise<void> {
+    const d = raw?.data ?? {};
+    if (cmd === "PK_BATTLE_PRE_NEW") {
+      const matchType = Number(d.match_type);
+      const uid = Number(d.uid) || 0;
+      const roomId = Number(d.room_id) || 0;
+      if (RANDOM_PK_MATCH_TYPES.has(matchType) && uid > 0 && roomId > 0) {
+        this.pkOpponent = {
+          uid,
+          roomId,
+          name: String(d.uname || ""),
+          face: String(d.face || ""),
+        };
+        // 超时未收到 START_NEW（可能是被拒绝的邀请/误判），清除对手恢复常规显示
+        if (this.pkPendingTimer) clearTimeout(this.pkPendingTimer);
+        this.pkPendingTimer = setTimeout(() => {
+          this.pkPendingTimer = null;
+          if (!this.pkOpponent) return;
+          this.pkOpponent = null;
+          void this.refreshInfoPanel("pk");
+        }, 90_000);
+        // 随机 PK：立即读取对方首胜状态
+        await this.refreshInfoPanel("pk");
+      } else if (this.pkOpponent) {
+        this.pkOpponent = null;
+        await this.refreshInfoPanel("pk");
+      }
+      return;
+    }
+    if (cmd === "PK_BATTLE_START_NEW") {
+      // 指定 PK 没有需要展示的对方首胜信息，直接忽略
+      if (!this.pkOpponent) return;
+      if (this.pkPendingTimer) {
+        clearTimeout(this.pkPendingTimer);
+        this.pkPendingTimer = null;
+      }
+      const matchRoom = Number(d.match_info?.room_id) || 0;
+      if (matchRoom > 0) this.pkOpponent = { ...this.pkOpponent, roomId: matchRoom };
+      await this.refreshInfoPanel("pk");
+      return;
+    }
+    // PK 结束：清除对手并恢复常规显示。END/SETTLE 等多个包可能连续到达，
+    // 合并为一次刷新（3 秒防抖），避免重复请求。
+    if (this.pkPendingTimer) {
+      clearTimeout(this.pkPendingTimer);
+      this.pkPendingTimer = null;
+    }
+    if (this.pkOpponent) this.pkOpponent = null;
+    if (this.pkEndRefreshTimer) clearTimeout(this.pkEndRefreshTimer);
+    this.pkEndRefreshTimer = setTimeout(() => {
+      this.pkEndRefreshTimer = null;
+      void this.refreshInfoPanel("pk");
+    }, 3_000);
+  }
+
   /** 处理一条送礼信息：追加到礼物逐条记录 → 组装达标礼物清单 → emit。
    *  礼物记录（uid_<mid>/display-gift-records.json）同时供"礼物展示"与盲盒"今日/昨日"查询使用，
    *  是单一来源，不再各自维护一份今日聚合。
@@ -1891,6 +2368,26 @@ class DisplayDanmakuService {
       Number(d.num) || 1,
       { id: blindGiftId, name: blindGiftName },
     );
+
+    // 信息面板·加班机：命中增加/减少时长的礼物时，按「单位分钟 × 礼物数量」调整倒计时
+    const ot = config.infoPanel?.overtime;
+    if (config.infoPanel?.enabled && ot?.enabled) {
+      const num = Math.max(1, Number(d.num) || 1);
+      if (ot.increaseGiftId && giftId === ot.increaseGiftId) {
+        void this.adjustOvertime(ot.increaseMinutes * num, ot);
+      } else if (ot.decreaseGiftId && giftId === ot.decreaseGiftId) {
+        void this.adjustOvertime(-ot.decreaseMinutes * num, ot);
+      }
+    }
+
+    // 信息面板·心动盲盒：收到「心动盲盒」时刷新一次官方收集进度（独立于礼物条开关；
+    // 收集期达到 120 个后 refreshInfoPanelBlindBox 内部会直接跳过请求）。
+    if (config.infoPanel?.enabled && config.infoPanel.blindBox) {
+      const isBlindGift =
+        blindGiftName.includes(BLIND_BOX_GIFT_NAME) ||
+        String(d.giftName || "").includes(BLIND_BOX_GIFT_NAME);
+      if (isBlindGift) void this.refreshInfoPanelBlindBox();
+    }
 
     if (!config.gift) return;
 

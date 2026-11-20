@@ -152,7 +152,6 @@ export async function GET(request: Request) {
           start_time: activity.start_time,
           end_time: activity.end_time,
           profit,
-          certifications: [],
         });
       } catch (err) {
         console.error(`[SynthesisStats] 获取活动 ${activity.id} 失败:`, err);
@@ -172,7 +171,6 @@ export async function GET(request: Request) {
             anchors: [],
             detailedRecords: [],
           },
-          certifications: [],
         });
       }
     }

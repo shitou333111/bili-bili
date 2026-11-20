@@ -9,6 +9,7 @@ import { getPlatform } from "@/lib/platform";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_ENTRY_SAMPLE,
+  DEFAULT_INFO_PANEL_CONFIG,
   DEFAULT_GIFT_FLIP_OPTIONS,
   GIFT_FLIP_MAX_OPTIONS,
   GIFT_FLIP_MAX_TEXT_LEN,
@@ -23,6 +24,7 @@ import {
   type EntryAnimeConfig,
   type EntrySampleConfig,
   type GiftFlipOption,
+  type InfoPanelConfig,
   type MovableRect,
   type ScreenOrientation,
 } from "./types";
@@ -46,7 +48,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner" | "giftFlip", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "infoPanel" | "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner" | "giftFlip", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -54,7 +56,8 @@ function normalizeLayout(raw: unknown): DisplayLayout {
       portrait: normalizeRect(re?.portrait, def.portrait),
     };
   };
-  return {
+  const out: DisplayLayout = {
+    infoPanel: norm("infoPanel", r.infoPanel),
     gift: norm("gift", r.gift),
     giftSeparate: norm("giftSeparate", (r as any).giftSeparate),
     giftEffect: norm("giftEffect", (r as any).giftEffect),
@@ -63,6 +66,20 @@ function normalizeLayout(raw: unknown): DisplayLayout {
     banner: norm("banner", (r as any).banner),
     giftFlip: norm("giftFlip", (r as any).giftFlip),
   };
+  // 旧默认位置迁移（仅当用户从未拖动过、仍是旧默认坐标时）：
+  // ① 最早左上角（60/70,6）② 上一版右上角（1593/743,60/70）③ 上一版 250 宽的右上角（1610/760）
+  const ot = out.infoPanel;
+  const isOldLandscape = (x: number, y: number) =>
+    ot.landscape.x === x && ot.landscape.y === y && ot.landscape.scale === 1;
+  const isOldPortrait = (x: number, y: number) =>
+    ot.portrait.x === x && ot.portrait.y === y && ot.portrait.scale === 1;
+  if (isOldLandscape(60, 6) || isOldLandscape(1593, 60) || isOldLandscape(1610, 60)) {
+    ot.landscape = { ...d.infoPanel.landscape };
+  }
+  if (isOldPortrait(70, 6) || isOldPortrait(743, 70) || isOldPortrait(760, 70)) {
+    ot.portrait = { ...d.infoPanel.portrait };
+  }
+  return out;
 }
 /** 把片段秒数规整为非负有限数（0 = 未设置/从头/播到尾），非法值归 0。 */
 function clampSec(v: unknown): number {
@@ -98,6 +115,7 @@ export function resolveAnimeSegment(
  */
 export function displayMaster(cfg: DisplayConfig): boolean {
   return !!(
+    cfg.infoPanel?.enabled ||
     cfg.gift ||
     cfg.giftEffect?.enabled ||
     cfg.entry ||
@@ -189,6 +207,41 @@ function normalizeEntrySamples(raw: unknown, legacy: unknown, entryStyle: string
   return out;
 }
 
+/** 信息面板 · 加班机：分钟数裁剪到 1..999，礼物 id/名称/图标缺失回退默认。 */
+function normalizeInfoPanelOvertime(raw: unknown): InfoPanelConfig["overtime"] {
+  const d = DEFAULT_INFO_PANEL_CONFIG.overtime;
+  const o = (raw ?? {}) as Partial<InfoPanelConfig["overtime"]>;
+  const minutes = (v: unknown, fb: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 1 ? Math.min(999, Math.round(n)) : fb;
+  };
+  return {
+    enabled: o.enabled === undefined ? d.enabled : !!o.enabled,
+    initialMinutes: minutes(o.initialMinutes, d.initialMinutes),
+    // 礼物未配置（旧版本默认 id=0）时回退到默认的幸运盲盒 / 心动盲盒
+    decreaseGiftId: Number(o.decreaseGiftId) || d.decreaseGiftId,
+    decreaseGiftName:
+      typeof o.decreaseGiftName === "string" && o.decreaseGiftName
+        ? o.decreaseGiftName
+        : d.decreaseGiftName,
+    decreaseGiftIcon:
+      typeof o.decreaseGiftIcon === "string" && o.decreaseGiftIcon
+        ? o.decreaseGiftIcon
+        : d.decreaseGiftIcon,
+    decreaseMinutes: minutes(o.decreaseMinutes, d.decreaseMinutes),
+    increaseGiftId: Number(o.increaseGiftId) || d.increaseGiftId,
+    increaseGiftName:
+      typeof o.increaseGiftName === "string" && o.increaseGiftName
+        ? o.increaseGiftName
+        : d.increaseGiftName,
+    increaseGiftIcon:
+      typeof o.increaseGiftIcon === "string" && o.increaseGiftIcon
+        ? o.increaseGiftIcon
+        : d.increaseGiftIcon,
+    increaseMinutes: minutes(o.increaseMinutes, d.increaseMinutes),
+  };
+}
+
 /** 解析一个可能残缺的配置对象，用默认值补齐缺失字段（向前兼容）。 */
 export function normalizeConfig(raw: unknown): DisplayConfig {
   const d = DEFAULT_DISPLAY_CONFIG;
@@ -212,6 +265,57 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     entryStyle,
     // 官方动画样本表：每个动画独立保存，缺失项用默认样本（不影响粒子入场提示配色）
     entrySamples: normalizeEntrySamples(legacy.entrySamples, legacy.entrySample, entryStyle),
+    // 信息面板：透明度 0-100，榜一各日期复选框缺省回退默认
+    // （旧默认值为 60% 透明度 / 8 秒停留，命中时迁移到新的 50% / 10 秒，避免老配置一直沿用旧默认）
+    infoPanel: {
+      enabled: !!r.infoPanel?.enabled,
+      opacity:
+        r.infoPanel?.opacity === 60
+          ? DEFAULT_INFO_PANEL_CONFIG.opacity
+          : typeof r.infoPanel?.opacity === "number" && Number.isFinite(r.infoPanel.opacity)
+            ? Math.min(100, Math.max(0, Math.round(r.infoPanel.opacity)))
+            : d.infoPanel.opacity,
+      dwellSeconds:
+        r.infoPanel?.dwellSeconds === 8
+          ? DEFAULT_INFO_PANEL_CONFIG.dwellSeconds
+          : typeof r.infoPanel?.dwellSeconds === "number" && Number.isFinite(r.infoPanel.dwellSeconds)
+            ? Math.min(600, Math.max(1, Math.round(r.infoPanel.dwellSeconds)))
+            : d.infoPanel.dwellSeconds,
+      // 榜一日期：旧配置一次性迁移为「全部勾选」（迁移后按用户勾选结果保存，不再覆盖）
+      rank: {
+        enabled:
+          r.infoPanel?.rank?.enabled === undefined
+            ? DEFAULT_INFO_PANEL_CONFIG.rank.enabled
+            : !!r.infoPanel.rank.enabled,
+        yesterday:
+          r.infoPanel?.rankAllMigrated === true && r.infoPanel.rank.yesterday !== undefined
+            ? !!r.infoPanel.rank.yesterday
+            : true,
+        thisWeek:
+          r.infoPanel?.rankAllMigrated === true && r.infoPanel.rank.thisWeek !== undefined
+            ? !!r.infoPanel.rank.thisWeek
+            : true,
+        lastWeek:
+          r.infoPanel?.rankAllMigrated === true && r.infoPanel.rank.lastWeek !== undefined
+            ? !!r.infoPanel.rank.lastWeek
+            : true,
+        thisMonth:
+          r.infoPanel?.rankAllMigrated === true && r.infoPanel.rank.thisMonth !== undefined
+            ? !!r.infoPanel.rank.thisMonth
+            : true,
+        lastMonth:
+          r.infoPanel?.rankAllMigrated === true && r.infoPanel.rank.lastMonth !== undefined
+            ? !!r.infoPanel.rank.lastMonth
+            : true,
+      },
+      rankAllMigrated: true,
+      pk: r.infoPanel?.pk === undefined ? DEFAULT_INFO_PANEL_CONFIG.pk : !!r.infoPanel.pk,
+      blindBox:
+        r.infoPanel?.blindBox === undefined
+          ? DEFAULT_INFO_PANEL_CONFIG.blindBox
+          : !!r.infoPanel.blindBox,
+      overtime: normalizeInfoPanelOvertime(r.infoPanel?.overtime),
+    },
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,
     giftEffect: {

@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import SiteHomeButton from "@/components/SiteHomeButton";
 import { biliSpaceWebUrl, openBiliSpace } from "@/lib/bili-space";
-import type {
-  LeaderboardCardMeta,
-  LeaderboardMeta,
-  LeaderboardMetric,
-  LeaderboardRanking,
-  LeaderboardRow,
-  LeaderboardTabKey,
-  LeaderboardView,
+import {
+  MAX_RANK_LIMIT,
+  RANK_PAGE_ROWS,
+  type LeaderboardCardMeta,
+  type LeaderboardMeta,
+  type LeaderboardMetric,
+  type LeaderboardRanking,
+  type LeaderboardRow,
+  type LeaderboardSort,
+  type LeaderboardTabKey,
+  type LeaderboardView,
 } from "@/lib/leaderboard-types";
 
 /** 顶部三种榜单模式：用户合成 / 用户盲盒 / 主播盲盒 */
@@ -30,6 +33,17 @@ const MODES: Array<{
 /** 每行固定列宽：昵称列定宽、公式列占据剩余空间，所有卡片数字起始位置一致 */
 const ROW_GRID =
   "grid grid-cols-[22px_118px_minmax(0,1fr)_44px] items-center gap-0.5 pl-0.5 pr-0.5 sm:grid-cols-[24px_130px_minmax(0,1fr)_48px] sm:gap-2 sm:pl-2 sm:pr-1 lg:grid-cols-[22px_122px_minmax(0,1fr)_44px] xl:grid-cols-[28px_146px_minmax(0,1fr)_58px]";
+
+/** 榜单侧面：白 = 前 N 名，黑 = 倒数 N 名 */
+type BoardSide = "white" | "black";
+
+/** 每张卡片的交互状态 */
+type CardUi = {
+  period?: string;
+  sort?: LeaderboardSort;
+  side?: BoardSide;
+  limit?: number;
+};
 
 function fmt(n: number): string {
   return Math.round(Number(n) || 0).toLocaleString("zh-CN");
@@ -56,8 +70,8 @@ function normalizeFace(url?: string): string {
   return u;
 }
 
-function rankingKey(card: string, period: string, view: string): string {
-  return `${card}|${period}|${view}`;
+function rankingKey(card: string, period: string, view: string, sort: LeaderboardSort, limit: number): string {
+  return `${card}|${period}|${view}|${sort}|${limit}`;
 }
 
 function Segmented<T extends string>({
@@ -76,7 +90,7 @@ function Segmented<T extends string>({
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
-          className={`rounded-full px-2.5 py-0.5 text-[12px] font-medium transition ${
+          className={`rounded-full px-2 py-[3px] text-[11.5px] font-medium transition ${
             value === o.value ? "bg-[#221d24] text-white" : "text-black/45 hover:text-black/70"
           }`}
         >
@@ -139,7 +153,31 @@ function MaxGiftBadge({ metric }: { metric: LeaderboardMetric }) {
 }
 
 /** 「收益-花费=盈亏」与礼物两列，字号加大、灰色加深 */
-function MetricCells({ metric, showGift = true }: { metric: LeaderboardMetric; showGift?: boolean }) {
+function MetricCells({
+  metric,
+  showGift = true,
+  sort = "absolute",
+}: {
+  metric: LeaderboardMetric;
+  showGift?: boolean;
+  sort?: LeaderboardSort;
+}) {
+  if (sort === "relative") {
+    const hasSpent = metric.spent > 0;
+    const ratio = hasSpent ? metric.earned / metric.spent : 0;
+    const good = hasSpent && ratio >= 1;
+    return (
+      <>
+        <span className="whitespace-nowrap text-left text-[12px] tabular-nums text-[#4f4a55] xl:text-[13px]">
+          {num(metric.earned)}/{num(metric.spent)}=
+          <span className={`font-semibold ${good ? "text-[#1f9d63]" : "text-[#e0523f]"}`}>
+            {hasSpent ? ratio.toFixed(2) : "—"}
+          </span>
+        </span>
+        {showGift ? <MaxGiftBadge metric={metric} /> : null}
+      </>
+    );
+  }
   const positive = metric.profit >= 0;
   return (
     <>
@@ -155,17 +193,17 @@ function MetricCells({ metric, showGift = true }: { metric: LeaderboardMetric; s
 }
 
 function RankBadge({ rank }: { rank: number }) {
-  if (rank <= 0) {
+  const abs = Math.abs(rank);
+  if (abs > 3) {
     return <span className="flex h-5 w-5 items-center justify-center text-[12px] font-semibold text-black/40">{rank}</span>;
   }
+  // 白榜第 1/2/3 与黑榜倒数第 1/2/3 使用相同的金银铜配色
   const style =
-    rank === 1
+    abs === 1
       ? "bg-[#f5c451] text-[#5b3f00]"
-      : rank === 2
+      : abs === 2
         ? "bg-[#dfe3e8] text-[#454b52]"
-        : rank === 3
-          ? "bg-[#e8c9a8] text-[#5b3b1c]"
-          : "bg-black/[0.05] text-black/50";
+        : "bg-[#e8c9a8] text-[#5b3b1c]";
   return (
     <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold ${style}`}>
       {rank}
@@ -173,7 +211,15 @@ function RankBadge({ rank }: { rank: number }) {
   );
 }
 
-function RowView({ row, showGift }: { row: LeaderboardRow; showGift: boolean }) {
+function RowView({
+  row,
+  showGift,
+  sort,
+}: {
+  row: LeaderboardRow;
+  showGift: boolean;
+  sort: LeaderboardSort;
+}) {
   return (
     <div className={`${ROW_GRID} rounded-lg py-[6px] odd:bg-black/[0.02]`}>
       <RankBadge rank={row.rank} />
@@ -193,7 +239,7 @@ function RowView({ row, showGift }: { row: LeaderboardRow; showGift: boolean }) 
           {row.name}
         </span>
       </a>
-      <MetricCells metric={row.metric} showGift={showGift} />
+      <MetricCells metric={row.metric} showGift={showGift} sort={sort} />
     </div>
   );
 }
@@ -202,7 +248,7 @@ export default function HeiBaiPage() {
   const [meta, setMeta] = useState<LeaderboardMeta | null>(null);
   const [metaError, setMetaError] = useState("");
   const [mode, setMode] = useState<BoardMode>("user-blind");
-  const [selections, setSelections] = useState<Record<string, { period: string }>>({});
+  const [cardUi, setCardUi] = useState<Record<string, CardUi>>({});
   const [rankings, setRankings] = useState<Record<string, LeaderboardRanking>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const [reloadKey, setReloadKey] = useState(0);
@@ -242,13 +288,21 @@ export default function HeiBaiPage() {
     };
   }, [reloadKey]);
 
-  // 当前卡片的有效周期（视图由顶部模式决定）
-  const periodOf = useMemo(() => {
-    return (card: LeaderboardCardMeta): string => {
-      const s = selections[card.key];
-      return s && card.periods.some((p) => p.key === s.period) ? s.period : card.defaultPeriod;
-    };
-  }, [selections]);
+  // 每张卡片的有效交互状态：周期 / 排序口径 / 白黑 / 当前展示条数
+  const uiOf = useCallback(
+    (card: LeaderboardCardMeta) => {
+      const ui = cardUi[card.key] ?? {};
+      const period =
+        ui.period && card.periods.some((p) => p.key === ui.period) ? ui.period : card.defaultPeriod;
+      return {
+        period,
+        sort: ui.sort ?? ("absolute" as LeaderboardSort),
+        side: ui.side ?? ("white" as BoardSide),
+        limit: ui.limit ?? RANK_PAGE_ROWS,
+      };
+    },
+    [cardUi],
+  );
 
   // 按需加载当前模式下所有卡片的排行
   useEffect(() => {
@@ -256,11 +310,17 @@ export default function HeiBaiPage() {
     const tab = meta.tabs.find((t) => t.key === activeTab);
     if (!tab) return;
     for (const card of tab.cards) {
-      const period = periodOf(card);
-      const key = rankingKey(card.key, period, view);
+      const { period, sort, limit } = uiOf(card);
+      const key = rankingKey(card.key, period, view, sort, limit);
       if (rankings[key] || inFlight.current.has(key)) continue;
       inFlight.current.add(key);
-      const params = new URLSearchParams({ card: card.key, period, view });
+      const params = new URLSearchParams({
+        card: card.key,
+        period,
+        view,
+        sort,
+        limit: String(limit),
+      });
       fetch(`/api/leaderboard/ranking?${params.toString()}`, { cache: "no-store" })
         .then((r) => r.json())
         .then((json: { code?: number; data?: LeaderboardRanking }) => {
@@ -279,12 +339,27 @@ export default function HeiBaiPage() {
         .catch(() => setFailed((prev) => ({ ...prev, [key]: true })))
         .finally(() => inFlight.current.delete(key));
     }
-  }, [meta, activeTab, view, periodOf, rankings]);
+  }, [meta, activeTab, view, uiOf, rankings]);
 
   const currentTab = meta?.tabs.find((t) => t.key === activeTab) ?? null;
 
+  const updateUi = (card: LeaderboardCardMeta, patch: Partial<CardUi>) => {
+    setCardUi((prev) => ({ ...prev, [card.key]: { ...(prev[card.key] ?? {}), ...patch } }));
+  };
+
+  // 切换周期 / 排序 / 白黑时回到默认 30 条
   const setPeriod = (card: LeaderboardCardMeta, period: string) => {
-    setSelections((prev) => ({ ...prev, [card.key]: { period } }));
+    updateUi(card, { period, limit: RANK_PAGE_ROWS });
+  };
+  const setSort = (card: LeaderboardCardMeta, sort: LeaderboardSort) => {
+    updateUi(card, { sort, limit: RANK_PAGE_ROWS });
+  };
+  const setSide = (card: LeaderboardCardMeta, side: BoardSide) => {
+    updateUi(card, { side, limit: RANK_PAGE_ROWS });
+  };
+  const expandRows = (card: LeaderboardCardMeta) => {
+    const { limit } = uiOf(card);
+    updateUi(card, { limit: Math.min(MAX_RANK_LIMIT, limit + RANK_PAGE_ROWS) });
   };
 
   const refresh = () => {
@@ -374,21 +449,23 @@ export default function HeiBaiPage() {
 
         {currentTab && currentTab.cards.length > 0 && (
           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {currentTab.cards.map((card, cardIndex) => {
-              const period = periodOf(card);
-              const key = rankingKey(card.key, period, view);
+            {currentTab.cards.map((card) => {
+              const { period, sort, side, limit } = uiOf(card);
+              const key = rankingKey(card.key, period, view, sort, limit);
               const data = rankings[key];
               const isFailed = failed[key];
               // 无法确定卡片最大礼物时不展示礼物列，避免误显示用户自己的最大礼物
               const showGift = !card.hideTopGift && !!card.topGift;
+              const rows = data ? (side === "white" ? data.top : data.bottom) : [];
+              const canExpand = !!data && data.total > limit && limit < MAX_RANK_LIMIT;
 
               return (
                 <section
                   key={card.key}
                   className="rounded-2xl border border-black/[0.07] bg-white px-2 py-3 shadow-[0_10px_30px_rgba(31,28,23,0.05)] sm:px-3"
                 >
-                  <header className="flex flex-wrap items-center gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
+                  <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       {card.icon ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
@@ -400,8 +477,11 @@ export default function HeiBaiPage() {
                         />
                       ) : null}
                       <h2 className="truncate text-[14px] font-semibold text-[#221d24]">{card.title}</h2>
+                      {card.unitNote ? (
+                        <span className="shrink-0 whitespace-nowrap text-[11px] text-black/40">单位电池</span>
+                      ) : null}
                     </div>
-                    <div className="ml-auto flex items-center gap-2">
+                    <div className="ml-auto flex flex-wrap items-center gap-1.5">
                       {card.periods.length > 1 && (
                         <Segmented
                           value={period}
@@ -409,11 +489,22 @@ export default function HeiBaiPage() {
                           onChange={(v) => setPeriod(card, v)}
                         />
                       )}
-                      {cardIndex === 0 && (
-                        <span className="whitespace-nowrap text-[11px] text-black/45">
-                          本网站所有单位都是电池
-                        </span>
-                      )}
+                      <Segmented<LeaderboardSort>
+                        value={sort}
+                        options={[
+                          { value: "absolute", label: "绝对" },
+                          { value: "relative", label: "相对" },
+                        ]}
+                        onChange={(v) => setSort(card, v)}
+                      />
+                      <Segmented<BoardSide>
+                        value={side}
+                        options={[
+                          { value: "white", label: "白" },
+                          { value: "black", label: "黑" },
+                        ]}
+                        onChange={(v) => setSide(card, v)}
+                      />
                     </div>
                   </header>
 
@@ -435,9 +526,7 @@ export default function HeiBaiPage() {
 
                   {data && data.total > 0 && (
                     <div className="mt-3">
-                      <div
-                        className={`${ROW_GRID} mb-1 rounded-lg bg-[#f2edfa] py-[6px]`}
-                      >
+                      <div className={`${ROW_GRID} mb-1 rounded-lg bg-[#f2edfa] py-[6px]`}>
                         <span className="flex h-5 w-5 items-center justify-center text-[12px] font-semibold text-[#5b3fa8]">
                           Σ
                         </span>
@@ -452,35 +541,45 @@ export default function HeiBaiPage() {
                             </span>
                           </span>
                         </div>
-                        <MetricCells metric={data.summary} showGift={showGift} />
+                        <MetricCells metric={data.summary} showGift={showGift} sort={sort} />
                       </div>
 
                       <div className="space-y-0.5">
-                        {data.top.map((row) => (
-                          <RowView key={`top-${row.uid}`} row={row} showGift={showGift} />
+                        {rows.map((row) => (
+                          <RowView
+                            key={`${side}-${row.uid}`}
+                            row={row}
+                            showGift={showGift}
+                            sort={sort}
+                          />
                         ))}
                       </div>
 
-                      {data.bottom.length > 0 && (
-                        <>
-                          <div className="mt-1 flex items-center gap-2 px-2 py-1 text-[11px] text-black/25">
-                            <span className="h-px flex-1 bg-black/[0.06]" />
-                            <span>亏损</span>
-                            <span className="h-px flex-1 bg-black/[0.06]" />
-                          </div>
-                          <div className="space-y-0.5">
-                            {data.bottom.map((row) => (
-                              <RowView key={`bottom-${row.uid}`} row={row} showGift={showGift} />
-                            ))}
-                          </div>
-                        </>
+                      {canExpand && (
+                        <button
+                          type="button"
+                          onClick={() => expandRows(card)}
+                          aria-label="展开更多"
+                          className="mx-auto mt-1.5 flex items-center gap-0.5 rounded-full px-3 py-1 text-[11px] font-medium text-black/40 transition hover:bg-black/[0.04] hover:text-black/65 active:scale-95"
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="h-4 w-4"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                          <span>展开更多</span>
+                        </button>
                       )}
 
-                      {data.total > 40 && (
-                        <p className="mt-2 px-2 text-right text-[10px] text-black/25">
-                          共 {fmt(data.total)} 条，仅展示盈利前 20 与亏损前 20
-                        </p>
-                      )}
+                      <p className="mt-1 px-2 text-right text-[10px] text-black/25">
+                        共 {fmt(data.total)} 条
+                      </p>
                     </div>
                   )}
                 </section>
@@ -490,7 +589,7 @@ export default function HeiBaiPage() {
         )}
 
         <p className="mt-8 text-center text-[14px] leading-5 text-black/30">
-          榜单仅供娱乐，只统计了使用【B瓜】软件的数据。如果想上榜，可以使用软件查看自己的数据。
+          榜单仅供娱乐，只统计了使用【B瓜】软件的用户。如果想上榜，可以使用软件查看自己的数据。
         </p>
 
         <SiteHomeButton />

@@ -201,21 +201,6 @@ type BlindBoxProfitResult = {
 
 type BlindBoxStats = BlindBoxProfitResult[];
 
-type Certification = {
-  date: string;
-  type: "lucky" | "unlucky" | "rich";
-  drawCount: number;
-  castleCount: number;
-  profit: number;
-  spent: number;
-  earned: number;
-  userName: string;
-  blindBoxName: string;
-  blindBoxImg: string;
-  castleName: string;
-  castleImg: string;
-};
-
 type SynthesisGiftInfo = {
   gift_id: number;
   gift_name: string;
@@ -252,18 +237,6 @@ type SynthesisActivityStats = {
       synthetic_time: number;
     }>;
   };
-  certifications: Array<{
-    type: "lucky" | "unlucky" | "rich";
-    ruid: number;
-    rname: string;
-    gift_name: string;
-    gift_price: number;
-    gift_img: string;
-    spent: number;
-    profit: number;
-    date: string;
-    count?: number;
-  }>;
 };
 
 type SynthesisStats = {
@@ -471,248 +444,6 @@ function GiftSaveModal({
                 关闭
               </button>
             </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CertificationModal({
-  certifications,
-  currentIndex,
-  onIndexChange,
-  onClose,
-}: {
-  certifications: Certification[];
-  currentIndex: number;
-  onIndexChange: (index: number) => void;
-  onClose: () => void;
-}) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const cert = certifications[currentIndex];
-  const isLucky = cert.type === "lucky";
-  const total = certifications.length;
-
-  function formatDateCN(dateStr: string) {
-    const parts = dateStr.split("-");
-    return `${parts[0]}年${parseInt(parts[1])}月${parseInt(parts[2])}日`;
-  }
-
-  useEffect(() => {
-    generateImage();
-  }, [currentIndex]);
-
-  async function generateImage() {
-    setLoading(true);
-    if (!cardRef.current) {
-      setLoading(false);
-      return;
-    }
-    try {
-      const dataUrl = await toPng(cardRef.current, {
-        backgroundColor: "#fff",
-        pixelRatio: 2,
-        filter: (node: HTMLElement) => !node.classList?.contains("save-exclude"),
-      });
-      setGeneratedImage(dataUrl);
-    } catch (err) {
-      console.error("生成图片失败:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function downloadImage() {
-    if (!generatedImage) return;
-    const res = await saveMobileOrDownload(generatedImage, `cert_${cert.type}_${cert.date.replace(/[^0-9]/g, "")}.png`);
-    if (res === "fallback") showToast("未保存到相册，请长按上方图片保存");
-  }
-
-  function goPrev() {
-    if (currentIndex > 0) onIndexChange(currentIndex - 1);
-  }
-
-  function goNext() {
-    if (currentIndex < total - 1) onIndexChange(currentIndex + 1);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      {/* 隐藏的卡片用于生成图片 - 使用绝对定位移出视口而非display:none */}
-      <div style={{ position: "absolute", left: "-9999px", top: "-9999px" }}>
-        <div
-          ref={cardRef}
-          className="w-[80vw] max-w-md rounded-lg bg-white p-6 shadow-2xl"
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-2xl">
-              {cert.type === "lucky" ? "👑" : cert.type === "rich" ? "💰" : "👻"}
-            </span>
-            <span className={`text-lg font-bold ${
-              cert.type === "lucky" ? "text-yellow-600" :
-              cert.type === "rich" ? "text-purple-600" : "text-gray-600"
-            }`}>
-              {cert.type === "lucky" ? "欧皇认证" :
-               cert.type === "rich" ? "神豪认证" : "非酋认证"}
-            </span>
-            {total > 1 && (
-              <span className="ml-auto text-xs text-black/35">{currentIndex + 1}/{total}</span>
-            )}
-          </div>
-
-          <div className="space-y-2.5 text-sm text-black/80">
-            <div className="flex items-center gap-1">
-              <span className="text-black/45 w-10 flex-shrink-0">日期</span>
-              <span className="font-medium">{formatDateCN(cert.date)}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-black/45 w-10 flex-shrink-0">用户</span>
-              <span className="font-medium text-[#1f1c17]">{cert.userName}</span>
-            </div>
-            {cert.type !== "rich" && (
-              <>
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-10 flex-shrink-0">开启</span>
-                  <span className="font-medium">{cert.drawCount}</span>
-                  <span>个心动盲盒</span>
-                  {cert.blindBoxImg && (
-                    <img src={fixImageUrl(cert.blindBoxImg)} alt="" className="w-5 h-5 rounded" />
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                  {cert.type === "lucky" ? (
-                    <>
-                      <span className="font-medium text-yellow-600">{cert.castleCount}</span>
-                      <span>个浪漫城堡</span>
-                      {cert.castleImg && (
-                        <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded" />
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <span className="font-medium text-gray-500">0</span>
-                      <span>个浪漫城堡</span>
-                      {cert.castleImg && (
-                        <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded opacity-40" />
-                      )}
-                    </>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-10 flex-shrink-0">花费</span>
-                  <span className="font-medium">{cert.spent} 电池</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                  <span className="font-medium">{cert.earned} 电池</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-black/45 w-10 flex-shrink-0">盈亏</span>
-                  <span className={`font-bold ${cert.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                    {cert.profit >= 0 ? "+" : ""}{cert.profit} 电池
-                  </span>
-                </div>
-              </>
-            )}
-            {cert.type === "rich" && (
-              <div className="flex items-center gap-1">
-                <span className="text-black/45 w-10 flex-shrink-0">爆出</span>
-                <span className="font-bold text-purple-600">{cert.castleCount}</span>
-                <span>个浪漫城堡</span>
-                {cert.castleImg && (
-                  <img src={fixImageUrl(cert.castleImg)} alt="" className="w-5 h-5 rounded" />
-                )}
-                <span className="ml-auto text-black/60">壕无人性！</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div
-        className="relative mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* 加载状态 */}
-        {loading && (
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-white text-sm">生成图片中...</p>
-          </div>
-        )}
-
-        {/* 图片内容 */}
-        {!loading && generatedImage && (
-          <>
-            {/* 上方提示 */}
-            {isMobileDevice() && (
-              <span className="text-center text-white/80 text-base font-medium mb-2 block">长按图片保存到相册</span>
-            )}
-
-            <div className="flex flex-col items-center gap-2">
-              {/* 上箭头 */}
-              {total > 1 && (
-                <button
-                  onClick={goPrev}
-                  disabled={currentIndex === 0}
-                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-                >
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
-                  </svg>
-                </button>
-              )}
-
-              {/* 图片 */}
-              <img src={generatedImage} alt="认证卡片" className="max-w-full max-h-[70vh] rounded-lg shadow-2xl" />
-
-              {/* 下箭头 */}
-              {total > 1 && (
-                <button
-                  onClick={goNext}
-                  disabled={currentIndex === total - 1}
-                  className="w-8 h-8 rounded-full bg-white/90 text-black/60 flex items-center justify-center disabled:opacity-30 hover:bg-white transition"
-                >
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 9l7 7 7-7" />
-                  </svg>
-                </button>
-              )}
-            </div>
-
-            {/* 下方按钮区域 */}
-            <div className="flex gap-2.5 mt-3 justify-center">
-              {!isMobileDevice() && (
-                <button onClick={downloadImage} className="modal-action-btn modal-action-primary">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  下载图片
-                </button>
-              )}
-              <button onClick={onClose} className="modal-action-btn modal-action-light">
-                关闭
-              </button>
-            </div>
-
-            {/* 底部指示器 */}
-            {total > 1 && (
-              <div className="flex justify-center gap-1.5 mt-3">
-                {certifications.map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onIndexChange(i)}
-                    className={`w-2 h-2 rounded-full transition ${
-                      i === currentIndex ? "bg-white" : "bg-white/40"
-                    }`}
-                  />
-                ))}
-              </div>
-            )}
           </>
         )}
       </div>
@@ -993,9 +724,6 @@ export default function HomePage() {
   const [showStatsRules, setShowStatsRules] = useState(false);
   const [showGiftListRules, setShowGiftListRules] = useState(false);
   const [blindBoxFilters, setBlindBoxFilters] = useState<Record<number, { ruid: string; dateRange: string }>>({});
-  const [certifications, setCertifications] = useState<Certification[]>([]);
-  const [showCertModal, setShowCertModal] = useState(false);
-  const [certModalIndex, setCertModalIndex] = useState(0);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [overviewAnchor, setOverviewAnchor] = useState<string>("");
@@ -2066,12 +1794,11 @@ export default function HomePage() {
   /** 从浏览器缓存(IndexedDB)读取并展示某账号的全部业务数据（WEB 端离线/秒显用）。返回是否命中。 */
   async function loadMidCache(mid: number): Promise<boolean> {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) return false;
-    const [snap, blindBox, synthesis, other, cert] = await Promise.all([
+    const [snap, blindBox, synthesis, other] = await Promise.all([
       cacheGet<Snapshot>(cacheKeys.snapshot(mid)),
       cacheGet<BlindBoxStats>(cacheKeys.blindBox(mid)),
       cacheGet<SynthesisStats>(cacheKeys.synthesis(mid)),
       cacheGet<OtherStats>(cacheKeys.other(mid)),
-      cacheGet<Certification[]>(cacheKeys.certification(mid)),
     ]);
     let hit = false;
     if (snap?.data) {
@@ -2086,7 +1813,6 @@ export default function HomePage() {
     }
     if (synthesis?.data) setSynthesisStats(synthesis.data);
     if (other?.data) setOtherStats(other.data);
-    if (cert?.data) setCertifications(cert.data);
     return hit;
   }
 
@@ -2260,6 +1986,8 @@ export default function HomePage() {
   //   ② 点绿色环形按钮：refreshData → finishRefresh → anchorRefreshRef.current()
   // 切换标签栏（display:none / display:flex）不触发任何请求，仅展示已加载到 React state 中的数据
   const anchorRefreshRef = useRef<(() => Promise<void>) | null>(null);
+  // 收益模块的「中止流水获取」回调（全屏进度遮罩上的中止按钮调用）
+  const anchorAbortRef = useRef<(() => void) | null>(null);
 
   /** 检查当前账号是否有直播间（是否为主播）。仅客户端需要（WEB 端"主播"页恒显示引导提示，
    *  不依赖检测结果，也不发起任何探测请求）；查询出错（网络/接口异常）时视为有房，避免误判真实主播。
@@ -2409,7 +2137,6 @@ export default function HomePage() {
       if (snapshotData.data?.source === "real") {
         await Promise.all([
           fetchStats(),
-          fetchCertifications(),
           fetchOtherStats(),
         ]);
         // 收益随页面一起拉取 + 统一上传本账号所有变化的数据
@@ -2547,23 +2274,6 @@ export default function HomePage() {
     setBlindBoxFilters(newFilters);
     fetchStats(newFilters);
   }, [blindBoxFilters]);
-
-  async function fetchCertifications() {
-    try {
-      const res = await dataFetch("/api/stats/certification", { cache: "no-store" });
-      const data = await res.json();
-      if (data.message === "needs-relogin") {
-        await handleAuthExpired();
-        return;
-      }
-      if (data.code === 0 && data.data) {
-        setCertifications(data.data.certifications);
-        if (currentMidRef.current) cacheSet(cacheKeys.certification(currentMidRef.current), data.data.certifications);
-      }
-    } catch {
-      // certifications may not be available
-    }
-  }
 
   async function fetchOtherStats() {
     try {
@@ -3040,7 +2750,6 @@ export default function HomePage() {
       if (snapshotData.data?.source === "real") {
         await Promise.all([
           fetchStats(),
-          fetchCertifications(),
           fetchOtherStats(),
         ]);
         // 收益随页面一起拉取 + 统一上传本账号所有变化的数据
@@ -3177,7 +2886,6 @@ export default function HomePage() {
       blindBoxRawRef.current = null;
       setSynthesisStats(null);
       setOtherStats(null);
-      setCertifications([]);
       setOfflineCacheAt(0);
       // 本地优先：先展示目标账号的浏览器缓存（WEB 端），再后台静默同步
       const target = accounts.find((a) => a.sid === sid) || null;
@@ -3840,7 +3548,15 @@ export default function HomePage() {
 
       {/* 首次初始化 / 重建数据：全屏遮罩，标题栏展示当前阶段与进度，下方为功能轮播 */}
       {isFirstTime && syncing && createPortal(
-        <DataInitOverlay progress={fetchProgress} />,
+        <DataInitOverlay
+          progress={fetchProgress}
+          onAbortAnchor={() => {
+            anchorAbortRef.current?.();
+            // 中止后不再等待流水任务收尾：消费记录此时已加载完毕，直接关闭全屏遮罩，
+            // 否则遮罩会退回"消费记录"阶段并停在无进度文案的状态，像是卡住了。
+            setIsFirstTime(false);
+          }}
+        />,
         document.body
       )}
 
@@ -3878,9 +3594,6 @@ export default function HomePage() {
           showGiftSaveModal={showGiftSaveModal}
           blindBoxStats={blindBoxStats}
           blindBoxFilters={blindBoxFilters}
-          certifications={certifications}
-          showCertModal={showCertModal}
-          certModalIndex={certModalIndex}
           selectedCastleGift={selectedCastleGift}
           showCastleModal={showCastleModal}
           synthesisStats={synthesisStats}
@@ -3902,8 +3615,6 @@ export default function HomePage() {
           setShowStatsRules={setShowStatsRules}
           setShowGiftListRules={setShowGiftListRules}
           setShowGiftSaveModal={setShowGiftSaveModal}
-          setShowCertModal={setShowCertModal}
-          setCertModalIndex={setCertModalIndex}
           setCastleAnchorStats={setCastleAnchorStats}
           setSelectedCastleGift={setSelectedCastleGift}
           setShowCastleModal={setShowCastleModal}
@@ -4016,6 +3727,7 @@ export default function HomePage() {
           lastRefreshTime={lastRefreshTime}
           isLocalAccount={isLocalAccount}
           onFetchRequest={anchorRefreshRef}
+          abortRef={anchorAbortRef}
           onRefresh={handleRefresh}
           showToast={showToast}
           onFetchProgress={(p) =>
@@ -5154,16 +4866,6 @@ export default function HomePage() {
         activeKey={dockTab}
         onChange={handleDockChange}
       />
-
-      {/* 欧皇/非酋认证弹窗 */}
-      {showCertModal && certifications.length > 0 && (
-        <CertificationModal
-          certifications={certifications}
-          currentIndex={certModalIndex}
-          onIndexChange={setCertModalIndex}
-          onClose={() => setShowCertModal(false)}
-        />
-      )}
 
       {/* 礼物清单保存图片弹窗 */}
       {showGiftSaveModal && monthGiftSummaryNew.length > 0 && (

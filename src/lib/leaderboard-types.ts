@@ -8,6 +8,8 @@
 export type LeaderboardTabKey = "blind" | "synthesis";
 export type LeaderboardView = "user" | "anchor";
 export type LeaderboardPeriodKey = "today" | "lastFriday" | "activity" | "year";
+/** 排序口径：绝对盈亏 / 相对收益（收入 ÷ 花费） */
+export type LeaderboardSort = "absolute" | "relative";
 
 export type LeaderboardMaxGift = {
   id: number;
@@ -48,6 +50,8 @@ export type LeaderboardCardMeta = {
   icon?: string;
   /** 该卡片的最大礼物（盲盒可爆出 / 合成活动可产出），用于每行固定展示 */
   topGift?: LeaderboardTopGift;
+  /** 是否在标题右侧展示「单位电池」备注（仅第一张非心动/幸运盲盒卡） */
+  unitNote?: boolean;
   /** true = 不展示最大礼物（如「一年内总合成」无法区分最大礼物） */
   hideTopGift?: boolean;
   views: LeaderboardView[];
@@ -82,6 +86,8 @@ export type LeaderboardRanking = {
   card: string;
   period: LeaderboardPeriodKey;
   view: LeaderboardView;
+  /** 本次排序口径 */
+  sort: LeaderboardSort;
   summary: LeaderboardMetric & { users: number };
   top: LeaderboardRow[];
   bottom: LeaderboardRow[];
@@ -130,6 +136,10 @@ export const SYN_CARD_PREFIX = "syn:";
 export const SYN_YEAR_CARD = "syn-year";
 
 export const MAX_RANK_ROWS = 20;
+/** 页面按需展开时的单次条数 */
+export const RANK_PAGE_ROWS = 30;
+/** 接口允许返回的单侧最大条数 */
+export const MAX_RANK_LIMIT = 300;
 
 export function blindCardKey(id: number): string {
   return `${BLIND_CARD_PREFIX}${id}`;

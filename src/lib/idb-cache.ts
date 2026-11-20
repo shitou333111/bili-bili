@@ -3,7 +3,7 @@
  *
  * 背景：WEB 端浏览器无法直连 B站（CORS 限制），所有 B站 数据都由服务器路由拉取后返回。
  * 一旦服务器不可达/断网，界面就没有任何可展示的数据。本模块用 IndexedDB 把服务器返回的
- * 业务数据（账号、消费记录、盲盒/合成/其他统计、认证信息）按账号(mid)隔离缓存，
+ * 业务数据（账号、消费记录、盲盒/合成/其他统计）按账号(mid)隔离缓存，
  * 让"离线模式下使用本地缓存数据"真正成立。
  *
  * 约定：
@@ -32,8 +32,6 @@ export const cacheKeys = {
   synthesis: (mid: number) => `synthesis:${mid}`,
   /** 其他统计 */
   other: (mid: number) => `other:${mid}`,
-  /** 认证信息 */
-  certification: (mid: number) => `certification:${mid}`,
 };
 
 type Envelope = { v: number; savedAt: number; data: unknown };

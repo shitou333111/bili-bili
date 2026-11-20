@@ -77,21 +77,6 @@ type BlindBoxProfitResult = {
 
 type BlindBoxStats = BlindBoxProfitResult[];
 
-type Certification = {
-  date: string;
-  type: "lucky" | "unlucky" | "rich";
-  drawCount: number;
-  castleCount: number;
-  profit: number;
-  spent: number;
-  earned: number;
-  userName: string;
-  blindBoxName: string;
-  blindBoxImg: string;
-  castleName: string;
-  castleImg: string;
-};
-
 type SynthesisGiftInfo = {
   gift_id: number;
   gift_name: string;
@@ -128,18 +113,6 @@ type SynthesisActivityStats = {
       synthetic_time: number;
     }>;
   };
-  certifications: Array<{
-    type: "lucky" | "unlucky" | "rich";
-    ruid: number;
-    rname: string;
-    gift_name: string;
-    gift_price: number;
-    gift_img: string;
-    spent: number;
-    profit: number;
-    date: string;
-    count?: number;
-  }>;
 };
 
 type SynthesisStats = {
@@ -261,9 +234,6 @@ interface RevenueModuleContentProps {
   showGiftSaveModal: boolean;
   blindBoxStats: BlindBoxStats | null;
   blindBoxFilters: Record<number, { ruid: string; dateRange: string }>;
-  certifications: Certification[];
-  showCertModal: boolean;
-  certModalIndex: number;
   selectedCastleGift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null;
   showCastleModal: boolean;
   synthesisStats: SynthesisStats | null;
@@ -288,8 +258,6 @@ interface RevenueModuleContentProps {
   setShowStatsRules: (show: boolean) => void;
   setShowGiftListRules: (show: boolean) => void;
   setShowGiftSaveModal: (show: boolean) => void;
-  setShowCertModal: (show: boolean) => void;
-  setCertModalIndex: (index: number) => void;
   setCastleAnchorStats: (stats: CastleStat[] | null) => void;
   setSelectedCastleGift: (gift: { gift_id: number; gift_name: string; gift_img: string; price: number } | null) => void;
   setShowCastleModal: (show: boolean) => void;
@@ -619,7 +587,6 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     showGiftSaveModal,
     blindBoxStats,
     blindBoxFilters,
-    certifications,
     synthesisStats,
     showHistoricalDebug,
     otherStats,
@@ -637,8 +604,6 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
     setShowStatsRules,
     setShowGiftListRules,
     setShowGiftSaveModal,
-    setShowCertModal,
-    setCertModalIndex,
     setCastleAnchorStats,
     setSelectedCastleGift,
     setShowCastleModal,
@@ -1395,28 +1360,6 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                             <img src={stat.blindBoxImg || BLIND_BOX_CONFIG.icons[stat.blindBoxId]} alt="" className="w-6 h-6 rounded" />
                           )}
                           <span className="font-semibold text-sm truncate max-w-[80px]">{stat.blindBoxName.slice(0, 6)}{stat.blindBoxName.length > 6 ? "..." : ""}</span>
-                          {isXindong && (
-                            <button
-                              onClick={() => {
-                                if (certifications.length > 0) {
-                                  setShowCertModal(true);
-                                  setCertModalIndex(0);
-                                } else {
-                                  alert("当前暂无满足欧皇/非酋认证的记录。\n\n欧皇认证：某一天爆出至少1个浪漫城堡，且盈利超过10,000电池。\n非酋认证：某一天抽取超过1,000个心动盲盒，但没有爆出浪漫城堡。");
-                                }
-                              }}
-                              className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-xs transition ${
-                                certifications.length > 0
-                                  ? "border-yellow-400 bg-yellow-50 hover:bg-yellow-100"
-                                  : "border-black/15 bg-white opacity-40"
-                              }`}
-                              title={certifications.length > 0 ? "查看欧皇/非酋认证" : "暂无认证记录"}
-                            >
-                              <span className="text-sm leading-none">👑</span>
-                              <span className="w-px h-3 bg-black/20 mx-0.5"></span>
-                              <span className="text-sm leading-none">👻</span>
-                            </button>
-                          )}
                           <span className="ml-auto flex items-center gap-1 text-xs text-black/65">
                             {stat.dateRange
                               ? `${stat.dateRange.start.split(" ")[0].replace(/-/g, ".")} - ${stat.dateRange.end.split(" ")[0].replace(/-/g, ".")}`

@@ -83,17 +83,22 @@ export async function buildLeaderboardMeta(): Promise<LeaderboardMeta> {
 
   const blindCfg = await getEffectiveBlindBoxConfig();
   const blindCards: LeaderboardCardMeta[] = [];
+  // 「单位电池」备注只放在第一张非心动/幸运的盲盒卡上（这类卡没有时间切换，空间充足）
+  let unitNoteAssigned = false;
   for (const id of blindCfg.current_activity_blind_box_ids) {
     const box = blindCfg.boxes[id];
     const title = box?.name || blindCfg.names[id] || getGiftName(id) || `盲盒 ${id}`;
     const icon = box?.icon || blindCfg.icons[id] || getGiftImg(id);
     const permanent = PERMANENT_BLIND_BOX_IDS.has(id);
+    const unitNote = !permanent && !unitNoteAssigned;
+    if (unitNote) unitNoteAssigned = true;
     blindCards.push({
       key: blindCardKey(id),
       tab: "blind",
       title,
       icon: icon || undefined,
       topGift: topBlindBoxGift(box),
+      unitNote: unitNote || undefined,
       views: ["user", "anchor"],
       periods: permanent
         ? [
@@ -109,14 +114,17 @@ export async function buildLeaderboardMeta(): Promise<LeaderboardMeta> {
   const synthesisCfg = await getEffectiveSynthesisConfig();
   const synthesisCards: LeaderboardCardMeta[] = [];
   for (const activity of synthesisCfg.current_activity) {
-    const productName = activity.products?.[0] ?? "";
-    const icon = productName ? getGiftImgByName(productName) : "";
+    const topGift = topSynthesisGift(activity.products);
+    // 活动图标与软件内一致：取价值最高的产物；取不到时回退配置中最后一个产物
+    const products = activity.products ?? [];
+    const fallbackName = products.length > 0 ? products[products.length - 1] : "";
+    const icon = topGift?.img || (fallbackName ? getGiftImgByName(fallbackName) : "");
     synthesisCards.push({
       key: synCardKey(activity.id),
       tab: "synthesis",
       title: activity.name || activity.id,
       icon: icon || undefined,
-      topGift: topSynthesisGift(activity.products),
+      topGift,
       views: ["user"],
       // 合成活动只有一个「活动期」口径，无需时间按钮组
       periods: [{ key: "activity", label: PERIOD_LABEL.activity }],

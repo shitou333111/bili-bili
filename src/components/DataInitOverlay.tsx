@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import SloganRotator from "@/app/landing/SloganRotator";
+import PayRecordCarousel from "@/components/init/PayRecordCarousel";
+import StreamRecordCarousel from "@/components/init/StreamRecordCarousel";
 import type { FetchProgress } from "@/lib/client-fetch";
 
 // ==================== 首次登录 / 重建数据 的全屏初始化遮罩 ====================
@@ -9,7 +10,7 @@ import type { FetchProgress } from "@/lib/client-fetch";
 // 标题栏三段式：左「阶段标题」/ 中「进度文案」/ 右「进度指示器」。
 //   · 消费记录：没有百分比 → 右侧用圆形旋转按钮；
 //   · 流水记录：百分比已知 → 右侧用湖水填充的圆球（面积即百分比，带波动）。
-// 轮播暂时用登录页轮播的前 3 张（消费记录）与前 6 张（流水记录）占位，后续可直接换素材。
+// 两个阶段各有独立轮播组件与内容（/components/init、/lib/init-carousel-content.ts）。
 
 /** 三个竖直居中的点，依次闪烁（用于「正在探测流水记录」的无进度阶段） */
 function TypingDots() {
@@ -96,7 +97,14 @@ function WaterBall({ ratio }: { ratio: number }) {
   );
 }
 
-export default function DataInitOverlay({ progress }: { progress: FetchProgress | null }) {
+export default function DataInitOverlay({
+  progress,
+  onAbortAnchor,
+}: {
+  progress: FetchProgress | null;
+  /** 流水记录阶段的中止回调：停止全量流水下载，并按非主播处理 */
+  onAbortAnchor?: () => void;
+}) {
   const isAnchor = !!progress?.anchorGift;
   // 首次全量探测阶段没有可靠百分比，走不定态
   const isProbe = isAnchor && (!!progress?.probe || progress?.ratio === undefined);
@@ -166,9 +174,27 @@ export default function DataInitOverlay({ progress }: { progress: FetchProgress 
           </header>
         </div>
 
-        {/* ============ 占位轮播（阶段一 3 张 / 阶段二 6 张） ============ */}
+        {/* ============ 流水记录：耗时提示 + 中止（仅流水阶段显示） ============ */}
+        {isAnchor && onAbortAnchor && (
+          <div className="shrink-0 border-b border-black/10 bg-[#fff8e8]">
+            <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5 sm:px-8">
+              <p className="min-w-0 flex-1 text-[12px] leading-5 text-[#7a5200]">
+                下载流水记录非常耗时，即使只有很少的流水。如果你只想查看消费记录，不在意直播收益，可以中止。
+              </p>
+              <button
+                type="button"
+                onClick={onAbortAnchor}
+                className="shrink-0 rounded-full bg-[#dc2626] px-3.5 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#b91c1c] active:scale-95"
+              >
+                中止
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ============ 阶段专属轮播（消费记录 / 流水记录） ============ */}
         <div className="relative flex min-h-0 w-full flex-1 flex-col pb-2 sm:pb-3">
-          <SloganRotator key={isAnchor ? "anchor" : "pay"} fitViewport count={isAnchor ? 6 : 3} />
+          {isAnchor ? <StreamRecordCarousel /> : <PayRecordCarousel />}
         </div>
       </div>
     </div>

@@ -13,6 +13,7 @@ import { ensureGiftCatalogLoaded, getGiftImgByName } from "@/lib/gift-catalog-cl
 import { buildGiftSummary } from "@/lib/gift-summary";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
 import { reportAnchorLeaderboard } from "@/lib/leaderboard-report";
+import { cancelAnchorGiftsFetch } from "@/lib/anchor-gifts-client";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
 import LeaderboardLink from "@/components/LeaderboardLink";
@@ -384,6 +385,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onNoRevenue,
   /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「活动素材下载」之后 */
   otherToolsExtra,
+  /** 父级 ref：注册「中止流水获取」回调，供全屏遮罩上的中止按钮调用 */
+  abortRef = null,
 }: {
   anchorName?: string;
   anchorFace?: string;
@@ -411,6 +414,8 @@ const AnchorDataModule = memo(function AnchorDataModule({
   onNoRevenue?: () => void;
   /** 「其他」tab 额外内容（从帮助页迁移过来的工具卡片），渲染在「活动素材下载」之后 */
   otherToolsExtra?: ReactNode;
+  /** 父级 ref：注册「中止流水获取」回调（全屏遮罩使用） */
+  abortRef?: MutableRefObject<(() => void) | null> | null;
 }) {
   const [stats, setStats] = useState<AnchorStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -429,6 +434,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
   const [downloadingMaterial, setDownloadingMaterial] = useState<number | null>(null);
   const [materialPreview, setMaterialPreview] = useState<{ url: string; name: string } | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  // 中止流水获取：Web/服务器模式用 AbortController 掐断请求，桌面端用模块级取消标记
+  const abortCtlRef = useRef<AbortController | null>(null);
+  const abortedRef = useRef(false);
   // 撞到 B站 412 限流时的提示：说明已抓多少、还剩多少个月份待补
   const [quotaHint, setQuotaHint] = useState<string | null>(null);
   const [blindBoxDateFilter, setBlindBoxDateFilter] = useState<string>("all");
@@ -534,6 +542,25 @@ const AnchorDataModule = memo(function AnchorDataModule({
     }
   }
 
+  // 向父级注册中止回调：点击全屏遮罩上的「中止」后立即停止本轮流水拉取，
+  // 并把账号按"非主播"处理（父级隐藏主播入口并展示已有的非主播提醒）。
+  useEffect(() => {
+    if (!abortRef) return;
+    abortRef.current = () => {
+      abortedRef.current = true;
+      abortCtlRef.current?.abort();
+      cancelAnchorGiftsFetch();
+      setStats(null);
+      setQuotaHint(null);
+      setAuthError(null);
+      onFetchProgress?.(null);
+      onNoRevenue?.();
+    };
+    return () => {
+      abortRef.current = null;
+    };
+  }, [abortRef, onFetchProgress, onNoRevenue]);
+
   async function fetchData() {
     if (fetchingRef.current) {
       console.log("[AnchorGifts] 已有拉取进行中，跳过重复请求");
@@ -561,6 +588,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
     const restoreProbeFlag = () => {
       if (probe) localStorage.setItem("bili_live_anchor_probe", "1");
     };
+    abortedRef.current = false;
+    const controller = new AbortController();
+    abortCtlRef.current = controller;
     try {
       // 先确保本地礼物目录已加载（给 GiftScreenshotPanel、giftSummary 图标读取用）
       try {
@@ -577,11 +607,15 @@ const AnchorDataModule = memo(function AnchorDataModule({
       // 本函数仅由页面统一刷新触发（冷启动初始化 / 绿色刷新按钮，见 page.tsx finishRefresh）。
       // 必须带 refresh=true：否则会被客户端/服务器当作"打开页面"的本地直出（不拉 B站），
       // 导致冷启动/手动刷新永远拿不到新数据。筛选切换等页面内交互走独立请求，不带此参数。
-      const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts?refresh=true", { cache: "no-store" }, (p) => {
+      const res = await dataFetch(probe ? "/api/anchor/gifts?probe=true" : "/api/anchor/gifts?refresh=true", { cache: "no-store", signal: controller.signal }, (p) => {
         // 进度透传给父级全屏遮罩（首次初始化时遮罩同步显示"获取主播收益"进度）
         onFetchProgress?.(p);
       });
       const data = await res.json();
+      if (abortedRef.current || data.message === "cancelled") {
+        // 用户主动中止：不改数据、不报错，按非主播处理
+        return;
+      }
       if (data.message === "needs-relogin") {
         setAuthError("B站登录已失效，请重新扫码登录。");
         window.location.href = "/login";
@@ -631,11 +665,13 @@ const AnchorDataModule = memo(function AnchorDataModule({
         setAuthError(data.message || "获取数据失败");
       }
     } catch (error) {
+      if (abortedRef.current) return;
       restoreProbeFlag();
       setQuotaHint(null);
       console.error("Failed to fetch anchor data:", error);
       setAuthError("网络请求失败，请检查网络连接后重试。");
     } finally {
+      abortCtlRef.current = null;
       fetchingRef.current = false;
       setLoading(false);
     }
@@ -981,9 +1017,10 @@ const AnchorDataModule = memo(function AnchorDataModule({
       {/* 首次/重建的加载进度统一由页面级全屏遮罩（DataInitOverlay）展示，
           这里不再维护模块内的第二套加载遮罩 */}
 
-      {/* Content - scrollable */}
+      {/* Content - 与粉丝页一致：不做内部滚动，交给页面根滚动，
+          使顶部按钮组 sticky 能贴住视口顶部 */}
       {stats && (
-        <div className="flex-1 overflow-y-auto overflow-x-hidden py-3">
+        <div className="flex-1 py-3">
           <div className="content-wrapper px-2 min-w-0">
             {/* 服务器账号顶部提示：本机无登录凭证，仅可查看；刷新从服务器重载（与主页同一位置/样式） */}
             {isServerAccount && (
@@ -1087,7 +1124,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                     const latest = stats.records[0];
                     return (
                       <div className="rounded-lg border border-black/10 bg-[#f9f4ea] p-3 mb-3">
-                        <span className="text-sm font-medium text-black/65">最新记录（验证是否最新）</span>
+                        <span className="text-sm font-medium text-black/65">最新记录（只能到昨日）</span>
                         <div className="flex items-center justify-between text-sm mt-1">
                           <span className="font-medium">{latest.name}×{latest.num}</span>
                           <span className="text-black">{latest.uname}</span>

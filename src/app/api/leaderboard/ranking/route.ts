@@ -5,12 +5,14 @@ import { beijingDateKey, lastPastFridayKey } from "@/lib/leaderboard-time";
 import {
   emptyMetric,
   isPeriodKey,
+  MAX_RANK_LIMIT,
   MAX_RANK_ROWS,
   sumMetrics,
   type LeaderboardMetric,
   type LeaderboardPeriodKey,
   type LeaderboardRanking,
   type LeaderboardRow,
+  type LeaderboardSort,
 } from "@/lib/leaderboard-types";
 
 export const runtime = "nodejs";
@@ -28,11 +30,24 @@ function stripMetric(p: LeaderboardMetric): LeaderboardMetric {
   };
 }
 
+function parseLimit(raw: string | null): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return MAX_RANK_ROWS;
+  return Math.min(MAX_RANK_LIMIT, Math.max(1, Math.round(n)));
+}
+
+/** 相对榜口径：收入 ÷ 花费（花费为 0 的记录不参与排名） */
+function ratioOf(m: LeaderboardMetric): number {
+  return m.spent > 0 ? m.earned / m.spent : 0;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const cardKey = url.searchParams.get("card") ?? "";
   const periodParam = url.searchParams.get("period") ?? "";
   const viewParam = url.searchParams.get("view") ?? "";
+  const sort: LeaderboardSort = url.searchParams.get("sort") === "relative" ? "relative" : "absolute";
+  const limit = parseLimit(url.searchParams.get("limit"));
 
   const meta = await buildLeaderboardMeta();
   const card = findCardMeta(meta, cardKey);
@@ -73,33 +88,49 @@ export async function GET(request: Request) {
 
   const summaryBase = rows.length > 0 ? sumMetrics(rows.map((r) => r.metric)) : emptyMetric();
 
-  rows.sort((a, b) => {
-    if (b.metric.profit !== a.metric.profit) return b.metric.profit - a.metric.profit;
+  // 相对榜下花费为 0 的记录没有比值，不参与排名
+  const ranked = sort === "relative" ? rows.filter((r) => r.metric.spent > 0) : rows;
+
+  const betterFirst = (a: (typeof rows)[number], b: (typeof rows)[number]): number => {
+    if (sort === "relative") {
+      const d = ratioOf(b.metric) - ratioOf(a.metric);
+      if (d !== 0) return d;
+    } else if (b.metric.profit !== a.metric.profit) {
+      return b.metric.profit - a.metric.profit;
+    }
     if (b.metric.earned !== a.metric.earned) return b.metric.earned - a.metric.earned;
     return a.uid - b.uid;
-  });
+  };
 
-  const top: LeaderboardRow[] = rows
-    .slice(0, MAX_RANK_ROWS)
+  const worseFirst = (a: (typeof rows)[number], b: (typeof rows)[number]): number => {
+    if (sort === "relative") {
+      const d = ratioOf(a.metric) - ratioOf(b.metric);
+      if (d !== 0) return d;
+    } else if (a.metric.profit !== b.metric.profit) {
+      return a.metric.profit - b.metric.profit;
+    }
+    return a.uid - b.uid;
+  };
+
+  const top: LeaderboardRow[] = [...ranked]
+    .sort(betterFirst)
+    .slice(0, limit)
     .map((r, i) => ({ rank: i + 1, uid: r.uid, name: r.name, face: r.face, metric: r.metric }));
 
-  const remaining = rows.slice(MAX_RANK_ROWS);
-  const bottom: LeaderboardRow[] = remaining
-    .sort((a, b) => {
-      if (a.metric.profit !== b.metric.profit) return a.metric.profit - b.metric.profit;
-      return a.uid - b.uid;
-    })
-    .slice(0, MAX_RANK_ROWS)
+  const bottom: LeaderboardRow[] = [...ranked]
+    .sort(worseFirst)
+    .slice(0, limit)
     .map((r, i) => ({ rank: -(i + 1), uid: r.uid, name: r.name, face: r.face, metric: r.metric }));
 
   const data: LeaderboardRanking = {
     card: card.key,
     period,
     view,
+    sort,
     summary: { ...summaryBase, users: rows.length },
     top,
     bottom,
-    total: rows.length,
+    total: ranked.length,
     updatedAt: board.updatedAt,
   };
 

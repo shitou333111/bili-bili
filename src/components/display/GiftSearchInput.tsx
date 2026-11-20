@@ -102,6 +102,7 @@ export default function GiftSearchInput({
   onPick,
   placeholder = "输入礼物名称搜索",
   className = "",
+  dropdownWidth,
 }: {
   /** 当前已选礼物名称（受控显示值） */
   giftName: string;
@@ -109,6 +110,8 @@ export default function GiftSearchInput({
   onPick: (g: GiftPick) => void;
   placeholder?: string;
   className?: string;
+  /** 下拉列表宽度（px）；不传则与输入框同宽 */
+  dropdownWidth?: number;
 }) {
   // 输入框"编辑态"文本：输入即时跟随，未点选候选则失焦回退到已选礼物名
   const [text, setText] = useState(giftName);
@@ -142,8 +145,9 @@ export default function GiftSearchInput({
   const options = useMemo(() => {
     if (!ready) return [];
     const q = text.trim();
-    return q ? searchByName(q) : defaultCandidates();
-  }, [ready, text]);
+    // 预填的「已选礼物名」不算搜索词：聚焦时也展示默认下拉候选（与礼物抽卡模块一致）
+    return q && q !== giftName ? searchByName(q) : defaultCandidates();
+  }, [ready, text, giftName]);
 
   const emptyHint = text.trim() ? "未找到匹配的礼物" : "";
 
@@ -169,7 +173,12 @@ export default function GiftSearchInput({
         className={inputBase}
       />
       {open && (
-        <div className="absolute left-0 right-0 z-20 mt-1 rounded-lg border border-black/10 bg-white shadow-lg max-h-56 overflow-y-auto">
+        <div
+          className={`absolute left-0 z-20 mt-1 rounded-lg border border-black/10 bg-white shadow-lg max-h-56 overflow-y-auto ${
+            dropdownWidth ? "" : "right-0"
+          }`}
+          style={dropdownWidth ? { width: dropdownWidth } : undefined}
+        >
           {!ready ? (
             <div className="px-2.5 py-2 text-xs text-black/40">礼物目录加载中…</div>
           ) : options.length > 0 ? (

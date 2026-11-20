@@ -71,19 +71,6 @@ export type SynthesisActivityProfitResult = SynthesisProfitResult & {
   detailedRecords: SynthesisDetailedRecord[];
 };
 
-export type SynthesisCertification = {
-  type: "lucky" | "unlucky" | "rich";
-  ruid: number;
-  rname: string;
-  gift_name: string;
-  gift_price: number;
-  gift_img: string;
-  spent: number;
-  profit: number;
-  date: string;
-  count?: number;
-};
-
 export type SynthesisActivityStats = {
   id: string;
   type?: string;
@@ -92,7 +79,6 @@ export type SynthesisActivityStats = {
   start_time?: number;
   end_time?: number;
   profit: SynthesisActivityProfitResult;
-  certifications: SynthesisCertification[];
 };
 
 /**

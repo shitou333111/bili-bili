@@ -35,6 +35,7 @@ export interface MovableRect {
 
 /** 可编辑布局的元素 ID */
 export type LayoutElementId =
+  | "infoPanel"
   | "gift"
   | "giftSeparate"
   | "giftEffect"
@@ -45,6 +46,8 @@ export type LayoutElementId =
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
+  /** 信息面板（榜一 / PK任务 / 心动盲盒 横向长条，位于礼物条上方） */
+  infoPanel: Record<ScreenOrientation, MovableRect>;
   gift: Record<ScreenOrientation, MovableRect>;
   /** 单独条（突出显示专用礼物条，与常规礼物条并存；仅"单独条"开关开启时使用） */
   giftSeparate: Record<ScreenOrientation, MovableRect>;
@@ -60,6 +63,12 @@ export interface DisplayLayout {
  *  anime 默认 {0,0,1} 表示"尚未自定义"：渲染时元素尺寸贴合视频画面（按宽高比在画布内
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
+  infoPanel: {
+    // 信息面板：默认置于画布右上角，横向长条（固定 238×44）。
+    // 水平/竖直边距与礼物展示等元素保持一致（横屏 60、竖屏 70），主播可在布局编辑中拖动/缩放。
+    landscape: { x: 1920 - 238 - 60, y: 60, scale: 1 },
+    portrait: { x: 1080 - 238 - 70, y: 70, scale: 1 },
+  },
   gift: {
     // 恢复迁移前（960 坐标系）的默认位置：左上角，不水平居中（较此前默认右移、下移各 10px）
     landscape: { x: 60, y: 60, scale: 1 },
@@ -157,6 +166,168 @@ export interface BannerConfig {
   /** 横幅按钮文字（最多 30 个字；输入中不实时同步，失焦才更新到画布） */
   text: string;
 }
+
+/** 信息面板 · 榜一日期类型 */
+export type InfoPanelRankKey = "yesterday" | "thisWeek" | "lastWeek" | "thisMonth" | "lastMonth";
+
+/** 信息面板 · 榜一信息（内部各日期可独立勾选） */
+export interface InfoPanelRankConfig {
+  /** 榜一信息整体开关 */
+  enabled: boolean;
+  yesterday: boolean;
+  thisWeek: boolean;
+  lastWeek: boolean;
+  thisMonth: boolean;
+  lastMonth: boolean;
+}
+
+/** 信息面板 · 加班机（下播倒计时）配置 */
+export interface InfoPanelOvertimeConfig {
+  /** 加班机开关 */
+  enabled: boolean;
+  /** 初始时长（分钟，最小 1） */
+  initialMinutes: number;
+  /** 减少时长的礼物 */
+  decreaseGiftId: number;
+  decreaseGiftName: string;
+  decreaseGiftIcon: string;
+  /** 每收到 1 个减少礼物扣除的分钟数 */
+  decreaseMinutes: number;
+  /** 增加时长的礼物 */
+  increaseGiftId: number;
+  increaseGiftName: string;
+  increaseGiftIcon: string;
+  /** 每收到 1 个增加礼物增加的分钟数 */
+  increaseMinutes: number;
+}
+
+/** 信息面板配置：画布上方横向半透明长条，各元素轮换显示 */
+export interface InfoPanelConfig {
+  /** 模块总开关 */
+  enabled: boolean;
+  /** 长条背景透明度 0-100（0=全透明，100=不透明） */
+  opacity: number;
+  /** 每个元素停留显示多少秒后切换到下一个 */
+  dwellSeconds: number;
+  rank: InfoPanelRankConfig;
+  /** PK任务（每日首胜 / 有效场次 / 有效胜场；随机PK时显示对方首胜） */
+  pk: boolean;
+  /** 心动盲盒（周六~周四显示收集进度，周五显示开盒数/盈亏/城堡/爆率） */
+  blindBox: boolean;
+  /** 加班机（下播倒计时，送礼增加/减少时长） */
+  overtime: InfoPanelOvertimeConfig;
+  /** 内部迁移标记：已把榜一日期默认值重置为「全部勾选」（不暴露在设置界面） */
+  rankAllMigrated?: boolean;
+}
+
+/** 榜一日期标签（画布上显示） */
+export const INFO_PANEL_RANK_LABELS: Record<InfoPanelRankKey, string> = {
+  yesterday: "昨日榜一",
+  thisWeek: "本周榜一",
+  lastWeek: "上周榜一",
+  thisMonth: "本月榜一",
+  lastMonth: "上月榜一",
+};
+
+/** 信息面板 · 单个榜单第一名 */
+export interface InfoPanelRankData {
+  key: InfoPanelRankKey;
+  uid: number;
+  name: string;
+  face: string;
+}
+
+/** 信息面板 · PK任务数据（随机PK时附带对方首胜状态） */
+export interface InfoPanelPkData {
+  /** normal=平常（显示自己的有效场次/胜利）；random=随机PK中（改为显示对方首胜） */
+  mode: "normal" | "random";
+  /** 自己今日首胜是否已完成 */
+  selfFirstWin: boolean;
+  /** 每日有效PK场次 */
+  validNum: number;
+  validNeed: number;
+  /** 每日有效PK胜利 */
+  winNum: number;
+  winNeed: number;
+  /** 随机PK对手（mode=random 时存在） */
+  opponent?: {
+    uid: number;
+    name: string;
+    face: string;
+    /** 对方今日首胜是否已完成 */
+    firstWin: boolean;
+  };
+}
+
+/** 信息面板 · 心动盲盒数据 */
+export interface InfoPanelBlindBoxData {
+  /** collect=收集期（周六~周四）；friday=周五开盒 */
+  mode: "collect" | "friday";
+  /** 心动盲盒图标 */
+  icon: string;
+  /** 收集期：当前已收集数量 */
+  collected: number;
+  /** 收集期：下一阶梯目标数量 */
+  target: number;
+  /** 收集期：下一阶梯爆率倍数（如 "4"） */
+  multiple: string;
+  /** 收集期：下一阶梯城堡限额 */
+  limit: number;
+  /** 周五：今日已开盒数量（本地弹幕记录统计） */
+  opened: number;
+  /** 周五：今日盈亏（电池，本地弹幕记录统计） */
+  profit: number;
+  /** 周五：今日已开出城堡数量（本地弹幕记录统计） */
+  castleCount: number;
+  /** 周五：城堡图标 */
+  castleImg: string;
+}
+
+/** 信息面板 · 加班机数据（下播倒计时） */
+export interface InfoPanelOvertimeData {
+  /** 剩余时长（分钟；0 表示已到点） */
+  remainMinutes: number;
+}
+
+/** 信息面板 · 画布渲染数据（主进程定时/事件触发拉取后下发） */
+export interface InfoPanelData {
+  ranks: InfoPanelRankData[];
+  pk: InfoPanelPkData | null;
+  blindBox: InfoPanelBlindBoxData | null;
+  overtime: InfoPanelOvertimeData | null;
+}
+
+/** 默认信息面板配置 */
+export const DEFAULT_INFO_PANEL_CONFIG: InfoPanelConfig = {
+  enabled: false,
+  opacity: 50,
+  dwellSeconds: 10,
+  rank: {
+    enabled: true,
+    yesterday: true,
+    thisWeek: true,
+    lastWeek: true,
+    thisMonth: true,
+    lastMonth: true,
+  },
+  rankAllMigrated: true,
+  pk: true,
+  blindBox: true,
+  overtime: {
+    enabled: true,
+    initialMinutes: 240,
+    decreaseGiftId: 35206,
+    decreaseGiftName: "幸运盲盒",
+    decreaseGiftIcon:
+      "https://s1.hdslb.com/bfs/live/d9bf4b2234e854b0badbd509edf59b5bf0361b7f.png",
+    decreaseMinutes: 10,
+    increaseGiftId: 32251,
+    increaseGiftName: "心动盲盒",
+    increaseGiftIcon:
+      "https://s1.hdslb.com/bfs/live/38f645d811537b50873718cecbfd84cd28af50ed.png",
+    increaseMinutes: 10,
+  },
+};
 
 /** 礼物翻卡/抽奖 · 单个选项：文字 + 可选图片（data URL） */
 export interface GiftFlipOption {
@@ -352,6 +523,8 @@ export interface DisplayConfig {
   /** 模块1 · 官方入场动画的昵称样本表：key = 官方动画 id（每项独立保存，互不覆盖；
    *  表中缺失的动画使用 DEFAULT_ENTRY_SAMPLE）。与粒子入场提示的配色完全独立。 */
   entrySamples: Record<string, EntrySampleConfig>;
+  /** 信息面板（榜一 / PK任务 / 心动盲盒，位于礼物展示上方） */
+  infoPanel: InfoPanelConfig;
   /** 模块2 · 收到的礼物展示 开关 */
   gift: boolean;
   /** 模块3 · 高级用户自定义入场动画 开关 */
@@ -414,6 +587,8 @@ export interface DisplayConfig {
 export type DisplayFlags = {
   /** 派生总开关：任一画布显示子模块（礼物展示/礼物特效/入场提示/入场动画/横幅）开启即为 true */
   master: boolean;
+  /** 信息面板开关（从 DisplayConfig.infoPanel.enabled 派生） */
+  infoPanel: boolean;
   entry: boolean;
   gift: boolean;
   anime: boolean;
@@ -435,6 +610,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   entryColors: DEFAULT_ENTRY_COLORS, // 默认红橙黄渐变 + 白色昵称（与改造前一致）
   entryStyle: "particle", // 默认粒子聚散（可选 admin 中定义的官方入场提示 id）
   entrySamples: {}, // 官方入场动画样本表（key=动画 id），新动画自动用默认样本
+  infoPanel: DEFAULT_INFO_PANEL_CONFIG,
   gift: false,
   anime: false,
   giftEffect: {
