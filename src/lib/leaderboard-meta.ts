@@ -113,18 +113,23 @@ export async function buildLeaderboardMeta(): Promise<LeaderboardMeta> {
 
   const synthesisCfg = await getEffectiveSynthesisConfig();
   const synthesisCards: LeaderboardCardMeta[] = [];
+  // 每个页面单独判断：「单位电池」放在合成页第一张有空间的卡片上
+  let synthesisUnitNoteAssigned = false;
   for (const activity of synthesisCfg.current_activity) {
     const topGift = topSynthesisGift(activity.products);
     // 活动图标与软件内一致：取价值最高的产物；取不到时回退配置中最后一个产物
     const products = activity.products ?? [];
     const fallbackName = products.length > 0 ? products[products.length - 1] : "";
     const icon = topGift?.img || (fallbackName ? getGiftImgByName(fallbackName) : "");
+    const unitNote = !synthesisUnitNoteAssigned;
+    if (unitNote) synthesisUnitNoteAssigned = true;
     synthesisCards.push({
       key: synCardKey(activity.id),
       tab: "synthesis",
       title: activity.name || activity.id,
       icon: icon || undefined,
       topGift,
+      unitNote: unitNote || undefined,
       views: ["user"],
       // 合成活动只有一个「活动期」口径，无需时间按钮组
       periods: [{ key: "activity", label: PERIOD_LABEL.activity }],
@@ -139,6 +144,7 @@ export async function buildLeaderboardMeta(): Promise<LeaderboardMeta> {
     icon: YEAR_CARD_ICON,
     // 一年内总合成包含多个活动，无法确定一个「最大礼物」，不展示礼物列
     hideTopGift: true,
+    unitNote: !synthesisUnitNoteAssigned || undefined,
     views: ["user"],
     periods: [{ key: "year", label: PERIOD_LABEL.year }],
     defaultView: "user",

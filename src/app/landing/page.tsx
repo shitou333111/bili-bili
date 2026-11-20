@@ -60,6 +60,25 @@ const features = [
   },
 ];
 
+/** 官网「其他功能」：三个独立的公开网页 */
+const others = [
+  {
+    title: "B瓜黑白榜",
+    path: "/hbb",
+    desc: "查看心动盲盒、活动盲盒、合成活动的盈亏排行榜，包括用户视角和主播视角。使用本软件的用户，可以上传数据（只是简要盈亏信息）参与。",
+  },
+  {
+    title: "B瓜医药费",
+    path: "/120",
+    desc: "服务主播：多人接力PK，快速算出医药费要发在哪些群；拼到最后却没有吃到医药费的主播，可以在这里抽一份小礼物。",
+  },
+  {
+    title: "B瓜天选红包列表",
+    path: "/red",
+    desc: "提供发天选和红包的直播间列表，方便点进直播间参与抽奖。但不能自动参与，也不会提供，以防违规。",
+  },
+];
+
 export default function LandingPage() {
   return (
     <main
@@ -123,6 +142,25 @@ export default function LandingPage() {
         <section id="download" className="mx-auto mt-12 max-w-4xl scroll-mt-8 sm:mt-16">
           <h2 className="text-center text-2xl font-semibold sm:text-3xl">第二种：选择你的设备下载使用</h2>
           <DownloadSection />
+        </section>
+
+        {/* ============ 其他功能（在使用指南上方） ============ */}
+        <section id="more" className="mx-auto mt-16 max-w-4xl scroll-mt-8 sm:mt-24">
+          <h2 className="text-center text-2xl font-semibold sm:text-3xl">其他功能</h2>
+          <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {others.map((o) => (
+              <a
+                key={o.path}
+                href={o.path}
+                target="_blank"
+                rel="noreferrer"
+                className="block rounded-3xl border border-[#ececec] bg-white p-5 shadow-sm transition-transform hover:-translate-y-1"
+              >
+                <h4 className="text-center text-[15px] font-semibold">{o.title}</h4>
+                <p className="mt-2 text-[13px] leading-6 text-[#6b6b6b]">{o.desc}</p>
+              </a>
+            ))}
+          </div>
         </section>
 
         {/* ============ 使用指南（与上方下载区保持较大间隔） ============ */}

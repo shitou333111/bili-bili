@@ -156,8 +156,9 @@ export async function middleware(request: NextRequest) {
     !isLocalDev &&
     !pathname.startsWith("/admin") &&
     !pathname.startsWith("/landing") &&
-    // 公开黑白榜不依赖登录，网页端关闭时仍保持可访问
-    !pathname.startsWith("/hbb")
+    // 公开黑白榜 / 天选红包列表不依赖登录，网页端关闭时仍保持可访问
+    !pathname.startsWith("/hbb") &&
+    !pathname.startsWith("/red")
   ) {
     const { webDisabled } = await readGlobalSwitch();
     if (webDisabled) {
