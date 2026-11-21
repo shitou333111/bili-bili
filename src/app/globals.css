@@ -1084,44 +1084,56 @@ html.ios-web .bottom-dock {
   to { opacity: 0; }
 }
 
-/* ===== badge 透明度滑动条（展示设置面板）：无边框细轨道 + 小圆滑标 =====
-   默认 range 控件带 UA 边框且滑标偏大，这里用 appearance:none 自绘：
-   轨道 4px 无边框浅灰圆条，滑标 10px amber-600 小圆球。 */
-.badge-opacity-slider {
+/* ===== 细滑条（信息面板 / 礼物展示的透明度共用）：4px 轨道 + 8px 小圆滑标 =====
+   默认 range 控件带 UA 边框且滑标偏大，这里用 appearance:none 自绘。
+   已选部分用 --slider-color 填色，进度由 --slider-pct（如 "60%"）控制。 */
+.slim-slider {
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
 }
-.badge-opacity-slider::-webkit-slider-runnable-track {
+.slim-slider::-webkit-slider-runnable-track {
   height: 4px;
   border: none;
   border-radius: 9999px;
-  background: rgb(0 0 0 / 0.12);
+  background: linear-gradient(
+    to right,
+    var(--slider-color, #0e7490) 0%,
+    var(--slider-color, #0e7490) var(--slider-pct, 50%),
+    rgb(0 0 0 / 0.12) var(--slider-pct, 50%),
+    rgb(0 0 0 / 0.12) 100%
+  );
 }
-.badge-opacity-slider::-webkit-slider-thumb {
+.slim-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 10px;
-  height: 10px;
-  /* (轨道 4px − 滑标 10px) / 2：把滑标垂直居中到轨道上 */
-  margin-top: -3px;
+  width: 8px;
+  height: 8px;
+  /* (轨道 4px − 滑标 8px) / 2：把滑标垂直居中到轨道上 */
+  margin-top: -2px;
   border: none;
   border-radius: 50%;
-  background: #d97706; /* amber-600 */
+  background: var(--slider-color, #0e7490);
   cursor: pointer;
 }
 /* Firefox（admin 网页在 Firefox 调试时的等价样式） */
-.badge-opacity-slider::-moz-range-track {
+.slim-slider::-moz-range-track {
   height: 4px;
   border: none;
   border-radius: 9999px;
   background: rgb(0 0 0 / 0.12);
 }
-.badge-opacity-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
+.slim-slider::-moz-range-progress {
+  height: 4px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--slider-color, #0e7490);
+}
+.slim-slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
   border: none;
   border-radius: 50%;
-  background: #d97706;
+  background: var(--slider-color, #0e7490);
   cursor: pointer;
 }

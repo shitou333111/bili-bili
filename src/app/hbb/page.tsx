@@ -266,6 +266,16 @@ export default function HeiBaiPage() {
     };
   }, []);
 
+  // 支持 /hbb?mode=...：APP 内从不同入口打开时，直接定位到对应榜单
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("mode");
+    if (m === "user-synthesis" || m === "user-blind" || m === "anchor-blind") {
+      // 首帧后再同步一次外部 URL 状态，避免 SSR/水合不一致
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMode(m);
+    }
+  }, []);
+
   // 拉取卡片配置
   useEffect(() => {
     let alive = true;

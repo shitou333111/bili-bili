@@ -36,6 +36,7 @@ import MedicalFeeSettlement from "@/components/MedicalFeeSettlement";
 import { fetchFollowingAnchors, likeAnchors, loadLikedAnchorsToday, markAnchorLikedToday, DAILY_ANCHOR_LIMIT, type LikeAnchor } from "@/lib/like-client";
 import { hasLiveRoom as checkAccountHasLiveRoom } from "@/lib/medical-client";
 import ScreenshotViewer from "@/components/ScreenshotViewer";
+import RedLotteryEntryCard from "@/components/RedLotteryEntryCard";
 import BiliSimulator from "@/components/bili-simulator/BiliSimulator";
 import { getStreamerInfoByUid, getHistory, addHistory, getBadgeColor, type StreamerInfo, type HistoryEntry } from "@/components/bili-simulator/liveStream";
 import RealActivityModal from "@/components/RealActivityModal";
@@ -639,7 +640,7 @@ function ToolCard({
   return (
     <button
       onClick={onClick}
-      className={`w-full rounded-xl border p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
+      className={`w-full rounded-xl border px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition ${
         disabled
           ? "border-black/5 bg-gray-100/70 cursor-not-allowed opacity-60"
           : highlight
@@ -687,8 +688,8 @@ function LotteryEntryCard({
       onClick={onClick}
       className={
         disabled
-          ? "w-full rounded-xl border border-black/10 bg-white/50 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
-          : "w-full rounded-xl border border-amber-200 bg-amber-50/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-amber-300 hover:shadow-lg"
+          ? "w-full rounded-xl border border-black/10 bg-white/50 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.04)] backdrop-blur text-left cursor-not-allowed opacity-50 grayscale"
+          : "w-full rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-amber-300 hover:shadow-lg"
       }
     >
       <div className="flex items-center gap-3">
@@ -3784,7 +3785,7 @@ export default function HomePage() {
                       setAdminUsed(true);
                     }
                   }}
-                  className={`select-none rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}
+                  className={`select-none rounded-xl border px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${updateCard.bg} ${updateCard.border}`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     {/* 状态/操作按钮：圆形按钮，4 字文案分 2 行显示（绿=无更新时可点"检查更新"；刚检查完短暂显示"已是最新"不可点） */}
@@ -3878,7 +3879,7 @@ export default function HomePage() {
 
                 {/* 重建数据库卡片：只在有登录账号时显示；服务器账号无登录凭证不可用 */}
                 {isLoggedIn && (
-                  <div className={`rounded-xl border p-4 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
+                  <div className={`rounded-xl border px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.06)] backdrop-blur ${serverAccount ? "border-black/5 bg-gray-100/60 opacity-60" : "border-indigo-200 bg-indigo-50/70"}`}>
                     {/* 上半部分点击展开/收起抓取速度块；重建按钮已 stopPropagation 不触发 */}
                     <div
                       className={`flex items-center gap-4 ${serverAccount ? "" : "cursor-pointer"}`}
@@ -3983,7 +3984,7 @@ export default function HomePage() {
                   </div>
                 )}
                 {/* 分享本软件：左侧圆形标识（仅展示，不可点击）+ 网站地址 + 复制按钮 */}
-                <div className="rounded-xl border border-black/10 bg-white/80 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                <div className="rounded-xl border border-black/10 bg-white/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                   <div className="flex items-center gap-4">
                     <div className="shrink-0 w-16 h-16 rounded-full flex flex-col items-center justify-center text-sm font-semibold leading-tight text-white shadow-md select-none bg-gradient-to-br from-[#ff6ec4] to-[#7873f5]">
                       <span>分享</span>
@@ -4051,6 +4052,8 @@ export default function HomePage() {
                     </button>
                   </div>
                 </div>
+                {/* 天选红包：点击在 APP 内打开 /red 直播间列表 */}
+                <RedLotteryEntryCard />
                 {HELP_TOOLS.map((tool) => {
                   // 默认隐藏的工具（点赞/天选）：连击版本卡片 10 次解锁后（adminUsed）才显示
                   if (!adminUsed && HIDDEN_BY_DEFAULT_TOOLS.has(tool.title)) return null;
@@ -4079,7 +4082,7 @@ export default function HomePage() {
                 {/* 开机自启动卡片（仅 Windows 桌面展示） */}
                 <AutostartCard />
                 {/* 反馈卡片（微信群二维码，位于常见问题上方） */}
-                <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
+                <div className="rounded-xl border border-black/10 bg-white/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur flex items-center justify-between gap-4">
                   <p className="text-base text-black/75 leading-relaxed">
                     有问题，反馈BUG，提需求，扫码加入微信群。但请先看下面的常见问题，能解决大部分的疑问。
                   </p>
@@ -4103,7 +4106,7 @@ export default function HomePage() {
                 {/* 常见问题卡片（管理员在 admin 页编辑；无内容则不显示）
                     选项卡式：问题行之间无间距，仅用横线分隔，节省空间 */}
                 {helpFaq.length > 0 && (
-                  <div className="rounded-xl border border-black/10 bg-white/80 px-3 py-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+                  <div className="rounded-xl border border-black/10 bg-white/80 px-3 py-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
                     <h3 className="text-base font-bold mb-3">常见问题</h3>
                     <div className="divide-y divide-black/10 border-y border-black/10">
                       {helpFaq.map((item, i) => {
@@ -4155,7 +4158,7 @@ export default function HomePage() {
                 {adminUsed && (
                   <button
                     onClick={attemptAdminLogin}
-                    className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-black/20 hover:shadow-lg"
+                    className="rounded-xl border border-black/10 bg-white/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur text-left transition hover:border-black/20 hover:shadow-lg"
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-3xl">🛠️</span>
@@ -4170,7 +4173,7 @@ export default function HomePage() {
               </div>
 
               {/* 用户卡片：显示当前账号头像+昵称，可切换本机账号（置于页面下方） */}
-              <div className="rounded-xl border border-black/10 bg-white/85 p-4 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur mt-3">
+              <div className="rounded-xl border border-black/10 bg-white/85 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur mt-3">
                 {isLoggedIn ? (
                   <>
                     <div className="flex items-center gap-3 mb-3">

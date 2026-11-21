@@ -64,7 +64,7 @@ export default function AutostartCard() {
   if (!supported) return null;
 
   return (
-    <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+    <div className="rounded-xl border border-black/10 bg-white/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
       <div className="flex items-center gap-2">
         <span className="text-3xl">🚀</span>
         <h3 className="text-base font-bold">开机自启动</h3>

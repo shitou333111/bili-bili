@@ -305,4 +305,5 @@ export const EMPTY_INFO_PANEL_DATA: InfoPanelData = {
   pk: null,
   blindBox: null,
   overtime: null,
+  pkLive: null,
 };

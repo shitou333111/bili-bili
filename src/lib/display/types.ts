@@ -216,8 +216,16 @@ export interface InfoPanelConfig {
   blindBox: boolean;
   /** 加班机（下播倒计时，送礼增加/减少时长） */
   overtime: InfoPanelOvertimeConfig;
+  /** 自定义标语（如提醒 iOS 用户充值），最多 12 个字；为空时不参与轮换 */
+  slogan: string;
+  /** 自定义标语开关（与其他元素一样可勾选，勾选且内容非空时参与轮换） */
+  sloganEnabled: boolean;
   /** 内部迁移标记：已把榜一日期默认值重置为「全部勾选」（不暴露在设置界面） */
   rankAllMigrated?: boolean;
+  /** 首胜提醒：未打首胜的随机 PK 最后 20 秒，己方落后且票数低于阈值时在显示条警告 */
+  pkFirstWinWarn: boolean;
+  /** 首胜提醒 · 己方票数阈值（低于该值才提醒） */
+  pkFirstWinWarnVotes: number;
 }
 
 /** 榜一日期标签（画布上显示） */
@@ -259,6 +267,16 @@ export interface InfoPanelPkData {
   };
 }
 
+/** 信息面板 · 随机 PK 实时战况（来自 PK 弹幕包的 init_info/match_info） */
+export interface InfoPanelPkLive {
+  /** PK 结束时间（毫秒时间戳） */
+  endAt: number;
+  /** 己方当前票数 */
+  selfVotes: number;
+  /** 对方当前票数 */
+  oppVotes: number;
+}
+
 /** 信息面板 · 心动盲盒数据 */
 export interface InfoPanelBlindBoxData {
   /** collect=收集期（周六~周四）；friday=周五开盒 */
@@ -295,6 +313,8 @@ export interface InfoPanelData {
   pk: InfoPanelPkData | null;
   blindBox: InfoPanelBlindBoxData | null;
   overtime: InfoPanelOvertimeData | null;
+  /** 随机 PK 实时战况（不在 PK 中为 null） */
+  pkLive: InfoPanelPkLive | null;
 }
 
 /** 默认信息面板配置 */
@@ -311,8 +331,12 @@ export const DEFAULT_INFO_PANEL_CONFIG: InfoPanelConfig = {
     lastMonth: true,
   },
   rankAllMigrated: true,
+  pkFirstWinWarn: true,
+  pkFirstWinWarnVotes: 1000,
   pk: true,
   blindBox: true,
+  slogan: "",
+  sloganEnabled: true,
   overtime: {
     enabled: true,
     initialMinutes: 240,

@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
@@ -1017,12 +1018,37 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
       const saved = await update({ infoPanel: next });
       await syncService(saved);
       await displayDanmaku.broadcastFlags();
-      // 只改透明度 / 停留秒数等纯样式项时不需要重新拉取数据
-      const onlyStyle = Object.keys(patch).every((k) => k === "opacity" || k === "dwellSeconds");
+      // 只改透明度 / 停留秒数 / 标语 / 首胜提醒阈值等纯展示项时不需要重新拉取数据
+      const onlyStyle = Object.keys(patch).every(
+        (k) =>
+          k === "opacity" ||
+          k === "dwellSeconds" ||
+          k === "slogan" ||
+          k === "sloganEnabled" ||
+          k === "pkFirstWinWarn" ||
+          k === "pkFirstWinWarnVotes",
+      );
       await displayDanmaku.broadcastInfoPanelConfig(next, !onlyStyle);
     },
     [mid, update, syncService],
   );
+
+  // 信息面板 · 自定义标语输入框"编辑态"文本：与横幅输入框同一套 IME 处理——
+  // 受控值由本地 state 提供，避免异步 setConfig 打断中文输入法合成；
+  // 合成中的拼音不截断，确认上屏后才限长 12 字，失焦才保存并广播。
+  const [sloganEditText, setSloganEditText] = useState(
+    DEFAULT_DISPLAY_CONFIG.infoPanel?.slogan ?? "",
+  );
+  const sloganComposingRef = useRef(false);
+  useEffect(() => {
+    setSloganEditText(config.infoPanel.slogan);
+  }, [config.infoPanel.slogan]);
+  const commitSloganText = useCallback(() => {
+    const text = Array.from(sloganEditText).slice(0, 12).join("");
+    setSloganEditText(text);
+    if (text === config.infoPanel.slogan) return;
+    void updateInfoPanel({ slogan: text });
+  }, [sloganEditText, config.infoPanel.slogan, updateInfoPanel]);
 
   // 盲盒盈亏 · 弹幕查询开关：不显示在画布上、不参与派生 master，但它的查询依赖弹幕监听，
   // 因此单独触发监听服务的启停（打开它即可单独让监听跑起来，关闭它也不影响画布模块）
@@ -2003,7 +2029,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <p className="text-xs text-black/45 leading-relaxed">勾选的信息循环显示</p>
             <div className="flex items-center gap-1">
-              <span className="shrink-0 text-xs text-black/55">透明度</span>
+              <span className="shrink-0 text-xs text-black/55">背景条透明度</span>
               <span className="w-5 shrink-0 text-right text-xs tabular-nums text-black/70">
                 {config.infoPanel.opacity}
               </span>
@@ -2015,7 +2041,13 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 value={config.infoPanel.opacity}
                 disabled={!config.infoPanel.enabled}
                 onChange={(e) => void updateInfoPanel({ opacity: Number(e.target.value) })}
-                className="h-1.5 w-16 cursor-pointer accent-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
+                style={
+                  {
+                    "--slider-pct": `${config.infoPanel.opacity}%`,
+                    "--slider-color": "#0891b2",
+                  } as CSSProperties
+                }
+                className="slim-slider h-2.5 w-16 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               />
               <span className="mx-1 h-4 w-px bg-black/15" />
               <span className="shrink-0 text-xs text-black/55">停留</span>
@@ -2068,12 +2100,46 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 <>
                   PK任务
                   <span className="text-black/40">
-                    （显示首胜/有效/胜场，处于PK时显示对方首胜状况）
+                    （显示首胜/有效/胜场，PK时显示对方首胜状态）
                   </span>
                 </>
               }
               onChange={(v) => void updateInfoPanel({ pk: v })}
             />
+
+            {/* 首胜提醒：随机 PK 最后 30 秒，未拿首胜且己方落后并低于阈值时在显示条警告 */}
+            {config.infoPanel.pk && (
+              <div className="flex flex-wrap items-center gap-x-2 pl-6">
+                <Check
+                  muted
+                  checked={config.infoPanel.pkFirstWinWarn}
+                  label="首胜预警"
+                  onChange={(v) => void updateInfoPanel({ pkFirstWinWarn: v })}
+                />
+                <span className={`text-xs ${config.infoPanel.pkFirstWinWarn ? "text-black/45" : "text-black/25"}`}>
+                  结束前30秒 己方领先且低于
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={9999}
+                  value={config.infoPanel.pkFirstWinWarnVotes}
+                  disabled={!config.infoPanel.pkFirstWinWarn}
+                  onChange={(e) =>
+                    void updateInfoPanel({
+                      pkFirstWinWarnVotes: Math.max(
+                        1,
+                        Math.min(9999, Math.round(Number(e.target.value) || 1)),
+                      ),
+                    })
+                  }
+                  className={`${inputFlat} w-16 disabled:opacity-40`}
+                />
+                <span className={`text-xs ${config.infoPanel.pkFirstWinWarn ? "text-black/45" : "text-black/25"}`}>
+                  分
+                </span>
+              </div>
+            )}
 
             <Check
               checked={config.infoPanel.blindBox}
@@ -2189,6 +2255,42 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 <span className="shrink-0 text-xs text-black/55">分</span>
               </div>
             </div>
+
+            {/* 自定义标语：勾选项 + 输入框，最多 12 个字，作为信息面板的一个轮换屏 */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+              <Check
+                checked={config.infoPanel.sloganEnabled}
+                label="自定义标语"
+                onChange={(v) => void updateInfoPanel({ sloganEnabled: v })}
+              />
+              <input
+                type="text"
+                value={sloganEditText}
+                placeholder="内容需要限制在12字以内"
+                onChange={(e) => {
+                  // 合成中（拼音未上屏）原样保留不截断；确认后的输入才限长 12 字
+                  const native = e.nativeEvent as Event & { isComposing?: boolean };
+                  const composing = !!native.isComposing || sloganComposingRef.current;
+                  setSloganEditText(
+                    composing ? e.target.value : Array.from(e.target.value).slice(0, 12).join(""),
+                  );
+                }}
+                onCompositionStart={() => {
+                  sloganComposingRef.current = true;
+                }}
+                onCompositionEnd={(e) => {
+                  sloganComposingRef.current = false;
+                  setSloganEditText(Array.from(e.currentTarget.value).slice(0, 12).join(""));
+                }}
+                onBlur={commitSloganText}
+                onKeyDown={(e) => {
+                  // 合成中的 Enter 是确认拼音，不提交失焦
+                  if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+                className={`${inputFlat} w-44`}
+              />
+            </div>
           </div>
         </Card>
       </section>
@@ -2300,22 +2402,31 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 })}
               </div>
             </div>
-            {/* badge 透明度：滑动条 0-100（100 = 原观感），修改后即时广播到画布 */}
-            <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-xs text-black">透明度</span>
+            {/* badge 透明度：滑动条 0-100（100 = 原观感），数值紧跟标签，修改后即时广播到画布 */}
+            <div className="flex items-center gap-1">
+              <span className="shrink-0 text-xs text-black">背景透明度</span>
+              <span className="w-5 shrink-0 text-right text-xs tabular-nums text-black/70">
+                {config.giftBadgeOpacity}
+              </span>
               <input
                 type="range"
                 min={0}
                 max={100}
                 step={5}
                 value={config.giftBadgeOpacity}
-                aria-label="badge 透明度"
+                aria-label="背景透明度"
                 onChange={(e) =>
                   void update({ giftBadgeOpacity: Number(e.target.value) }).then((next) =>
                     displayDanmaku.broadcastGiftBadgeOpacity(next.giftBadgeOpacity),
                   )
                 }
-                className="badge-opacity-slider h-1.5 w-24 cursor-pointer accent-amber-600"
+                style={
+                  {
+                    "--slider-pct": `${config.giftBadgeOpacity}%`,
+                    "--slider-color": "#f59e0b",
+                  } as CSSProperties
+                }
+                className="slim-slider h-2.5 w-16 cursor-pointer"
               />
             </div>
           </div>

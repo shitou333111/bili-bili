@@ -253,6 +253,8 @@ export default function RedLotteryList() {
         ) : results.length === 0 ? (
           <div className="mt-8 rounded-3xl border border-black/[0.06] bg-white/70 px-6 py-16 text-center text-[13px] text-black/35 shadow-sm">
             当前没有符合筛选条件的天选/红包
+            <br />
+            不需要手动刷新，列表会自动更新
           </div>
         ) : (
           <div className="mt-4 grid grid-cols-1 gap-2 lg:grid-cols-2">
@@ -270,14 +272,14 @@ export default function RedLotteryList() {
                   target="_blank"
                   rel="noreferrer"
                   className="grid items-center gap-x-2 rounded-xl border border-black/[0.06] bg-white/85 px-2.5 py-2 shadow-[0_8px_20px_-20px_rgba(40,20,50,0.8)] backdrop-blur transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_14px_28px_-20px_rgba(40,20,50,0.7)]"
-                  // 单行：头像 / 主播 / 类型 + 奖品 + 金额 / 倒计时
-                  style={{ gridTemplateColumns: "24px minmax(56px, 1fr) minmax(0, 1.4fr) 44px" }}
+                  // 单行：头像 / 主播 / 类型 + 奖品 / 金额（固定起点，便于纵向比较）/ 倒计时
+                  style={{ gridTemplateColumns: "24px minmax(56px, 1fr) minmax(0, 70px) auto 44px" }}
                 >
                   <Avatar face={item.face} name={item.uname || `#${item.roomId}`} />
                   <span className="min-w-0 truncate text-[12px] font-medium text-black/80">
                     {item.uname || `房间 ${item.roomId}`}
                   </span>
-                  <span className="flex min-w-0 items-center gap-2">
+                  <span className="flex min-w-0 items-center gap-1">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={meta.icon}
@@ -288,9 +290,9 @@ export default function RedLotteryList() {
                     <span className="min-w-0 truncate text-[12px] text-black/55">
                       {prizeName(item)}
                     </span>
-                    <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-[#f59e0b]">
-                      {item.value} 电池
-                    </span>
+                  </span>
+                  <span className="whitespace-nowrap text-left text-[11px] font-medium text-[#f59e0b]">
+                    {item.value} 电池
                   </span>
                   <span
                     className={`text-right font-mono text-[12px] ${
@@ -311,7 +313,7 @@ export default function RedLotteryList() {
             该网站只是提供发天选和红包的直播间列表，你需要手动点进直播间参与，不能自动参与，也不会提供。
           </p>
           <p className="mt-2">
-            主播发红包目的是为了吸引用户到直播间，然后靠自身魅力转化用户。提供红包列表是和主播目的一致的，尤其是通过网站进入直播间的反而都是“活人”。
+            主播发红包目的是为了吸引用户到直播间，然后靠自身魅力转化用户。提供红包列表和主播目的一致，尤其是通过网站进入直播间的反而都是“活人”。
           </p>
           <p className="mt-2">
             红包的中奖率和粉丝等级、互动程度密切相关，甚至有直播间专属礼物，所以主播不必介意。

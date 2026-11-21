@@ -1345,7 +1345,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           {/* Blind box tab */}
           {activeTab === "blindbox" && (
             <>
-              <LeaderboardLink />
+              <LeaderboardLink mode="user-blind" />
               {blindBoxStats ? (
                 <div className="space-y-4">
                   {blindBoxStats.map((stat, boxIndex) => {
@@ -1505,7 +1505,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
             <>
               {/* 黑抽卡片固定在合成页最上方；即使统计数据还在加载也先展示入口 */}
               {synthesisToolsExtra}
-              <LeaderboardLink />
+              <LeaderboardLink mode="user-synthesis" />
               {synthesisStats ? (
                 <>
               {synthesisStats.activities.length > 0 ? (

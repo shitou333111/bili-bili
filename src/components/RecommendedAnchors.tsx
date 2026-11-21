@@ -97,7 +97,7 @@ export default function RecommendedAnchors() {
 
   return (
     <>
-      <div className="rounded-xl border border-black/10 bg-white/80 p-5 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
+      <div className="rounded-xl border border-black/10 bg-white/80 px-4 py-3 shadow-[0_20px_80px_rgba(31,28,23,0.08)] backdrop-blur">
         {/* 标题栏 */}
         <div className="flex items-center gap-2 mb-4">
           <span className="text-3xl">✨</span>

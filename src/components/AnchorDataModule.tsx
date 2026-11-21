@@ -1616,7 +1616,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
               {/* 盲盒盈亏 tab */}
               {activeTab === "blindbox" && (
                 <>
-                  <LeaderboardLink />
+                  <LeaderboardLink mode="anchor-blind" />
                   {blindBoxProfits && blindBoxProfits.length > 0 ? (
                     <div className="space-y-4">
                       {blindBoxProfits.map((bb, idx) => {

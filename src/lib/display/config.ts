@@ -315,6 +315,29 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
           ? DEFAULT_INFO_PANEL_CONFIG.blindBox
           : !!r.infoPanel.blindBox,
       overtime: normalizeInfoPanelOvertime(r.infoPanel?.overtime),
+      // 自定义标语：最多 12 个字（按字符截断，避免截断 emoji 代理对）
+      slogan: typeof r.infoPanel?.slogan === "string"
+        ? Array.from(r.infoPanel.slogan).slice(0, 12).join("")
+        : "",
+      sloganEnabled:
+        r.infoPanel?.sloganEnabled === undefined
+          ? DEFAULT_INFO_PANEL_CONFIG.sloganEnabled
+          : !!r.infoPanel.sloganEnabled,
+      // 首胜提醒：开关 + 己方票数阈值（1..9999，非法回退默认 1000）
+      pkFirstWinWarn:
+        r.infoPanel?.pkFirstWinWarn === undefined
+          ? DEFAULT_INFO_PANEL_CONFIG.pkFirstWinWarn
+          : !!r.infoPanel.pkFirstWinWarn,
+      pkFirstWinWarnVotes: Math.max(
+        1,
+        Math.min(
+          9999,
+          Math.round(
+            Number(r.infoPanel?.pkFirstWinWarnVotes) ||
+              DEFAULT_INFO_PANEL_CONFIG.pkFirstWinWarnVotes,
+          ),
+        ),
+      ),
     },
     gift: r.gift ?? d.gift,
     anime: r.anime ?? d.anime,

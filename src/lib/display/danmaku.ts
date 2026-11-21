@@ -29,6 +29,7 @@ import {
   type InfoPanelData,
   type InfoPanelOvertimeConfig,
   type InfoPanelPkData,
+  type InfoPanelPkLive,
   type InfoPanelRankData,
   type InfoPanelRankKey,
   type LayoutElementId,
@@ -685,6 +686,27 @@ const VERSION_QUERY_KEYWORD = "B瓜版本";
 const VERSION_REPLY_COOLDOWN_MS = 10_000;
 
 // ---- 信息面板 ----
+/** 从 PK 弹幕包解析实时战况：init_info=发起方、match_info=匹配方，按 room_id 判断哪边是自己。
+ *  注意：线上实测 PK_BATTLE_PROCESS_NEW 不含 pk_end_time（只有票数），结束时间由 PK_INFO
+ *  的 pk_basic.end_time 或 START_NEW 提供；缺失时保留原有结束时间。 */
+function parsePkLive(raw: any, selfRoomId: number): InfoPanelPkLive | null {
+  const d = raw?.data ?? {};
+  const init = d.init_info ?? {};
+  const match = d.match_info ?? {};
+  if (!init.room_id && !match.room_id) return null;
+  const initRoom = Number(init.room_id) || 0;
+  const initIsSelf = !initRoom || initRoom === selfRoomId;
+  const self = initIsSelf ? init : match;
+  const other = initIsSelf ? match : init;
+  const endRaw = Number(d.pk_end_time) || 0;
+  return {
+    // 部分版本给毫秒时间戳，> 1e12 时不再乘 1000
+    endAt: endRaw > 1e12 ? endRaw : endRaw * 1000,
+    selfVotes: Number(self.votes) || 0,
+    oppVotes: Number(other.votes) || 0,
+  };
+}
+
 /** 榜一日期顺序（与面板复选框顺序一致） */
 const INFO_PANEL_RANK_KEYS: InfoPanelRankKey[] = [
   "yesterday",
@@ -708,6 +730,8 @@ const RANDOM_PK_MATCH_TYPES = new Set([1]);
 const PK_RAW_CMDS = [
   "PK_BATTLE_PRE_NEW",
   "PK_BATTLE_START_NEW",
+  "PK_BATTLE_PROCESS_NEW",
+  "PK_INFO",
   "PK_BATTLE_END",
   "PK_BATTLE_SETTLE_NEW",
   "PK_BATTLE_SETTLE_V2",
@@ -790,6 +814,8 @@ class DisplayDanmakuService {
   private infoPanelBusy = false;
   /** 随机PK对手（PRE_NEW 解析；PK结束时清空） */
   private pkOpponent: { uid: number; roomId: number; name: string; face: string } | null = null;
+  /** 随机 PK 实时战况（票数 + 结束时间），来自 PK_BATTLE_*_NEW 弹幕包；不在 PK 中为 null */
+  private pkLive: InfoPanelPkLive | null = null;
   /** 自己的每日PK任务缓存（接口偶发失败时保留上一次进度） */
   private pkMainCache: PkBattleMain | null = null;
   /** PRE_NEW 后等待 START_NEW 的兜底定时器：超时未真正开PK则清除对手，避免残留 */
@@ -1377,6 +1403,7 @@ class DisplayDanmakuService {
     this.stopInfoPanelLoop();
     this.infoPanelData = EMPTY_INFO_PANEL_DATA;
     this.pkOpponent = null;
+    this.pkLive = null;
     this.pkMainCache = null;
     this.fridayCache = null;
     this.overtimeEndsAt = 0;
@@ -1991,6 +2018,7 @@ class DisplayDanmakuService {
       this.infoPanelData = EMPTY_INFO_PANEL_DATA;
       this.pkMainCache = null;
       this.pkOpponent = null;
+      this.pkLive = null;
       this.fridayCache = null;
       this.overtimeEndsAt = 0;
       this.overtimeDay = "";
@@ -2061,7 +2089,7 @@ class DisplayDanmakuService {
 
       // ---- PK任务 ----
       // 触发时机：启动/勾选(PK) 首次读取；随机 PK 开始、PK 结束立即读取（reason=pk）；
-      // 其余时间每 5 分钟兜底一次。
+      // 其余时间每 5 分钟兜底一次。双方首胜状态在 PK 期间不会变化，开局查一次即可。
       if (ip.pk) {
         const needPk =
           reason === "pk" ||
@@ -2072,16 +2100,21 @@ class DisplayDanmakuService {
           if (own) this.pkMainCache = own;
           this.infoPanelLastPkAt = now;
           let opponent: InfoPanelPkData["opponent"] | undefined;
-          if (this.pkOpponent) {
-            const oppData = await fetchPkBattleMain(
-              this.pkOpponent.roomId,
-              this.pkOpponent.uid,
-            ).catch(() => null);
+          const opp = this.pkOpponent;
+          if (opp) {
+            const oppData = await fetchPkBattleMain(opp.roomId, opp.uid).catch(() => null);
+            const prevOpp = this.infoPanelData.pk?.opponent;
             opponent = {
-              uid: this.pkOpponent.uid,
-              name: this.pkOpponent.name,
-              face: this.pkOpponent.face,
-              firstWin: pkFirstWinDone(oppData),
+              uid: opp.uid,
+              name: opp.name,
+              face: opp.face,
+              // 请求失败（null）时沿用上一次成功结果，避免瞬时网络问题把「已打」重置为「未打」
+              firstWin:
+                oppData !== null
+                  ? pkFirstWinDone(oppData)
+                  : prevOpp && prevOpp.uid === opp.uid
+                    ? prevOpp.firstWin
+                    : false,
             };
           }
           if (this.pkMainCache || opponent) {
@@ -2103,6 +2136,10 @@ class DisplayDanmakuService {
       }
 
       // 加班机已在函数入口先行更新/广播（见 syncOvertime），这里直接带上最终数据
+      this.infoPanelData = {
+        ...this.infoPanelData,
+        pkLive: ip.pk ? this.pkLive : null,
+      };
       await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
     } finally {
       this.infoPanelBusy = false;
@@ -2250,7 +2287,7 @@ class DisplayDanmakuService {
       const matchType = Number(d.match_type);
       const uid = Number(d.uid) || 0;
       const roomId = Number(d.room_id) || 0;
-      if (RANDOM_PK_MATCH_TYPES.has(matchType) && uid > 0 && roomId > 0) {
+      if (RANDOM_PK_MATCH_TYPES.has(matchType) && uid > 0 && roomId > 0 && roomId !== this.roomId) {
         this.pkOpponent = {
           uid,
           roomId,
@@ -2263,12 +2300,14 @@ class DisplayDanmakuService {
           this.pkPendingTimer = null;
           if (!this.pkOpponent) return;
           this.pkOpponent = null;
+          this.pkLive = null;
           void this.refreshInfoPanel("pk");
         }, 90_000);
         // 随机 PK：立即读取对方首胜状态
         await this.refreshInfoPanel("pk");
       } else if (this.pkOpponent) {
         this.pkOpponent = null;
+        this.pkLive = null;
         await this.refreshInfoPanel("pk");
       }
       return;
@@ -2280,18 +2319,62 @@ class DisplayDanmakuService {
         clearTimeout(this.pkPendingTimer);
         this.pkPendingTimer = null;
       }
+      // 实测：init_info.room_id 是发起方、match_info.room_id 是匹配方，发起方不一定是自己
+      //（本次抓包 init=对手、match=自己）。PK 任务接口按 room_id 返回该房间主播的数据，
+      // 所以对方房间必须取「不是自己」的那一边；直接取 match_info 会把自己的房间当成对方，
+      // 导致对方首胜永远显示「未打」。
+      const initRoom = Number(d.init_info?.room_id) || 0;
       const matchRoom = Number(d.match_info?.room_id) || 0;
-      if (matchRoom > 0) this.pkOpponent = { ...this.pkOpponent, roomId: matchRoom };
+      const oppRoom =
+        initRoom > 0 && initRoom !== this.roomId
+          ? initRoom
+          : matchRoom > 0 && matchRoom !== this.roomId
+            ? matchRoom
+            : 0;
+      if (oppRoom > 0) this.pkOpponent = { ...this.pkOpponent, roomId: oppRoom };
+      // 首胜提醒依赖结束时间与双方票数，开局包带 pk_end_time（秒）
+      const live = parsePkLive(raw, this.roomId);
+      if (live) this.pkLive = { ...live, endAt: live.endAt || this.pkLive?.endAt || 0 };
       await this.refreshInfoPanel("pk");
       return;
     }
-    // PK 结束：清除对手并恢复常规显示。END/SETTLE 等多个包可能连续到达，
+    if (cmd === "PK_BATTLE_PROCESS_NEW") {
+      // 指定 PK 不跟踪战况；随机 PK 的分包到达即更新并广播（无需请求接口）
+      if (!this.pkOpponent) return;
+      const live = parsePkLive(raw, this.roomId);
+      if (!live) return;
+      this.pkLive = { ...live, endAt: live.endAt || this.pkLive?.endAt || 0 };
+      this.infoPanelData = { ...this.infoPanelData, pkLive: this.pkLive };
+      await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+      return;
+    }
+    if (cmd === "PK_INFO") {
+      // 线上实测：PK_INFO 是最直接的战况结构——pk_basic.end_time（秒）+ members[].votes；
+      // PROCESS_NEW 只带双方票数、不带结束时间，这里补齐倒计时。仅 1v1 用于首胜提醒。
+      if (!this.pkOpponent) return;
+      const basic = d.pk_basic ?? {};
+      const members: any[] = Array.isArray(d.members) ? d.members : [];
+      const selfM = members.find((m) => Number(m.room_id) === this.roomId);
+      const others = members.filter((m) => Number(m.room_id) !== this.roomId);
+      if (!selfM || others.length !== 1) return;
+      const endAt = (Number(basic.end_time) || 0) * 1000;
+      this.pkLive = {
+        endAt: endAt || this.pkLive?.endAt || 0,
+        selfVotes: Number(selfM.votes) || 0,
+        oppVotes: Number(others[0].votes) || 0,
+      };
+      this.infoPanelData = { ...this.infoPanelData, pkLive: this.pkLive };
+      await this.broadcast({ type: "infoPanelData", infoPanelData: this.infoPanelData });
+      return;
+    }
+    // PK 结束：清除对手与实时战况并恢复常规显示。END/SETTLE 等多个包可能连续到达，
     // 合并为一次刷新（3 秒防抖），避免重复请求。
     if (this.pkPendingTimer) {
       clearTimeout(this.pkPendingTimer);
       this.pkPendingTimer = null;
     }
     if (this.pkOpponent) this.pkOpponent = null;
+    this.pkLive = null;
     if (this.pkEndRefreshTimer) clearTimeout(this.pkEndRefreshTimer);
     this.pkEndRefreshTimer = setTimeout(() => {
       this.pkEndRefreshTimer = null;

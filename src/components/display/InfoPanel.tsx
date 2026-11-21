@@ -8,6 +8,7 @@
  * 2. PK任务：首胜状态 + 有效场次 + 有效胜场；随机PK时后两项替换为对方首胜状态
  * 3. 心动盲盒：周六~周四显示收集进度（到下一阶梯目标），周五显示开盒数/盈亏/城堡图标/爆率
  * 4. 加班机：下播倒计时（送礼增加 / 减少时长）
+ * 5. 自定义标语：单行文字（最多 10 字，为空时不显示）
  *
  * 面板宽高固定（238×44），保证轮换时尺寸不跳动；首尾元素分别贴左右边，中间按语义分组排布。
  * 数据由主窗口弹幕服务拉取后经 WS 下发；本组件只负责渲染与轮换（切换时向上滑动）。
@@ -648,6 +649,87 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
     });
   }
 
+  // ---- 自定义标语（勾选且内容非空时参与轮换；单行水平居中） ----
+  const slogan = (config.slogan ?? "").trim();
+  if (config.sloganEnabled && slogan) {
+    frames.push({
+      key: "slogan",
+      node: (
+        <div style={{ ...frameStyle, justifyContent: "center" }}>
+          <span
+            style={{
+              ...TEXT,
+              fontSize: 17,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "clip",
+              maxWidth: "100%",
+            }}
+          >
+            {slogan}
+          </span>
+        </div>
+      ),
+    });
+  }
+
+  // ---- 首胜提醒：随机 PK 最后 30 秒，未取得首胜且己方领先（严格大于）并低于阈值时强提醒 ----
+  // 数据来自 PK 弹幕包（pkLive：结束时间 + 双方票数），每秒随冒号闪烁重算一次；
+  // 票数实时变化，条件一旦不满足（被追平/反超或达到阈值）警告立即消失。
+  const live = data?.pkLive ?? null;
+  const warnMsLeft = live ? live.endAt - Date.now() : 0;
+  const warnThreshold = Math.max(0, Math.round(Number(config.pkFirstWinWarnVotes) || 0));
+  /** 对方今日首胜是否已完成（警告条右侧展示） */
+  const oppFirstWin = !!pk?.opponent?.firstWin;
+  const pkWarn =
+    !!config.pkFirstWinWarn &&
+    !!pk &&
+    pk.mode === "random" &&
+    !pk.selfFirstWin &&
+    !!live &&
+    warnMsLeft > 0 &&
+    warnMsLeft <= 30_000 &&
+    live.selfVotes > live.oppVotes &&
+    live.selfVotes < warnThreshold;
+  if (pkWarn) {
+    frames.push({
+      key: "pk-warn",
+      node: (
+        // 左：本场首胜警告；右：对方首胜状态（颜色与 PK 屏一致：已打绿 / 未打红）
+        <div style={frameStyle}>
+          <span
+            style={{
+              ...TEXT,
+              fontSize: 18,
+              fontWeight: 800,
+              color: "#ffd400",
+              letterSpacing: 0.5,
+              whiteSpace: "nowrap",
+              animation: "ip-warn-blink 2s ease-in-out infinite",
+            }}
+          >
+            ⚠️本场首胜⚠️
+          </span>
+          <span
+            style={{
+              ...TEXT,
+              fontSize: 18,
+              fontWeight: 800,
+              color: oppFirstWin ? GREEN : RED,
+              letterSpacing: 0.5,
+              whiteSpace: "nowrap",
+              animation: "ip-warn-blink 2s ease-in-out infinite",
+            }}
+          >
+            {oppFirstWin ? "对方已打" : "对方未打"}
+          </span>
+        </div>
+      ),
+    });
+  }
+
   // 轮换：每 dwellSeconds 秒切到下一个元素；只有一个元素时不动。
   // turn 同时记录上一条，用于播放「旧内容向上滑出、新内容从下方滑入」的动画。
   const count = frames.length;
@@ -657,14 +739,16 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
   const [cycle, setCycle] = useState(0);
   const current = count > 0 ? turn.idx % count : 0;
   const prev = count > 0 ? turn.prev % count : -1;
+  /** 首胜警告帧下标（激活时追加在末尾）：激活期间冻结轮换，保持警告常驻直到 PK 结束 */
+  const warnIdx = frames.findIndex((f) => f.key === "pk-warn");
   useEffect(() => {
-    if (count <= 1) return;
+    if (count <= 1 || warnIdx >= 0) return;
     const timer = setInterval(
       () => setTurn((t) => ({ idx: (t.idx + 1) % count, prev: t.idx % count })),
       dwell * 1000,
     );
     return () => clearInterval(timer);
-  }, [count, dwell, cycle]);
+  }, [count, dwell, cycle, warnIdx]);
 
   // PK 开始（识别到对方首胜状态）时立即切到 PK 屏，不等到下一次轮换
   const pkIdx = frames.findIndex((f) => f.key === "pk");
@@ -677,6 +761,16 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
     });
     setCycle((c) => c + 1);
   }, [pkActive, pkIdx, count]);
+
+  // 首胜警告激活 → 立即切到警告屏（并重置停留计时）
+  useEffect(() => {
+    if (warnIdx < 0) return;
+    setTurn((t) => {
+      const cur = count > 0 ? t.idx % count : 0;
+      return cur === warnIdx ? t : { idx: warnIdx, prev: cur };
+    });
+    setCycle((c) => c + 1);
+  }, [warnIdx, count]);
 
   if (count === 0) {
     if (!placeholder) return null;
@@ -700,6 +794,10 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
         @keyframes ip-slide-out {
           from { transform: translateY(0); opacity: 1; }
           to { transform: translateY(-100%); opacity: 0; }
+        }
+        @keyframes ip-warn-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.1; }
         }
       `}</style>
       {/* 用 grid 把所有元素叠在同一格：宽高固定，轮换时面板尺寸不跳动 */}
