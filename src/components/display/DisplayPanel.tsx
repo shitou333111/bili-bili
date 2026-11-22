@@ -50,7 +50,6 @@ import {
   type GiftFlipPhase,
   type GiftHighlight,
   type InfoPanelConfig,
-  type InfoPanelOvertimeConfig,
   type InfoPanelRankKey,
   type ScreenOrientation,
 } from "@/lib/display/types";
@@ -343,7 +342,7 @@ function Switch({
 function TimeField({
   minutes,
   onChange,
-  label = "初始",
+  label,
 }: {
   minutes: number;
   onChange: (minutes: number) => void;
@@ -371,7 +370,7 @@ function TimeField({
   const input = "w-9 text-center";
   return (
     <label className="flex items-center gap-2">
-      <span className="shrink-0 text-xs text-black/55">{label}</span>
+      {label ? <span className="shrink-0 text-xs text-black/55">{label}</span> : null}
       <input
         value={draft.h}
         inputMode="numeric"
@@ -409,26 +408,23 @@ function TimeField({
   );
 }
 
-/** 加班机「现在」时刻：每秒跟随服务剩余时间刷新，也可直接编辑；
- *  右侧「归零」把当前倒计时清零，再右侧为「暂停 / 开始」按钮（暂停时冻结剩余、礼物不生效）。 */
-function NowTimeField({ overtime }: { overtime: InfoPanelOvertimeConfig }) {
-  const [minutes, setMinutes] = useState(() =>
-    displayDanmaku.getOvertimeRemainMinutes(overtime),
-  );
+/** 加班机当前剩余时间：每秒跟随服务剩余时间刷新，也可直接输入修改；
+ *  右侧「继续 / 暂停」文字按钮（继续=绿、暂停=黄）。 */
+function NowTimeField() {
+  const [minutes, setMinutes] = useState(() => displayDanmaku.getOvertimeRemainMinutes());
   const [paused, setPaused] = useState(() => displayDanmaku.isOvertimePaused());
   useEffect(() => {
     const tick = () => {
-      setMinutes(displayDanmaku.getOvertimeRemainMinutes(overtime));
+      setMinutes(displayDanmaku.getOvertimeRemainMinutes());
       setPaused(displayDanmaku.isOvertimePaused());
     };
     tick();
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [overtime]);
+  }, []);
   return (
     <div className="flex items-center gap-1.5">
       <TimeField
-        label="现在"
         minutes={minutes}
         onChange={(m) => {
           setMinutes(m);
@@ -438,39 +434,17 @@ function NowTimeField({ overtime }: { overtime: InfoPanelOvertimeConfig }) {
       <button
         type="button"
         onClick={() => {
-          setMinutes(0);
-          void displayDanmaku.setOvertimeRemainMinutes(0);
-        }}
-        className="shrink-0 rounded-md bg-white/70 px-1.5 py-0.5 text-[11px] text-black/60 transition hover:bg-white hover:text-black/80"
-      >
-        归零
-      </button>
-      <button
-        type="button"
-        title={paused ? "继续计时" : "暂停计时"}
-        aria-label={paused ? "继续计时" : "暂停计时"}
-        onClick={() => {
           const next = !paused;
           setPaused(next);
-          void displayDanmaku.setOvertimePaused(next, overtime);
+          void displayDanmaku.setOvertimePaused(next);
         }}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/70 transition hover:bg-white"
+        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${
+          paused
+            ? "bg-[#16a34a] text-white hover:bg-[#15803d]"
+            : "bg-[#eab308] text-black/80 hover:bg-[#d9a406]"
+        }`}
       >
-        {paused ? (
-          // 暂停中 → 绿色三角「开始」
-          <span
-            style={{
-              width: 0,
-              height: 0,
-              borderTop: "5px solid transparent",
-              borderBottom: "5px solid transparent",
-              borderLeft: "8px solid #16a34a",
-            }}
-          />
-        ) : (
-          // 计时中 → 红色方块「暂停」
-          <span className="h-2.5 w-2.5 rounded-[1px] bg-red-600" />
-        )}
+        {paused ? "继续" : "暂停"}
       </button>
     </div>
   );
@@ -2133,7 +2107,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       ),
                     })
                   }
-                  className={`${inputFlat} w-16 disabled:opacity-40`}
+                  className={`${inputFlat} ${noSpin} w-20 disabled:opacity-40`}
                 />
                 <span className={`text-xs ${config.infoPanel.pkFirstWinWarn ? "text-black/45" : "text-black/25"}`}>
                   分
@@ -2152,20 +2126,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               onChange={(v) => void updateInfoPanel({ blindBox: v })}
             />
 
-            {/* 加班机：开关 + 初始时长 + 现在时刻 + 归零（HH : MM，冒号固定加粗） */}
+            {/* 加班机：开关 + 当前剩余时间 + 开始/暂停 + 归零（HH : MM，冒号固定加粗） */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <Check
                 checked={config.infoPanel.overtime.enabled}
-                label="加班机"
+                label="加班机（小时 : 分钟）"
                 onChange={(v) => void updateInfoPanel({ overtime: { enabled: v } })}
               />
-              <TimeField
-                minutes={config.infoPanel.overtime.initialMinutes}
-                onChange={(m) =>
-                  void updateInfoPanel({ overtime: { initialMinutes: Math.max(1, m) } })
-                }
-              />
-              <NowTimeField overtime={config.infoPanel.overtime} />
+              <NowTimeField />
             </div>
 
             {/* 加班机礼物：红色「–」/ 绿色「+」标记减少 / 增加时长（始终可配置） */}

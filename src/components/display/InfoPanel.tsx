@@ -10,7 +10,7 @@
  * 4. 加班机：下播倒计时（送礼增加 / 减少时长）
  * 5. 自定义标语：单行文字（最多 10 字，为空时不显示）
  *
- * 面板宽高固定（238×44），保证轮换时尺寸不跳动；首尾元素分别贴左右边，中间按语义分组排布。
+ * 面板宽高固定（214×44），保证轮换时尺寸不跳动；首尾元素分别贴左右边，中间按语义分组排布。
  * 数据由主窗口弹幕服务拉取后经 WS 下发；本组件只负责渲染与轮换（切换时向上滑动）。
  */
 import {
@@ -23,6 +23,7 @@ import {
 } from "react";
 import {
   INFO_PANEL_RANK_LABELS,
+  OVERTIME_INITIAL_MINUTES,
   type InfoPanelConfig,
   type InfoPanelData,
   type InfoPanelRankKey,
@@ -43,8 +44,8 @@ const RANK_KEYS: InfoPanelRankKey[] = [
   "lastMonth",
 ];
 
-const GREEN = "#35d07f";
-const RED = "#ff5d5d";
+const GREEN = "#35d07f"; // 明快绿（高对比）
+const RED = "#ff5d5d"; // 明快红（高对比）
 const GOLD = "#ffd166";
 /** 榜一头像圆环：深黄色（第一名） */
 const RANK_RING = "#d6a419";
@@ -293,7 +294,7 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
     textShadow: "0 1px 2px rgba(0,0,0,0.35)",
     // 固定宽高：所有元素/状态使用同一条尺寸，轮换时不跳动
     // 高度收窄以减少上下留白（内容最高约 32px）
-    width: 238,
+    width: 226,
     height: 44,
     padding: "0 6px",
     boxSizing: "border-box",
@@ -322,17 +323,26 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
 
   const frames: Array<{ key: string; node: ReactNode }> = [];
 
-  // ---- 榜一：每个勾选的日期各占一屏（时段在左，头像 + 昵称在右，保持一行） ----
+  // ---- 榜一：每个勾选的日期各占一屏（左侧时段只占最窄宽度，右侧头像+昵称在剩余空间内水平居中） ----
   for (const { key, item } of ranks) {
     frames.push({
       key: `rank:${key}`,
       node: (
         <div style={frameStyle}>
-          {/* 左：时段（贴最左） */}
-          <span style={{ ...TEXT, fontSize: 16, opacity: 0.8, letterSpacing: 0.5, flex: "0 0 auto" }}>
+          {/* 左：时段（只容纳文字本身，不参与拉伸） */}
+          <span
+            style={{
+              ...TEXT,
+              fontSize: 14,
+              opacity: 0.8,
+              letterSpacing: 0.5,
+              flex: "0 0 auto",
+              marginRight: 4,
+            }}
+          >
             {INFO_PANEL_RANK_LABELS[key]}
           </span>
-          {/* 右：头像 + 昵称作为一个整体（贴最右） */}
+          {/* 右：头像 + 昵称作为整体，在剩余空间内水平居中 */}
           <span
             style={{
               display: "flex",
@@ -341,7 +351,7 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
               flex: "1 1 0",
               minWidth: 0,
               overflow: "hidden",
-              justifyContent: "flex-end",
+              justifyContent: "center",
             }}
           >
             <Avatar src={item?.face} />
@@ -610,7 +620,7 @@ export default function InfoPanel({ config, data, placeholder }: Props) {
 
   // ---- 加班机（下播倒计时，冒号每秒闪烁） ----
   if (ot) {
-    const { hh, mm } = clockParts(overtime?.remainMinutes ?? ot.initialMinutes);
+    const { hh, mm } = clockParts(overtime?.remainMinutes ?? OVERTIME_INITIAL_MINUTES);
     frames.push({
       key: "overtime",
       node: (

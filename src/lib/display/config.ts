@@ -217,7 +217,6 @@ function normalizeInfoPanelOvertime(raw: unknown): InfoPanelConfig["overtime"] {
   };
   return {
     enabled: o.enabled === undefined ? d.enabled : !!o.enabled,
-    initialMinutes: minutes(o.initialMinutes, d.initialMinutes),
     // 礼物未配置（旧版本默认 id=0）时回退到默认的幸运盲盒 / 心动盲盒
     decreaseGiftId: Number(o.decreaseGiftId) || d.decreaseGiftId,
     decreaseGiftName:

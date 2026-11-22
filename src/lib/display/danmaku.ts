@@ -11,6 +11,7 @@
 import { getPlatform, type Platform } from "@/lib/platform";
 import {
   ENTRY_COOLDOWN_MS,
+  OVERTIME_INITIAL_MINUTES,
   type AnimeOpacity,
   type AnimeEnding,
   type AnimeOpening,
@@ -781,8 +782,8 @@ class DisplayDanmakuService {
    *  时没有冷却兜底，若不去重会一次进场播两次特效。窗口 2s 只合并"同一次进场的重复
    *  下发包"，不改变冷却语义（用户快速再次进场仍可触发）。 */
   private entryEmitAt = new Map<number, { anime: number; entry: number }>();
-  /** 底层 WS open 时刻（诊断用，用于计算连接存活时长） */
-  private wsConnectedAt = 0;
+  /** 连续"短命连接"（open 后不到 2s 就关闭）次数：达到阈值判定底层自动重连失效，主动阻断 */
+  private shortCloseStreak = 0;
   // ---- 礼物翻卡/抽奖 调度 ----
   /** 是否有一张翻卡正在画布播放（播放中不再下发新的，待画布回执 giftFlipDone 后继续调度） */
   private giftFlipBusy = false;
@@ -939,6 +940,7 @@ class DisplayDanmakuService {
     // 若已连同一房间，忽略重复启动
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
+    this.shortCloseStreak = 0;
     // 启动即清理过期调试日志（保留最近两个自然天），处理"长期离线后重新打开"的残留
     void this.cleanupExpiredDebugLog(mid);
     await this.connect(roomId, mid);
@@ -1352,9 +1354,13 @@ class DisplayDanmakuService {
       this.bindHandlers(mid);
       // 信息面板：配置已开启时启动定时拉取（榜一/PK/盲盒），关闭时不做任何请求
       void this.startInfoPanelLoop();
+      // 捕获本次连接实例：短命连接判定成立时要 close 的必须是"制造问题的那个实例"，
+      // 若期间已重连出新的实例，绝不能误关新连接。
+      const inst = this.live;
+      // 本次连接的 open 时刻（实例内局部变量：避免上一实例的 open 时间污染本次存活时长判断）
+      let openedAt = 0;
       this.live.onOpen(() => {
-        this.retry = 0;
-        this.wsConnectedAt = Date.now();
+        openedAt = Date.now();
         console.log("[展示]WS open（底层连接建立）", { roomId });
         this.pushDebug("ws", "open", { roomId });
         this.emitStatus({ state: "connected", roomId });
@@ -1367,9 +1373,43 @@ class DisplayDanmakuService {
         console.log("[展示]WS 心跳", { online });
       });
       this.live.onClose((code?: number, reason?: any) => {
-        const ageSec = this.wsConnectedAt ? Math.round((Date.now() - this.wsConnectedAt) / 1000) : 0;
+        const ageMs = openedAt ? Date.now() - openedAt : 0;
+        const ageSec = Math.round(ageMs / 1000);
         console.log("[展示]WS close", { code, reason: reason?.message ?? reason, ageSec });
         this.pushDebug("ws", "close", { ageSec, code, reason: reason?.message ?? reason });
+        // 连接活满 2 秒视为正常断线：清空退避与短命计数
+        if (ageMs >= 2000) {
+          this.retry = 0;
+          this.shortCloseStreak = 0;
+        } else {
+          this.shortCloseStreak += 1;
+        }
+        // 底层 bilibili-live-ws 的 KeepLive 在连接关闭后会以 100ms 间隔自行无限重连
+        // （与我们这里的指数退避无关）。若连接每次"连上即断"（token 失效 / 线路不可达 /
+        // 鉴权被拒），就会形成每秒多次 open→close 的风暴，且每次 close 都会重置本服务的
+        // 退避定时器，使其永远等不到触发。连续 3 次短命连接即判定不可恢复：
+        // ① 主动关闭该实例（KeepLive.close() 置 closed=true，阻断其内部 100ms 循环）；
+        // ② 清空 token 缓存，下次由本服务退避后重新拉取 token；
+        // ③ 抬高退避档位，避免立即再撞同一故障。
+        if (this.shortCloseStreak >= 3) {
+          console.warn("[展示]WS 连续快速断开，判定底层自动重连失效，主动阻断并重建", {
+            roomId,
+            streak: this.shortCloseStreak,
+            ageSec,
+          });
+          this.pushDebug("ws", "hard-reset", { streak: this.shortCloseStreak, ageSec });
+          this.shortCloseStreak = 0;
+          this.cachedToken = null;
+          this.cachedRoomId = 0;
+          this.retry = Math.max(this.retry, 2);
+          if (this.live === inst) {
+            try {
+              inst.close();
+            } catch {
+              /* 已关闭则忽略 */
+            }
+          }
+        }
         this.scheduleReconnect(roomId, mid);
       });
       this.live.onError((err: any) => {
@@ -1454,11 +1494,28 @@ class DisplayDanmakuService {
     }, delay);
   }
 
+  /** 在底层 WS（KeepLive 事件总线）上监听原始命令，返回可真正解绑的函数。
+   *  注意：库的 onRawMessage 返回的是 EventEmitter 本身而不是解绑函数，直接放进
+   *  removeHandlers 会在断开时抛错被 try/catch 吞掉 → 监听永不释放；频繁重连时
+   *  旧实例上的监听越挂越多（日志成倍放大）。这里直接拿实例 + removeListener。 */
+  private onRaw(cmd: string, handler: (raw: any) => void): () => void {
+    // BiliLive 包装类本身不是事件总线，真正的 EventEmitter 在其 .live 字段（KeepLive）
+    const emitter: any = (this.live as any)?.live ?? this.live;
+    emitter.on(cmd, handler);
+    return () => {
+      try {
+        emitter.removeListener(cmd, handler);
+      } catch {
+        /* 实例已释放 */
+      }
+    };
+  }
+
   private bindHandlers(mid: number) {
     // ---- 调试：捕获原始关键事件 ----
     for (const cmd of RAW_CMDS) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, (raw: any) => {
+        this.onRaw(cmd, (raw: any) => {
           // 面板展示精简字段，落盘保存原始消息全字段（便于深层排查）
           this.pushDebug(cmd, "raw", summarizeRaw(cmd, raw), raw);
         }),
@@ -1470,7 +1527,7 @@ class DisplayDanmakuService {
     // 随机PK判定见 RANDOM_PK_MATCH_TYPES 注释（先按 match_type===1，后续可用真实弹幕校准）。
     for (const cmd of PK_RAW_CMDS) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, async (raw: any) => {
+        this.onRaw(cmd, async (raw: any) => {
           if (!this.active) return;
           this.pushDebug("pk", cmd, summarizePk(raw), raw);
           await this.handlePkMessage(cmd, raw);
@@ -1490,7 +1547,7 @@ class DisplayDanmakuService {
     // handleEntry 入口触发，一处修复即可同时生效。
     for (const cmd of ["INTERACT_WORD", "INTERACT_WORD_V2", "ENTRY_EFFECT"]) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, async (raw: any) => {
+        this.onRaw(cmd, async (raw: any) => {
           if (!this.active) return;
           const src = cmd === "INTERACT_WORD_V2" ? parseInteractWordV2(raw?.data) : parseEntryJson(raw?.data);
           if (!src || !src.uid) return;
@@ -1531,7 +1588,7 @@ class DisplayDanmakuService {
     // 落盘/展示路径。解析失败时记录原始包便于排查。
     for (const cmd of ["SEND_GIFT_V2", "UNIVERSAL_EVENT_GIFT_V2"]) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, async (raw: any) => {
+        this.onRaw(cmd, async (raw: any) => {
           const pbList = parseGiftV2Pb(raw?.data);
           const jsonList = parseNewGift(raw);
           const list = pbList ?? jsonList;
@@ -1556,7 +1613,7 @@ class DisplayDanmakuService {
     // ② 触发礼物特效（名称交给 emitGiftEffect 做别名换算：舰长→舰长一号…）。
     for (const cmd of ["GUARD_BUY", "USER_TOAST_MSG"]) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, async (raw: any) => {
+        this.onRaw(cmd, async (raw: any) => {
           if (!this.active) return;
           const d = raw?.data ?? {};
           const uid = Number(d.uid) || 0;
@@ -1622,7 +1679,7 @@ class DisplayDanmakuService {
     // 1 元 = 10 电池（1 元 = 1000 金瓜子，100 金瓜子 = 1 电池）→ 电池 = price × rate / 100（rate 默认 1000）。
     // 注意：data.time 是 SC 的「展示时长（秒）」而非时间戳；时间戳只用 start_time（网页协议为 unix 秒）。
     this.removeHandlers.push(
-      this.live.onRawMessage("SUPER_CHAT_MESSAGE", async (raw: any) => {
+      this.onRaw("SUPER_CHAT_MESSAGE", async (raw: any) => {
         if (!this.active) return;
         const d = raw?.data ?? {};
         const uid = Number(d.uid) || 0;
@@ -2190,7 +2247,7 @@ class DisplayDanmakuService {
     const remain = otCfg?.enabled
       ? this.overtimePaused
         ? Math.max(0, Math.round(this.overtimePausedRemainMs / 60000))
-        : Math.max(0, Math.round((this.ensureOvertime(otCfg) - Date.now()) / 60000))
+        : Math.max(0, Math.round((this.ensureOvertime() - Date.now()) / 60000))
       : null;
     const prev = this.infoPanelData.overtime?.remainMinutes ?? -1;
     const next = remain ?? -1;
@@ -2204,24 +2261,23 @@ class DisplayDanmakuService {
   }
 
   /** 初始化 / 跨天重置加班机倒计时，返回下播时间戳（毫秒）。 */
-  private ensureOvertime(ot: InfoPanelOvertimeConfig): number {
+  private ensureOvertime(): number {
     const day = localDayStr(new Date());
     if (!this.overtimeEndsAt || this.overtimeDay !== day) {
       this.overtimeDay = day;
-      this.overtimeEndsAt = Date.now() + Math.max(1, ot.initialMinutes) * 60000;
+      this.overtimeEndsAt = Date.now() + OVERTIME_INITIAL_MINUTES * 60000;
     }
     return this.overtimeEndsAt;
   }
 
-  /** 加班机：当前剩余分钟（只读，不初始化；尚未开始时返回初始时长）。
-   *  设置面板的「现在」时刻每秒读取它，避免面板一打开就锁定旧的初始值。 */
-  getOvertimeRemainMinutes(ot: InfoPanelOvertimeConfig): number {
+  /** 加班机：当前剩余分钟（只读，不初始化；尚未开始时返回固定初始时长 4 小时）。 */
+  getOvertimeRemainMinutes(): number {
     if (this.overtimePaused) {
       return Math.max(0, Math.round(this.overtimePausedRemainMs / 60000));
     }
     const day = localDayStr(new Date());
     if (!this.overtimeEndsAt || this.overtimeDay !== day) {
-      return Math.max(1, Math.round(ot.initialMinutes) || 1);
+      return OVERTIME_INITIAL_MINUTES;
     }
     return Math.max(0, Math.round((this.overtimeEndsAt - Date.now()) / 60000));
   }
@@ -2232,10 +2288,10 @@ class DisplayDanmakuService {
   }
 
   /** 加班机：暂停 / 继续计时。暂停时冻结当前剩余；继续时从冻结值接着走，礼物重新生效。 */
-  async setOvertimePaused(paused: boolean, ot: InfoPanelOvertimeConfig): Promise<void> {
+  async setOvertimePaused(paused: boolean): Promise<void> {
     if (paused) {
       if (this.overtimePaused) return;
-      this.overtimePausedRemainMs = Math.max(0, this.ensureOvertime(ot) - Date.now());
+      this.overtimePausedRemainMs = Math.max(0, this.ensureOvertime() - Date.now());
       this.overtimePaused = true;
     } else {
       if (!this.overtimePaused) return;
@@ -2263,9 +2319,9 @@ class DisplayDanmakuService {
   /** 加班机：收到增加/减少时长的礼物，按「单位分钟 × 礼物数量」调整并立即广播。
    *  暂停期间忽略礼物（不改变时间）。
    *  以「当前剩余」为基准计算：剩余为 0 时减分不再生效（不会变成负数），加分则从 0 重新起算。 */
-  private async adjustOvertime(deltaMinutes: number, ot: InfoPanelOvertimeConfig): Promise<void> {
+  private async adjustOvertime(deltaMinutes: number): Promise<void> {
     if (this.overtimePaused) return;
-    const remainMs = Math.max(0, this.ensureOvertime(ot) - Date.now());
+    const remainMs = Math.max(0, this.ensureOvertime() - Date.now());
     const nextMs = Math.max(0, remainMs + deltaMinutes * 60000);
     this.overtimeEndsAt = Date.now() + nextMs;
     this.infoPanelData = {
@@ -2457,9 +2513,9 @@ class DisplayDanmakuService {
     if (config.infoPanel?.enabled && ot?.enabled) {
       const num = Math.max(1, Number(d.num) || 1);
       if (ot.increaseGiftId && giftId === ot.increaseGiftId) {
-        void this.adjustOvertime(ot.increaseMinutes * num, ot);
+        void this.adjustOvertime(ot.increaseMinutes * num);
       } else if (ot.decreaseGiftId && giftId === ot.decreaseGiftId) {
-        void this.adjustOvertime(-ot.decreaseMinutes * num, ot);
+        void this.adjustOvertime(-ot.decreaseMinutes * num);
       }
     }
 
@@ -2678,6 +2734,8 @@ class GiftWatchService {
   private active = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retry = 0;
+  /** 连续"短命连接"次数（见 DisplayDanmaku 同名判定） */
+  private shortCloseStreak = 0;
   private cachedToken: string | null = null;
   private cachedRoomId = 0;
 
@@ -2685,6 +2743,7 @@ class GiftWatchService {
   async start(roomId: number, mid: number): Promise<void> {
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
+    this.shortCloseStreak = 0;
     await this.connect(roomId, mid);
   }
 
@@ -2734,12 +2793,37 @@ class GiftWatchService {
       };
       this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
       this.bindGiftHandlers();
+      const inst = this.live;
+      let openedAt = 0;
       this.live.onOpen(() => {
-        this.retry = 0;
+        openedAt = Date.now();
         console.log("[旁路礼物]WS open", { roomId });
       });
       this.live.onClose(() => {
-        console.log("[旁路礼物]WS close", { roomId });
+        const ageMs = openedAt ? Date.now() - openedAt : 0;
+        console.log("[旁路礼物]WS close", { roomId, ageSec: Math.round(ageMs / 1000) });
+        // 与展示监听同一策略：短命连接连续出现时阻断 KeepLive 的 100ms 内部重连，
+        // 清空 token 缓存并抬高退避，避免"连上即断"风暴。
+        if (ageMs >= 2000) {
+          this.retry = 0;
+          this.shortCloseStreak = 0;
+        } else {
+          this.shortCloseStreak += 1;
+        }
+        if (this.shortCloseStreak >= 3) {
+          console.warn("[旁路礼物]WS 连续快速断开，判定底层自动重连失效，主动阻断并重建", { roomId });
+          this.shortCloseStreak = 0;
+          this.cachedToken = null;
+          this.cachedRoomId = 0;
+          this.retry = Math.max(this.retry, 2);
+          if (this.live === inst) {
+            try {
+              inst.close();
+            } catch {
+              /* 已关闭则忽略 */
+            }
+          }
+        }
         this.scheduleReconnect(roomId, mid);
       });
       this.live.onError((err: any) => {
@@ -2755,6 +2839,19 @@ class GiftWatchService {
     }
   }
 
+  /** 底层 WS 原始命令监听（返回真正可解绑的函数，理由同 DisplayDanmaku.onRaw）。 */
+  private onRaw(cmd: string, handler: (raw: any) => void): () => void {
+    const emitter: any = (this.live as any)?.live ?? this.live;
+    emitter.on(cmd, handler);
+    return () => {
+      try {
+        emitter.removeListener(cmd, handler);
+      } catch {
+        /* 实例已释放 */
+      }
+    };
+  }
+
   /** 只绑礼物相关命令：旧协议 onGift、新协议 pb/json、大航海开通/续费。 */
   private bindGiftHandlers(): void {
     // 旧协议礼物
@@ -2768,7 +2865,7 @@ class GiftWatchService {
     // 新协议礼物（pb / json 变体），逐条复用解析
     for (const cmd of ["SEND_GIFT_V2", "UNIVERSAL_EVENT_GIFT_V2"]) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, (raw: any) => {
+        this.onRaw(cmd, (raw: any) => {
           const pbList = parseGiftV2Pb(raw?.data);
           const jsonList = parseNewGift(raw);
           const list = pbList ?? jsonList;
@@ -2783,7 +2880,7 @@ class GiftWatchService {
     // 大航海开通/续费（GUARD_BUY / USER_TOAST_MSG）
     for (const cmd of ["GUARD_BUY", "USER_TOAST_MSG"]) {
       this.removeHandlers.push(
-        this.live.onRawMessage(cmd, (raw: any) => {
+        this.onRaw(cmd, (raw: any) => {
           const d = raw?.data ?? {};
           const guardLevel = Number(d.guard_level) || 0;
           const name = String(d.gift_name || d.role_name || "").trim() || GUARD_LEVEL_GIFT_NAME[guardLevel] || "";

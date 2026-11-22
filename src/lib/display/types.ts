@@ -64,10 +64,10 @@ export interface DisplayLayout {
  *  等比缩放）并在画布中居中；一旦拖动/缩放即保存为绝对坐标（左上角 + 缩放系数）。 */
 export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
   infoPanel: {
-    // 信息面板：默认置于画布右上角，横向长条（固定 238×44）。
+    // 信息面板：默认置于画布右上角，横向长条（固定 226×44）。
     // 水平/竖直边距与礼物展示等元素保持一致（横屏 60、竖屏 70），主播可在布局编辑中拖动/缩放。
-    landscape: { x: 1920 - 238 - 60, y: 60, scale: 1 },
-    portrait: { x: 1080 - 238 - 70, y: 70, scale: 1 },
+    landscape: { x: 1920 - 226 - 60, y: 60, scale: 1 },
+    portrait: { x: 1080 - 226 - 70, y: 70, scale: 1 },
   },
   gift: {
     // 恢复迁移前（960 坐标系）的默认位置：左上角，不水平居中（较此前默认右移、下移各 10px）
@@ -181,12 +181,13 @@ export interface InfoPanelRankConfig {
   lastMonth: boolean;
 }
 
+/** 加班机初始时长（分钟）：固定 4 小时，每次应用启动 / 跨天从该值重新开始倒计时。 */
+export const OVERTIME_INITIAL_MINUTES = 240;
+
 /** 信息面板 · 加班机（下播倒计时）配置 */
 export interface InfoPanelOvertimeConfig {
   /** 加班机开关 */
   enabled: boolean;
-  /** 初始时长（分钟，最小 1） */
-  initialMinutes: number;
   /** 减少时长的礼物 */
   decreaseGiftId: number;
   decreaseGiftName: string;
@@ -339,7 +340,6 @@ export const DEFAULT_INFO_PANEL_CONFIG: InfoPanelConfig = {
   sloganEnabled: true,
   overtime: {
     enabled: true,
-    initialMinutes: 240,
     decreaseGiftId: 35206,
     decreaseGiftName: "幸运盲盒",
     decreaseGiftIcon:
