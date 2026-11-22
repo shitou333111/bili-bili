@@ -9,6 +9,7 @@
  * 仅 Tauri（桌面）环境使用；Web 下不 emit 到独立窗口。
  */
 import { getPlatform, type Platform } from "@/lib/platform";
+import { fetchWbiKeys, invalidateWbiKeys, wbiSignQuery } from "@/lib/wbi";
 import {
   ENTRY_COOLDOWN_MS,
   OVERTIME_INITIAL_MINUTES,
@@ -567,51 +568,99 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+// WBI 签名（MD5 / mixin key / 密钥获取）统一在 @/lib/wbi 实现，与抢福袋共用。
+
 /** 获取弹幕服务器的 token（须携带登录 Cookie + buvid3，否则可能触发风控 -352）。
+ *  同时返回配套的 auth uid：带 SESSDATA 时为 session 的 mid，否则为 0（匿名）。
  *  模块级共享：展示监听与「礼物完整录屏」旁路监听都要用它建 WS。 */
-async function fetchDanmuToken(platform: Platform, roomId: number): Promise<string> {
+async function fetchDanmuToken(
+  platform: Platform,
+  roomId: number,
+  anonymous = false,
+): Promise<{ token: string; uid: number; hasSess: boolean }> {
   const state = await platform.getSessionState();
   const session = (state.sessions || []).find((s: any) => s.sid === state.currentSid);
   const cookie: string[] = [];
-  if (session) {
+  // anonymous=true：登录 Cookie 失效/不可用时的降级路径，只用匿名身份（uid=0）收听公开弹幕
+  if (session && !anonymous) {
     if (session.biliCookies?.length) cookie.push(...session.biliCookies);
     if (session.biliSessdata && !cookie.some((c) => c.startsWith("SESSDATA="))) {
       cookie.push(`SESSDATA=${session.biliSessdata}`);
     }
   }
-  // 弹幕服务器配置/token 用旧版 Danmu/getConf 接口：
-  // getDanmuInfo 虽自 2025-05 起要求 WBI 签名（见 blivechat issue #264），但经实测：
-  //   - 走 Tauri reqwest/rustls 客户端仍被 getDanmuInfo 的浏览器指纹风控拦截（-352）
-  //   - getConf 在应用客户端可正常获取 token，且其 token 对弹幕 WS 认证有效（auth code=0）
-  // 故保留 getConf；WBI 不适用于当前客户端的 token 获取路径。
   if (!cookie.some((c) => c.toLowerCase().startsWith("buvid3="))) {
     const buvid = await platform.getBuvidCookie();
     if (buvid) cookie.push(buvid);
   }
   const flat = cookie.flatMap((c) => c.split(";").map((s) => s.trim().split("=")[0]));
-  console.log(
-    "[弹幕]getConf 请求",
-    JSON.stringify({ roomId, cookieKeys: flat, hasSess: flat.some((k) => k.toLowerCase() === "sessdata") }),
-  );
-  const data = await withTimeout(
-    platform.fetchBilibiliJson<any>({
-      url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
-      cookie: cookie.join("; "),
-      live: true, // 必须用 live 域 Referer/Origin
-    }),
-    10000,
-    "获取弹幕服务器",
-  );
-  console.log(
-    "[弹幕]getConf 返回",
-    JSON.stringify({ code: data?.code, message: data?.message, msg: data?.msg, hasToken: !!data?.data?.token }),
-  );
-  if (data?.code !== 0 || !data?.data?.token) {
-    const errMsg = data?.message || data?.msg;
-    console.log("[弹幕]getConf 失败: code=", data?.code, "message=", data?.message, "msg=", data?.msg);
-    throw new Error(String(errMsg ?? "获取弹幕服务器失败"));
+  // auth uid 必须与 token 的签发身份一致：
+  //  - 请求带了 SESSDATA → token 属于该 Cookie 的账号，uid 用该 session 的 mid；
+  //  - 没带（服务器账号 / Cookie 缺失 / 已过期）→ token 是匿名的，uid 必须为 0。
+  // 实测：匿名 token + uid≠0，服务端不回 auth 包，约 20ms 后 1006 断开。
+  const hasSess = flat.some((k) => k.toLowerCase() === "sessdata");
+  const uid = hasSess ? Number(session?.mid) || 0 : 0;
+  const cookieStr = cookie.join("; ");
+  console.log("[弹幕]token 请求", JSON.stringify({ roomId, uid, cookieKeys: flat, hasSess }));
+
+  // 1) 优先新版 getDanmuInfo（WBI 签名）：
+  //    实测 Danmu/getConf 对个别账号（大 UID 主播在自家房间）签发的 token 会被弹幕服务
+  //    以 1006 直接拒绝（无 auth 回包），而同一账号的 getDanmuInfo token 能正常认证。
+  //    getDanmuInfo 未签名返回 -352，故先取 nav.wbi_img 签名；任何失败都回退 getConf，
+  //    保证现网原本可用的账号行为完全不变。
+  let token: string | null = null;
+  const keys = await fetchWbiKeys(platform, { cookie: cookieStr });
+  if (keys) {
+    const query = wbiSignQuery({ id: roomId, type: 0, web_location: 444.8 }, keys.imgKey, keys.subKey);
+    try {
+      const info = await withTimeout(
+        platform.fetchBilibiliJson<any>({
+          url: `https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?${query}`,
+          cookie: cookieStr,
+          live: true, // 必须用 live 域 Referer/Origin
+        }),
+        10000,
+        "获取弹幕服务器",
+      );
+      if (info?.code === 0 && info?.data?.token) {
+        token = String(info.data.token);
+        console.log("[弹幕]getDanmuInfo 返回", JSON.stringify({ code: info.code, hasToken: true }));
+      } else {
+        if (info?.code === -352) invalidateWbiKeys(); // 密钥/签名过期：下次重新取
+        console.warn(
+          "[弹幕]getDanmuInfo 失败，回退 getConf",
+          JSON.stringify({ code: info?.code, message: info?.message }),
+        );
+      }
+    } catch (e) {
+      console.warn("[弹幕]getDanmuInfo 异常，回退 getConf", e instanceof Error ? e.message : e);
+    }
+  } else {
+    console.warn("[弹幕]未取到 WBI 密钥，回退 getConf");
   }
-  return data.data.token;
+
+  // 2) 回退旧版 Danmu/getConf
+  if (!token) {
+    const data = await withTimeout(
+      platform.fetchBilibiliJson<any>({
+        url: `https://api.live.bilibili.com/room/v1/Danmu/getConf?room_id=${roomId}&platform=pc&player=web`,
+        cookie: cookieStr,
+        live: true, // 必须用 live 域 Referer/Origin
+      }),
+      10000,
+      "获取弹幕服务器",
+    );
+    console.log(
+      "[弹幕]getConf 返回",
+      JSON.stringify({ code: data?.code, message: data?.message, msg: data?.msg, hasToken: !!data?.data?.token }),
+    );
+    if (data?.code !== 0 || !data?.data?.token) {
+      const errMsg = data?.message || data?.msg;
+      console.log("[弹幕]getConf 失败: code=", data?.code, "message=", data?.message, "msg=", data?.msg);
+      throw new Error(String(errMsg ?? "获取弹幕服务器失败"));
+    }
+    token = String(data.data.token);
+  }
+  return { token, uid, hasSess };
 }
 
 // ==================== 礼物关键字（弹幕精确匹配礼物名称 → 播放特效） ====================
@@ -767,6 +816,12 @@ class DisplayDanmakuService {
   // 弹幕 token 缓存：弹幕接口有风控，不能每次重连都重新拉取；
   // 首次进房间拉一次，后续断线重连直接复用，避免高频请求把 IP 打成 -352。
   private cachedToken: string | null = null;
+  /** 与 token 配套的 auth uid（匿名 token 为 0），重连时必须沿用，避免 uid/token 身份不一致 */
+  private cachedUid = 0;
+  /** 硬重建设置计数：连续两次仍"连上即断"说明登录 Cookie 侧有问题，降级匿名（uid=0）收听 */
+  private hardResetCount = 0;
+  /** 降级为匿名连接（只带 buvid，uid=0）；登录凭证失效时仍可收到公开弹幕/礼物/PK */
+  private forceAnonymous = false;
   private cachedRoomId = 0;
   /** 「B瓜版本号」查询：最近一次回复时刻（全局冷却，见 VERSION_REPLY_COOLDOWN_MS） */
   private lastVersionReplyAt = 0;
@@ -941,6 +996,8 @@ class DisplayDanmakuService {
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
     this.shortCloseStreak = 0;
+    this.hardResetCount = 0;
+    this.forceAnonymous = false;
     // 启动即清理过期调试日志（保留最近两个自然天），处理"长期离线后重新打开"的残留
     void this.cleanupExpiredDebugLog(mid);
     await this.connect(roomId, mid);
@@ -1339,17 +1396,35 @@ class DisplayDanmakuService {
     this.emitStatus({ state: "connecting" });
 
     try {
-      // 复用缓存的 token；仅首次进该房间或 token 缺失时才请求 getDanmuInfo
+      // 复用缓存的 token；仅首次进该房间或 token 缺失时才请求 getConf
       let token = this.cachedToken;
+      let authUid = this.cachedUid;
+      let tokenHasSess: boolean | null = null;
       if (!token || this.cachedRoomId !== roomId) {
-        token = await fetchDanmuToken(platform, roomId);
+        const got = await fetchDanmuToken(platform, roomId, this.forceAnonymous);
+        token = got.token;
+        authUid = got.uid;
+        tokenHasSess = got.hasSess;
         this.cachedToken = token;
+        this.cachedUid = authUid;
         this.cachedRoomId = roomId;
       }
       const { BiliLive } = (await import("bili-live-listener")) as {
         BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
       };
-      this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
+      // uid 必须与 token 的签发身份一致：getConf 带 SESSDATA 时 token 属于该 Cookie 的账号，
+      // 不带（服务器账号 / Cookie 缺失）时是匿名 token，此时只能传 uid=0。
+      // 实测：匿名 token + uid≠0 → 服务端不做 auth 回包、~20ms 直接 1006 断开。
+      console.log("[展示]WS 建立", { roomId, uid: authUid, panelMid: mid, tokenLen: token.length });
+      this.pushDebug("ws", "connect", {
+        roomId,
+        uid: authUid,
+        panelMid: mid,
+        anonymous: this.forceAnonymous,
+        hasSess: tokenHasSess,
+        tokenLen: token.length,
+      });
+      this.live = new BiliLive(roomId, { key: token, uid: authUid, isBrowser: true });
 
       this.bindHandlers(mid);
       // 信息面板：配置已开启时启动定时拉取（榜一/PK/盲盒），关闭时不做任何请求
@@ -1400,8 +1475,18 @@ class DisplayDanmakuService {
           this.pushDebug("ws", "hard-reset", { streak: this.shortCloseStreak, ageSec });
           this.shortCloseStreak = 0;
           this.cachedToken = null;
+          this.cachedUid = 0;
           this.cachedRoomId = 0;
           this.retry = Math.max(this.retry, 2);
+          // 硬重建第一次就降级匿名：已实测存在"账号登录 token 被弹幕服务器直接拒绝"
+          // 的情况（换房间、换成 uid=0 都被 1006 秒断，匿名 token + uid=0 正常）。
+          // 匿名只影响身份，公开弹幕/礼物/PK 消息照常接收，因此优先保证可用。
+          this.hardResetCount += 1;
+          if (!this.forceAnonymous) {
+            this.forceAnonymous = true;
+            console.warn("[展示]WS 登录身份疑似失效，降级为匿名连接（uid=0）", { roomId });
+            this.pushDebug("ws", "anonymous-fallback", { roomId });
+          }
           if (this.live === inst) {
             try {
               inst.close();
@@ -1435,6 +1520,7 @@ class DisplayDanmakuService {
     this.active = false;
     this.roomId = 0;
     this.cachedToken = null;
+    this.cachedUid = 0;
     this.cachedRoomId = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -2737,6 +2823,11 @@ class GiftWatchService {
   /** 连续"短命连接"次数（见 DisplayDanmaku 同名判定） */
   private shortCloseStreak = 0;
   private cachedToken: string | null = null;
+  /** 与 token 配套的 auth uid（匿名 token 为 0） */
+  private cachedUid = 0;
+  /** 硬重建设置计数 / 匿名降级（同 DisplayDanmaku） */
+  private hardResetCount = 0;
+  private forceAnonymous = false;
   private cachedRoomId = 0;
 
   /** 启动监听指定房间的礼物（幂等：已在监听同一房间则直接返回；换房间则切换）。 */
@@ -2744,6 +2835,8 @@ class GiftWatchService {
     if (this.active && this.roomId === roomId) return;
     this.retry = 0;
     this.shortCloseStreak = 0;
+    this.hardResetCount = 0;
+    this.forceAnonymous = false;
     await this.connect(roomId, mid);
   }
 
@@ -2753,6 +2846,7 @@ class GiftWatchService {
     this.roomId = 0;
     this.mid = 0;
     this.cachedToken = null;
+    this.cachedUid = 0;
     this.cachedRoomId = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -2783,15 +2877,20 @@ class GiftWatchService {
       const platform = await getPlatform();
       // 复用缓存 token，避免高频重连触发风控
       let token = this.cachedToken;
+      let authUid = this.cachedUid;
       if (!token || this.cachedRoomId !== roomId) {
-        token = await fetchDanmuToken(platform, roomId);
+        const got = await fetchDanmuToken(platform, roomId, this.forceAnonymous);
+        token = got.token;
+        authUid = got.uid;
         this.cachedToken = token;
+        this.cachedUid = authUid;
         this.cachedRoomId = roomId;
       }
       const { BiliLive } = (await import("bili-live-listener")) as {
         BiliLive: new (roomId: number, opts: { key: string; uid: number; isBrowser: boolean }) => any;
       };
-      this.live = new BiliLive(roomId, { key: token, uid: mid, isBrowser: true });
+      // uid 必须与 token 身份一致（匿名 token → 0），否则服务端会立刻 1006 断开
+      this.live = new BiliLive(roomId, { key: token, uid: authUid, isBrowser: true });
       this.bindGiftHandlers();
       const inst = this.live;
       let openedAt = 0;
@@ -2814,8 +2913,14 @@ class GiftWatchService {
           console.warn("[旁路礼物]WS 连续快速断开，判定底层自动重连失效，主动阻断并重建", { roomId });
           this.shortCloseStreak = 0;
           this.cachedToken = null;
+          this.cachedUid = 0;
           this.cachedRoomId = 0;
           this.retry = Math.max(this.retry, 2);
+          this.hardResetCount += 1;
+          if (!this.forceAnonymous) {
+            this.forceAnonymous = true;
+            console.warn("[旁路礼物]登录身份疑似失效，降级为匿名连接（uid=0）", { roomId });
+          }
           if (this.live === inst) {
             try {
               inst.close();
