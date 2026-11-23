@@ -273,7 +273,9 @@ export default function RedLotteryList() {
                   rel="noreferrer"
                   className="grid items-center gap-x-2 rounded-xl border border-black/[0.06] bg-white/85 px-2.5 py-2 shadow-[0_8px_20px_-20px_rgba(40,20,50,0.8)] backdrop-blur transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_14px_28px_-20px_rgba(40,20,50,0.7)]"
                   // 单行：头像 / 主播 / 类型 + 奖品 / 金额（固定起点，便于纵向比较）/ 倒计时
-                  style={{ gridTemplateColumns: "24px minmax(56px, 1fr) minmax(0, 70px) auto 44px" }}
+                  // 主播列限制最大宽度，多余空间留给奖品列：窄屏时奖品略微左移，宽屏时左移更多
+                  // 金额列固定宽度：避免「30 电池 / 300 电池」宽度不同导致左侧图标起点左右跳动
+                  style={{ gridTemplateColumns: "24px minmax(48px, 180px) minmax(80px, 1fr) 40px 44px" }}
                 >
                   <Avatar face={item.face} name={item.uname || `#${item.roomId}`} />
                   <span className="min-w-0 truncate text-[12px] font-medium text-black/80">
