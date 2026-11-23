@@ -38,6 +38,8 @@ type Body = {
   requestIntervalMs?: number;
   redIntervalMs?: number;
   hotRoomsPerPartition?: number;
+  plazaUrl?: string;
+  plazaIntervalMs?: number;
   cookie?: string;
   uid?: number;
 };
@@ -69,6 +71,8 @@ export async function POST(request: Request) {
         requestIntervalMs: body.requestIntervalMs,
         redIntervalMs: body.redIntervalMs,
         hotRoomsPerPartition: body.hotRoomsPerPartition,
+        plazaUrl: body.plazaUrl,
+        plazaIntervalMs: body.plazaIntervalMs,
       });
       break;
     }

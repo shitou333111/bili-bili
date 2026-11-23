@@ -76,6 +76,10 @@ export default function LotteryScanAdmin() {
   const [requestIntervalInput, setRequestIntervalInput] = useState("450");
   const [redIntervalInput, setRedIntervalInput] = useState("450");
   const [hotLimitInput, setHotLimitInput] = useState("100");
+  const [plazaUrlInput, setPlazaUrlInput] = useState(
+    "https://api.live.bilibili.com/xlive/custom-activity-interface/activities2026/RedPacketPlaza?act_id=111040",
+  );
+  const [plazaIntervalInput, setPlazaIntervalInput] = useState("60");
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [pickingSid, setPickingSid] = useState<string | null>(null);
   const [accountMsg, setAccountMsg] = useState("");
@@ -104,6 +108,8 @@ export default function LotteryScanAdmin() {
         setRequestIntervalInput(String(res.data.config.requestIntervalMs));
         setRedIntervalInput(String(res.data.config.redIntervalMs));
         setHotLimitInput(String(res.data.config.hotRoomsPerPartition));
+        setPlazaUrlInput(res.data.config.plazaUrl);
+        setPlazaIntervalInput(String(Math.round(res.data.config.plazaIntervalMs / 1000)));
       }
     } catch {
       if (!silent) setError("无法连接服务器");
@@ -184,6 +190,8 @@ export default function LotteryScanAdmin() {
       requestIntervalMs: Number(requestIntervalInput) || 450,
       redIntervalMs: Number(redIntervalInput) || 450,
       hotRoomsPerPartition: Number(hotLimitInput) || 0,
+      plazaUrl: plazaUrlInput.trim(),
+      plazaIntervalMs: Math.max(10, Number(plazaIntervalInput) || 60) * 1000,
     });
     if (ok) showToast("扫描配置已保存");
   };
@@ -301,6 +309,12 @@ export default function LotteryScanAdmin() {
             )}
             <span>上一轮：{fmtTime(state.lastScanAt)}</span>
             <span>下一轮：{config.enabled ? fmtTime(state.nextScanAt) : "—"}</span>
+            {config.plazaUrl && (
+              <span>
+                广场上一轮：{fmtTime(state.plazaLastScanAt)} / 下一轮：
+                {config.enabled ? fmtTime(state.plazaNextScanAt) : "—"}
+              </span>
+            )}
             {state.lastRound && (
               <span>
                 本轮：{state.lastRound.rooms} 房间 / 天选 {state.lastRound.lottery} / 红包 {state.lastRound.red} / 失败{" "}
@@ -380,6 +394,25 @@ export default function LotteryScanAdmin() {
                   inputMode="numeric"
                   className="w-10 rounded border border-black/10 px-1.5 py-0.5 text-center outline-none focus:border-[#00a1d6]"
                 />
+              </label>
+              <label className="flex min-w-[280px] flex-1 items-center gap-1">
+                <span className="shrink-0 text-black/50">红包广场链接</span>
+                <input
+                  value={plazaUrlInput}
+                  onChange={(e) => setPlazaUrlInput(e.target.value)}
+                  placeholder="留空关闭广场扫描"
+                  className="min-w-0 flex-1 rounded border border-black/10 px-1.5 py-0.5 outline-none focus:border-[#00a1d6]"
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="text-black/50">广场扫描间隔</span>
+                <input
+                  value={plazaIntervalInput}
+                  onChange={(e) => setPlazaIntervalInput(e.target.value.replace(/[^\d]/g, ""))}
+                  inputMode="numeric"
+                  className="w-12 rounded border border-black/10 px-1.5 py-0.5 text-center outline-none focus:border-[#00a1d6]"
+                />
+                <span className="text-black/40">秒</span>
               </label>
               <button
                 onClick={saveConfig}
@@ -573,7 +606,7 @@ export default function LotteryScanAdmin() {
                         <span className="truncate text-black/30">
                           {r.source === "hot"
                             ? r.areaName || "分区热门"
-                            : { custom: "指定", history: "常发", rank: "人气", hot: "分区热门" }[r.source]}
+                            : { custom: "指定", plaza: "红包广场", history: "常发", rank: "人气", hot: "分区热门" }[r.source]}
                         </span>
                       </div>
                     );

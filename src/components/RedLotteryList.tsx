@@ -310,7 +310,7 @@ export default function RedLotteryList() {
         {/* ===== 声明 ===== */}
         <section className="mt-10 rounded-3xl border border-black/[0.06] bg-white/60 px-4 py-5 text-[12px] leading-6 text-black/45 sm:px-6">
           <p>
-            天选/红包中标注的电池价值是单份的，最大的单个礼物价值或者电池红包总价除份数。因为如果总价很高但是份数很多，也是没有价值的。
+            天选/红包中标注的电池价值是单份的，最大的单个礼物价值（剔除直播间专属礼物）或者电池红包总价除份数。因为如果总价很高但是份数很多，也是没有价值的。
           </p>
           <p>
             该网页只是提供发天选和红包的直播间列表，你需要手动点进直播间参与，不能自动参与，也不会提供。

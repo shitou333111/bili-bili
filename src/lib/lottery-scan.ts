@@ -10,7 +10,10 @@
  * - 请求严格串行 + 固定间隔 + 命中风控(-352/-412)指数退避，频率慢但持续；
  * - 结果按"单份礼物价值"阈值过滤（默认 50 电池）；
  * - 天选风控判断：要求送礼/大航海一律跳过（实物天选往往要求送贵重礼物），粉丝团/免费可参与；
- * - 常发红包直播间：达到阈值的红包房间永久记录并按次数排序，每轮先确认在播再扫描。
+ * - 常发红包直播间：达到阈值的红包房间永久记录并按次数排序，每轮先确认在播再扫描；
+ * - 红包广场：活动官方会在大量直播间发红包，广场接口（匿名）列表变化很快，
+ *   因此用独立于整轮的定时器高频轮询，拿到的房间排在「常发」之前优先扫描；
+ * - 专属礼物（gift_type=1，仅能送给本直播间、无实际价值）在计算红包价值与展示前剔除。
  */
 
 import { promises as fs } from "fs";
@@ -54,7 +57,7 @@ const HOT_ROOM_PARTITIONS = [
 
 // ===== 类型 =====
 
-export type RoomSource = "custom" | "history" | "rank" | "hot";
+export type RoomSource = "custom" | "plaza" | "history" | "rank" | "hot";
 
 export type ScanRoom = {
   roomid: number;
@@ -138,6 +141,10 @@ export type ScanConfig = {
   redIntervalMs: number;
   /** 每个分区取前 N 个热门直播间 */
   hotRoomsPerPartition: number;
+  /** 红包广场接口地址（为空则不扫描广场）；活动每年路径可能变化，因此配置完整链接 */
+  plazaUrl: string;
+  /** 红包广场扫描间隔（毫秒），独立于整轮扫描，默认 60 秒 */
+  plazaIntervalMs: number;
   account: ScanAccount | null;
   customRooms: CustomRoom[];
 };
@@ -174,6 +181,9 @@ export type ScanState = {
   lastScanAt: number | null;
   lastScanFinishedAt: number | null;
   nextScanAt: number | null;
+  /** 红包广场独立循环的最近一次/下一次执行时间 */
+  plazaLastScanAt: number | null;
+  plazaNextScanAt: number | null;
   /** 当前轮进度 */
   progress: { done: number; total: number; currentRoom: number | null };
   results: ScanResult[];
@@ -191,6 +201,8 @@ const DEFAULT_CONFIG: ScanConfig = {
   requestIntervalMs: 450,
   redIntervalMs: 450,
   hotRoomsPerPartition: 100,
+  plazaUrl: "https://api.live.bilibili.com/xlive/custom-activity-interface/activities2026/RedPacketPlaza?act_id=111040",
+  plazaIntervalMs: 60 * 1000,
   account: null,
   customRooms: [],
 };
@@ -200,6 +212,8 @@ const DEFAULT_STATE: ScanState = {
   lastScanAt: null,
   lastScanFinishedAt: null,
   nextScanAt: null,
+  plazaLastScanAt: null,
+  plazaNextScanAt: null,
   progress: { done: 0, total: 0, currentRoom: null },
   results: [],
   rateLimitEvents: [],
@@ -302,7 +316,10 @@ type Engine = {
   loaded: boolean;
   loading: Promise<void> | null;
   timer: ReturnType<typeof setTimeout> | null;
+  /** 红包广场独立循环定时器 */
+  plazaTimer: ReturnType<typeof setTimeout> | null;
   roundInFlight: boolean;
+  plazaInFlight: boolean;
   lotteryRate: EndpointRate;
   redRate: EndpointRate;
   /** 扫描结果版本号：结果有任何新增/变化时 +1，供客户端长轮询感知 */
@@ -322,7 +339,9 @@ function engine(): Engine {
       loaded: false,
       loading: null,
       timer: null,
+      plazaTimer: null,
       roundInFlight: false,
+      plazaInFlight: false,
       lotteryRate: { nextAt: 0, blockedUntil: 0, streak: 0 },
       redRate: { nextAt: 0, blockedUntil: 0, streak: 0 },
       generation: 0,
@@ -386,6 +405,8 @@ async function ensureLoaded(): Promise<void> {
       requestIntervalMs: Math.max(200, num(cfg.requestIntervalMs) || DEFAULT_CONFIG.requestIntervalMs),
       redIntervalMs: Math.max(200, num(cfg.redIntervalMs) || DEFAULT_CONFIG.redIntervalMs),
       hotRoomsPerPartition: Math.max(0, num(cfg.hotRoomsPerPartition) || DEFAULT_CONFIG.hotRoomsPerPartition),
+      plazaUrl: typeof cfg.plazaUrl === "string" ? cfg.plazaUrl.trim() : DEFAULT_CONFIG.plazaUrl,
+      plazaIntervalMs: Math.max(10_000, num(cfg.plazaIntervalMs) || DEFAULT_CONFIG.plazaIntervalMs),
     };
     e.state = {
       ...DEFAULT_STATE,
@@ -395,6 +416,8 @@ async function ensureLoaded(): Promise<void> {
       results: Array.isArray(st.results) ? st.results : [],
       rateLimitEvents: Array.isArray(st.rateLimitEvents) ? st.rateLimitEvents : [],
       logs: Array.isArray(st.logs) ? st.logs : [],
+      plazaLastScanAt: num(st.plazaLastScanAt) || null,
+      plazaNextScanAt: null,
     };
     e.history = rawHistory
       .filter((r) => r && num(r.roomid) > 0)
@@ -415,6 +438,7 @@ async function ensureLoaded(): Promise<void> {
     e.loading = null;
     addLog("扫描引擎已从本地数据恢复");
     startLoop();
+    startPlazaLoop();
   })();
   return e.loading;
 }
@@ -437,15 +461,30 @@ function rateOf(endpoint: "lottery" | "red_pocket"): EndpointRate {
   return endpoint === "lottery" ? engine().lotteryRate : engine().redRate;
 }
 
-/** 等待到允许的请求时刻并占用下一个时间片 */
+/**
+ * 等待到允许的请求时刻并占用下一个时间片。
+ * 主循环与红包广场循环并发运行，共享同一限速器，这里把等待串行化，
+ * 避免两个循环同时通过检查后叠加请求。
+ */
+let paceChain: Promise<void> = Promise.resolve();
 async function pace(endpoint: "lottery" | "red_pocket", intervalMs: number): Promise<boolean> {
-  const rate = rateOf(endpoint);
-  const now = Date.now();
-  if (now < rate.blockedUntil) return false;
-  const wait = rate.nextAt - now;
-  if (wait > 0) await sleep(wait);
-  rate.nextAt = Date.now() + intervalMs;
-  return true;
+  let release!: () => void;
+  const prev = paceChain;
+  paceChain = new Promise<void>((r) => {
+    release = r;
+  });
+  await prev;
+  try {
+    const rate = rateOf(endpoint);
+    const now = Date.now();
+    if (now < rate.blockedUntil) return false;
+    const wait = rate.nextAt - now;
+    if (wait > 0) await sleep(wait);
+    rate.nextAt = Date.now() + intervalMs;
+    return true;
+  } finally {
+    release();
+  }
 }
 
 /** 记录限流事件并进入指数退避 */
@@ -639,9 +678,22 @@ async function scanRoomLottery(room: ScanRoom): Promise<ScanResult | null> {
 
 // ----- 红包检测 -----
 
+type RedPocketAward = {
+  gift_id?: number;
+  num?: number;
+  gift_name?: string;
+  gift_pic?: string;
+  /**
+   * 详细红包列表中的礼物类型（实测）：
+   * 0 = 普通礼物；1 = 「专属」礼物（只能送给抢到红包的这个直播间，无实际价值）。
+   * 同一个 gift_id 可能同时出现一条 0 和一条 1（如活动红包里既有专属又有普通版本）。
+   */
+  gift_type?: number;
+};
+
 type RedPocketItem = {
   lot_id?: number;
-  awards?: { gift_id?: number; num?: number; gift_name?: string; gift_pic?: string }[];
+  awards?: RedPocketAward[];
   end_time?: number;
   current_time?: number;
   lot_status?: number;
@@ -697,9 +749,18 @@ async function fetchRedPockets(roomId: number): Promise<RedPocketItem[] | null> 
   return list.filter((rp) => num(rp.lot_status) === 1 && num(rp.rp_type) !== 4);
 }
 
-/** 红包单份价值（电池） */
-function redPocketValue(rp: RedPocketItem): number {
-  const awards = rp.awards ?? [];
+/**
+ * 「专属」礼物判定：详细红包列表里 gift_type=1（实测活动红包 18/18 与广场
+ * award_desc 的「（专属）」完全对应）；名称里带（专属）时也兜底识别。
+ * 专属礼物只能送给抢到红包的直播间，不计入红包价值。
+ */
+function isExclusiveAward(award: RedPocketAward): boolean {
+  if (num(award.gift_type) === 1) return true;
+  return /（专属）|\(专属\)/.test(String(award.gift_name ?? ""));
+}
+
+/** 红包单份价值（电池）；awards 需已剔除专属礼物 */
+function redPocketValue(rp: RedPocketItem, awards: RedPocketAward[]): number {
   const rpType = num(rp.rp_type);
   if (rpType === 3 || rpType === 5) {
     const shares = awards.reduce((s, a) => s + num(a.num), 0) || 0;
@@ -718,7 +779,9 @@ function collectRedResults(room: ScanRoom, list: RedPocketItem[]): ScanResult[] 
     if (!lotId) continue;
     const endTime = num(rp.end_time);
     if (endTime <= nowSec()) continue;
-    const value = redPocketValue(rp);
+    // 所有红包（不只活动红包）都剔除专属礼物后再计算价值/展示
+    const awards = (rp.awards ?? []).filter((a) => !isExclusiveAward(a));
+    const value = redPocketValue(rp, awards);
     if (value < minValue) continue;
     out.push({
       key: `red:${lotId}`,
@@ -737,7 +800,7 @@ function collectRedResults(room: ScanRoom, list: RedPocketItem[]): ScanResult[] 
       rpType: num(rp.rp_type),
       totalPrice: num(rp.total_price),
       // 按单份礼物价值降序，awards[0] 即价值最高的奖品（UI 只展示这一个）
-      awards: (rp.awards ?? [])
+      awards: awards
         .map((a) => ({
           giftId: num(a.gift_id),
           giftName: String(a.gift_name ?? ""),
@@ -748,6 +811,161 @@ function collectRedResults(room: ScanRoom, list: RedPocketItem[]): ScanResult[] 
     });
   }
   return out;
+}
+
+// ----- 红包广场 -----
+
+type PlazaRedPacket = {
+  packet_id?: number;
+  /** 主播 uid（即 room_id 对应的主播） */
+  ruid?: number;
+  room_id?: number;
+  total_price?: number;
+  end_time?: number;
+  status?: number;
+  award_desc?: string;
+  time?: number;
+};
+
+/** 广场列表缓存：主循环收集房间与广场独立循环共用，避免同一时刻重复请求 */
+let plazaCache: { url: string; at: number; items: PlazaRedPacket[] } | null = null;
+const PLAZA_CACHE_TTL_MS = 30_000;
+/** 广场接口连续失败告警节流（活动结束后接口会持续报错，不能每 60 秒刷一条日志） */
+let plazaFail = { streak: 0, lastLogAt: 0 };
+
+/**
+ * 红包广场列表（匿名接口，无需登录凭证）。
+ * 配置的是完整链接，便于活动路径每年变化时直接替换；判断当前活动只用链接里的 act_id。
+ * 活动过期/不存在时接口返回非 0（实测 act_id 无效返回 -404），只节流告警并返回 null。
+ */
+async function fetchRedPacketPlaza(url: string, force = false): Promise<PlazaRedPacket[] | null> {
+  if (!force && plazaCache && plazaCache.url === url && Date.now() - plazaCache.at < PLAZA_CACHE_TTL_MS) {
+    return plazaCache.items;
+  }
+  const res = await biliGet<{ list?: PlazaRedPacket[] }>(url, await anonCookie());
+  if (!res || res.code !== 0) {
+    plazaFail.streak += 1;
+    const now = Date.now();
+    if (plazaFail.streak === 1 || now - plazaFail.lastLogAt > 5 * 60 * 1000) {
+      plazaFail.lastLogAt = now;
+      // 链接里带 act_id 时用它做简短标识，避免日志里出现整条 URL
+      const label = url.match(/[?&]act_id=(\d+)/)?.[1] ?? url;
+      addLog(
+        `红包广场（${label}）暂不可用（code ${res?.code ?? "请求失败"}${res?.message ? ` ${res.message}` : ""}），可能活动已结束`,
+        "warn",
+      );
+    }
+    return null;
+  }
+  plazaFail.streak = 0;
+  const items = (res.data?.list ?? []).filter((x) => num(x.room_id) > 0);
+  plazaCache = { url, at: Date.now(), items };
+  return items;
+}
+
+const plazaRoomInfoCache = new Map<
+  number,
+  { uid: number; uname: string; face: string; title: string; ts: number }
+>();
+const PLAZA_ROOM_INFO_TTL_MS = 10 * 60 * 1000;
+
+/** 广场只给 room_id/ruid，主播名/头像需要补查（缓存 10 分钟，避免高频循环重复请求） */
+async function plazaScanRoom(roomId: number, uid: number): Promise<ScanRoom> {
+  const hit = plazaRoomInfoCache.get(roomId);
+  let info = hit && Date.now() - hit.ts < PLAZA_ROOM_INFO_TTL_MS ? hit : null;
+  if (!info) {
+    const resolved = uid > 0 ? await resolveRoomByUid(uid).catch(() => null) : null;
+    info = {
+      uid,
+      uname: resolved?.uname || (uid > 0 ? `UID${uid}` : `#${roomId}`),
+      face: resolved?.face || "",
+      title: resolved?.title || "",
+      ts: Date.now(),
+    };
+    plazaRoomInfoCache.set(roomId, info);
+  }
+  return {
+    roomid: roomId,
+    uid: info.uid || uid,
+    uname: info.uname,
+    face: info.face,
+    title: info.title,
+    source: "plaza",
+  };
+}
+
+/** 广场直播间列表（主循环排队用：排在「常发」之前） */
+async function collectPlazaRooms(): Promise<ScanRoom[]> {
+  const url = engine().config.plazaUrl.trim();
+  if (!url) return [];
+  const items = await fetchRedPacketPlaza(url);
+  if (!items?.length) return [];
+  const seen = new Set<number>();
+  const out: ScanRoom[] = [];
+  for (const item of items) {
+    const roomId = num(item.room_id);
+    if (!roomId || seen.has(roomId)) continue;
+    seen.add(roomId);
+    out.push(await plazaScanRoom(roomId, num(item.ruid)));
+  }
+  return out;
+}
+
+/**
+ * 红包广场一轮：拉广场列表 → 逐房间复用现有红包接口取详情 → 与主流程相同的阈值过滤/登记。
+ * 独立于主循环按 plazaIntervalMs 高频运行，活动过期报错只节流告警，不影响主循环。
+ */
+async function runPlazaRound(): Promise<void> {
+  const e = engine();
+  if (e.plazaInFlight) return;
+  const plazaUrl = e.config.plazaUrl.trim();
+  if (!e.config.enabled || !plazaUrl || !e.config.account) return;
+  e.plazaInFlight = true;
+  e.state.plazaLastScanAt = Date.now();
+  try {
+    const items = await fetchRedPacketPlaza(plazaUrl, true);
+    if (!items?.length) return;
+    // 按 room_id 去重（同一房间可能连续发多个红包）
+    const rooms = new Map<number, number>();
+    for (const item of items) {
+      const roomId = num(item.room_id);
+      if (roomId && !rooms.has(roomId)) rooms.set(roomId, num(item.ruid));
+    }
+    const results: ScanResult[] = [];
+    const foundRedLots = new Map<number, { room: ScanRoom; lots: { lotId: number; value?: number }[] }>();
+    for (const [roomId, uid] of rooms) {
+      if (!e.config.enabled) break;
+      if (Date.now() < e.redRate.blockedUntil || e.redRate.streak >= 4) {
+        addLog("红包接口处于限流冷却，广场本轮提前结束", "warn");
+        break;
+      }
+      const room = await plazaScanRoom(roomId, uid);
+      const list = await fetchRedPockets(roomId);
+      if (!list) {
+        if (e.state.accountStatus?.valid === false) break;
+        continue;
+      }
+      const reds = collectRedResults(room, list);
+      if (reds.length === 0) continue;
+      for (const r of reds) results.push(r);
+      foundRedLots.set(roomId, {
+        room,
+        lots: reds.map((r) => ({ lotId: r.lotId ?? 0, value: r.value })).filter((x) => x.lotId > 0),
+      });
+      commitResults(results, true);
+    }
+    for (const [, v] of foundRedLots) recordHistoryRedPacket(v.room, v.lots);
+    if (results.length > 0) {
+      addLog(`红包广场：${rooms.size} 个直播间，命中 ${results.length} 个红包`, "success");
+      await Promise.all([saveState().catch(() => {}), saveHistory().catch(() => {})]);
+    }
+  } catch (err) {
+    addLog(`红包广场扫描异常：${err instanceof Error ? err.message : String(err)}`, "error");
+  } finally {
+    e.plazaInFlight = false;
+    e.state.plazaNextScanAt = Date.now() + e.config.plazaIntervalMs;
+    schedulePlazaNext(e.config.plazaIntervalMs);
+  }
 }
 
 // ----- 房间列表 -----
@@ -876,13 +1094,15 @@ async function collectRooms(): Promise<ScanRoom[]> {
       title: String(r.title ?? ""),
       source: "custom" as const,
     }));
+  // 广场红包通常即将开奖且变化快，排在「常发」之前优先扫描
+  const plaza = await collectPlazaRooms();
   const history = await collectHistoryRooms();
   const rank = await fetchHotRankRooms();
   const hot = await fetchHotPartitionRooms(e.config.hotRoomsPerPartition);
 
   const merged: ScanRoom[] = [];
   const seen = new Set<number>();
-  for (const list of [custom, history, rank, hot]) {
+  for (const list of [custom, plaza, history, rank, hot]) {
     for (const room of list) {
       if (seen.has(room.roomid)) continue;
       seen.add(room.roomid);
@@ -891,7 +1111,7 @@ async function collectRooms(): Promise<ScanRoom[]> {
     }
     if (merged.length >= MAX_ROOMS_PER_ROUND) break;
   }
-  addLog(`收集完成：自定义 ${custom.length}、常发红包 ${history.length}、人气 ${rank.length}、分区热门 ${hot.length}，去重后 ${merged.length}`);
+  addLog(`收集完成：自定义 ${custom.length}、红包广场 ${plaza.length}、常发红包 ${history.length}、人气 ${rank.length}、分区热门 ${hot.length}，去重后 ${merged.length}`);
   return merged;
 }
 
@@ -1103,6 +1323,38 @@ function startLoop() {
   scheduleNext(5_000);
 }
 
+// ----- 红包广场独立循环 -----
+
+function schedulePlazaNext(delayMs?: number) {
+  const e = engine();
+  if (e.plazaTimer) clearTimeout(e.plazaTimer);
+  e.plazaTimer = setTimeout(() => {
+    e.plazaTimer = null;
+    void tickPlaza();
+  }, Math.max(2000, delayMs ?? e.config.plazaIntervalMs));
+}
+
+async function tickPlaza() {
+  const e = engine();
+  await ensureLoaded();
+  if (!e.config.enabled || !e.config.plazaUrl.trim() || !e.config.account) {
+    e.state.plazaNextScanAt = null;
+    schedulePlazaNext(e.config.plazaIntervalMs);
+    return;
+  }
+  if (e.plazaInFlight) {
+    schedulePlazaNext(5_000);
+    return;
+  }
+  await runPlazaRound();
+}
+
+function startPlazaLoop() {
+  const e = engine();
+  if (e.plazaTimer) return;
+  schedulePlazaNext(8_000);
+}
+
 // ===== 对外接口 =====
 
 export type PublicScanSnapshot = {
@@ -1120,6 +1372,7 @@ export type PublicScanSnapshot = {
 export async function getPublicSnapshot(): Promise<PublicScanSnapshot> {
   await ensureLoaded();
   startLoop();
+  startPlazaLoop();
   const e = engine();
   return {
     enabled: e.config.enabled,
@@ -1144,6 +1397,7 @@ export type AdminScanSnapshot = {
 export async function getAdminSnapshot(): Promise<AdminScanSnapshot> {
   await ensureLoaded();
   startLoop();
+  startPlazaLoop();
   const e = engine();
   return {
     config: {
@@ -1179,9 +1433,12 @@ export async function setScanEnabled(enabled: boolean): Promise<{ ok: boolean; m
       e.timer = null;
       scheduleNext(500);
     }
+    // 广场循环也立即开始（不等下一个 60 秒周期）
+    if (!e.plazaInFlight) schedulePlazaNext(1000);
   } else {
     addLog("管理后台停止扫描", "warn");
     e.state.nextScanAt = null;
+    e.state.plazaNextScanAt = null;
     addLog("等待当前请求结束…", "info");
     await saveState().catch(() => {});
   }
@@ -1194,6 +1451,8 @@ export async function updateScanConfig(patch: {
   requestIntervalMs?: number;
   redIntervalMs?: number;
   hotRoomsPerPartition?: number;
+  plazaUrl?: string;
+  plazaIntervalMs?: number;
 }): Promise<ScanConfig> {
   await ensureLoaded();
   const e = engine();
@@ -1210,7 +1469,19 @@ export async function updateScanConfig(patch: {
   if (patch.hotRoomsPerPartition !== undefined) {
     e.config.hotRoomsPerPartition = Math.max(0, Math.floor(num(patch.hotRoomsPerPartition)));
   }
+  if (patch.plazaUrl !== undefined) {
+    e.config.plazaUrl = String(patch.plazaUrl).trim();
+    plazaCache = null;
+    plazaFail = { streak: 0, lastLogAt: 0 };
+  }
+  if (patch.plazaIntervalMs !== undefined) {
+    e.config.plazaIntervalMs = Math.max(10_000, Math.floor(num(patch.plazaIntervalMs)));
+  }
   await saveConfig();
+  // 配置变化后按新间隔重新排队，避免旧的定时器继续按旧节奏执行
+  if (patch.plazaUrl !== undefined || patch.plazaIntervalMs !== undefined) {
+    schedulePlazaNext(1000);
+  }
   return e.config;
 }
 
