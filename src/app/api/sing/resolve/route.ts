@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { findOnPlaybackPlatform, pickSong } from "@/lib/sing/match";
 import { musicServiceAvailable, searchCapabilities, searchSongs } from "@/lib/sing/music-service";
+import { refreshProfile } from "@/lib/sing/refresh";
 import { allSongs, isValidUid, readProfile } from "@/lib/sing/store";
 import { isPlaybackPlatform, type PlaybackPlatform, type ResolveResult, type SongRef } from "@/lib/sing/types";
 
@@ -52,6 +53,52 @@ async function finalize(
   const converted = await findOnPlaybackPlatform(origin, target);
   if (converted) return ok({ ...base, song: converted, via });
   return ok({ ...base, status: "unmatched", message: "cross_platform_failed" });
+}
+
+/** 在目标平台直接搜索（可用性检查 + 结果），失败时给出对应的错误响应 */
+async function searchOnTarget(
+  target: PlaybackPlatform,
+  keyword: string,
+): Promise<{ error: NextResponse } | { results: SongRef[] }> {
+  if (!(await musicServiceAvailable())) {
+    return { error: ok({ status: "service_unavailable", message: "service_unavailable" }) };
+  }
+  if (!(await canSearchOn(target))) {
+    return { error: ok({ status: "unmatched", message: "search_unavailable" }) };
+  }
+  return { results: await searchSongs(target, keyword, 10) };
+}
+
+/** 把搜索命中的歌曲组装成「直接播放」结果 */
+function searchHit(picked: { song: SongRef; reason: string }, target: PlaybackPlatform): NextResponse {
+  return ok({
+    status: "ok",
+    song: { ...picked.song, platform: target },
+    via: "search",
+    matchReason: picked.reason,
+    matchedName: picked.song.name,
+    matchedArtists: picked.song.artists,
+  });
+}
+
+/** 歌单未命中时重新向音乐平台拉一次歌单的冷却：同一用户 60 秒内最多刷新一次 */
+const REFRESH_COOLDOWN_MS = 60_000;
+const lastRefreshAt = new Map<string, number>();
+
+/**
+ * 重新解析该用户的歌单（粉丝可能刚在音乐平台加了歌，服务器缓存的还是旧列表）。
+ * 冷却期内直接返回 null，避免每条没命中的点歌都去打平台接口。
+ */
+async function refreshPool(uid: string): Promise<SongRef[] | null> {
+  const now = Date.now();
+  if (now - (lastRefreshAt.get(uid) || 0) < REFRESH_COOLDOWN_MS) return null;
+  lastRefreshAt.set(uid, now);
+  try {
+    const profile = await refreshProfile(uid);
+    return profile ? allSongs(profile) : null;
+  } catch {
+    return null;
+  }
 }
 
 function pickRandom<T>(list: T[]): T | null {
@@ -106,34 +153,34 @@ export async function POST(request: Request) {
 
   // 没有歌单 → 直接在目标平台搜索
   if (pool.length === 0) {
-    if (!(await musicServiceAvailable())) {
-      return ok({ status: "service_unavailable", message: "service_unavailable" });
-    }
-    if (!(await canSearchOn(target))) {
-      return ok({ status: "unmatched", message: "search_unavailable" });
-    }
-    const results = await searchSongs(target, rawKeyword, 10);
-    const picked = pickSong(rawKeyword, results);
+    const searched = await searchOnTarget(target, rawKeyword);
+    if ("error" in searched) return searched.error;
+    const picked = pickSong(rawKeyword, searched.results);
     if (!picked) {
       return ok({
         status: "unmatched",
         message: "search_no_match",
-        candidates: results.slice(0, 5).map((s) => `${s.name} - ${s.artists.join("/")}`),
+        candidates: searched.results.slice(0, 5).map((s) => `${s.name} - ${s.artists.join("/")}`),
       });
     }
-    return ok({
-      status: "ok",
-      song: { ...picked.song, platform: target },
-      via: "search",
-      matchReason: picked.reason,
-      matchedName: picked.song.name,
-      matchedArtists: picked.song.artists,
-    });
+    return searchHit(picked, target);
   }
 
   const picked = pickSong(rawKeyword, pool);
-  if (!picked) {
-    return ok({ status: "unmatched", message: "no_match" });
+  if (picked) return finalize(picked.song, target, "user", picked.reason);
+
+  // 歌单里没有 → 先刷新一遍歌单再匹配（粉丝可能刚加了这首歌，服务器还是旧列表），
+  // 刷新后仍未命中才在目标平台搜索最相近的一首。搜索也无结果时返回 no_match，
+  // 客户端刷新歌单后会再试一次。
+  const refreshed = await refreshPool(uid);
+  if (refreshed) {
+    const again = pickSong(rawKeyword, refreshed);
+    if (again) return finalize(again.song, target, "user", again.reason);
   }
-  return finalize(picked.song, target, "user", picked.reason);
+
+  const fallback = await searchOnTarget(target, rawKeyword);
+  if ("error" in fallback) return fallback.error;
+  const alt = pickSong(rawKeyword, fallback.results);
+  if (alt) return searchHit(alt, target);
+  return ok({ status: "unmatched", message: "no_match" });
 }

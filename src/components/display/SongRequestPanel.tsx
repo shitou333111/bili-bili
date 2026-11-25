@@ -270,11 +270,11 @@ export default function SongRequestPanel({
                因此改为只实现额外的功能。
               </li>
               <li>
-                「{value.keyword || "点歌"} 随机」随机播放用户的歌单，「{value.keyword || "点歌"} 主播」随机播放主播歌单的一首。
+                「{value.keyword || "点歌"} 随机」随机播放用户歌单的一首，「{value.keyword || "点歌"} 主播」随机播放主播歌单的一首。
               </li>
               <li>
                 {isNative
-                  ? "本机播放软件支持网易云 / QQ音乐 / 酷狗 / 汽水音乐。"
+                  ? "本机播放软件支持网易云 / QQ音乐 / 酷狗 / 汽水音乐，但是汽水音乐不能搜索，也就是。"
                   : "本机播放需要在 Windows 客户端中使用。"}
               </li>
               <li>该功能不会显示在画布中，只通过弹幕互动。这个模块不会太常用，之后会移动到页面底部。</li>
@@ -372,7 +372,7 @@ export default function SongRequestPanel({
         {/* 点歌记录：状态随队列实时流转（排队 → 播放中 → 已播放） */}
         <div className="mt-3 border-t border-[#e6d2d1] pt-2.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-black/75">点歌记录（自下向上按序号排队播放）</span>
+            <span className="text-xs font-medium text-black/75">点歌记录（自下向上按序号播放）</span>
             <button
               type="button"
               disabled={logs.length === 0}
