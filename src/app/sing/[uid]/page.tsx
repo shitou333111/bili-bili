@@ -6,6 +6,15 @@
  */
 import SingClient from "@/components/sing/SingClient";
 
+/**
+ * 静态导出（桌面端 output: export）要求动态段能预生成参数，否则构建直接失败。
+ * 桌面端不会打开 /sing/<uid>（「歌单网站」走外部浏览器访问服务器地址），
+ * 因此导出时给一个占位参数即可；Web 构建返回空数组，保持任意 UID 动态渲染。
+ */
+export function generateStaticParams() {
+  return process.env.TAURI_BUILD === "1" ? [{ uid: "0" }] : [];
+}
+
 export default async function Page({ params }: { params: Promise<{ uid: string }> }) {
   const { uid } = await params;
   return <SingClient routeUid={uid} />;
