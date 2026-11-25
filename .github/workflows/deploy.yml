@@ -84,6 +84,22 @@ jobs:
           BUILD_TS="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
           NEXT_PUBLIC_BUILD_DATE="${BUILD_TS}" npm run build
 
+      # 点歌解析服务（Go CLI，依赖 music-lib）：.tools/ 不入库，必须在 CI 里编译并随
+      # standalone 产物一起部署，否则服务器上 search/parse 会报 service_unavailable。
+      # 只知道 Windows 的开发机不必装 Go —— 这里用 runner 的 Go 交叉编译出 Linux 版。
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: music-service/go.mod
+          cache-dependency-path: music-service/go.sum
+
+      - name: Build music-service (linux)
+        run: |
+          cd music-service
+          mkdir -p ../.tools/music-service
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+            -o ../.tools/music-service/music-service-linux-amd64 .
+
       - name: Prepare deploy artifacts
         run: |
           # Next.js standalone 输出结构:
@@ -117,6 +133,11 @@ jobs:
             cp -r public/. deploy-dist/public/
           fi
 
+          # 点歌解析服务：放进 release 的 .tools/music-service/（server.js 的 cwd 就是 release 目录）
+          mkdir -p deploy-dist/.tools/music-service
+          cp .tools/music-service/music-service-linux-amd64 deploy-dist/.tools/music-service/
+          chmod +x deploy-dist/.tools/music-service/music-service-linux-amd64
+
       # 冒烟测试：用即将上线的 standalone 产物在 runner 上起服务，验证 PWA 关键路由。
       # 目的：/sw.js 或 manifest 构建异常（路由被静态化、图标缺失、版本号未注入）时，
       # 在部署前直接失败，而不是等用户端检测不到更新或出现白屏。
@@ -132,6 +153,9 @@ jobs:
             sleep 1
           done
           [ -n "$ready" ] || { echo "standalone server did not start"; exit 1; }
+          # 点歌解析服务必须随包部署，且能在 Linux 上正常启动
+          test -x deploy-dist/.tools/music-service/music-service-linux-amd64
+          deploy-dist/.tools/music-service/music-service-linux-amd64 health | grep -q '"ok":true'
           # PWA 图标必须随 public 一起部署
           test -f deploy-dist/public/icon-192.png
           test -f deploy-dist/public/icon-512.png

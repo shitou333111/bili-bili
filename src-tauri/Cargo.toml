@@ -98,7 +98,7 @@ tokio-tungstenite = "0.29"
 futures-util = "0.3"
 mime_guess = "2"
 # tokio：with_timeout 用的 tokio::time::timeout（各命令请求超时，配合全局 reqwest Client 复用）
-tokio = { version = "1", features = ["time", "net", "rt-multi-thread", "sync", "io-util", "macros"] }
+tokio = { version = "1", features = ["time", "net", "rt-multi-thread", "sync", "io-util", "macros", "process"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # 仅 Windows：「原始录屏」在找不到 adb 时按需下载 Google 官方 platform-tools（zip 包）并解压。
 # 走 flate2 后端（工程里已有），不带 zlib-rs/zopfli/zstd 等压缩后端，只是解压用。

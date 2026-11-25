@@ -178,6 +178,7 @@ bili_live/
 | 主播礼物数据 | `anchor/gifts` | [anchor-gifts-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/anchor-gifts-client.ts) |
 | 盲盒抽取记录 | `blind-box/drawStream` | [stats-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/stats-client.ts) |
 | 认证/合成/其他统计 | `stats/*` | [stats-client.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/stats-client.ts) |
+| 天选/红包详情（服务器扫描） | `lottery/getLotteryInfoWeb` / `popularityRedPocket/RedPocketActiveList` | [lottery-scan.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/lottery-scan.ts)（WBI 签名 + 扫描账号） |
 | 扫码登录 / 刷新凭证 | B站 登录接口 | [auth/](file:///c:/Users/song/vscode_projects/bili_live/src/lib/auth/) |
 
 > 这些功能在「服务器账号」（source=`server`）下**不可用**，因为没有 B站 登录凭证，详见下文「账号体系」。
@@ -190,6 +191,7 @@ bili_live/
 |------|---------|------|
 | 天选礼物列表 | `guardBenefit/GiftPanel` | 判断哪些礼物属于"天选" |
 | 红包礼物列表 | `popularityRedPocket/RedPocketDetail` | 判断红包礼物 |
+| **红包广场** | `RedPacketPlaza` | 活动期间各直播间正在发放的红包列表，匿名可请求，变化快、需高频轮询 |
 | 盲盒信息（内含礼物列表） | `blindFirstWin/getInfo` | 盲盒内有哪些礼物 |
 | 主播信息 / 头像 | `anchor-info` / `faces` | 根据 uid 查昵称、头像 |
 | 礼物特效配置 | `fullScSpecialEffect/GetEffectConfListV2` | 礼物特效列表 |
@@ -229,6 +231,7 @@ bili_live/
 | 主播卡片 | `https://api.live.bilibili.com/live_user/v1/card/card_up?uid={mid}&browser=0` |
 | 天选礼物列表 | `https://api.live.bilibili.com/xlive/general-interface/v1/guardBenefit/GiftPanel` |
 | 红包礼物列表 | `https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDetail` |
+| **红包广场**（活动红包列表，admin 可配置完整链接） | `https://api.live.bilibili.com/xlive/custom-activity-interface/activities2026/RedPacketPlaza?act_id={id}` |
 | 盲盒信息（内含礼物列表） | `https://api.live.bilibili.com/xlive/general-interface/v1/blindFirstWin/getInfo` |
 | 登录态校验 / 用户信息 | `https://api.bilibili.com/x/web-interface/nav` |
 | 风控指纹（spi） | `https://api.bilibili.com/x/frontend/finger/spi` |
@@ -240,6 +243,8 @@ bili_live/
 | **消费记录**（送礼明细，增量拉取） | `https://api.live.bilibili.com/xlive/revenue/v2/giftStream/payRecord` |
 | **主播收到的礼物** | `https://api.live.bilibili.com/xlive/revenue/v1/giftStream/getReceivedGiftStream` |
 | **盲盒抽取记录** | `https://api.live.bilibili.com/xlive/general-interface/v1/blind-box/drawStream` |
+| **天选详情**（按房间，扫描引擎，需 WBI） | `https://api.live.bilibili.com/xlive/lottery-interface/v1/lottery/getLotteryInfoWeb` |
+| **红包详情**（按房间，扫描引擎，需 WBI） | `https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketActiveList` |
 | 粉丝列表 | `https://api.bilibili.com/x/relation/fans?vmid={mid}&pn={pn}&ps={ps}` |
 | 粉丝牌列表 | `https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/panel?page={page}&page_size=10` |
 | 取关 / 移除粉丝牌 | `https://api.bilibili.com/x/relation/modify`、`https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/web_room/del_medal` |
@@ -289,6 +294,9 @@ bili_live/
 | `upload-state.json` | 增量上传哈希记录（Tauri 端）|
 | `gift-catalog.json` | 礼物图标目录缓存（服务端，来自 B站 giftConfig API，12h 更新一次）|
 | `special-gift-ids.json` | 天选/红包礼物 ID 的历史累积（全局共享：列表对所有用户一致） |
+| `lottery-scan-config.json` | 天选/红包扫描配置（开关、阈值、各扫描间隔、红包广场链接、扫描账号） |
+| `lottery-scan-state.json` | 扫描状态与当前结果（`/red` 页面的数据源） |
+| `lottery-scan-history.json` | 「常发红包」直播间历史统计 |
 
 > Tauri 端的会话存在 `plugin-store`（`bili-live-state.json`），Web 端的会话存在服务器的 `.data/bili-live-state.json`。它们结构相同，但**互不通**——在 Web 登录的账号和在本机客户端登录的账号是各自独立的。
 
@@ -450,9 +458,29 @@ bili_live/
 - **favicon**：`/moniqi` 壳页面 HTML 用内联 SVG data-URI 作 favicon，不依赖 CDN，避免防盗链 403。
 - **admin 切换活动**：`/moniqi` 每次请求都读取服务器 `admin-config.json`（无模块级缓存），所以 admin 里切换活动**立即生效、无需改代码**。唯一前提是**目标活动的镜像目录 `public/moniqi/mirror/<新id>/` 必须已存在于服务器**（先在本机起用该活动后跑 `moniqi-mirror.mjs` 抓取，再提交部署）。只有当新玩法属于 mock-shim 不支持的**全新算法**时，才需要实现算法并经前端热更新/重新部署推送。
 
+### 6. 天选/红包实时列表（/red）
+
+独立公开页面（[red/page.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/app/red/page.tsx)，列表组件 [RedLotteryList.tsx](file:///c:/Users/song/vscode_projects/bili_live/src/components/RedLotteryList.tsx)），展示**正在发放天选/红包的直播间**，只读、无需登录，点击卡片跳转直播间手动参与。前端用**长轮询**（`api/lottery/scan/results` + `api/lottery/scan/wait`）自动更新，无需手动刷新；支持按类型筛选（天选/电池红包/普通红包）、按时间或金额排序、实时倒计时。
+
+扫描引擎（[lottery-scan.ts](file:///c:/Users/song/vscode_projects/bili_live/src/lib/lottery-scan.ts)）在服务器端运行，由管理后台「服务器扫描」配置（`api/admin/lottery-scan`）：
+
+| 数据源 | 说明 |
+|------|------|
+| **红包广场** | 活动期间官方会在大量直播间发红包，列表变化很快。使用**独立于整轮的定时循环**（默认 60 秒，可单独配置）；接口匿名、无需登录 |
+| 自定义 | 管理员手动添加的直播间 |
+| 常发红包 | 达到次数阈值的历史红包房间，永久记录并按次数排序 |
+| 人气 / 分区热门 | 人气榜与各分区热门直播间 |
+
+- **扫描顺序**：自定义 → **红包广场** → 常发 → 人气 → 分区热门（广场红包排在「常发」之前优先扫描）。
+- 广场返回 `ruid`/`room_id` 后，复用现有红包详情接口 `RedPocketActiveList` 取详细列表，后续流程与普通扫描完全一致。
+- **专属礼物识别**：红包中的「（专属）」礼物只能送给抢到该红包的直播间，没有实际价值。实测详情接口用 `awards[].gift_type === 1` 标记（同一个 `gift_id` 可能同时存在 `0`/`1` 两条，需按单条剔除）。扫描时对**所有红包**（不只活动红包）剔除专属礼物，再取剩余礼物中价值最大者作为红包价值；只剩专属礼物的红包直接丢弃。
+- **容错**：广场链接失效/活动过期（实测无效 `act_id` 返回 `-404`）只做节流告警（每 5 分钟最多一条），不影响主循环；红包接口被限流时进入冷却并提前结束本批。广场配置的是**完整链接**，活动换年份时在 admin 里替换链接即可。
+- 配置/状态/历史分别存放在 `.data/lottery-scan-config.json`、`lottery-scan-state.json`、`lottery-scan-history.json`。
+
 ### 其他页面
 - **登录页**（`/login`）：扫码登录（QR 轮询）、开发者登录。
-- **管理后台**（`/admin`）：用户列表、盲盒/活动配置、模拟登录。
+- **天选红包列表**（`/red`）：公开只读，实时展示正在发红包的直播间（详见上一节）。
+- **管理后台**（`/admin`）：用户列表、盲盒/活动配置、模拟登录、服务器扫描（天选/红包，含红包广场链接与独立扫描间隔）。
 - **复活区截图**（`/screenshot`）：工具介绍与使用，内容由服务器实时提供。
 
 ---

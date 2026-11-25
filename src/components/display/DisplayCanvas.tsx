@@ -362,6 +362,53 @@ function pickEntrySample(v: unknown): EntrySampleConfig {
   };
 }
 
+/**
+ * 网易云宠物投影层。
+ *
+ * 宠物窗口是 Electron 透明窗口（WS_EX_NOREDIRECTIONBITMAP + TOOLWINDOW），
+ * 窗口/游戏捕获都拿不到画面，因此由本机 pet-relay 中转服务通过调试端口取帧，
+ * 这里按固定间隔拉最新一帧（跨域 img 不受 CORS 限制），居中叠在画布上。
+ */
+function PetLayer() {
+  const [src, setSrc] = useState("");
+  const [visible, setVisible] = useState(false);
+  // 中转服务未运行时不频繁重试（避免控制台刷错误），连上后按 8fps 拉帧
+  const okRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    let timer = 0;
+    const loop = () => {
+      if (!alive) return;
+      setSrc(`http://127.0.0.1:9321/frame?t=${Date.now()}`);
+      timer = window.setTimeout(loop, okRef.current ? 120 : 1500);
+    };
+    loop();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
+  return (
+    <div style={{ width: 260, height: 379 }}>
+      <img
+        src={src || undefined}
+        alt=""
+        draggable={false}
+        className="h-full w-full object-contain"
+        style={{ opacity: visible ? 1 : 0 }}
+        onLoad={() => {
+          okRef.current = true;
+          setVisible(true);
+        }}
+        onError={() => {
+          okRef.current = false;
+          setVisible(false);
+        }}
+      />
+    </div>
+  );
+}
+
 export default function DisplayCanvas() {
   const [currentEntry, setCurrentEntry] = useState<EntryItem | null>(null);
   // 入场展示序号：每次展示新入场（含同 uid 连续入场）自增，与 uid 一起做 EntryBadge 的 key。
@@ -462,6 +509,7 @@ export default function DisplayCanvas() {
     giftEffect: true,
     banner: true,
     giftFlip: true,
+    pet: false,
   });
   // flags 的最新 ref（供 applyEvent 读取，避免闭包过期）
   const flagsRef = useRef(flags);
@@ -1246,6 +1294,20 @@ export default function DisplayCanvas() {
         zoom: fit,
       }}
     >
+      {/* 网易云宠物投影：像其他画布元素一样可拖动/缩放，默认居中；帧来自本机 pet-relay */}
+      {flags.pet && (
+        <MovableBox
+          id="pet"
+          rect={layouts.pet[orientation]}
+          onCommit={commitLayout("pet")}
+          editable={isEdit}
+          zIndex={4}
+          {...selectProps("pet")}
+        >
+          <PetLayer />
+        </MovableBox>
+      )}
+
       {/* 动画：正常模式播事件；编辑模式常驻播放样本；未配置视频时显示占位提示。
           与礼物/入场提示一样可拖动/缩放（仅编辑模式）；层级最底（zIndex=1），
           礼物(3)与入场提示(3)在其上，重叠时点击优先选中上层元素。

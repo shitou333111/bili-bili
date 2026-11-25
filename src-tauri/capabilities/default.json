@@ -45,6 +45,11 @@
     "allow-commit-output-file",
     "allow-open-material-folder",
     "allow-commit-material-file",
+    "allow-music-state",
+    "allow-music-play",
+    "allow-music-restart",
+    "allow-music-probe",
+    "allow-pet-relay-start",
     {
       "identifier": "http:default",
       "allow": [

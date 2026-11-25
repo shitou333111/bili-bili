@@ -1051,6 +1051,12 @@ mod wsa;
 #[cfg(windows)]
 mod setup;
 
+// 点歌机本地音乐控制桥：常驻 PowerShell worker 读状态/播放（酷狗 / QQ音乐 / 网易云）
+mod music;
+
+// 网易云桌面宠物帧中转（内置本地 HTTP 服务，供画布投影）
+mod pet_relay;
+
 /// 弹出原生文件选择框，让用户为本账号指定"入场动画"视频文件。
 /// 返回所选文件的绝对路径；用户取消时返回 null。
 #[tauri::command]
@@ -2122,6 +2128,8 @@ pub fn run() {
             }
             // 注册本地展示（浏览器源）服务器状态（server.rs 的幂等启动 / 广播）
             app.manage(server::DisplayServerState::default());
+            // 宠物帧中转状态（点歌机开关触发启动，幂等）
+            app.manage(pet_relay::PetRelay::default());
             if let Some(window) = app.get_webview_window("main") {
                 // 仅桌面端调整窗口尺寸/位置（页面最大宽度来自 page-config.json，单一源头）。
                 // 移动端（iOS/Android）窗口天然全屏，绝不能 set_size/set_position：
@@ -2224,6 +2232,13 @@ pub fn run() {
             // 活动素材下载目录（exe 同级「B瓜活动素材下载」）
             open_material_folder,
             commit_material_file,
+            // 点歌机本地音乐控制桥（酷狗 / QQ音乐 / 网易云）
+            music::music_state,
+            music::music_play,
+            music::music_restart,
+            music::music_probe,
+            // 网易云桌面宠物帧中转（画布投影用）
+            pet_relay::pet_relay_start,
         ])
         .run(context)
         .expect("error while running tauri application");

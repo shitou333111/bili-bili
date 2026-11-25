@@ -1438,6 +1438,26 @@ export default function HomePage() {
     notifyAppReady().catch(() => {});
   }, []);
 
+  // 点歌机插播自检：网易云的调试端口只能由客户端「启动参数」开启（桌面快捷方式已带端口），
+  // 每次软件启动检查一遍；未就绪时打日志，点歌机卡片会显示对应提示。
+  const insertProbeCalled = useRef(false);
+  useEffect(() => {
+    if (insertProbeCalled.current) return;
+    insertProbeCalled.current = true;
+    void (async () => {
+      if (!isTauri()) return;
+      const { probeInsertSupport } = await import("@/lib/song-request/queue");
+      const r = await probeInsertSupport();
+      if (r.ready) {
+        console.info("[点歌机]网易云插播已就绪（CDP 调试端口可用）");
+      } else {
+        console.warn(
+          "[点歌机]网易云插播未就绪：请用桌面「网易云音乐（点歌机）」快捷方式启动客户端（带 --remote-debugging-port=9229）",
+        );
+      }
+    })();
+  }, []);
+
   // 冷启动更新：首页渲染前先检查并应用热更新（先更新切换再显示首页，无闪烁）。
   //  - 有原生更新等待 → 不自动应用，首页照常显示，由原生更新卡片引导手动安装
   //  - 有热更新且满足条件 → 后台下载+激活（hotswap applyUpdate），然后 reload 加载新资源

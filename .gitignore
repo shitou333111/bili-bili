@@ -53,6 +53,26 @@ hot-update.pub
 minisign.key
 minisign.pub
 
+# local toolchains & build artifacts (portable Go, music-service binaries)
+.tools/
+/music-service/music-service
+/music-service/music-service.exe
+/music-service/bin/
+
+# 点歌解析服务：Go 依赖缓存/构建缓存
+/music-service/.cache/
+
+# 临时调试日志
+*.log
+debug.log
+
+# Trae 本地过程文档（AI 生成，不随仓库分发）
+.trae/documents/
+
+# 抓取/反编译得到的研究产物（仅供本地参考，不入库）
+_js_research/
+_probe_js/
+
 # test scratch files
 .fttest/
 

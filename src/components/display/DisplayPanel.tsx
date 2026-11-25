@@ -85,6 +85,7 @@ import { dataFetch } from "@/lib/client-fetch";
 import { getEffectiveBlindBoxConfig, getAllBlindBoxInfo } from "@/lib/stats-client";
 import { type ToastKind } from "@/lib/toast";
 import DisplayEditModal from "./DisplayEditModal";
+import SongRequestPanel from "./SongRequestPanel";
 import EntryBadge, { ENTRY_TOTAL_MS } from "./EntryBadge";
 import EntryOfficialEffect from "./EntryOfficialEffect";
 import ColorBoard from "./ColorBoard";
@@ -1023,6 +1024,19 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     if (text === config.infoPanel.slogan) return;
     void updateInfoPanel({ slogan: text });
   }, [sloganEditText, config.infoPanel.slogan, updateInfoPanel]);
+
+  // 点歌机：保存配置并同步监听服务（开启即自动拉起弹幕监听；关闭不影响其他模块）
+  const updateSongRequest = useCallback(
+    async (patch: Partial<DisplayConfig["songRequest"]>) => {
+      const latest = await loadDisplayConfig(mid);
+      const next = { ...latest.songRequest, ...patch };
+      const saved = await update({ songRequest: next });
+      await syncService(saved);
+      // 宠物投影等开关需要画布即时响应，不用重连浏览器源
+      void displayDanmaku.broadcastFlags();
+    },
+    [mid, update, syncService],
+  );
 
   // 盲盒盈亏 · 弹幕查询开关：不显示在画布上、不参与派生 master，但它的查询依赖弹幕监听，
   // 因此单独触发监听服务的启停（打开它即可单独让监听跑起来，关闭它也不影响画布模块）
@@ -1988,6 +2002,14 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
           onClose={() => setEditOpen(false)}
         />
       )}
+
+      {/* 点歌机：不加入画布，只通过弹幕回复互动（观众发「点歌 歌名」→ 本机音乐软件播放） */}
+      <SongRequestPanel
+        mid={mid}
+        value={config.songRequest}
+        isNative={isNative}
+        onChange={updateSongRequest}
+      />
 
       {/* 信息面板：横向半透明长条，位于「收到的礼物展示」上方。
           三个元素各自可勾选；榜一内部 5 个日期也可分别勾选。数据由主进程自动拉取。 */}

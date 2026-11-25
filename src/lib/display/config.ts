@@ -48,7 +48,7 @@ function normalizeRect(v: unknown, fallback: MovableRect): MovableRect {
 function normalizeLayout(raw: unknown): DisplayLayout {
   const d = DEFAULT_DISPLAY_CONFIG.layout;
   const r = (raw ?? {}) as Partial<DisplayLayout>;
-  const norm = (el: "infoPanel" | "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner" | "giftFlip", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
+  const norm = (el: "infoPanel" | "gift" | "giftSeparate" | "giftEffect" | "entry" | "anime" | "banner" | "giftFlip" | "pet", rawEl: unknown): Record<ScreenOrientation, MovableRect> => {
     const re = (rawEl ?? {}) as Record<ScreenOrientation, unknown>;
     const def = d[el];
     return {
@@ -65,6 +65,7 @@ function normalizeLayout(raw: unknown): DisplayLayout {
     anime: norm("anime", r.anime),
     banner: norm("banner", (r as any).banner),
     giftFlip: norm("giftFlip", (r as any).giftFlip),
+    pet: norm("pet", (r as any).pet),
   };
   // 旧默认位置迁移（仅当用户从未拖动过、仍是旧默认坐标时）：
   // ① 最早左上角（60/70,6）② 上一版右上角（1593/743,60/70）③ 上一版 250 宽的右上角（1610/760）
@@ -78,6 +79,14 @@ function normalizeLayout(raw: unknown): DisplayLayout {
   }
   if (isOldPortrait(70, 6) || isOldPortrait(743, 70) || isOldPortrait(760, 70)) {
     ot.portrait = { ...d.infoPanel.portrait };
+  }
+  // 宠物默认尺寸偏小：旧的 1.5 倍居中默认值升级为 2.2 倍居中
+  const pt = out.pet;
+  if (pt.landscape.scale === 1.5 && pt.landscape.x === 765 && pt.landscape.y === 256) {
+    pt.landscape = { ...d.pet.landscape };
+  }
+  if (pt.portrait.scale === 1.5 && pt.portrait.x === 345 && pt.portrait.y === 676) {
+    pt.portrait = { ...d.pet.portrait };
   }
   return out;
 }
@@ -121,7 +130,9 @@ export function displayMaster(cfg: DisplayConfig): boolean {
     cfg.entry ||
     cfg.anime ||
     cfg.banner?.enabled ||
-    cfg.giftFlip?.enabled
+    cfg.giftFlip?.enabled ||
+    // 宠物投影也是画布元素：只开它时画布/服务仍需保持运行
+    cfg.songRequest?.petCapture
   );
 }
 
@@ -133,7 +144,7 @@ export function displayMaster(cfg: DisplayConfig): boolean {
  *  - 弹幕互动不需要（它自己按间隔向直播间发弹幕，不依赖监听）
  */
 export function displayNeedsService(cfg: DisplayConfig): boolean {
-  return displayMaster(cfg) || !!cfg.blindBoxQuery?.enabled;
+  return displayMaster(cfg) || !!cfg.blindBoxQuery?.enabled || !!cfg.songRequest?.enabled;
 }
 
 /** 上次入场时间记录条数上限：超出时按时间戳保留最近的条目，防止文件无限增长 */
@@ -464,6 +475,25 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
     blindBoxQuery: {
       // 字段缺失（老配置/首次）时默认开启；一旦写入就记住用户选择
       enabled: r.blindBoxQuery === undefined ? true : !!r.blindBoxQuery.enabled,
+    },
+    songRequest: {
+      enabled: !!r.songRequest?.enabled,
+      keyword:
+        typeof r.songRequest?.keyword === "string" && r.songRequest.keyword.trim()
+          ? r.songRequest.keyword.trim().slice(0, 10)
+          : d.songRequest.keyword,
+      platform:
+        r.songRequest?.platform === "qq" ||
+        r.songRequest?.platform === "kugou" ||
+        r.songRequest?.platform === "soda"
+          ? r.songRequest.platform
+          : "netease",
+      giftId:
+        typeof r.songRequest?.giftId === "number" && Number.isFinite(r.songRequest.giftId) && r.songRequest.giftId > 0
+          ? Math.round(r.songRequest.giftId)
+          : 0,
+      giftName: typeof r.songRequest?.giftName === "string" ? r.songRequest.giftName.slice(0, 60) : "",
+      petCapture: !!r.songRequest?.petCapture,
     },
   };
 }

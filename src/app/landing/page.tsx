@@ -77,6 +77,11 @@ const others = [
     path: "/red",
     desc: "提供发天选和红包的直播间列表，方便点进直播间参与抽奖。但不能自动参与，也不会提供，以防违规。",
   },
+  {
+    title: "点歌机",
+    path: "/sing",
+    desc: "导入你的网易云 / QQ音乐 / 酷狗等歌单，在主播直播间发送「点歌 歌名」即可点歌；主播也可以设置自己的演唱歌单。",
+  },
 ];
 
 export default function LandingPage() {
@@ -146,7 +151,7 @@ export default function LandingPage() {
 
         {/* ============ 其他功能（在使用指南上方） ============ */}
         <section id="more" className="mx-auto mt-16 max-w-4xl scroll-mt-8 sm:mt-24">
-          <h2 className="text-center text-2xl font-semibold sm:text-3xl">其他功能</h2>
+          <h2 className="text-center text-2xl font-semibold sm:text-3xl">其他功能（点击进入）</h2>
           <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {others.map((o) => (
               <a

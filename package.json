@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
+    "build:music": "node scripts/build-music-service.mjs",
     "build:tauri": "node scripts/build-tauri.mjs",
     "start": "next start -H 0.0.0.0",
     "moniqi:mirror": "node scripts/moniqi-mirror.mjs",
+    "pet-relay": "node scripts/pet-relay.mjs",
     "postinstall": "node scripts/patch-foamtree.mjs && node scripts/patch-bilibili-ws.mjs && node scripts/patch-particle-effect-button.mjs",
     "lint": "eslint",
     "tauri": "tauri"

@@ -17,6 +17,13 @@ fn main() {
                 // 活动素材下载（打开 exe 同级「B瓜活动素材下载」目录 + 文件落盘）
                 "open_material_folder",
                 "commit_material_file",
+                // 点歌机 · 本机音乐软件控制（缺失会导致 invoke 报 not allowed）
+                "music_state",
+                "music_play",
+                "music_restart",
+                "music_probe",
+                // 网易云宠物帧中转（内置 HTTP 服务，开关打开时启动）
+                "pet_relay_start",
             ]),
         ),
     )

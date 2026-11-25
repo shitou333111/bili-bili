@@ -2385,6 +2385,30 @@
           "markdownDescription": "Enables the is_bililive_running command without any pre-configured scope."
         },
         {
+          "description": "Enables the music_play command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-music-play",
+          "markdownDescription": "Enables the music_play command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the music_probe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-music-probe",
+          "markdownDescription": "Enables the music_probe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the music_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-music-restart",
+          "markdownDescription": "Enables the music_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the music_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-music-state",
+          "markdownDescription": "Enables the music_state command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-activity-panel",
@@ -2413,6 +2437,12 @@
           "type": "string",
           "const": "allow-output-dir",
           "markdownDescription": "Enables the output_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pet_relay_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pet-relay-start",
+          "markdownDescription": "Enables the pet_relay_start command without any pre-configured scope."
         },
         {
           "description": "Enables the pick_video_file command without any pre-configured scope.",
@@ -2565,6 +2595,30 @@
           "markdownDescription": "Denies the is_bililive_running command without any pre-configured scope."
         },
         {
+          "description": "Denies the music_play command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-music-play",
+          "markdownDescription": "Denies the music_play command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the music_probe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-music-probe",
+          "markdownDescription": "Denies the music_probe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the music_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-music-restart",
+          "markdownDescription": "Denies the music_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the music_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-music-state",
+          "markdownDescription": "Denies the music_state command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_activity_panel command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-activity-panel",
@@ -2593,6 +2647,12 @@
           "type": "string",
           "const": "deny-output-dir",
           "markdownDescription": "Denies the output_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pet_relay_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pet-relay-start",
+          "markdownDescription": "Denies the pet_relay_start command without any pre-configured scope."
         },
         {
           "description": "Denies the pick_video_file command without any pre-configured scope.",

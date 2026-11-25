@@ -87,6 +87,7 @@ import {
 import { getGiftEffectsMap } from "@/lib/gift-local-store";
 import { fetchUserInfo } from "@/lib/tools-client";
 import { getVersionDisplay } from "@/lib/updater";
+import { handleSongRequestDanmaku, notifySongRequestGift, resetSongRequest } from "@/lib/song-request";
 
 /** 浏览器源客户端 → 主窗口 的消息（经 display-server-message 事件） */
 interface ServerMessage {
@@ -1180,6 +1181,7 @@ class DisplayDanmakuService {
         giftEffect: !!cfg.giftEffect?.enabled,
         banner: !!cfg.banner?.enabled,
         giftFlip: !!cfg.giftFlip?.enabled,
+        pet: !!cfg.songRequest?.petCapture,
       },
     });
   }
@@ -1206,6 +1208,7 @@ class DisplayDanmakuService {
         giftEffect: !!cfg.giftEffect?.enabled,
         banner: !!cfg.banner?.enabled,
         giftFlip: !!cfg.giftFlip?.enabled,
+        pet: !!cfg.songRequest?.petCapture,
       },
     });
   }
@@ -1547,6 +1550,7 @@ class DisplayDanmakuService {
     this.infoPanelLastRankAt = 0;
     this.infoPanelLastPkAt = 0;
     this.stopListeners();
+    resetSongRequest();
     this.emitStatus({ state: "idle" });
   }
 
@@ -1750,6 +1754,7 @@ class DisplayDanmakuService {
             num: Number(d.num) || 1,
             img: giftImg,
           });
+          notifySongRequestGift(mid, uid, giftId);
           this.pushDebug("guard", "开通/续费", { uid, guardLevel, giftName: name, cmd, giftId, hasImg: !!giftImg, hasFace: !!face });
           // ② 礼物特效（仅特效开关开启时）
           const config = await loadDisplayConfig(mid);
@@ -1854,6 +1859,17 @@ class DisplayDanmakuService {
             if (hitId) await this.emitGiftEffect(hitId, key);
           }
         }
+
+        // 点歌机：弹幕开头命中点歌关键词 → 解析歌单并控制本机音乐软件（独立于盲盒查询）
+        void handleSongRequestDanmaku({
+          mid,
+          roomId: this.roomId,
+          config,
+          uid: Number(d.user.uid),
+          uname: String(d.user.uname || ""),
+          avatar: String((d.user as { face?: string }).face || ""),
+          content,
+        });
 
         if (!config.blindBoxQuery?.enabled) return;
         const senderUid = Number(d.user.uid);
@@ -2569,6 +2585,8 @@ class DisplayDanmakuService {
       num: Number(d.num) || 1,
       img: giftImg,
     });
+    // 点歌礼物：命中正在等待投喂的点歌请求 → 立即放行
+    notifySongRequestGift(mid, uid, giftId);
     this.pushDebug("gift", "记录", { uid, uname, giftId, giftName: d.giftName, num: Number(d.num) || 1, hasImg: !!giftImg });
 
     // 「原始录屏」只读订阅点：与展示开关无关（录制不吃展示配置），放在 native 判定之前

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-music-restart"
+description = "Enables the music_restart command without any pre-configured scope."
+commands.allow = ["music_restart"]
+
+[[permission]]
+identifier = "deny-music-restart"
+description = "Denies the music_restart command without any pre-configured scope."
+commands.deny = ["music_restart"]

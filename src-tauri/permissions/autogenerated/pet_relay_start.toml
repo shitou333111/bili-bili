@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pet-relay-start"
+description = "Enables the pet_relay_start command without any pre-configured scope."
+commands.allow = ["pet_relay_start"]
+
+[[permission]]
+identifier = "deny-pet-relay-start"
+description = "Denies the pet_relay_start command without any pre-configured scope."
+commands.deny = ["pet_relay_start"]

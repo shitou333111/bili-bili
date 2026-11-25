@@ -42,7 +42,8 @@ export type LayoutElementId =
   | "entry"
   | "anime"
   | "banner"
-  | "giftFlip";
+  | "giftFlip"
+  | "pet";
 
 /** 画布元素布局：每个元素按朝向各存一套位置（横屏/竖屏独立） */
 export interface DisplayLayout {
@@ -57,6 +58,8 @@ export interface DisplayLayout {
   banner: Record<ScreenOrientation, MovableRect>;
   /** 礼物翻卡/礼物抽奖：3D 轮转卡片面板 */
   giftFlip: Record<ScreenOrientation, MovableRect>;
+  /** 网易云桌面宠物投影（固定 260×379 基准尺寸） */
+  pet: Record<ScreenOrientation, MovableRect>;
 }
 
 /** 各元素默认位置（横竖屏各一套；首次切入并尚未保存布局时使用）。
@@ -109,6 +112,11 @@ export const DEFAULT_DISPLAY_LAYOUT: DisplayLayout = {
     landscape: { x: Math.round((1920 - 900) / 2), y: 210, scale: 1 },
     portrait: { x: Math.round((1080 - 900) / 2), y: 520, scale: 1 },
   },
+  pet: {
+    // 网易云宠物：基准 260×379，默认 2.2 倍（572×834）居中
+    landscape: { x: Math.round((1920 - 572) / 2), y: Math.round((1080 - 834) / 2), scale: 2.2 },
+    portrait: { x: Math.round((1080 - 572) / 2), y: Math.round((1920 - 834) / 2), scale: 2.2 },
+  },
 };
 
 /** 高级用户自定义入场动画配置（逐用户一份） */
@@ -149,6 +157,22 @@ export interface DanmakuInteractionConfig {
 export interface BlindBoxQueryConfig {
   /** 总开关：关闭后不识别查询弹幕、不自动回复 */
   enabled: boolean;
+}
+
+/** 点歌机配置（弹幕点歌，不在画布中显示，只通过弹幕回复互动） */
+export interface SongRequestConfig {
+  /** 总开关：关闭后不识别点歌弹幕、不自动回复 */
+  enabled: boolean;
+  /** 点歌关键词（必须位于弹幕开头；默认「点歌」） */
+  keyword: string;
+  /** 本机播放用的音乐软件 */
+  platform: "netease" | "qq" | "kugou" | "soda";
+  /** 点歌礼物 id（0 = 不校验礼物） */
+  giftId: number;
+  /** 点歌礼物名称（用于提示文案） */
+  giftName: string;
+  /** 把网易云桌面宠物投影到画布（需在本机运行 pet-relay 中转服务） */
+  petCapture: boolean;
 }
 
 /** 礼物特效模块配置 */
@@ -603,6 +627,8 @@ export interface DisplayConfig {
   layout: DisplayLayout;
   /** 盲盒盈亏 · 弹幕查询 */
   blindBoxQuery: BlindBoxQueryConfig;
+  /** 点歌机（弹幕点歌，不显示在画布上） */
+  songRequest: SongRequestConfig;
 }
 
 /** 画布各模块显示开关（主进程随配置变化实时广播，浏览器源据此即时显隐元素）。
@@ -622,6 +648,8 @@ export type DisplayFlags = {
   banner: boolean;
   /** 礼物翻卡/抽奖模块开关（从 DisplayConfig.giftFlip.enabled 派生） */
   giftFlip: boolean;
+  /** 网易云宠物投影开关（从 DisplayConfig.songRequest.petCapture 派生） */
+  pet: boolean;
 };
 
 /** 默认展示配置 */
@@ -685,6 +713,14 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   },
   blindBoxQuery: {
     enabled: true, // 默认开启：开播即识别查询弹幕并自动回复
+  },
+  songRequest: {
+    enabled: false, // 默认关闭：需要在展示页「点歌机」卡片中开启
+    keyword: "点歌",
+    platform: "netease",
+    giftId: 0,
+    giftName: "",
+    petCapture: false,
   },
 };
 

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getPlatform } from "@/lib/platform";
 import {
   ensureGiftCatalogLoaded,
+  getGiftImg,
   getGiftList,
   getRoomGiftData,
 } from "@/lib/gift-catalog-client";
@@ -99,19 +100,25 @@ function defaultCandidates(): GiftPick[] {
 
 export default function GiftSearchInput({
   giftName,
+  giftId = 0,
   onPick,
   placeholder = "输入礼物名称搜索",
   className = "",
   dropdownWidth,
+  compact = false,
 }: {
   /** 当前已选礼物名称（受控显示值） */
   giftName: string;
+  /** 当前已选礼物 id（用于在输入框右侧回显礼物图标） */
+  giftId?: number;
   /** 点击候选后回调（父级据此写入 giftId / giftName / giftImg） */
   onPick: (g: GiftPick) => void;
   placeholder?: string;
   className?: string;
   /** 下拉列表宽度（px）；不传则与输入框同宽 */
   dropdownWidth?: number;
+  /** 紧凑样式：更矮、更窄、居中的胶囊输入框 */
+  compact?: boolean;
 }) {
   // 输入框"编辑态"文本：输入即时跟随，未点选候选则失焦回退到已选礼物名
   const [text, setText] = useState(giftName);
@@ -150,9 +157,11 @@ export default function GiftSearchInput({
   }, [ready, text, giftName]);
 
   const emptyHint = text.trim() ? "未找到匹配的礼物" : "";
+  // 已选礼物图标：礼物目录就绪后按 id 回查，未选中或下拉展开时不显示
+  const pickedImg = ready && giftId > 0 && !open ? getGiftImg(giftId) : "";
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative ${compact ? "h-5" : ""} ${className}`}>
       <input
         type="text"
         value={text}
@@ -170,8 +179,19 @@ export default function GiftSearchInput({
             if (!pickedRef.current) setText(giftName);
           }, 200);
         }}
-        className={inputBase}
+        className={`${
+          compact
+            ? "block h-5 w-full rounded-full bg-white/85 pl-2 text-center text-[11px] leading-5 text-black/80 outline-none transition placeholder:text-black/35 focus:bg-white focus:ring-2 focus:ring-[#b26a6a]/25"
+            : inputBase
+        } ${pickedImg ? "pr-6" : ""}`}
       />
+      {pickedImg && (
+        <img
+          src={pickedImg}
+          alt=""
+          className="pointer-events-none absolute right-1 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded object-contain"
+        />
+      )}
       {open && (
         <div
           className={`absolute left-0 z-20 mt-1 rounded-lg border border-black/10 bg-white shadow-lg max-h-56 overflow-y-auto ${
