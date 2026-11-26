@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import PlatformIcon from "@/components/PlatformIcon";
-import { isTauri } from "@/lib/server-api";
+import { isTauri, serverApiUrl } from "@/lib/server-api";
 
 interface AccountStatus {
   loggedIn: boolean;
@@ -63,11 +63,14 @@ async function adminRequest(url: string, init?: RequestInit): Promise<Response> 
     ...((init?.headers as Record<string, string> | undefined) || {}),
     ...(sid ? { "X-Admin-Sid": sid } : {}),
   };
+  // 打包后的客户端是静态页，相对路径 /api/... 会指向 WebView 自身而不是后端服务器，
+  // 必须用 serverApiUrl 补全 NEXT_PUBLIC_SERVER_URL
+  const fullUrl = serverApiUrl(url);
   if (isTauri()) {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    return tauriFetch(url, { ...init, headers });
+    return tauriFetch(fullUrl, { ...init, headers });
   }
-  return fetch(url, { ...init, headers, credentials: "include" });
+  return fetch(fullUrl, { ...init, headers, credentials: "include" });
 }
 
 function formatTime(ts?: number): string {
