@@ -1,12 +1,12 @@
 /**
- * 点歌机 · 点歌记录
+ * 点歌听 · 点歌记录
  *
  * 每条点歌（含播放失败 / 未匹配 / 未投喂礼物）都落一条记录到
- * <dataDir>/uid_<mid>/song-request-log.json，点歌机卡片读取展示。
+ * <dataDir>/uid_<mid>/song-request-log.json，点歌听卡片读取展示。
  * 记录按时间倒序保存，最多 MAX_ENTRIES 条；写盘失败（如 Web 端）时降级为内存记录。
  */
 import { getPlatform } from "@/lib/platform";
-import type { PlaybackPlatform, SingPlatform } from "@/lib/sing/types";
+import type { PlaybackTarget, SingPlatform } from "@/lib/sing/types";
 
 const LOG_NAME = "song-request-log.json";
 /** 记录条数上限（超出丢弃最旧的） */
@@ -40,9 +40,11 @@ export interface SongRequestLogEntry {
   /** 实际播放/命中的歌名 */
   songName?: string;
   artists?: string[];
-  platform?: PlaybackPlatform;
+  platform?: PlaybackTarget;
   /** 用户点的原曲来自哪个平台（用于记录里显示来源图标） */
   originPlatform?: SingPlatform;
+  /** 命中来源：playlist=粉丝/主播歌单；library=网络乐库搜索 */
+  source?: "playlist" | "library";
   status: SongRequestLogStatus;
   /** 附加说明：失败原因 / 排队位置等 */
   detail?: string;
@@ -80,9 +82,10 @@ function sanitizeEntry(raw: unknown): SongRequestLogEntry | null {
     artists: Array.isArray(r.artists)
       ? (r.artists as unknown[]).filter((a): a is string => typeof a === "string")
       : undefined,
-    platform: typeof r.platform === "string" ? (r.platform as PlaybackPlatform) : undefined,
+    platform: typeof r.platform === "string" ? (r.platform as PlaybackTarget) : undefined,
     originPlatform:
       typeof r.originPlatform === "string" ? (r.originPlatform as SingPlatform) : undefined,
+    source: r.source === "playlist" || r.source === "library" ? r.source : undefined,
     status,
     detail: typeof r.detail === "string" ? r.detail : undefined,
   };

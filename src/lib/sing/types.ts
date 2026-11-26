@@ -1,5 +1,5 @@
 /**
- * 点歌机 · 共享类型
+ * 点歌听 · 共享类型
  *
  * 数据流向：
  *   粉丝 /sing → /api/sing/* → .data/sing/uid_<uid>.json
@@ -25,9 +25,17 @@ export const SING_PLATFORMS = [
 
 export type SingPlatform = (typeof SING_PLATFORMS)[number];
 
-/** 桌面端实际可播放的平台（点歌机目标软件） */
+/** 桌面端实际可播放的平台（点歌听目标软件） */
 export const PLAYBACK_PLATFORMS = ["netease", "qq", "kugou", "soda"] as const;
 export type PlaybackPlatform = (typeof PLAYBACK_PLATFORMS)[number];
+
+/**
+ * 点歌听的播放方式：
+ * - 具体平台 = 用本机该音乐软件播放；
+ * - inapp = 服务器解析音频、经代理流式传给客户端，在软件内播放。
+ */
+export const PLAYBACK_TARGETS = [...PLAYBACK_PLATFORMS, "inapp"] as const;
+export type PlaybackTarget = (typeof PLAYBACK_TARGETS)[number];
 
 const PLATFORM_LABELS: Record<SingPlatform, string> = {
   netease: "网易云音乐",
@@ -51,6 +59,10 @@ export function isSingPlatform(value: unknown): value is SingPlatform {
 
 export function isPlaybackPlatform(value: unknown): value is PlaybackPlatform {
   return typeof value === "string" && (PLAYBACK_PLATFORMS as readonly string[]).includes(value);
+}
+
+export function isPlaybackTarget(value: unknown): value is PlaybackTarget {
+  return typeof value === "string" && (PLAYBACK_TARGETS as readonly string[]).includes(value);
 }
 
 export function platformLabel(platform: string): string {
@@ -115,6 +127,8 @@ export interface ParsedLink {
   name?: string;
   cover?: string;
   songs?: SongRef[];
+  /** 解析后实际使用的规范链接（短链会换成长期地址，用于后续刷新） */
+  link?: string;
   error?: string;
 }
 
@@ -136,6 +150,16 @@ export interface ResolveResult {
   /** 未匹配时给客户端参考 */
   candidates?: string[];
   message?: string;
+  /** 软件内播放：由服务器取流后代理给客户端 */
+  inapp?: boolean;
+  /** 原平台无法取流，已自动换到其他平台（song.platform 是实际播放平台） */
+  switched?: boolean;
+  /** 换源前的原始平台 */
+  switchedFrom?: SingPlatform;
+  /** 实际取到的音质（请求 high 但账号权益不足时会自动降级） */
+  quality?: string;
+  /** 只拿到平台试听片段（汽水会员曲目在服务器上常见） */
+  preview?: boolean;
 }
 
 export interface HostMatch {

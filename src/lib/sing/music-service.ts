@@ -1,5 +1,5 @@
 /**
- * 点歌机 · Go 解析服务调用层
+ * 点歌听 · Go 解析服务调用层
  *
  * music-service 是一个极薄的 CLI（依赖 github.com/guohuiyuan/music-lib）：
  *   music-service parse <url>
@@ -196,6 +196,7 @@ export async function parseLink(url: string, fresh = false): Promise<ParsedLink>
       kind,
       name: typeof d.name === "string" ? d.name : typeof d.title === "string" ? d.title : undefined,
       cover: typeof d.cover === "string" ? d.cover : undefined,
+      link: typeof d.link === "string" && d.link ? d.link : undefined,
       songs,
     } as ParsedLink;
   })();
@@ -209,9 +210,24 @@ export async function searchSongs(platform: string, query: string, limit = 10): 
   if (!q || !isSingPlatform(platform)) return [];
   const n = Math.min(Math.max(Math.round(limit), 1), 30);
   return cached(`search:${platform}:${n}:${q}`, async () => {
-    const res = await run(["search", "--source", platform, "--q", q, "--limit", String(n)]);
-    if (!res.ok) return [] as SongRef[];
-    const d = res.data || {};
+    // 优先走 serve 模式：搜索实例会带上管理员绑定的账号 Cookie。
+    // 匿名实例会被音乐库过滤掉 VIP/付费曲目（网易云 fl=0、QQ payplay=1），
+    // 导致原唱搜不到、只剩翻唱。
+    const res = await serviceJson("/api/music/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: platform, q, limit: n }),
+    });
+    const served = asRecord(res.data);
+    if (res.ok && Array.isArray(served.songs)) {
+      return normalizeSongs(served.songs, platform);
+    }
+    // 平台自身搜索失败（如上游 502）时不用再跑匿名 CLI 重复一次
+    if (res.error !== "service_unavailable" && res.error !== "bad_output") return [] as SongRef[];
+    // 服务没起 / 旧版二进制没有该接口时退回 CLI（无 Cookie，VIP 曲目可能被过滤）
+    const cli = await run(["search", "--source", platform, "--q", q, "--limit", String(n)]);
+    if (!cli.ok) return [] as SongRef[];
+    const d = cli.data || {};
     return normalizeSongs(d.songs ?? d.list ?? d, platform);
   });
 }
@@ -244,4 +260,182 @@ export function clearMusicServiceCache(): void {
   cache.clear();
   searchCapCache = null;
   binCache = undefined;
+}
+
+// ==================== serve 模式（软件内播放） ====================
+
+/**
+ * serve 模式地址：music-service 以常驻 HTTP 进程运行，只监听回环地址，
+ * 由 Next 服务端反代（浏览器/客户端永远拿不到这个地址）。
+ */
+export function musicServiceBase(): string {
+  return (process.env.MUSIC_SERVICE_URL || "http://127.0.0.1:8081").replace(/\/+$/, "");
+}
+
+/** 内部访问令牌（与 music-service 的 --token 对齐；未配置时为空） */
+export function musicServiceToken(): string {
+  return (process.env.MUSIC_SERVICE_TOKEN || "").trim();
+}
+
+/** 把服务返回的 JSON 当对象读取，避免到处写 any */
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+async function serviceJson(pathname: string, init?: RequestInit, timeoutMs = 15_000): Promise<CliOutcome> {
+  const headers: Record<string, string> = {
+    ...((init?.headers as Record<string, string> | undefined) || {}),
+  };
+  const token = musicServiceToken();
+  if (token) headers["X-Music-Token"] = token;
+  try {
+    const res = await fetch(`${musicServiceBase()}${pathname}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const raw = await res.json().catch(() => null);
+    return unwrap(raw);
+  } catch {
+    return { ok: false, data: null, error: "service_unavailable" };
+  }
+}
+
+export interface MusicAccountStatus {
+  loggedIn: boolean;
+  updatedAt?: number;
+  cookieKeys?: string[];
+}
+
+/** 查询各平台账号登录状态（服务不可用时返回 null） */
+export async function getMusicAccounts(): Promise<Record<string, MusicAccountStatus> | null> {
+  const res = await serviceJson("/api/music/accounts", undefined, 6000);
+  if (!res.ok) return null;
+  const accounts = asRecord(res.data).accounts;
+  return accounts && typeof accounts === "object" ? (accounts as Record<string, MusicAccountStatus>) : null;
+}
+
+export interface MusicQrSession {
+  ok: boolean;
+  key?: string;
+  url?: string;
+  /** 平台直接给的二维码图片（data URL）；为空时前端用 url 自行渲染 */
+  image?: string;
+  expiresAt?: number;
+  error?: string;
+}
+
+/** 创建扫码登录会话 */
+export async function startMusicQrLogin(source: string): Promise<MusicQrSession> {
+  const res = await serviceJson(
+    `/api/music/login/${encodeURIComponent(source)}/start`,
+    { method: "POST" },
+    30_000,
+  );
+  if (!res.ok) return { ok: false, error: res.error || "qr_start_failed" };
+  const d = asRecord(res.data);
+  return {
+    ok: true,
+    key: typeof d.key === "string" ? d.key : "",
+    url: typeof d.url === "string" ? d.url : "",
+    image: typeof d.image === "string" ? d.image : undefined,
+    expiresAt: typeof d.expiresAt === "number" ? d.expiresAt : undefined,
+  };
+}
+
+export interface MusicQrStatus {
+  ok: boolean;
+  status?: "waiting" | "scanned" | "success" | "expired" | "failed";
+  message?: string;
+  key?: string;
+  loggedIn?: boolean;
+  extra?: Record<string, string>;
+  error?: string;
+}
+
+const QR_STATUS = ["waiting", "scanned", "success", "expired", "failed"] as const;
+
+/** 轮询扫码状态（成功时服务端已把 Cookie 落盘） */
+export async function checkMusicQrLogin(source: string, key: string): Promise<MusicQrStatus> {
+  const res = await serviceJson(
+    `/api/music/login/${encodeURIComponent(source)}/check?key=${encodeURIComponent(key)}`,
+    undefined,
+    30_000,
+  );
+  if (!res.ok) return { ok: false, error: res.error || "qr_check_failed" };
+  const d = asRecord(res.data);
+  const status =
+    typeof d.status === "string" && (QR_STATUS as readonly string[]).includes(d.status)
+      ? (d.status as MusicQrStatus["status"])
+      : undefined;
+  return {
+    ok: true,
+    status,
+    message: typeof d.message === "string" ? d.message : undefined,
+    key: typeof d.key === "string" ? d.key : undefined,
+    loggedIn: d.loggedIn === true,
+    extra: d.extra && typeof d.extra === "object" ? (d.extra as Record<string, string>) : undefined,
+  };
+}
+
+/**
+ * 手动绑定某平台账号 Cookie。
+ * 用于汽水音乐：其扫码登录依赖官方动态风控签名，music-lib 明确未调通，
+ * 只能由管理员从已登录的汽水客户端/浏览器复制 Cookie 填进来。
+ */
+export async function setMusicAccountCookie(
+  source: string,
+  cookie: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await serviceJson(
+    `/api/music/accounts/${encodeURIComponent(source)}/cookie`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cookie }),
+    },
+    15_000,
+  );
+  return { ok: res.ok, error: res.error };
+}
+
+/** 清除某平台账号 Cookie */
+export async function clearMusicAccount(source: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await serviceJson(
+    `/api/music/accounts/${encodeURIComponent(source)}/clear`,
+    { method: "POST" },
+    10_000,
+  );
+  return { ok: res.ok, error: res.error };
+}
+
+export interface StreamProbe {
+  ok: boolean;
+  quality?: string;
+  ext?: string;
+  /** 拿到的只是平台试听片段（汽水会员曲目在服务器上常见） */
+  preview?: boolean;
+  error?: string;
+}
+
+/** 探测一首歌能否在该平台取到完整音频（点歌解析时用于判断是否需要换源） */
+export async function probeMusicStream(song: SongRef, quality = "standard"): Promise<StreamProbe> {
+  const qs = new URLSearchParams({
+    source: song.platform,
+    id: song.id,
+    name: song.name || "",
+    artist: song.artists?.join("/") || "",
+    quality,
+  });
+  if (song.playId) qs.set("playid", song.playId);
+  const res = await serviceJson(`/api/music/probe?${qs.toString()}`, undefined, 20_000);
+  if (!res.ok) return { ok: false, error: res.error || "probe_failed" };
+  const d = asRecord(res.data);
+  return {
+    ok: true,
+    quality: typeof d.quality === "string" ? d.quality : undefined,
+    ext: typeof d.ext === "string" ? d.ext : undefined,
+    preview: d.preview === true,
+  };
 }

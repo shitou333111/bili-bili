@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 展示模块 · 点歌机卡片
+ * 展示模块 · 点歌听卡片
  *
  * 不参与画布渲染，只靠弹幕回复互动：观众在直播间发送「点歌 歌名」，
  * 主播端解析其 /sing 歌单并控制本机音乐软件播放。本卡片做配置 + 点歌记录：
@@ -22,6 +22,8 @@ import GiftSearchInput, { type GiftPick } from "./GiftSearchInput";
 import PlatformIcon from "@/components/PlatformIcon";
 import HintBubble from "@/components/HintBubble";
 import { probeInsertSupport, restartNetease, type InsertSupport } from "@/lib/song-request/queue";
+import { stopInAppPlayer } from "@/lib/song-request/inapp-player";
+import InAppPlayerBar from "./InAppPlayerBar";
 
 const STATUS_BADGE: Record<SongRequestLogStatus, { label: string; className: string }> = {
   playing: { label: "播放中", className: "bg-emerald-500/15 text-emerald-700" },
@@ -34,7 +36,10 @@ const STATUS_BADGE: Record<SongRequestLogStatus, { label: string; className: str
   gift_required: { label: "未投喂", className: "bg-black/10 text-black/50" },
 };
 
-const PLATFORMS: { value: SongRequestConfig["platform"]; label: string }[] = [  { value: "qq", label: "QQ" },
+const PLATFORMS: { value: SongRequestConfig["platform"]; label: string }[] = [
+  // 软件内播放放最前：不依赖本机闭源软件，也能精确播其他平台的歌
+  { value: "inapp", label: "软件内" },
+  { value: "qq", label: "QQ" },
   { value: "kugou", label: "酷狗" },
   { value: "soda", label: "汽水" },
   // 网易云放最后：插播未开启时，后面会紧跟「插播未开启 + 重启网易云」提示与按钮
@@ -47,30 +52,35 @@ function formatTime(ts: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** iOS 风格开关（与展示面板其他模块一致） */
+/** iOS 风格开关（与展示面板其他模块一致）；size="sm" 为更扁平的紧凑版 */
 function Switch({
   checked,
   disabled,
   onToggle,
   onColor = "bg-lime-500",
+  size = "md",
 }: {
   checked: boolean;
   disabled?: boolean;
   onToggle: (next: boolean) => void;
   onColor?: string;
+  size?: "md" | "sm";
 }) {
+  const flat = size === "sm";
   return (
     <button
       type="button"
       onClick={() => onToggle(!checked)}
       disabled={disabled}
-      className={`relative h-[22px] w-[40px] shrink-0 rounded-full transition-colors duration-300 ${
-        checked ? onColor : "bg-black/15"
-      } ${disabled ? "opacity-50" : ""}`}
+      className={`relative shrink-0 rounded-full transition-colors duration-300 ${
+        flat ? "h-[16px] w-[30px]" : "h-[22px] w-[40px]"
+      } ${checked ? onColor : "bg-black/15"} ${disabled ? "opacity-50" : ""}`}
     >
       <span
-        className={`absolute top-[2px] h-[18px] w-[18px] rounded-full bg-white shadow transition-all duration-300 ${
-          checked ? "left-[20px]" : "left-[2px]"
+        className={`absolute top-[2px] rounded-full bg-white shadow transition-all duration-300 ${
+          flat
+            ? `h-[12px] w-[12px] ${checked ? "left-[16px]" : "left-[2px]"}`
+            : `h-[18px] w-[18px] ${checked ? "left-[20px]" : "left-[2px]"}`
         }`}
       />
     </button>
@@ -123,22 +133,27 @@ export default function SongRequestPanel({
 
   // 网易云插播自检：软件启动时页首已检查过，这里定期复检。
   // 客户端闲置较久后主窗口渲染进程可能被重建，调试目标会短暂不可用；
-  // 只在挂载时查一次会导致「明明开了端口却一直提示未开启」，所以按 30 秒周期复查。
+  // 只在挂载时查一次会导致「明明开了端口却一直提示未开启」。
+  // 未就绪时用 5 秒的短周期（重启后端口/渲染进程恢复能很快反映到界面），
+  // 已就绪时放宽到 30 秒，避免无谓的 CDP 探测。
   useEffect(() => {
     if (!isNative) return;
     let alive = true;
     const check = () => {
       void probeInsertSupport().then((r) => {
-        if (alive) setInsertSupport(r);
+        if (!alive) return;
+        setInsertSupport(r);
+        // 端口恢复后清掉「仍未就绪」的残留提示
+        if (r.ready) setMusicNotice("");
       });
     };
     check();
-    const id = window.setInterval(check, 30_000);
+    const id = window.setInterval(check, insertSupport?.ready ? 30_000 : 5_000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [isNative]);
+  }, [isNative, insertSupport?.ready]);
 
   // 宠物投影：开启时确保内置中转服务已启动（幂等；客户端重启后配置仍为开启也会自动恢复）
   useEffect(() => {
@@ -188,7 +203,7 @@ export default function SongRequestPanel({
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  /** 一键修复：关闭网易云并用调试端口重新启动，成功后立刻复检 */
+  /** 一键修复：关闭网易云并用调试端口重新启动，成功后继续探测直到端口可用 */
   const restartMusicApp = async () => {
     if (restarting) return;
     if (
@@ -206,25 +221,33 @@ export default function SongRequestPanel({
       setRestarting(false);
       return;
     }
-    const next = await probeInsertSupport();
+    // 端口打开后渲染进程还要几秒才能连上 CDP：持续探测，
+    // 避免「刚重启完就判定未就绪」把提示误留到下一个 5 秒周期。
+    let next = await probeInsertSupport();
+    for (let i = 0; i < 16 && !next.ready; i++) {
+      await new Promise((res) => window.setTimeout(res, 1200));
+      next = await probeInsertSupport();
+    }
     setInsertSupport(next);
-    if (!next.ready) setMusicNotice("已重启，但调试端口仍未就绪（可能被安全软件拦截或端口被占用）");
+    if (!next.ready) {
+      setMusicNotice("已重启网易云，但调试端口仍未就绪（可能被安全软件拦截或端口被占用）");
+    }
     setRestarting(false);
   };
 
   return (
     <section>
       <div className="mb-1.5 flex select-none items-center justify-center gap-2">
-        <h3 className="text-sm font-bold text-black/75">点歌机</h3>
+        <h3 className="text-sm font-bold text-black/75">点歌听</h3>
         <Switch
           checked={value.enabled}
           onToggle={(v) => void onChange({ enabled: v })}
-          onColor="bg-[#b26a6a]"
+          onColor="bg-[#ec4141]"
         />
       </div>
-      <section className="rounded-2xl border border-[#e6d2d1] bg-[#f4e2e0] p-3.5 shadow-[0_1px_2px_rgba(31,28,23,0.06)]">
+      <section className="rounded-2xl border border-[#f4caca] bg-[#fdeeee] p-3.5 shadow-[0_1px_2px_rgba(31,28,23,0.06)]">
         <div className="flex items-start gap-1.5">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-relaxed text-[#6f5a5a]">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-relaxed text-[#6b4b4b]">
             <span>粉丝发送「{value.keyword || "点歌"} 歌名」，自动添加播放。</span>
             <span className="inline-flex items-center gap-1">
               <span className="shrink-0 font-medium text-black/75">触发词</span>
@@ -243,14 +266,14 @@ export default function SongRequestPanel({
                   if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 }}
                 maxLength={10}
-                className="h-5 w-16 rounded-full bg-white/85 px-1.5 text-center text-[11px] leading-5 text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#b26a6a]/25"
+                className="h-5 w-16 rounded-full bg-white/85 px-1.5 text-center text-[11px] leading-5 text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#ec4141]/25"
               />
             </span>
           </div>
           <button
             type="button"
             onClick={() => void openSingPage()}
-            className="h-5 shrink-0 rounded-full bg-[#b26a6a] px-2 text-[10px] font-medium leading-none text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
+            className="h-5 shrink-0 rounded-full bg-[#ec4141] px-2 text-[10px] font-medium leading-none text-white shadow-sm transition hover:opacity-90 active:scale-[0.98]"
           >
             歌单网站↗
           </button>
@@ -258,14 +281,14 @@ export default function SongRequestPanel({
             <ul className="list-disc space-y-1 pl-4">
               <li>直播间发送弹幕点歌，并不是点唱主播的才艺歌曲，而是播放用户喜欢的歌曲，大家一起「听歌」而已。主播可以在左侧的[歌单网站]为自己和粉丝设置歌单。
               </li>
-              <li>相比于一般点歌机，一是粉丝可以精确点自己的歌，二是自动在音乐软件中播放。功能比较偏，因为调研过程中发现一个很完善的插件
+              <li>相比于一般点歌听，一是粉丝可以精确点自己的歌，二是自动在音乐软件中播放。功能比较偏，因为调研过程中发现一个很完善的插件
               <a
                 href="https://play-live.bilibili.com/details/1793973485495"
                 target="_blank"
                 rel="noreferrer"
-                className="mx-1 inline-flex items-center gap-0.5 rounded-full bg-[#b26a6a]/10 px-1.5 py-0.5 align-middle text-[11px] font-medium leading-4 text-[#8f4f4f] transition hover:bg-[#b26a6a] hover:text-white"
+                className="mx-1 inline-flex items-center gap-0.5 rounded-full bg-[#ec4141]/10 px-1.5 py-0.5 align-middle text-[11px] font-medium leading-4 text-[#c9302c] transition hover:bg-[#ec4141] hover:text-white"
               >
-               歌单点歌机↗
+               歌单点歌听↗
               </a>
                因此改为只实现额外的功能。
               </li>
@@ -274,8 +297,8 @@ export default function SongRequestPanel({
               </li>
               <li>
                 {isNative
-                  ? "本机播放软件支持网易云 / QQ音乐 / 酷狗 / 汽水音乐，但是汽水音乐不能搜索，也就是。"
-                  : "本机播放需要在 Windows 客户端中使用。"}
+                  ? "「软件内」由服务器上的音乐账号取流播放，不依赖本机软件，能精确播粉丝其它平台的歌；本机播放支持网易云 / QQ音乐 / 酷狗 / 汽水（汽水只能点歌单内的歌）。"
+                  : "「软件内」由服务器取流，网页端也能用；本机播放需要在 Windows 客户端中使用。"}
               </li>
               <li>该功能不会显示在画布中，只通过弹幕互动。这个模块不会太常用，之后会移动到页面底部。</li>
             </ul>
@@ -311,24 +334,26 @@ export default function SongRequestPanel({
         {notice && <p className="mt-1.5 text-[11px] text-red-600/80">{notice}</p>}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="shrink-0 text-xs font-medium text-black/75">本机音乐软件</span>
+          <span className="shrink-0 text-xs font-medium text-black/75">本机播放软件</span>
           <div className="flex flex-wrap items-center gap-1">
             {PLATFORMS.map((p) => (
               <button
                 key={p.value}
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  // 离开「软件内」时停止正在播放的音频，避免和本机音乐软件同时出声
+                  if (value.platform === "inapp" && p.value !== "inapp") stopInAppPlayer();
                   void onChange(
-                    // 宠物投影只对网易云有效：切到其他软件时一并关闭，避免开关被隐藏后仍在投影
+                    // 宠物投影只对网易云有效：切到其他方式时一并关闭，避免开关被隐藏后仍在投影
                     p.value === "netease" || !value.petCapture
                       ? { platform: p.value }
                       : { platform: p.value, petCapture: false },
-                  )
-                }
+                  );
+                }}
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[11px] transition ${
                   value.platform === p.value
-                    ? "bg-[#b26a6a] font-medium text-white"
-                    : "bg-white/70 text-[#6f5a5a] hover:bg-white"
+                    ? "bg-[#ec4141] font-medium text-white"
+                    : "bg-white/70 text-[#6b4b4b] hover:bg-white"
                 }`}
               >
                 <PlatformIcon platform={p.value} size={13} />
@@ -338,30 +363,40 @@ export default function SongRequestPanel({
           </div>
           {isNative && value.platform === "netease" && insertSupport && !insertSupport.ready && (
             <span className="flex items-center gap-1.5 text-[11px] text-amber-700/80">
-              插播未开启
+              插件未启动
               <button
                 type="button"
                 disabled={restarting}
                 onClick={() => void restartMusicApp()}
-                className="rounded-full bg-[#b26a6a] px-2 py-0.5 text-[10px] font-medium leading-4 text-white transition hover:opacity-90 disabled:opacity-50"
+                className="rounded-full bg-black px-2 py-0.5 text-[10px] font-medium leading-4 text-white transition hover:opacity-90 disabled:opacity-50"
               >
                 {restarting ? "重启中…" : "重启网易云"}
               </button>
             </span>
           )}
+          {value.platform === "inapp" && (
+            <span className="text-[11px] text-black/40">服务器取流，原平台无版权自动换源</span>
+          )}
+          {value.platform === "soda" && (
+            <span className="text-[11px] text-black/40">汽水音乐只限点歌单内</span>
+          )}
         </div>
         {musicNotice && <p className="mt-1.5 text-[11px] text-red-600/80">{musicNotice}</p>}
+
+        {/* 软件内播放：音频在后台播放，这里提供进度 / 暂停 / 下一首 / 停止 / 音量控制 */}
+        {value.platform === "inapp" && <InAppPlayerBar />}
 
         {/* 网易云桌面宠物：窗口禁止捕获，内置中转服务取帧后投影到画布正中心（仅网易云可用） */}
         {value.platform === "netease" && (
           <>
             <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-black/75">网易云音乐宠物捕捉<span className="text-[10px] text-black/40">（这只是一个不太相关的功能···）</span></span>
+              <span className="text-xs font-medium text-black/75">网易云音乐宠物捕捉<span className="text-[10px] text-black/40">（这是一个不太相关的功能，只是作者常用···）</span></span>
               <span className="flex items-center gap-2">
                 <Switch
+                  size="sm"
                   checked={!!value.petCapture}
                   onToggle={(v) => void onChange({ petCapture: v })}
-                  onColor="bg-[#b26a6a]"
+                  onColor="bg-[#ec4141]"
                 />
               </span>
             </div>
@@ -370,9 +405,11 @@ export default function SongRequestPanel({
         )}
 
         {/* 点歌记录：状态随队列实时流转（排队 → 播放中 → 已播放） */}
-        <div className="mt-3 border-t border-[#e6d2d1] pt-2.5">
+        <div className="mt-3 border-t border-[#f4caca] pt-2.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-black/75">点歌记录（自下向上按序号播放）</span>
+            <span className="text-xs font-medium text-black/75">
+              点歌记录<span className="ml-1 font-normal text-black/35">（自下向上按序号播放）</span>
+            </span>
             <button
               type="button"
               disabled={logs.length === 0}
@@ -400,11 +437,11 @@ export default function SongRequestPanel({
                     className="grid items-center gap-1 rounded-lg bg-white/70 px-2 py-0.5"
                     style={{ gridTemplateColumns: "20px 32px minmax(56px,96px) minmax(0,1fr) auto 52px" }}
                   >
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#b26a6a] text-[10px] font-semibold tabular-nums text-white">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#ec4141] text-[10px] font-semibold tabular-nums text-white">
                       {no}
                     </span>
                     <span className="text-[10px] tabular-nums text-black/40">{formatTime(e.ts)}</span>
-                    <span className="flex min-w-0 items-center gap-1 rounded-full bg-[#b26a6a]/10 px-1 py-[1px] text-[10px] leading-4 text-[#7a4a4a]">
+                    <span className="flex min-w-0 items-center gap-1 rounded-full bg-[#ec4141]/10 px-1 py-[1px] text-[10px] leading-4 text-[#7a4a4a]">
                       {e.avatar ? (
                         <img
                           src={e.avatar}
@@ -414,14 +451,14 @@ export default function SongRequestPanel({
                           className="h-4 w-4 shrink-0 rounded-full object-cover"
                         />
                       ) : (
-                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#b26a6a]/25 text-[8px] font-semibold text-[#7a4a4a]">
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#ec4141]/25 text-[8px] font-semibold text-[#7a4a4a]">
                           {Array.from(e.uname || "匿")[0]}
                         </span>
                       )}
                       <span className="truncate">{e.uname || "匿名"}</span>
                     </span>
                     <span className="truncate text-[11px] text-black/60">
-                      《{e.songName || e.query}》
+                      {e.songName || e.query}
                       {artist ? <span className="text-black/35"> — {artist}</span> : null}
                     </span>
                     <span className="flex shrink-0 items-center gap-0.5">
@@ -443,6 +480,14 @@ export default function SongRequestPanel({
                       ) : (
                         <PlatformIcon platform={e.platform || e.originPlatform} size={14} />
                       )}
+                      {e.source ? (
+                        <span
+                          className="ml-1 shrink-0 text-[9px] leading-[14px]"
+                          style={{ color: e.source === "playlist" ? "#d40ba2ff" : "#6d28d9" }}
+                        >
+                          {e.source === "playlist" ? "歌单" : "乐库"}
+                        </span>
+                      ) : null}
                     </span>
                     <span
                       className={`shrink-0 justify-self-end rounded px-1 py-[1px] text-[10px] leading-4 ${badge.className}`}

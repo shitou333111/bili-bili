@@ -1438,8 +1438,8 @@ export default function HomePage() {
     notifyAppReady().catch(() => {});
   }, []);
 
-  // 点歌机插播自检：网易云的调试端口只能由客户端「启动参数」开启（桌面快捷方式已带端口），
-  // 每次软件启动检查一遍；未就绪时打日志，点歌机卡片会显示对应提示。
+  // 点歌听插播自检：网易云的调试端口只能由客户端「启动参数」开启（桌面快捷方式已带端口），
+  // 每次软件启动检查一遍；未就绪时打日志，点歌听卡片会显示对应提示。
   const insertProbeCalled = useRef(false);
   useEffect(() => {
     if (insertProbeCalled.current) return;
@@ -1449,10 +1449,10 @@ export default function HomePage() {
       const { probeInsertSupport } = await import("@/lib/song-request/queue");
       const r = await probeInsertSupport();
       if (r.ready) {
-        console.info("[点歌机]网易云插播已就绪（CDP 调试端口可用）");
+        console.info("[点歌听]网易云插播已就绪（CDP 调试端口可用）");
       } else {
         console.warn(
-          "[点歌机]网易云插播未就绪：请用桌面「网易云音乐（点歌机）」快捷方式启动客户端（带 --remote-debugging-port=9229）",
+          "[点歌听]网易云插播未就绪：请用桌面「网易云音乐（点歌听）」快捷方式启动客户端（带 --remote-debugging-port=9229）",
         );
       }
     })();

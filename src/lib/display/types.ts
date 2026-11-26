@@ -159,14 +159,18 @@ export interface BlindBoxQueryConfig {
   enabled: boolean;
 }
 
-/** 点歌机配置（弹幕点歌，不在画布中显示，只通过弹幕回复互动） */
+/** 点歌听配置（弹幕点歌，不在画布中显示，只通过弹幕回复互动） */
 export interface SongRequestConfig {
   /** 总开关：关闭后不识别点歌弹幕、不自动回复 */
   enabled: boolean;
   /** 点歌关键词（必须位于弹幕开头；默认「点歌」） */
   keyword: string;
-  /** 本机播放用的音乐软件 */
-  platform: "netease" | "qq" | "kugou" | "soda";
+  /**
+   * 播放方式：
+   * - netease / qq / kugou / soda：控制本机对应的音乐软件；
+   * - inapp：服务器解析音频并代理流式传输，在软件内直接播放。
+   */
+  platform: "netease" | "qq" | "kugou" | "soda" | "inapp";
   /** 点歌礼物 id（0 = 不校验礼物） */
   giftId: number;
   /** 点歌礼物名称（用于提示文案） */
@@ -627,7 +631,7 @@ export interface DisplayConfig {
   layout: DisplayLayout;
   /** 盲盒盈亏 · 弹幕查询 */
   blindBoxQuery: BlindBoxQueryConfig;
-  /** 点歌机（弹幕点歌，不显示在画布上） */
+  /** 点歌听（弹幕点歌，不显示在画布上） */
   songRequest: SongRequestConfig;
 }
 
@@ -715,9 +719,10 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
     enabled: true, // 默认开启：开播即识别查询弹幕并自动回复
   },
   songRequest: {
-    enabled: false, // 默认关闭：需要在展示页「点歌机」卡片中开启
+    enabled: false, // 默认关闭：需要在展示页「点歌听」卡片中开启
     keyword: "点歌",
-    platform: "netease",
+    // 默认「软件内」：不依赖本机闭源音乐软件，也能精确播放其他平台的歌
+    platform: "inapp",
     giftId: 0,
     giftName: "",
     petCapture: false,

@@ -485,7 +485,8 @@ export function normalizeConfig(raw: unknown): DisplayConfig {
       platform:
         r.songRequest?.platform === "qq" ||
         r.songRequest?.platform === "kugou" ||
-        r.songRequest?.platform === "soda"
+        r.songRequest?.platform === "soda" ||
+        r.songRequest?.platform === "inapp"
           ? r.songRequest.platform
           : "netease",
       giftId:

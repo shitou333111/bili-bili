@@ -28,6 +28,9 @@ type parseOK struct {
 	Name     string    `json:"name"`
 	Cover    string    `json:"cover"`
 	Songs    []outSong `json:"songs"`
+	// Link 是解析后实际使用的规范链接（例如酷狗短链会换成长期有效的精选集页），
+	// 客户端应保存这个链接，避免分享短链过期后无法刷新歌单。
+	Link string `json:"link"`
 }
 
 type searchOK struct {
@@ -56,7 +59,10 @@ const usageText = `usage:
   music-service health
   music-service capabilities
   music-service parse <url>
-  music-service search --source <platform> --q <keyword> [--limit 10]`
+  music-service search --source <platform> --q <keyword> [--limit 10]
+  music-service serve [--addr 127.0.0.1:8081] [--data .data/music/accounts.json] [--token ...]
+
+serve 模式提供点歌机「软件内播放」所需的取流与扫码登录接口（仅监听本机回环地址）。`
 
 func emit(v interface{}) {
 	enc := json.NewEncoder(os.Stdout)
@@ -108,6 +114,10 @@ func main() {
 			fail(err, 2)
 		}
 		emit(out)
+	case "serve":
+		if err := runServe(os.Args[2:]); err != nil {
+			fail(err, 1)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, usageText)
 		fail(fmt.Errorf("unknown command: %s", os.Args[1]), 2)
@@ -148,6 +158,7 @@ func runParse(raw string) (parseOK, error) {
 	// 这里直接读页面内嵌的 var data=[...]。
 	if name == "kugou" {
 		if out, ok := parseKugouSpecialPage(link); ok {
+			out.Link = link
 			return out, nil
 		}
 	}
@@ -160,6 +171,7 @@ func runParse(raw string) (parseOK, error) {
 			if kugouPlayID != "" && len(out.Songs) == 1 && out.Songs[0].PlayID == "" {
 				out.Songs[0].PlayID = kugouPlayID
 			}
+			out.Link = link
 			return out, nil
 		}
 		errs = append(errs, kind+": "+err.Error())

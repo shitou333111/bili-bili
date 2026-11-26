@@ -1,14 +1,28 @@
 import { NextResponse } from "next/server";
-import { findOnPlaybackPlatform, pickSong } from "@/lib/sing/match";
-import { musicServiceAvailable, searchCapabilities, searchSongs } from "@/lib/sing/music-service";
+import { findOnPlaybackPlatform, pickSong, STRONG_SCORE } from "@/lib/sing/match";
+import {
+  musicServiceAvailable,
+  probeMusicStream,
+  searchCapabilities,
+  searchSongs,
+} from "@/lib/sing/music-service";
 import { refreshProfile } from "@/lib/sing/refresh";
 import { allSongs, isValidUid, readProfile } from "@/lib/sing/store";
-import { isPlaybackPlatform, type PlaybackPlatform, type ResolveResult, type SongRef } from "@/lib/sing/types";
+import {
+  isPlaybackTarget,
+  type PlaybackPlatform,
+  type PlaybackTarget,
+  type ResolveResult,
+  type SongRef,
+} from "@/lib/sing/types";
 
 export const dynamic = "force-dynamic";
 
 const SPECIAL_RANDOM = new Set(["随机", "随便", "随机一首", "random"]);
 const SPECIAL_ANCHOR = new Set(["主播", "主播唱", "点主播"]);
+
+/** 软件内播放：原平台取不到音频时的换源顺序 */
+const INAPP_SWITCH_ORDER: PlaybackPlatform[] = ["netease", "qq", "kugou", "soda"];
 
 function ok(result: ResolveResult) {
   return NextResponse.json({ code: 0, message: result.message || result.status, data: result });
@@ -27,10 +41,11 @@ async function canSearchOn(platform: PlaybackPlatform): Promise<boolean> {
 /** 把命中歌曲转到目标播放平台并组装结果 */
 async function finalize(
   origin: SongRef,
-  target: PlaybackPlatform,
+  target: PlaybackTarget,
   via: "user" | "anchor" | "search",
   matchReason: string,
 ): Promise<NextResponse> {
+  if (target === "inapp") return finalizeInApp(origin, via, matchReason);
   const base: ResolveResult = {
     status: "ok",
     originPlatform: origin.platform,
@@ -55,6 +70,133 @@ async function finalize(
   return ok({ ...base, status: "unmatched", message: "cross_platform_failed" });
 }
 
+/**
+ * 软件内播放：优先用原平台精确取流；无版权 / 无权益 / 取流失败时自动换源，
+ * 换到的平台与原始平台都写进结果，客户端据此在界面和点歌记录里标注「已换源」。
+ */
+async function finalizeInApp(
+  origin: SongRef,
+  via: "user" | "anchor" | "search",
+  matchReason: string,
+): Promise<NextResponse> {
+  const base: ResolveResult = {
+    status: "ok",
+    inapp: true,
+    originPlatform: origin.platform,
+    matchReason,
+    matchedName: origin.name,
+    matchedArtists: origin.artists,
+  };
+  // 试听片段（汽水会员曲目常见）只作为兜底：先继续找能完整播放的音源
+  let previewHit: { song: SongRef; probe: { quality?: string }; switched: boolean } | null = null;
+
+  const direct = await probeMusicStream(origin);
+  if (direct.ok && !direct.preview) {
+    return ok({ ...base, song: origin, via, quality: direct.quality, preview: false });
+  }
+  if (direct.ok && direct.preview) {
+    previewHit = { song: origin, probe: direct, switched: false };
+  }
+  if (direct.error === "service_unavailable") {
+    return ok({ ...base, status: "service_unavailable", message: "service_unavailable" });
+  }
+  for (const p of INAPP_SWITCH_ORDER) {
+    if (p === origin.platform) continue;
+    const converted = await findOnPlaybackPlatform(origin, p);
+    if (!converted) continue;
+    const target = { ...converted, platform: p };
+    const probe = await probeMusicStream(target);
+    if (!probe.ok) continue;
+    if (!probe.preview) {
+      return ok({
+        ...base,
+        song: target,
+        via,
+        switched: true,
+        switchedFrom: origin.platform,
+        quality: probe.quality,
+        preview: false,
+      });
+    }
+    if (!previewHit) previewHit = { song: target, probe, switched: true };
+  }
+  if (previewHit) {
+    return ok({
+      ...base,
+      song: previewHit.song,
+      via,
+      switched: previewHit.switched,
+      switchedFrom: previewHit.switched ? origin.platform : undefined,
+      quality: previewHit.probe.quality,
+      preview: true,
+    });
+  }
+  return ok({ ...base, status: "unmatched", message: "stream_unavailable" });
+}
+
+/**
+ * 首轮搜索命中不强时，用拆出的单个关键词补搜：
+ * 「七里香 周杰伦」→ 再搜「七里香」「周杰伦」，合并后再按完整关键词评分。
+ * 这样空格后是歌手时能拿到更好的候选，是「钢琴版」这类歌名关键词时也不会乱搜。
+ */
+async function searchWithFallback(platform: PlaybackPlatform, keyword: string): Promise<SongRef[]> {
+  const first = await searchSongs(platform, keyword, 10);
+  const picked = pickSong(keyword, first);
+  if (picked && picked.score >= STRONG_SCORE + 0.1) return first;
+  const tokens = [...new Set(keyword.split(/[\s,，、/|]+/).filter((t) => t.length >= 2))].slice(0, 2);
+  if (tokens.length <= 1) return first;
+  const more = await Promise.all(tokens.map((t) => searchSongs(platform, t, 10)));
+  return first.concat(...more);
+}
+
+/**
+ * 软件内播放 + 粉丝没有歌单：逐个平台搜索，取第一个能真正取到音频的结果。
+ * 汽水在服务器上通常不能搜索（需要本机签名器），由 canSearchOn 跳过。
+ */
+async function inAppSearch(keyword: string): Promise<NextResponse> {
+  if (!(await musicServiceAvailable())) {
+    return ok({ status: "service_unavailable", message: "service_unavailable" });
+  }
+  let previewHit: { song: SongRef; reason: string; probe: { quality?: string } } | null = null;
+  for (const p of INAPP_SWITCH_ORDER) {
+    if (!(await canSearchOn(p))) continue;
+    const results = await searchWithFallback(p, keyword);
+    const picked = pickSong(keyword, results);
+    if (!picked) continue;
+    const target = { ...picked.song, platform: p };
+    const probe = await probeMusicStream(target);
+    if (!probe.ok) continue;
+    if (!probe.preview) {
+      return ok({
+        status: "ok",
+        inapp: true,
+        song: target,
+        via: "search",
+        matchReason: picked.reason,
+        matchedName: picked.song.name,
+        matchedArtists: picked.song.artists,
+        quality: probe.quality,
+        preview: false,
+      });
+    }
+    if (!previewHit) previewHit = { song: target, reason: picked.reason, probe };
+  }
+  if (previewHit) {
+    return ok({
+      status: "ok",
+      inapp: true,
+      song: previewHit.song,
+      via: "search",
+      matchReason: previewHit.reason,
+      matchedName: previewHit.song.name,
+      matchedArtists: previewHit.song.artists,
+      quality: previewHit.probe.quality,
+      preview: true,
+    });
+  }
+  return ok({ status: "unmatched", message: "no_match" });
+}
+
 /** 在目标平台直接搜索（可用性检查 + 结果），失败时给出对应的错误响应 */
 async function searchOnTarget(
   target: PlaybackPlatform,
@@ -66,7 +208,7 @@ async function searchOnTarget(
   if (!(await canSearchOn(target))) {
     return { error: ok({ status: "unmatched", message: "search_unavailable" }) };
   }
-  return { results: await searchSongs(target, keyword, 10) };
+  return { results: await searchWithFallback(target, keyword) };
 }
 
 /** 把搜索命中的歌曲组装成「直接播放」结果 */
@@ -126,7 +268,7 @@ export async function POST(request: Request) {
   }
   const anchorUid = typeof body?.anchorUid === "string" ? body.anchorUid.trim() : "";
   const rawKeyword = typeof body?.keyword === "string" ? body.keyword.trim() : "";
-  const target: PlaybackPlatform = isPlaybackPlatform(body?.platform) ? body.platform : "netease";
+  const target: PlaybackTarget = isPlaybackTarget(body?.platform) ? body.platform : "netease";
 
   if (!rawKeyword) return ok({ status: "unmatched", message: "empty_keyword" });
 
@@ -153,6 +295,7 @@ export async function POST(request: Request) {
 
   // 没有歌单 → 直接在目标平台搜索
   if (pool.length === 0) {
+    if (target === "inapp") return inAppSearch(rawKeyword);
     const searched = await searchOnTarget(target, rawKeyword);
     if ("error" in searched) return searched.error;
     const picked = pickSong(rawKeyword, searched.results);
@@ -178,6 +321,7 @@ export async function POST(request: Request) {
     if (again) return finalize(again.song, target, "user", again.reason);
   }
 
+  if (target === "inapp") return inAppSearch(rawKeyword);
   const fallback = await searchOnTarget(target, rawKeyword);
   if ("error" in fallback) return fallback.error;
   const alt = pickSong(rawKeyword, fallback.results);

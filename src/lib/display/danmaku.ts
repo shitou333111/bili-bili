@@ -1860,7 +1860,7 @@ class DisplayDanmakuService {
           }
         }
 
-        // 点歌机：弹幕开头命中点歌关键词 → 解析歌单并控制本机音乐软件（独立于盲盒查询）
+        // 点歌听：弹幕开头命中点歌关键词 → 解析歌单并控制本机音乐软件（独立于盲盒查询）
         void handleSongRequestDanmaku({
           mid,
           roomId: this.roomId,

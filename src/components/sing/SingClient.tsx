@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * /sing 点歌机歌单页（无需登录）
+ * /sing 点歌听歌单页（无需登录）
  *
  * - 输入 B 站 UID 认领自己的歌单；勾选「主播」即切换为主播类别。
  * - 导入各音乐平台歌单/歌曲链接（由服务端 Go 解析服务完成）。
@@ -62,26 +62,26 @@ const FAN_THEME = {
   "--s-danger": "#b4543f",
 } as CSSProperties;
 
-/** 主播：低饱和红（与软件内点歌机卡片一致） */
+/** 主播：鲜艳红（网易云同款主色 #ec4141，背景相应调淡避免刺眼） */
 const ANCHOR_THEME = {
-  "--s-text": "#2b1b1b",
-  "--s-muted": "#8a7373",
-  "--s-ink2": "#5a3636",
-  "--s-border": "#e6d2d1",
-  "--s-accent": "#b26a6a",
-  "--s-accent-strong": "#8f4f4f",
-  "--s-accent-soft": "#f6e7e6",
+  "--s-text": "#2b1414",
+  "--s-muted": "#8b6a6a",
+  "--s-ink2": "#6b3131",
+  "--s-border": "#f4caca",
+  "--s-accent": "#ec4141",
+  "--s-accent-strong": "#c9302c",
+  "--s-accent-soft": "#fdeaea",
   "--s-card": "#ffffff",
-  "--s-danger": "#a84848",
+  "--s-danger": "#d33a3a",
 } as CSSProperties;
 
 const FAN_BG =
   "radial-gradient(1100px 600px at 10% -10%, rgba(205,232,128,0.45), transparent 60%), radial-gradient(900px 600px at 100% 0%, rgba(140,205,160,0.32), transparent 55%), #eef3e4";
 const ANCHOR_BG =
-  "radial-gradient(1100px 600px at 10% -10%, rgba(238,168,160,0.36), transparent 60%), radial-gradient(900px 600px at 100% 0%, rgba(188,172,205,0.30), transparent 55%), #ece4e8";
+  "radial-gradient(1100px 600px at 10% -10%, rgba(255,138,138,0.26), transparent 60%), radial-gradient(900px 600px at 100% 0%, rgba(255,180,180,0.22), transparent 55%), #fcefef";
 
 const FAN_TITLE = "from-[#cbe36a] via-[#9cc23c] to-[#5f9e3a]";
-const ANCHOR_TITLE = "from-[#d3a09a] via-[#b26a6a] to-[#8f7ba8]";
+const ANCHOR_TITLE = "from-[#ff8a8a] via-[#ec4141] to-[#c9302c]";
 
 /** B 站头像地址补全协议（接口常返回 //i0.hdslb.com/...） */
 function fixFace(url?: string): string | undefined {
@@ -617,7 +617,7 @@ export default function SingPage({ routeUid }: { routeUid?: string }) {
               isAnchorLook ? ANCHOR_TITLE : FAN_TITLE
             }`}
           >
-            {isHost ? "主播歌单" : "点歌机"}
+            {isHost ? "主播歌单" : "点歌听"}
           </h1>
           <div className="mt-2 flex items-start justify-center gap-1.5">
             <p className="text-[13px] text-[var(--s-muted)]">
@@ -939,7 +939,7 @@ export default function SingPage({ routeUid }: { routeUid?: string }) {
           </summary>
           <ul className="list-disc space-y-2 px-4 pb-5 pl-9 sm:px-6 sm:pl-11">
             <li>
-              在主播的直播间发送「点歌 歌名」，可以模糊匹配，主播需要安装 [B瓜] 软件并开启点歌机功能；本页面只负责保存和匹配歌单。
+              在主播的直播间发送「点歌 歌名」，可以模糊匹配，主播需要安装 [B瓜] 软件并开启点歌听功能；本页面只负责保存和匹配歌单。
             </li>
             <li>
               发送「点歌 随机」随机播放自己的歌单；发送「点歌 歌手名」播放自己歌单中该歌手的随机一首歌曲。
@@ -951,7 +951,7 @@ export default function SingPage({ routeUid }: { routeUid?: string }) {
               容易误解的地方：本网站配合直播间发送弹幕，并不是点唱主播的才艺歌曲，而是让主播播放用户喜欢的歌曲，大家一起「听歌」。查看主播歌单可以知道主播的才艺歌曲，感兴趣可发送「点歌 主播」随机播放主播歌单中的一首。
             </li>
             <li>
-              相比于一般直播间点歌机，特点是：一是可以精确点自己平常喜欢听的歌曲（同一首歌往往有多个版本，让主播手动搜索很麻烦）；二是主播端可以自动在音乐软件中播放，不用再手动搜索。
+              相比于一般直播间点歌听，特点是：一是可以精确点自己平常喜欢听的歌曲（同一首歌往往有多个版本，让主播手动搜索很麻烦）；二是主播端可以自动在音乐软件中播放，不用再手动搜索。
             </li>
             <li>
               这些功能比较偏，最初计划做全面的网站和主播插件；但调研过程中发现一个非常优秀的点歌插件
@@ -961,7 +961,7 @@ export default function SingPage({ routeUid }: { routeUid?: string }) {
                 rel="noreferrer"
                 className="mx-1 inline-flex items-center gap-0.5 rounded-full bg-[var(--s-accent-soft)] px-2 py-0.5 align-middle text-[11px] font-medium leading-4 text-[var(--s-accent-strong)] transition hover:bg-[var(--s-accent)] hover:text-white"
               >
-                歌单点歌机 ↗
+                歌单点歌听 ↗
               </a>
               ，完善程度超出计划、堪称完美。该插件与我无关，但非常推荐主播使用，因此改为只实现其他插件没有覆盖的功能，最终形成这个网站。
             </li>

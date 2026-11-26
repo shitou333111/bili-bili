@@ -146,7 +146,7 @@ jobs:
           set -e
           HOSTNAME=127.0.0.1 PORT=3999 node deploy-dist/server.js &
           SERVER_PID=$!
-          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          trap 'kill $SERVER_PID ${MUSIC_PID:-} 2>/dev/null || true' EXIT
           ready=""
           for i in $(seq 1 30); do
             if curl -sf -o /dev/null http://127.0.0.1:3999/; then ready=1; break; fi
@@ -156,6 +156,18 @@ jobs:
           # 点歌解析服务必须随包部署，且能在 Linux 上正常启动
           test -x deploy-dist/.tools/music-service/music-service-linux-amd64
           deploy-dist/.tools/music-service/music-service-linux-amd64 health | grep -q '"ok":true'
+          # serve 模式（软件内播放的取流 / 扫码登录）必须能启动并通过健康检查
+          deploy-dist/.tools/music-service/music-service-linux-amd64 serve \
+            --addr 127.0.0.1:18081 --data /tmp/ms-accounts.json --cache /tmp/ms-cache \
+            > /tmp/ms-serve.log 2>&1 &
+          MUSIC_PID=$!
+          ms_ready=""
+          for i in $(seq 1 15); do
+            if curl -sf -o /dev/null http://127.0.0.1:18081/healthz; then ms_ready=1; break; fi
+            sleep 1
+          done
+          [ -n "$ms_ready" ] || { cat /tmp/ms-serve.log; exit 1; }
+          kill "$MUSIC_PID" 2>/dev/null || true
           # PWA 图标必须随 public 一起部署
           test -f deploy-dist/public/icon-192.png
           test -f deploy-dist/public/icon-512.png
@@ -282,8 +294,20 @@ jobs:
               # restart 沿用缓存的旧路径执行，即使 current 已切换到新版本仍跑旧代码，导致页面不更新。
               # delete 后以当前 current 目录重新 start，让 pm2 重新解析到最新版本路径。
               pm2 delete bili-live >/dev/null 2>&1 || true
+              pm2 delete bili-music >/dev/null 2>&1 || true
+              # 点歌机「软件内播放」：音乐服务以常驻 serve 模式运行（仅监听回环地址），
+              # 账号 Cookie / 汽水解密缓存放在持久化的 .data 下（release 目录每次都会重建）。
+              MUSIC_TOKEN="${{ secrets.MUSIC_SERVICE_TOKEN }}"
+              [ -n "$MUSIC_TOKEN" ] || MUSIC_TOKEN="${{ secrets.ADMIN_PASSWORD }}"
               cd "${TARGET_DIR}/current"
-              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" pm2 start server.js --name bili-live
+              MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" pm2 start .tools/music-service/music-service-linux-amd64 \
+                --name bili-music \
+                -- serve --addr 127.0.0.1:8081 \
+                --data "${PRESERVE_DIR}/.data/music/accounts.json" \
+                --cache "${PRESERVE_DIR}/.data/music/cache"
+              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
+                MUSIC_SERVICE_URL="http://127.0.0.1:8081" MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" \
+                pm2 start server.js --name bili-live
               pm2 save || true
             else
               PID_FILE="${TARGET_DIR}/server.pid"
@@ -296,8 +320,28 @@ jobs:
               fi
 
               cd "${TARGET_DIR}/current"
-              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+              MUSIC_TOKEN="${{ secrets.MUSIC_SERVICE_TOKEN }}"
+              [ -n "$MUSIC_TOKEN" ] || MUSIC_TOKEN="${{ secrets.ADMIN_PASSWORD }}"
+              HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
+                MUSIC_SERVICE_URL="http://127.0.0.1:8081" MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" \
+                nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
               echo $! > "${PID_FILE}"
+
+              # 音乐服务（软件内播放）：与 pm2 分支相同的常驻 serve 进程
+              MUSIC_PID_FILE="${TARGET_DIR}/music-service.pid"
+              if [ -f "${MUSIC_PID_FILE}" ]; then
+                OLD_MUSIC_PID="$(cat "${MUSIC_PID_FILE}" 2>/dev/null || true)"
+                if [ -n "$OLD_MUSIC_PID" ] && kill -0 "$OLD_MUSIC_PID" 2>/dev/null; then
+                  kill "$OLD_MUSIC_PID" || true
+                fi
+                rm -f "${MUSIC_PID_FILE}"
+              fi
+              MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" nohup .tools/music-service/music-service-linux-amd64 serve \
+                --addr 127.0.0.1:8081 \
+                --data "${PRESERVE_DIR}/.data/music/accounts.json" \
+                --cache "${PRESERVE_DIR}/.data/music/cache" \
+                > "${TARGET_DIR}/music-service.log" 2>&1 &
+              echo $! > "${MUSIC_PID_FILE}"
             fi
 
             # 清理旧版本，保留最近 5 个
@@ -344,8 +388,28 @@ jobs:
             fi
 
             cd "${TARGET_DIR}/current"
-            HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
+            MUSIC_TOKEN="${{ secrets.MUSIC_SERVICE_TOKEN }}"
+            [ -n "$MUSIC_TOKEN" ] || MUSIC_TOKEN="${{ secrets.ADMIN_PASSWORD }}"
+            HOST=127.0.0.1 PORT=3000 ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
+              MUSIC_SERVICE_URL="http://127.0.0.1:8081" MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" \
+              nohup node server.js > "${TARGET_DIR}/server.log" 2>&1 &
             echo $! > "${PID_FILE}"
+
+            # 音乐服务（软件内播放）
+            MUSIC_PID_FILE="${TARGET_DIR}/music-service.pid"
+            if [ -f "${MUSIC_PID_FILE}" ]; then
+              OLD_MUSIC_PID="$(cat "${MUSIC_PID_FILE}" 2>/dev/null || true)"
+              if [ -n "$OLD_MUSIC_PID" ] && kill -0 "$OLD_MUSIC_PID" 2>/dev/null; then
+                kill "$OLD_MUSIC_PID" || true
+              fi
+              rm -f "${MUSIC_PID_FILE}"
+            fi
+            MUSIC_SERVICE_TOKEN="$MUSIC_TOKEN" nohup .tools/music-service/music-service-linux-amd64 serve \
+              --addr 127.0.0.1:8081 \
+              --data "${TARGET_DIR}/current/.data/music/accounts.json" \
+              --cache "${TARGET_DIR}/current/.data/music/cache" \
+              > "${TARGET_DIR}/music-service.log" 2>&1 &
+            echo $! > "${MUSIC_PID_FILE}"
 
             # 清理旧版本，保留最近 5 个
             ls -1dt "${RELEASES_DIR}"/release-* 2>/dev/null | tail -n +6 | xargs -r rm -rf

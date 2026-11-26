@@ -179,14 +179,14 @@ export default function DataInitOverlay({
           <div className="shrink-0 border-b border-black/10 bg-[#fff8e8]">
             <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5 sm:px-8">
               <p className="min-w-0 flex-1 text-[12px] leading-5 text-[#7a5200]">
-                下载流水记录非常耗时，即使只有很少的流水。如果你只想查看消费记录，不在意直播收益，可以中止。
+                下载流水记录非常耗时，即使只有很少的流水。如果你只想查看消费记录，不在意直播收益，可以跳过。
               </p>
               <button
                 type="button"
                 onClick={onAbortAnchor}
                 className="shrink-0 rounded-full bg-[#dc2626] px-3.5 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#b91c1c] active:scale-95"
               >
-                中止
+                跳过
               </button>
             </div>
           </div>

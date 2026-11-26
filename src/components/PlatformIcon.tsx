@@ -8,9 +8,12 @@ const FILES: Record<string, string> = {
   qq: "/QQ音乐.png",
   kugou: "/酷狗音乐.png",
   soda: "/汽水音乐.png",
+  // 软件内播放 = 本软件（B瓜）自己的图标
+  inapp: "/orig_icon.png",
 };
 
 const STYLE: Record<string, { bg: string; glyph: string; circle?: boolean }> = {
+  inapp: { bg: "#b26a6a", glyph: "▶" },
   kuwo: { bg: "#ff8a00", glyph: "♪" },
   migu: { bg: "#e60026", glyph: "♪" },
   qianqian: { bg: "#2aa8e0", glyph: "♪" },
@@ -32,7 +35,7 @@ export default function PlatformIcon({
   className?: string;
 }) {
   if (!platform) return null;
-  const label = platformLabel(platform) || platform;
+  const label = platform === "inapp" ? "软件内播放" : platformLabel(platform) || platform;
   const file = FILES[platform];
   if (file) {
     return (
@@ -41,7 +44,9 @@ export default function PlatformIcon({
         alt={label}
         title={label}
         draggable={false}
-        className={`inline-block shrink-0 select-none object-contain ${className}`}
+        className={`inline-block shrink-0 select-none object-contain ${
+          platform === "inapp" ? "rounded-[4px]" : ""
+        } ${className}`}
         style={{ width: size, height: size }}
       />
     );

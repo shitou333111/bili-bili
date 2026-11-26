@@ -1,5 +1,5 @@
 /**
- * 点歌机 · 应用内播放队列
+ * 点歌听 · 应用内播放队列
  *
  * 通过 Tauri 命令 music_state / music_play 控制本机音乐软件：
  * - 当前没有歌曲在播放 → 立即播放（replace）；
@@ -263,11 +263,11 @@ async function insertNextNow(entry: QueueEntry): Promise<boolean> {
       mode: "next",
     });
     if (res?.ok === false) {
-      console.warn("[点歌机]插播下一首失败", entry.song.name, res?.error);
+      console.warn("[点歌听]插播下一首失败", entry.song.name, res?.error);
       return false;
     }
   } catch (e: any) {
-    console.warn("[点歌机]插播下一首异常", entry.song.name, e?.message || e);
+    console.warn("[点歌听]插播下一首异常", entry.song.name, e?.message || e);
     return false;
   }
   entry.inserted = true;
@@ -444,7 +444,7 @@ async function poll(): Promise<void> {
     try {
       await pollInserted(head);
     } catch (e: any) {
-      console.warn("[点歌机]插播轮询异常", e?.message || e);
+      console.warn("[点歌听]插播轮询异常", e?.message || e);
     }
     // 插播仍有效 → 等播放器自己切到这首；已失效 → 立刻走下面的兜底切歌逻辑
     if (head.inserted) {
@@ -624,7 +624,7 @@ async function poll(): Promise<void> {
     const r = await doPlayNow(next.song, next.platform, next.onFinished);
     if (!r.ok) {
       // 播放失败（音乐软件未开等）→ 该首跳过，继续尝试后续
-      console.warn("[点歌机]队列歌曲播放失败", next.song.name, r.error);
+      console.warn("[点歌听]队列歌曲播放失败", next.song.name, r.error);
       try {
         next.onFailed?.(r.error);
       } catch {
@@ -639,7 +639,7 @@ async function poll(): Promise<void> {
     }
     scheduleNext();
   } catch (e: any) {
-    console.warn("[点歌机]队列轮询异常", e?.message || e);
+    console.warn("[点歌听]队列轮询异常", e?.message || e);
     scheduleNext();
   }
 }

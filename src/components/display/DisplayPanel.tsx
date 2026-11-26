@@ -294,6 +294,10 @@ const inputBase =
 const inputFlat =
   "rounded-lg bg-white/70 px-2.5 py-0.5 text-sm text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#1f1c17]/15";
 
+/** 与点歌听卡片一致的紧凑胶囊输入框（信息面板内统一使用） */
+const inputPill =
+  "h-5 rounded-full bg-white/85 px-2 text-[11px] leading-5 text-black/80 outline-none transition focus:bg-white focus:ring-2 focus:ring-[#0891b2]/25";
+
 /** 隐藏 number 输入框的上下箭头（WebKit/Blink 的 spin button） */
 const noSpin =
   "[appearance:textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none";
@@ -386,9 +390,9 @@ function TimeField({
           setEditing(false);
           commit(draft.h, draft.m);
         }}
-        className={`${inputFlat} ${input}`}
+        className={`${inputPill} ${input}`}
       />
-      <span className="text-sm font-black leading-none text-black/70">:</span>
+      <span className="text-xs font-black leading-none text-black/70">:</span>
       <input
         value={draft.m}
         inputMode="numeric"
@@ -403,7 +407,7 @@ function TimeField({
           setEditing(false);
           commit(draft.h, draft.m);
         }}
-        className={`${inputFlat} ${input}`}
+        className={`${inputPill} ${input}`}
       />
     </label>
   );
@@ -1025,7 +1029,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
     void updateInfoPanel({ slogan: text });
   }, [sloganEditText, config.infoPanel.slogan, updateInfoPanel]);
 
-  // 点歌机：保存配置并同步监听服务（开启即自动拉起弹幕监听；关闭不影响其他模块）
+  // 点歌听：保存配置并同步监听服务（开启即自动拉起弹幕监听；关闭不影响其他模块）
   const updateSongRequest = useCallback(
     async (patch: Partial<DisplayConfig["songRequest"]>) => {
       const latest = await loadDisplayConfig(mid);
@@ -2003,7 +2007,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
         />
       )}
 
-      {/* 点歌机：不加入画布，只通过弹幕回复互动（观众发「点歌 歌名」→ 本机音乐软件播放） */}
+      {/* 点歌听：不加入画布，只通过弹幕回复互动（观众发「点歌 歌名」→ 本机音乐软件或软件内播放） */}
       <SongRequestPanel
         mid={mid}
         value={config.songRequest}
@@ -2058,7 +2062,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                     dwellSeconds: Math.max(1, Math.min(600, Math.round(Number(e.target.value)) || 1)),
                   })
                 }
-                className={`${inputFlat} ${noSpin} w-12 text-center disabled:opacity-40`}
+                className={`${inputPill} ${noSpin} w-12 text-center disabled:opacity-40`}
               />
               <span className="text-xs text-black/55">秒</span>
             </div>
@@ -2129,7 +2133,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       ),
                     })
                   }
-                  className={`${inputFlat} ${noSpin} w-20 disabled:opacity-40`}
+                  className={`${inputPill} ${noSpin} w-16 text-center disabled:opacity-40`}
                 />
                 <span className={`text-xs ${config.infoPanel.pkFirstWinWarn ? "text-black/45" : "text-black/25"}`}>
                   分
@@ -2158,12 +2162,13 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
               <NowTimeField />
             </div>
 
-            {/* 加班机礼物：红色「–」/ 绿色「+」标记减少 / 增加时长（始终可配置） */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            {/* 加班机礼物：红色「–」/ 绿色「+」标记减少 / 增加时长（次级内容，随加班机缩进） */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pl-6">
               <div className="flex items-center gap-1.5">
                 <span className="shrink-0 text-base font-black leading-none text-red-600">–</span>
                 <GiftSearchInput
                   giftName={config.infoPanel.overtime.decreaseGiftName}
+                  giftId={config.infoPanel.overtime.decreaseGiftId}
                   onPick={(g) =>
                     void updateInfoPanel({
                       overtime: {
@@ -2173,16 +2178,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       },
                     })
                   }
-                  className="w-[90px]"
+                  className="w-24"
                   dropdownWidth={224}
+                  compact
                 />
-                {config.infoPanel.overtime.decreaseGiftIcon ? (
-                  <img
-                    src={config.infoPanel.overtime.decreaseGiftIcon}
-                    alt=""
-                    className="h-5 w-5 shrink-0 rounded"
-                  />
-                ) : null}
                 <input
                   type="number"
                   min={1}
@@ -2198,7 +2197,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       },
                     })
                   }
-                  className={`${inputFlat} ${noSpin} w-12 text-center`}
+                  className={`${inputPill} ${noSpin} w-12 text-center`}
                 />
                 <span className="shrink-0 text-xs text-black/55">分</span>
               </div>
@@ -2206,6 +2205,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                 <span className="shrink-0 text-base font-black leading-none text-green-600">+</span>
                 <GiftSearchInput
                   giftName={config.infoPanel.overtime.increaseGiftName}
+                  giftId={config.infoPanel.overtime.increaseGiftId}
                   onPick={(g) =>
                     void updateInfoPanel({
                       overtime: {
@@ -2215,16 +2215,10 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       },
                     })
                   }
-                  className="w-[90px]"
+                  className="w-24"
                   dropdownWidth={224}
+                  compact
                 />
-                {config.infoPanel.overtime.increaseGiftIcon ? (
-                  <img
-                    src={config.infoPanel.overtime.increaseGiftIcon}
-                    alt=""
-                    className="h-5 w-5 shrink-0 rounded"
-                  />
-                ) : null}
                 <input
                   type="number"
                   min={1}
@@ -2240,7 +2234,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                       },
                     })
                   }
-                  className={`${inputFlat} ${noSpin} w-12 text-center`}
+                  className={`${inputPill} ${noSpin} w-12 text-center`}
                 />
                 <span className="shrink-0 text-xs text-black/55">分</span>
               </div>
@@ -2278,7 +2272,7 @@ export default function DisplayPanel({ mid, isLocalAccount = true, showToast, pa
                   if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                   if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                 }}
-                className={`${inputFlat} w-44`}
+                className={`${inputPill} w-44`}
               />
             </div>
           </div>

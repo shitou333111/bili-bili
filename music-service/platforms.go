@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -122,6 +123,40 @@ var platforms = map[string]*platform{
 		parsePlaylist: bilibili.ParsePlaylist,
 		parseAlbum:    nil,
 	},
+}
+
+// searchWithCookie 用管理员绑定的账号 Cookie 搜索。
+//
+// music-lib 的 Search 只接收关键词，没有「是否包含/排除付费资源」参数：
+// 是否过滤 VIP 曲目取决于实例是不是会员账号（网易云匿名会丢掉 privilege.fl=0 的歌，
+// QQ 匿名会丢掉 payplay=1 的歌）。所以必须用带 Cookie 的实例搜索，否则周杰伦等
+// VIP 原唱会被直接过滤，只剩翻唱。
+func searchWithCookie(source, cookie, keyword string, limit int) ([]model.Song, error) {
+	var songs []model.Song
+	var err error
+	switch source {
+	case "netease":
+		songs, err = netease.New(cookie).Search(keyword)
+	case "qq":
+		songs, err = qq.New(cookie).Search(keyword)
+	case "kugou":
+		songs, err = kugou.New(cookie).Search(keyword)
+	case "soda":
+		songs, err = soda.New(cookie).Search(keyword)
+	default:
+		p, ok := platforms[source]
+		if !ok || p.search == nil {
+			return nil, fmt.Errorf("search not supported: %s", source)
+		}
+		songs, err = p.search(keyword)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(songs) > limit {
+		songs = songs[:limit]
+	}
+	return songs, nil
 }
 
 // qq.Parse 只把 songDetail/<mid> 当作 songmid，但分享短链跳转后

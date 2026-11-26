@@ -1,5 +1,5 @@
 /**
- * 点歌机 · 弹幕关键词 → 歌曲匹配
+ * 点歌听 · 弹幕关键词 → 歌曲匹配
  *
  * 规则（与产品需求一致）：
  * 1. 歌名是主信号：完全相同 > 包含 > 字二元组相似；
@@ -22,11 +22,13 @@ export interface SongMatch {
   song: SongRef;
   score: number;
   reason: MatchReason;
+  /** 在输入列表中的位置：同分时保留平台搜索排序（官方/热门通常在前） */
+  rank?: number;
 }
 
 const TITLE_THRESHOLD = 0.55;
 /** 认为是「直接命中歌名」的分数门槛 */
-const STRONG_SCORE = 0.8;
+export const STRONG_SCORE = 0.8;
 /** 版本标记（Live/伴奏/Remix…）：原版优先于各种改编版本 */
 const VERSION_MARKER =
   /(live|现场|演唱会|concert|纯享|伴奏|remaster|feat|ft\.|remix|dj|cover|翻唱版|翻唱|抖音|无损|高音质|完整版|片段|副歌|铃声|official|mv|高清|原唱|女声版|男声版)/i;
@@ -45,6 +47,76 @@ function words(input: string): string[] {
   return fold(input)
     .split(/[^\p{L}\p{N}]+/u)
     .filter((t) => t.length >= 1);
+}
+
+/** 弹幕关键词的切分假设：整串 + 「歌名部分 / 歌手部分」二段切分 */
+export interface QueryIntent {
+  /** 当作歌名/关键词的部分 */
+  title: string;
+  /** 当作歌手的部分（没有则为整串假设） */
+  artist?: string;
+  /** 用户输入的完整串 */
+  raw: string;
+}
+
+/**
+ * 生成切分假设。空格后的内容不一定是歌手（可能是「钢琴版」这类歌名关键词），
+ * 所以这里只提出假设，最终由候选歌曲的歌手字段来验证。
+ */
+export function buildQueryIntents(query: string): QueryIntent[] {
+  const raw = query.trim();
+  if (!raw) return [];
+  const intents: QueryIntent[] = [{ title: raw, raw }];
+  const tokens = raw.split(/[\s,，、/|]+/).filter(Boolean);
+  if (tokens.length < 2 || tokens.length > 4) return intents;
+  for (let k = 1; k < tokens.length; k++) {
+    const artist = tokens.slice(k).join(" ");
+    // 版本词（Live / 伴奏 / 钢琴版…）不是歌手
+    if (VERSION_MARKER.test(fold(artist))) continue;
+    intents.push({ title: tokens.slice(0, k).join(" "), artist, raw });
+  }
+  return intents;
+}
+
+/**
+ * 按某个切分假设打分：歌手部分必须真的匹配候选的歌手，
+ * 否则该假设不成立（例如「七里香 钢琴版」不会把「钢琴版」当歌手）。
+ */
+function scoreIntent(intent: QueryIntent, song: SongRef): SongMatch | null {
+  const base = scoreSong(intent.artist ? intent.title : intent.raw, song);
+  if (!base) return null;
+  if (!intent.artist) return base;
+  const hint = normalizeArtist(intent.artist);
+  if (hint.length < 2) return null;
+  const hit = song.artists.some((artist) => {
+    const norm = normalizeArtist(artist);
+    return norm === hint || (norm.length >= 2 && diceSimilarity(norm, hint) >= 0.85);
+  });
+  if (!hit) return null;
+  return { ...base, score: Math.min(1, base.score + 0.25), reason: "artist" };
+}
+
+/** 所有切分假设取最高分（同一首歌只保留最高分） */
+export function matchSongsByIntent(query: string, songs: SongRef[]): SongMatch[] {
+  const best = new Map<string, SongMatch>();
+  for (const intent of buildQueryIntents(query)) {
+    songs.forEach((song, index) => {
+      const m = scoreIntent(intent, song);
+      if (!m) return;
+      m.rank = index;
+      const key = `${song.platform}:${song.id}`;
+      const prev = best.get(key);
+      if (!prev || m.score > prev.score) best.set(key, m);
+    });
+  }
+  const out = [...best.values()];
+  out.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.song.name.length - b.song.name.length ||
+      (b.song.album ? 1 : 0) - (a.song.album ? 1 : 0),
+  );
+  return out;
 }
 
 /**
@@ -70,7 +142,9 @@ export function scoreSong(query: string, song: SongRef): SongMatch | null {
   } else if (qt.length >= 2 && nt.includes(qt)) {
     score = 0.82 + 0.13 * Math.min(1, qt.length / nt.length);
     reason = "contains";
-  } else if (nt.length >= 2 && qt.includes(nt)) {
+  } else if (nt.length >= 3 && nt.length / qt.length >= 0.6 && qt.includes(nt)) {
+    // 候选歌名只是查询词的一小部分时不算命中：
+    // 「蒲公英的约定」不应匹配「约定」；真正的「歌名 歌手」由切分假设精确命中。
     score = 0.8;
     reason = "contains";
   } else {
@@ -107,14 +181,15 @@ export function scoreSong(query: string, song: SongRef): SongMatch | null {
 export function matchSongs(query: string, songs: SongRef[]): SongMatch[] {
   const seen = new Set<string>();
   const out: SongMatch[] = [];
-  for (const song of songs) {
+  songs.forEach((song, index) => {
     const key = `${song.platform}:${song.id}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     const m = scoreSong(query, song);
-    if (!m) continue;
+    if (!m) return;
     seen.add(key);
+    m.rank = index;
     out.push(m);
-  }
+  });
   out.sort(
     (a, b) =>
       b.score - a.score ||
@@ -163,11 +238,14 @@ export function detectArtistIntent(query: string, songs: SongRef[]): ArtistInten
   return { artist: entry.display, songs: entry.songs };
 }
 
-/** 同分候选：优先最短标题（通常是原版，而非「(童声版)」「(Live)」等），同长度再随机 */
-function pickFromTies(ties: SongMatch[], random: () => number): SongMatch {
+/**
+ * 同分候选：优先最短标题（通常是原版，而非「(童声版)」「(Live)」等），
+ * 再优先平台搜索结果靠前的（官方/热门通常排在最前，避免随机点到翻唱）。
+ */
+function pickFromTies(ties: SongMatch[]): SongMatch {
   const minLen = Math.min(...ties.map((t) => t.song.name.length));
   const shortest = ties.filter((t) => t.song.name.length === minLen);
-  return shortest[Math.floor(random() * shortest.length)] || ties[0];
+  return shortest.reduce((best, cur) => ((cur.rank ?? 0) < (best.rank ?? 0) ? cur : best));
 }
 
 /**
@@ -175,13 +253,13 @@ function pickFromTies(ties: SongMatch[], random: () => number): SongMatch {
  * 同分候选（如多个版本）优先原版，避免每次都点到改编版本。
  */
 export function pickSong(query: string, songs: SongRef[], random: () => number = Math.random): SongMatch | null {
-  const matches = matchSongs(query, songs);
+  const matches = matchSongsByIntent(query, songs);
 
   if (matches.length > 0) {
     const top = matches[0];
     if (top.score >= STRONG_SCORE) {
       const ties = matches.filter((m) => top.score - m.score < 0.01);
-      return pickFromTies(ties, random);
+      return pickFromTies(ties);
     }
   }
 
@@ -194,7 +272,7 @@ export function pickSong(query: string, songs: SongRef[], random: () => number =
   if (matches.length > 0) {
     const top = matches[0];
     const ties = matches.filter((m) => top.score - m.score < 0.01);
-    return pickFromTies(ties, random);
+    return pickFromTies(ties);
   }
   return null;
 }

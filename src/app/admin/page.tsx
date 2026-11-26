@@ -8,6 +8,7 @@ import { dataFetch } from "@/lib/client-fetch";
 import SafeAreaStyler from "@/components/SafeAreaStyler";
 import WindowTitleBar from "@/components/WindowTitleBar";
 import LotteryScanAdmin from "@/components/LotteryScanAdmin";
+import MusicAccountAdmin from "@/components/MusicAccountAdmin";
 import { DESKTOP_TITLEBAR_H } from "@/lib/layout";
 // 模拟器活动算法注册表：作为下拉框选项的唯一数据源（新增算法只需在注册表登记）
 import { ALGORITHM_REGISTRY } from "@/components/bili-simulator/activities/algorithms";
@@ -2082,6 +2083,9 @@ export default function AdminPage() {
 
         {/* 自动抢天选/红包：服务器扫描管理 */}
         <LotteryScanAdmin />
+
+        {/* 点歌听「软件内播放」：服务器音乐账号（扫码登录） */}
+        <MusicAccountAdmin />
 
         {/* 数据加载失败提示 */}
         {loadError && (

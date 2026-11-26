@@ -1,10 +1,10 @@
 /**
- * 点歌机 · 弹幕编排
+ * 点歌听 · 弹幕编排
  *
  * 主播端监听弹幕 → 识别「点歌 歌名」（关键词可配置、必须在开头）→
  * 点歌礼物门禁 → 请求服务器解析歌单 / 跨平台搜索 → 控制本机音乐软件播放。
  *
- * 与画布模块不同，点歌机只用弹幕回复互动（即将播放 / 未匹配 / 请投喂 等）。
+ * 与画布模块不同，点歌听只用弹幕回复互动（即将播放 / 未匹配 / 请投喂 等）。
  */
 import { sendDanmakuWithRetry } from "@/lib/barrage";
 import type { DisplayConfig } from "@/lib/display/types";
@@ -12,6 +12,7 @@ import { serverFetch } from "@/lib/server-api";
 import {
   platformLabel,
   type PlaybackPlatform,
+  type PlaybackTarget,
   type ResolveResult,
   type SingPlatform,
   type SongRef,
@@ -23,6 +24,7 @@ import {
   type SongRequestLogStatus,
 } from "./log";
 import { clearSongQueue, enqueueOrPlay } from "./queue";
+import { enqueueOrPlayInApp, stopInAppPlayer } from "./inapp-player";
 
 export { notifySongRequestGift };
 
@@ -101,8 +103,9 @@ function logRequest(
   extra?: {
     songName?: string;
     artists?: string[];
-    platform?: PlaybackPlatform;
+    platform?: PlaybackTarget;
     originPlatform?: SingPlatform;
+    source?: "playlist" | "library";
     detail?: string;
   },
 ): number {
@@ -120,9 +123,18 @@ function logRequest(
 }
 
 /** 把播放失败的原始错误翻译成尽量准确的弹幕文案（B 站单条 20 字限制） */
-function playFailureText(error: string, platform: PlaybackPlatform): string {
+function playFailureText(error: string, platform: PlaybackTarget): string {
   const err = (error || "").trim();
   const lower = err.toLowerCase();
+  if (platform === "inapp") {
+    if (lower.includes("autoplay")) return "浏览器拦截了播放，请点一下页面";
+    if (lower.includes("service_unavailable")) return "服务器音乐服务未就绪";
+    if (/stream_unavailable|audio_load_failed|音频源|decode|not supported/.test(lower)) {
+      return "这首歌暂时播不了";
+    }
+    if (lower.includes("网络")) return "网络中断，播放下首";
+    return err ? `播放失败：${err.slice(0, 10)}` : "软件内播放失败";
+  }
   if (/未找到.*qqmusic|qqmusic\.exe/.test(lower)) return "没找到QQ音乐，请先安装";
   if (lower.includes("qq") && (lower.includes("songid") || err.includes("十进制"))) {
     return "QQ音乐播放失败，请重试";
@@ -136,7 +148,7 @@ function playFailureText(error: string, platform: PlaybackPlatform): string {
   }
   if (/music worker|worker|powershell/.test(lower)) return "音乐控制进程异常，请重启软件";
   if (/invoke|tauri|__tauri|not defined|not a function/.test(lower)) {
-    return "请在Windows客户端使用点歌机";
+    return "请在Windows客户端使用点歌听";
   }
   if (/not allowed|unknown command|command .*not found|not found/.test(lower)) {
     return "点歌功能未启用，请重启客户端";
@@ -175,10 +187,10 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
   query = query.replace(/^[：:\-—,，、。.]+/, "").trim();
 
   if (!cfg.enabled) {
-    // 未开启点歌机：低频提示一次，避免刷屏
+    // 未开启点歌听：低频提示一次，避免刷屏
     if (Date.now() - lastClosedNoticeAt > 300_000) {
       lastClosedNoticeAt = Date.now();
-      reply(roomId, "主播还没开启点歌机哦");
+      reply(roomId, "主播还没开启点歌听哦");
     }
     return;
   }
@@ -188,7 +200,9 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
     return;
   }
 
-  const platform: PlaybackPlatform = cfg.platform || "netease";
+  const platform: PlaybackTarget = cfg.platform || "netease";
+  /** 软件内播放：由服务器取流，与「控制本机音乐软件」是两种独立流程 */
+  const isInApp = platform === "inapp";
 
   // 点歌礼物门禁：点歌前 60 秒内送过指定礼物直接放行，否则等待最多 60 秒
   if (cfg.giftId > 0) {
@@ -227,7 +241,7 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
         60_000,
       );
     } catch (e: any) {
-      console.warn("[点歌机]解析请求失败", e?.message || e);
+      console.warn("[点歌听]解析请求失败", e?.message || e);
       return null;
     }
   };
@@ -271,10 +285,20 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
     ? {
         songName: hitSong.name,
         artists: hitSong.artists,
-        platform,
+        // 软件内播放的日志按实际播放平台记录（可能是换源后的平台）
+        ...(isInApp ? { platform: hitSong.platform as PlaybackPlatform } : { platform }),
         originPlatform: data.originPlatform,
+        // 区分「命中歌单」与「网络乐库搜索」，弹幕和点歌记录里都要标记
+        source: data.via === "search" ? ("library" as const) : data.via ? ("playlist" as const) : undefined,
       }
-    : { platform };
+    : { ...(isInApp ? {} : { platform }) };
+  /** 弹幕文案里的来源标记 + 换源/试听说明，合并进同一个括号，避免占用字数 */
+  const notes = [
+    data.via === "search" ? "乐库" : data.via ? "歌单" : "",
+    data.switched ? `换源${platformLabel(hitSong?.platform || platform)}` : "",
+    data.preview ? "仅试听" : "",
+  ].filter(Boolean);
+  const noteText = notes.length ? `（${notes.join(" ")}）` : "";
 
   switch (data.status) {
     case "ok": {
@@ -284,7 +308,7 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
         return;
       }
       // 同曲极短去重：60 秒内同一首歌（不区分观众）只受理一次，避免连点/刷屏重复排队
-      const songKey = `${platform}:${
+      const songKey = `${isInApp ? hitSong.platform : platform}:${
         hitSong.playId || hitSong.id || `${hitSong.name}|${hitSong.artists.join("/")}`
       }`;
       const nowTs = Date.now();
@@ -311,16 +335,26 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
         pendingStatus = status;
         pendingError = detail || "";
       };
-      const outcome = await enqueueOrPlay(
-        hitSong,
-        platform,
-        String(uid),
-        (error) => markStatus("failed", error || "播放失败"),
-        {
-          onStarted: () => markStatus("playing"),
-          onFinished: () => markStatus("played"),
-        },
-      );
+      const outcome = isInApp
+        ? await enqueueOrPlayInApp(
+            hitSong,
+            String(uid),
+            (error) => markStatus("failed", error || "播放失败"),
+            {
+              onStarted: () => markStatus("playing"),
+              onFinished: () => markStatus("played"),
+            },
+          )
+        : await enqueueOrPlay(
+            hitSong,
+            platform,
+            String(uid),
+            (error) => markStatus("failed", error || "播放失败"),
+            {
+              onStarted: () => markStatus("playing"),
+              onFinished: () => markStatus("played"),
+            },
+          );
       if (outcome.mode === "failed") {
         recentSongs.delete(songKey); // 播放失败允许立即重试，不被去重挡住
         logRequest(args, query, "failed", {
@@ -351,18 +385,23 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
             detail: pendingError || undefined,
           });
         }
-        reply(roomId, `已排到第${outcome.position}首：${songText(hitSong)}`);
+        reply(roomId, `已排到第${outcome.position}首：${songText(hitSong)}${noteText}`);
         return;
       }
-      logTs = logRequest(args, query, "playing", hitInfo);
+      const playDetail = data.switched
+        ? `已换源到${platformLabel(hitSong.platform)}`
+        : data.preview
+          ? "仅试听片段"
+          : undefined;
+      logTs = logRequest(args, query, "playing", { ...hitInfo, detail: playDetail });
       if (pendingStatus) {
         void updateSongRequestLog(args.mid, logTs, {
           status: pendingStatus,
           detail: pendingError || undefined,
         });
       }
-      const suffix = data.via === "search" ? "（平台搜索）" : "";
-      reply(roomId, `即将播放：${songText(hitSong)}${suffix}`);
+      // 来源、换源、试听都合并进一个括号，例如：（乐库 换源QQ音乐 仅试听）
+      reply(roomId, `即将播放：${songText(hitSong)}${noteText}`);
       return;
     }
     case "unmatched": {
@@ -372,7 +411,12 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
           platform,
           detail: `${platformLabel(platform)}无法搜索`,
         });
-        reply(roomId, `${platformLabel(platform)}无法搜索`);
+        reply(
+          roomId,
+          platform === "soda"
+            ? "主播是汽水音乐，无法搜索，只限点歌单内歌曲"
+            : `${platformLabel(platform)}无法搜索`,
+        );
         return;
       }
       if (data.message === "cross_platform_failed") {
@@ -386,6 +430,12 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
       if (data.message === "search_no_match") {
         logRequest(args, query, "unmatched", { platform, detail: "平台未搜索到" });
         reply(roomId, `${platformLabel(platform)}没搜到「${query}」，换个歌名试试`);
+        return;
+      }
+      if (data.message === "stream_unavailable") {
+        // 软件内播放：原平台与所有换源平台都取不到音频
+        logRequest(args, query, "unmatched", { ...hitInfo, detail: "无可播音源" });
+        reply(roomId, `《${data.matchedName || query}》暂时没有可播的音源`);
         return;
       }
       // 歌单里没匹配到：可能是用户在音乐平台更新了歌单而服务器未同步 → 通知服务器刷新
@@ -409,8 +459,11 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
       return;
     }
     case "service_unavailable": {
-      logRequest(args, query, "unavailable", { platform, detail: "缺少音乐解析服务" });
-      reply(roomId, "服务未就绪（缺少音乐解析服务）");
+      logRequest(args, query, "unavailable", {
+        platform,
+        detail: isInApp ? "音乐服务未启动" : "缺少音乐解析服务",
+      });
+      reply(roomId, isInApp ? "软件内播放服务未就绪，请联系主播" : "服务未就绪（缺少音乐解析服务）");
       return;
     }
     default: {
@@ -423,6 +476,7 @@ export async function handleSongRequestDanmaku(args: SongRequestDanmakuArgs): Pr
 /** 停止监听时清空队列 / 取消等待 / 清冷却 */
 export function resetSongRequest(): void {
   clearSongQueue();
+  stopInAppPlayer();
   resetGiftWaiters();
   pendingGift.clear();
   recentSongs.clear();

@@ -68,6 +68,8 @@ export async function POST(request: Request) {
   }
 
   const songs = parsed.songs;
+  // 短链（如酷狗 t1.kugou.com）会过期，保存解析后的规范链接，后续刷新才稳定
+  const canonical = parsed.link?.trim() || url;
   let imported: Record<string, unknown>;
   let deduped = false;
 
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
     if (exists) {
       deduped = true;
     } else {
-      profile.songs.unshift({ kind: "song", song, link: url, addedAt: Date.now() });
+      profile.songs.unshift({ kind: "song", song, link: canonical, addedAt: Date.now() });
       if (profile.songs.length > MAX_SONG_ITEMS) profile.songs.length = MAX_SONG_ITEMS;
     }
     imported = { kind: "song", platform: song.platform, name: song.name, count: 1 };
@@ -85,13 +87,14 @@ export async function POST(request: Request) {
     const item: PlaylistItem = {
       kind: "playlist",
       platform: parsed.platform,
-      link: url,
+      link: canonical,
       title: parsed.name || `${platformLabel(parsed.platform)}歌单`,
       cover: parsed.cover,
       songs,
       updatedAt: Date.now(),
     };
-    const index = profile.playlists.findIndex((p) => p.link === url);
+    // 之前用短链导入过同一歌单时也要能命中替换
+    const index = profile.playlists.findIndex((p) => p.link === url || p.link === canonical);
     if (index >= 0) {
       profile.playlists[index] = item;
       deduped = true;
