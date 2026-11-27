@@ -1811,7 +1811,7 @@ export async function GET(request: Request) {
         profit: totalHamsterBB - cost,
         gifts,
         img: boxImg,
-        blindPrice: rawBlindPrice / 2,  // 电池单位，/2 与收益对齐
+        blindPrice: rawBlindPrice,  // 电池单位：展示盲盒爆出礼物的完整价值（不折半）
         anchors,
         dateRange,
         castleFans,

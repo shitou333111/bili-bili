@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import BulbIcon from "@/components/BulbIcon";
 
 /**
- * 行内提示图标（?）：点击后显示浅色小弹层说明（macOS 风格浅底黑字）。
+ * 行内提示图标（黄色灯泡）：点击后显示浅色小弹层说明（macOS 风格浅底黑字）。
  * align="right" 用于右侧对齐（ml-auto）的场景，弹层向左展开避免超出屏幕/卡片。
  * 点击页面其他任意区域自动收起。
  */
@@ -33,11 +34,14 @@ export default function InfoHint({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-3.5 h-3.5 rounded-full bg-black/10 text-black/40 text-[9px] flex items-center justify-center hover:bg-black/20 hover:text-black/60 transition-colors cursor-pointer"
+        className={`flex h-5 w-5 items-center justify-center rounded-full transition ${
+          open ? "bg-amber-300/60" : "hover:bg-amber-200/50"
+        }`}
         title="点击查看说明"
         aria-label="提示"
+        aria-expanded={open}
       >
-        ?
+        <BulbIcon className="h-3.5 w-3.5" />
       </button>
       {open && (
         <span

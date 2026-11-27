@@ -13,6 +13,7 @@ import { beijingDateKey, lastPastFridayKey } from "./leaderboard-time";
 import { serverPost, serverFetch } from "./server-api";
 import { dataFetch } from "./client-fetch";
 import {
+  ALL_BLIND_CARD,
   blindCardKey,
   normalizeMetric,
   pickMaxGift,
@@ -77,19 +78,31 @@ function isPermanentBlindBox(id: number): boolean {
   return PERMANENT_BLIND_BOX_IDS.has(id);
 }
 
-async function sendReport(view: LeaderboardView, uid: number, name: string, face: string | undefined, cards: LeaderboardReportCard[]) {
-  if (!uid || cards.length === 0) return;
+async function sendReport(
+  view: LeaderboardView,
+  uid: number,
+  name: string,
+  face: string | undefined,
+  cards: LeaderboardReportCard[],
+  force = false,
+): Promise<boolean> {
+  if (!uid || cards.length === 0) return false;
   const key = `${view}:${uid}`;
   const now = Date.now();
-  if (now - (lastSentAt.get(key) ?? 0) < REPORT_INTERVAL_MS) return;
+  // 自动上报按最小间隔节流；手动 / 打开榜单触发的上传强制发送（服务端仍有 5s 防抖兜底）
+  if (!force && now - (lastSentAt.get(key) ?? 0) < REPORT_INTERVAL_MS) return false;
 
   const report: LeaderboardReport = { view, uid, name, face, cards };
   try {
     const res = await serverPost<{ code?: number }>("/api/leaderboard/report", report);
-    if (res?.code === 0) lastSentAt.set(key, now);
+    if (res?.code === 0) {
+      lastSentAt.set(key, now);
+      return true;
+    }
   } catch {
     // 静默失败
   }
+  return false;
 }
 
 // ==================== 用户侧 ====================
@@ -215,14 +228,19 @@ function metricFromSynthesis(p: LeaderboardSynthesisProfitSource, topGift?: Lead
   });
 }
 
-export async function reportUserLeaderboard(args: {
+export type UserLeaderboardSource = {
   uid: number;
   name: string;
   face?: string;
   blindBoxes: LeaderboardBlindBoxSource[];
   /** 合成统计失败时允许为空：盲盒数据仍应正常上报 */
   synthesis?: LeaderboardSynthesisSource | null;
-}): Promise<void> {
+};
+
+/** 最近一次成功统计得到的用户上报源：手动上传 / 打开榜单前上传时直接复用，无需重新拉取 */
+let lastUserSource: UserLeaderboardSource | null = null;
+
+async function buildUserCards(args: UserLeaderboardSource): Promise<LeaderboardReportCard[]> {
   const cards: LeaderboardReportCard[] = [];
   const topGifts = await loadTopGiftMap();
   const boxes = Array.isArray(args.blindBoxes) ? args.blindBoxes : [];
@@ -247,8 +265,26 @@ export async function reportUserLeaderboard(args: {
       },
     });
   }
+  return cards;
+}
 
+export async function reportUserLeaderboard(args: UserLeaderboardSource): Promise<void> {
+  // 先缓存源数据：即使本次因节流未真正发送，手动上传也能拿到最新统计
+  lastUserSource = args;
+  const cards = await buildUserCards(args);
   await sendReport("user", args.uid, args.name, args.face, cards);
+}
+
+/**
+ * 手动上传 / 打开黑白榜前上传当前账号数据。
+ * 使用最近一次统计缓存，强制发送（跳过客户端节流）。
+ */
+export async function uploadUserLeaderboardNow(): Promise<{ ok: boolean; at: number }> {
+  const args = lastUserSource;
+  if (!args || !args.uid) return { ok: false, at: 0 };
+  const cards = await buildUserCards(args);
+  const ok = await sendReport("user", args.uid, args.name, args.face, cards, true);
+  return { ok, at: ok ? Date.now() : 0 };
 }
 
 // ==================== 主播侧 ====================
@@ -263,11 +299,11 @@ export type LeaderboardAnchorBoxSource = {
   gifts: Array<{ gift_id: number; name: string; num: number; hamster: number; img: string; price?: number }>;
 };
 
-/** 主播页口径：收益/成本均为 hamster，展示时 /100 转电池 */
+/** 主播侧口径：收益/成本仍为金仓鼠，展示时 /50 转「盲盒爆出礼物价值」的电池（不折半） */
 function metricFromAnchorBox(box: LeaderboardAnchorBoxSource, topGift?: LeaderboardTopGift): LeaderboardMetric {
   return normalizeMetric({
-    spent: box.cost / 100,
-    earned: box.totalHamster / 100,
+    spent: box.cost / 50,
+    earned: box.totalHamster / 50,
     maxGift:
       countGift(
         topGift,
@@ -285,47 +321,91 @@ function metricFromAnchorBox(box: LeaderboardAnchorBoxSource, topGift?: Leaderbo
   });
 }
 
-async function fetchAnchorBoxes(range: "today" | "lastFriday"): Promise<LeaderboardAnchorBoxSource[]> {
+type AnchorBoxesPayload = {
+  /** admin「卡片」勾选的盲盒（单独成卡） */
+  cards: LeaderboardAnchorBoxSource[];
+  /** admin「盈亏」勾选的盲盒（"全部盲盒"聚合统计用） */
+  stats: LeaderboardAnchorBoxSource[];
+};
+
+async function fetchAnchorBoxes(
+  range: "today" | "lastFriday" | "all",
+  mid: number,
+): Promise<AnchorBoxesPayload> {
   try {
-    const res = await dataFetch(`/api/anchor/gifts?fast=1&dateRange=${range}`);
-    const json = (await res.json()) as { code?: number; data?: { blindBoxProfits?: LeaderboardAnchorBoxSource[] } };
-    if (json?.code !== 0) return [];
-    return json.data?.blindBoxProfits ?? [];
+    // mid 显式绑定目标账号：多账号切换时不会读到当前账号的数据
+    const res = await dataFetch(`/api/anchor/gifts?fast=1&dateRange=${range}&mid=${mid}`);
+    const json = (await res.json()) as {
+      code?: number;
+      data?: { blindBoxProfits?: LeaderboardAnchorBoxSource[]; blindBoxProfitStats?: LeaderboardAnchorBoxSource[] };
+    };
+    if (json?.code !== 0) return { cards: [], stats: [] };
+    return {
+      cards: json.data?.blindBoxProfits ?? [],
+      stats: json.data?.blindBoxProfitStats ?? [],
+    };
   } catch {
-    return [];
+    return { cards: [], stats: [] };
   }
+}
+
+/** 「全部盲盒」聚合：花费/收益/抽数累加，盈亏重算（单位：电池，不折半） */
+function aggregateAnchorBoxes(boxes: LeaderboardAnchorBoxSource[]): LeaderboardMetric {
+  let spent = 0;
+  let earned = 0;
+  let drawCount = 0;
+  for (const box of boxes) {
+    spent += box.cost / 50;
+    earned += box.totalHamster / 50;
+    drawCount += box.drawCount;
+  }
+  return normalizeMetric({ spent, earned, drawCount, maxGift: null });
 }
 
 const anchorInFlight = new Set<number>();
 
-export async function reportAnchorLeaderboard(args: {
-  uid: number;
-  name: string;
-  face?: string;
-  all: LeaderboardAnchorBoxSource[];
-}): Promise<void> {
-  if (!args.uid || !Array.isArray(args.all) || args.all.length === 0) return;
-  if (anchorInFlight.has(args.uid)) return;
-  if (Date.now() - (lastSentAt.get(`anchor:${args.uid}`) ?? 0) < REPORT_INTERVAL_MS) return;
+/**
+ * 主播盲盒榜上传（仅电脑端调用）：
+ * 读取目标账号本地整合后的盲盒盈亏（官方流水 + 弹幕礼物）后上报。
+ * 所有请求都用 mid 绑定账号，避免多账号切换时串号。
+ *
+ * @param opts.auto  随刷新自动上报：跳过 force，沿用客户端最小上报间隔节流
+ * @param opts.preloaded 已有本次刷新拿到的活动期数据时直接复用，避免重复读取
+ */
+export async function uploadAnchorLeaderboardNow(
+  args: {
+    uid: number;
+    name: string;
+    face?: string;
+    preloaded?: AnchorBoxesPayload;
+  },
+  opts: { auto?: boolean } = {},
+): Promise<{ ok: boolean; at: number }> {
+  if (!args.uid) return { ok: false, at: 0 };
+  if (anchorInFlight.has(args.uid)) return { ok: false, at: 0 };
 
   anchorInFlight.add(args.uid);
   try {
+    // 活动期 / 累计：同时拿到「卡片」与「盈亏」勾选的盲盒
+    const allRes = args.preloaded ?? (await fetchAnchorBoxes("all", args.uid));
+    if (allRes.cards.length === 0 && allRes.stats.length === 0) return { ok: false, at: 0 };
+
     // 只有心动 / 幸运盲盒需要「今天 / 上周五」数据，活动盲盒不拉取
-    const needDaily = args.all.some((box) => isPermanentBlindBox(box.gift_id));
+    const needDaily = allRes.cards.some((box) => isPermanentBlindBox(box.gift_id));
     let todayMap = new Map<number, LeaderboardAnchorBoxSource>();
     let fridayMap = new Map<number, LeaderboardAnchorBoxSource>();
     if (needDaily) {
-      const [todayBoxes, fridayBoxes] = await Promise.all([
-        fetchAnchorBoxes("today"),
-        fetchAnchorBoxes("lastFriday"),
+      const [todayRes, fridayRes] = await Promise.all([
+        fetchAnchorBoxes("today", args.uid),
+        fetchAnchorBoxes("lastFriday", args.uid),
       ]);
-      todayMap = new Map(todayBoxes.map((b) => [b.gift_id, b]));
-      fridayMap = new Map(fridayBoxes.map((b) => [b.gift_id, b]));
+      todayMap = new Map(todayRes.cards.map((b) => [b.gift_id, b]));
+      fridayMap = new Map(fridayRes.cards.map((b) => [b.gift_id, b]));
     }
 
     const cards: LeaderboardReportCard[] = [];
     const topGifts = await loadTopGiftMap();
-    for (const box of args.all) {
+    for (const box of allRes.cards) {
       const topGift = topGifts[blindCardKey(box.gift_id)];
       const periods: Partial<Record<LeaderboardPeriodKey, LeaderboardMetric>> = {
         activity: metricFromAnchorBox(box, topGift),
@@ -339,7 +419,16 @@ export async function reportAnchorLeaderboard(args: {
       cards.push({ card: blindCardKey(box.gift_id), periods });
     }
 
-    await sendReport("anchor", args.uid, args.name, args.face, cards);
+    // 「全部盲盒」聚合卡（仅主播盲盒榜展示）
+    if (allRes.stats.length > 0) {
+      cards.push({
+        card: ALL_BLIND_CARD,
+        periods: { activity: aggregateAnchorBoxes(allRes.stats) },
+      });
+    }
+
+    const ok = await sendReport("anchor", args.uid, args.name, args.face, cards, !opts.auto);
+    return { ok, at: ok ? Date.now() : 0 };
   } finally {
     anchorInFlight.delete(args.uid);
   }

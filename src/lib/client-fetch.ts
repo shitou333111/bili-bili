@@ -125,7 +125,10 @@ async function dispatchNative(
       // 才触发 B站 拉取；其余场景（打开/切换页面、切换时间段/粉丝，包括"全部"）一律仅基于
       // 本地记录重新统计，不拉 B站。本地数据的最新由冷启动增量更新/手动刷新保障。
       const fast = query.get("fast") === "1" || (!refresh && !probe);
-      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, fast, onProgress }));
+      // mid：黑白榜上传时显式指定要读取的账号（仅 fast 本地只读路径生效），
+      // 避免多账号切换过程中把当前账号的统计写到另一个账号名下。
+      const mid = Number(query.get("mid") ?? "") || undefined;
+      return jsonResponse(await fetchAnchorGifts(platform, { refresh, dateRange, fan, probe, fast, onProgress, mid }));
     }
     case "/api/anchor/gift-replay": {
       const { fetchGiftReplay } = await import("./gift-replay-client");

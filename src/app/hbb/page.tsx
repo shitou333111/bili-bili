@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import SiteHomeButton from "@/components/SiteHomeButton";
+import BulbIcon from "@/components/BulbIcon";
 import { biliSpaceWebUrl, openBiliSpace } from "@/lib/bili-space";
 import {
+  ALL_BLIND_CARD,
   MAX_RANK_LIMIT,
   RANK_PAGE_ROWS,
   type LeaderboardCardMeta,
@@ -32,10 +34,10 @@ const MODES: Array<{
 
 /** 每行固定列宽：昵称列定宽、公式列占据剩余空间，所有卡片数字起始位置一致 */
 const ROW_GRID =
-  "grid grid-cols-[22px_118px_minmax(0,1fr)_44px] items-center gap-0.5 pl-0.5 pr-0.5 sm:grid-cols-[24px_130px_minmax(0,1fr)_48px] sm:gap-2 sm:pl-2 sm:pr-1 lg:grid-cols-[22px_122px_minmax(0,1fr)_44px] xl:grid-cols-[28px_146px_minmax(0,1fr)_58px]";
+  "grid grid-cols-[22px_150px_minmax(0,1fr)_44px] items-center gap-0.5 pl-0.5 pr-0.5 sm:grid-cols-[24px_150px_minmax(0,1fr)_48px] sm:gap-2 sm:pl-2 sm:pr-1 lg:grid-cols-[22px_142px_minmax(0,1fr)_44px] xl:grid-cols-[28px_166px_minmax(0,1fr)_58px]";
 
 /** 榜单侧面：白 = 前 N 名，黑 = 倒数 N 名 */
-type BoardSide = "white" | "black";
+type BoardSide = "white" | "black" | "luxury";
 
 /** 每张卡片的交互状态 */
 type CardUi = {
@@ -70,8 +72,20 @@ function normalizeFace(url?: string): string {
   return u;
 }
 
-function rankingKey(card: string, period: string, view: string, sort: LeaderboardSort, limit: number): string {
-  return `${card}|${period}|${view}|${sort}|${limit}`;
+/** 节省横向空间：盲盒名称去掉末尾的「盲盒」二字（仅 hbb 展示用），如 心动盲盒 → 心动 */
+function compactBlindName(name: string): string {
+  return name.replace(/盲盒\s*$/, "").trim() || name;
+}
+
+function rankingKey(
+  card: string,
+  period: string,
+  view: string,
+  sort: LeaderboardSort,
+  side: BoardSide,
+  limit: number,
+): string {
+  return `${card}|${period}|${view}|${sort}|${side}|${limit}`;
 }
 
 function Segmented<T extends string>({
@@ -253,6 +267,8 @@ export default function HeiBaiPage() {
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const [reloadKey, setReloadKey] = useState(0);
   const [spinning, setSpinning] = useState(false);
+  // 「全部盲盒」标题灯泡：展开参与统计的盲盒图标+名称，点击灯泡或页面其它区域关闭
+  const [bulbCard, setBulbCard] = useState<string | null>(null);
   const inFlight = useRef<Set<string>>(new Set());
   const spinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -266,6 +282,13 @@ export default function HeiBaiPage() {
     };
   }, []);
 
+  // 灯泡提示层：点击页面其它区域关闭
+  useEffect(() => {
+    if (!bulbCard) return;
+    const close = () => setBulbCard(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [bulbCard]);
   // 支持 /hbb?mode=...：APP 内从不同入口打开时，直接定位到对应榜单
   useEffect(() => {
     const m = new URLSearchParams(window.location.search).get("mode");
@@ -320,8 +343,8 @@ export default function HeiBaiPage() {
     const tab = meta.tabs.find((t) => t.key === activeTab);
     if (!tab) return;
     for (const card of tab.cards) {
-      const { period, sort, limit } = uiOf(card);
-      const key = rankingKey(card.key, period, view, sort, limit);
+      const { period, sort, side, limit } = uiOf(card);
+      const key = rankingKey(card.key, period, view, sort, side, limit);
       if (rankings[key] || inFlight.current.has(key)) continue;
       inFlight.current.add(key);
       const params = new URLSearchParams({
@@ -329,6 +352,7 @@ export default function HeiBaiPage() {
         period,
         view,
         sort,
+        side,
         limit: String(limit),
       });
       fetch(`/api/leaderboard/ranking?${params.toString()}`, { cache: "no-store" })
@@ -352,6 +376,8 @@ export default function HeiBaiPage() {
   }, [meta, activeTab, view, uiOf, rankings]);
 
   const currentTab = meta?.tabs.find((t) => t.key === activeTab) ?? null;
+  // 只展示当前视图（用户 / 主播）可用的卡片：「全部盲盒」聚合卡仅在主播盲盒视图出现
+  const visibleCards = currentTab ? currentTab.cards.filter((c) => c.views.includes(view)) : [];
 
   const updateUi = (card: LeaderboardCardMeta, patch: Partial<CardUi>) => {
     setCardUi((prev) => ({ ...prev, [card.key]: { ...(prev[card.key] ?? {}), ...patch } }));
@@ -451,22 +477,23 @@ export default function HeiBaiPage() {
           </div>
         )}
 
-        {meta && currentTab && currentTab.cards.length === 0 && (
+        {meta && currentTab && visibleCards.length === 0 && (
           <div className="mt-5 rounded-2xl border border-black/[0.06] bg-white px-4 py-10 text-center text-[13px] text-black/35">
             暂无榜单卡片，请在管理后台勾选对应的盲盒 / 合成活动。
           </div>
         )}
 
-        {currentTab && currentTab.cards.length > 0 && (
+        {currentTab && visibleCards.length > 0 && (
           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {currentTab.cards.map((card) => {
+            {visibleCards.map((card) => {
               const { period, sort, side, limit } = uiOf(card);
-              const key = rankingKey(card.key, period, view, sort, limit);
+              const key = rankingKey(card.key, period, view, sort, side, limit);
               const data = rankings[key];
               const isFailed = failed[key];
               // 无法确定卡片最大礼物时不展示礼物列，避免误显示用户自己的最大礼物
               const showGift = !card.hideTopGift && !!card.topGift;
-              const rows = data ? (side === "white" ? data.top : data.bottom) : [];
+              // 白 / 豪 都取正序列表（豪 = 按花费倒序），黑取倒序列表
+              const rows = data ? (side === "black" ? data.bottom : data.top) : [];
               const canExpand = !!data && data.total > limit && limit < MAX_RANK_LIMIT;
 
               return (
@@ -474,7 +501,7 @@ export default function HeiBaiPage() {
                   key={card.key}
                   className="rounded-2xl border border-black/[0.07] bg-white px-2 py-3 shadow-[0_10px_30px_rgba(31,28,23,0.05)] sm:px-3"
                 >
-                  <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                  <header className="relative flex flex-wrap items-center gap-x-2 gap-y-1.5">
                     <div className="flex min-w-0 items-center gap-1.5">
                       {card.icon ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -486,11 +513,60 @@ export default function HeiBaiPage() {
                           referrerPolicy="no-referrer"
                         />
                       ) : null}
-                      <h2 className="truncate text-[14px] font-semibold text-[#221d24]">{card.title}</h2>
+                      <h2 className="truncate text-[14px] font-semibold text-[#221d24]">
+                        {card.key === ALL_BLIND_CARD ? card.title : compactBlindName(card.title)}
+                      </h2>
+                      {card.boxes && card.boxes.length > 0 ? (
+                        <button
+                          type="button"
+                          aria-label="查看全部盲盒"
+                          title="查看全部盲盒"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBulbCard((prev) => (prev === card.key ? null : card.key));
+                          }}
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition ${
+                            bulbCard === card.key
+                              ? "bg-amber-300/60"
+                              : "hover:bg-amber-200/50"
+                          }`}
+                        >
+                          <BulbIcon className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
                       {card.unitNote ? (
                         <span className="shrink-0 whitespace-nowrap text-[11px] text-black/40">单位电池</span>
                       ) : null}
                     </div>
+                    {bulbCard === card.key && card.boxes && card.boxes.length > 0 ? (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute left-0 top-full z-20 mt-1 min-w-[160px] max-w-[260px] rounded-xl border border-black/10 bg-white p-2 shadow-[0_16px_40px_rgba(31,28,23,0.16)]"
+                      >
+                        <div className="mb-1 px-0.5 text-[10px] font-medium text-black/40">参与统计的盲盒</div>
+                        <div className="flex flex-col gap-1">
+                          {card.boxes.map((box) => (
+                            <div key={box.id} className="flex items-center gap-1.5 px-0.5 py-0.5">
+                              {box.icon ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={normalizeFace(box.icon)}
+                                  alt=""
+                                  className="h-5 w-5 shrink-0 rounded object-cover"
+                                  loading="lazy"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-black/[0.06] text-[10px] text-black/40">
+                                  ?
+                                </span>
+                              )}
+                              <span className="truncate text-[12px] text-black/75">{compactBlindName(box.name)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="ml-auto flex flex-wrap items-center gap-1.5">
                       {card.periods.length > 1 && (
                         <Segmented
@@ -512,6 +588,7 @@ export default function HeiBaiPage() {
                         options={[
                           { value: "white", label: "白" },
                           { value: "black", label: "黑" },
+                          { value: "luxury", label: "豪" },
                         ]}
                         onChange={(v) => setSide(card, v)}
                       />

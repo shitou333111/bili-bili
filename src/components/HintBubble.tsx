@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import BulbIcon from "@/components/BulbIcon";
 
 /**
  * 黄色灯泡 + 浮层说明。
@@ -47,9 +48,7 @@ export default function HintBubble({
           open ? "bg-amber-300/60" : "hover:bg-amber-200/50"
         }`}
       >
-        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="#f0b429" aria-hidden>
-          <path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 0 0-4 12.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26A7 7 0 0 0 12 2z" />
-        </svg>
+        <BulbIcon className="h-4 w-4" />
       </button>
       {open && (
         <div

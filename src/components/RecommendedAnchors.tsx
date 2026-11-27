@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { dataFetch } from "@/lib/client-fetch";
 import { serverPost } from "@/lib/server-api";
 import { getPlatform } from "@/lib/platform";
+import BulbIcon from "@/components/BulbIcon";
 import { showToast } from "@/lib/toast";
 
 type AnchorItem = {
@@ -108,10 +109,11 @@ export default function RecommendedAnchors() {
             onMouseEnter={(e) => {
               // 桌面端 hover 不弹模态，避免频繁弹出；统一用点击触发
             }}
-            className="relative w-5 h-5 rounded-full bg-black/5 flex items-center justify-center text-[12px] text-black/40 hover:bg-black/10 hover:text-black/60 transition shrink-0"
+            className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition hover:bg-amber-200/50"
             title="点击查看说明"
+            aria-label="主播推荐说明"
           >
-            ?
+            <BulbIcon className="h-3.5 w-3.5" />
           </button>
         </div>
 

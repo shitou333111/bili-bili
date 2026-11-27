@@ -9,7 +9,9 @@ import ChartFullscreenModal from "@/components/ChartFullscreenModal";
 import PieTooltip from "@/components/PieTooltip";
 import Dropdown from "@/components/Dropdown";
 import InfoHint from "@/components/InfoHint";
+import BulbIcon from "@/components/BulbIcon";
 import LeaderboardLink from "@/components/LeaderboardLink";
+import { uploadUserLeaderboardNow } from "@/lib/leaderboard-report";
 import { sendDanmaku } from "@/lib/barrage";
 import { fetchMedicalRoomId } from "@/lib/medical-client";
 import { type ToastKind } from "@/lib/toast";
@@ -505,7 +507,7 @@ function LuckyBadge() {
         title="点击查看说明"
         aria-label="天选之子说明"
       >
-        <span>🎯</span>
+        <BulbIcon className="h-3.5 w-3.5" />
         <span className="text-yellow-700">天选之子</span>
       </button>
       {open && (
@@ -541,7 +543,7 @@ function LiveRoomBadge({ text }: { text: string }) {
         title="点击查看说明"
         aria-label="住在直播间说明"
       >
-        <span>🏠</span>
+        <BulbIcon className="h-3.5 w-3.5" />
         <span className="text-orange-700">住在直播间</span>
       </button>
       {open && (
@@ -800,9 +802,12 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                     <div className="relative" ref={statsRulesRef}>
                       <button
                         onClick={() => setShowStatsRules(!showStatsRules)}
-                        className="w-3.5 h-3.5 rounded-full bg-black/10 text-black/40 text-[9px] flex items-center justify-center hover:bg-black/20 hover:text-black/60 transition-colors cursor-pointer"
+                        className="flex h-5 w-5 items-center justify-center rounded-full transition hover:bg-amber-200/50"
                         title="查看计算规则"
-                      >?</button>
+                        aria-expanded={showStatsRules}
+                      >
+                        <BulbIcon className="h-3.5 w-3.5" />
+                      </button>
                       {showStatsRules && (
                         <div className="absolute left-5 top-0 z-50 w-72 bg-white border border-black/10 rounded-lg shadow-lg p-3 text-xs text-black/70 leading-relaxed">
                           <div className="font-medium text-black/90 mb-1.5">消费电池计算规则</div>
@@ -1272,9 +1277,12 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                     <div className="relative" ref={giftListRulesRef}>
                       <button
                         onClick={() => setShowGiftListRules(!showGiftListRules)}
-                        className="w-3.5 h-3.5 rounded-full bg-black/10 text-black/40 text-[9px] flex items-center justify-center hover:bg-black/20 hover:text-black/60 transition-colors cursor-pointer"
+                        className="flex h-5 w-5 items-center justify-center rounded-full transition hover:bg-amber-200/50"
                         title="查看统计规则"
-                      >?</button>
+                        aria-expanded={showGiftListRules}
+                      >
+                        <BulbIcon className="h-3.5 w-3.5" />
+                      </button>
                       {showGiftListRules && (
                         <div className="absolute left-5 top-0 z-50 w-72 bg-white border border-black/10 rounded-lg shadow-lg p-3 text-xs text-black/70 leading-relaxed">
                           <div className="font-medium text-black/90 mb-1.5">礼物清单规则</div>
@@ -1345,7 +1353,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
           {/* Blind box tab */}
           {activeTab === "blindbox" && (
             <>
-              <LeaderboardLink mode="user-blind" />
+              <LeaderboardLink mode="user-blind" upload={uploadUserLeaderboardNow} uploadKey="user" />
               {blindBoxStats ? (
                 <div className="space-y-4">
                   {blindBoxStats.map((stat, boxIndex) => {
@@ -1505,7 +1513,7 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
             <>
               {/* 黑抽卡片固定在合成页最上方；即使统计数据还在加载也先展示入口 */}
               {synthesisToolsExtra}
-              <LeaderboardLink mode="user-synthesis" />
+              <LeaderboardLink mode="user-synthesis" upload={uploadUserLeaderboardNow} uploadKey="user" />
               {synthesisStats ? (
                 <>
               {synthesisStats.activities.length > 0 ? (
@@ -1666,11 +1674,11 @@ function RevenueModuleContentInner(props: RevenueModuleContentProps) {
                     ref={antiKillHintBtnRef}
                     type="button"
                     onClick={() => toggleAntiKillTip("desc")}
-                    className="flex h-4 w-4 items-center justify-center rounded-full bg-black/10 text-[10px] text-black/40 transition-colors hover:bg-black/20 hover:text-black/60 cursor-pointer"
+                    className="flex h-5 w-5 items-center justify-center rounded-full transition hover:bg-amber-200/50 cursor-pointer"
                     title="点击查看说明"
                     aria-label="防氪记录说明"
                   >
-                    ?
+                    <BulbIcon className="h-3.5 w-3.5" />
                   </button>
                   <span className="ml-auto text-xs text-black/40">最近30天</span>
 

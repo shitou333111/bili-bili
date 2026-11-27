@@ -54,6 +54,8 @@ export type LeaderboardCardMeta = {
   unitNote?: boolean;
   /** true = 不展示最大礼物（如「一年内总合成」无法区分最大礼物） */
   hideTopGift?: boolean;
+  /** 「全部盲盒」聚合卡：标题灯泡里展示的参与统计盲盒（admin「盈亏」勾选） */
+  boxes?: Array<{ id: number; name: string; icon: string }>;
   views: LeaderboardView[];
   periods: Array<{ key: LeaderboardPeriodKey; label: string }>;
   defaultView: LeaderboardView;
@@ -134,6 +136,8 @@ export type LeaderboardReport = {
 export const BLIND_CARD_PREFIX = "blind:";
 export const SYN_CARD_PREFIX = "syn:";
 export const SYN_YEAR_CARD = "syn-year";
+/** 主播盲盒「全部盲盒」聚合卡片（对应软件内盲盒页最下方的全部盲盒盈亏） */
+export const ALL_BLIND_CARD = "blind:all";
 
 export const MAX_RANK_ROWS = 20;
 /** 页面按需展开时的单次条数 */

@@ -2235,6 +2235,11 @@ export default function HomePage() {
         return;
       }
 
+      // 发起请求前锁定账号：请求期间用户切换账号时，这批数据属于旧账号，
+      // 不能再用「当前账号」的 ref 上报，否则会把 A 的数据写到 B 名下（跨账号串数据）。
+      const midAtStart = currentMidRef.current;
+      const acctAtStart = currentAccountRef.current;
+
       const [blindBoxRes, synthesisRes] = await Promise.all([
         dataFetch(blindBoxUrl, { cache: "no-store" }),
         dataFetch("/api/stats/synthesis", { cache: "no-store" }),
@@ -2259,16 +2264,19 @@ export default function HomePage() {
         if (currentMidRef.current) cacheSet(cacheKeys.synthesis(currentMidRef.current), synthesisData.data);
       }
       // 全站黑白榜：统计成功后上报当前账号的绝对值快照（静默、失败不影响主流程）
-      // 注意用 ref 读取账号：首次加载时 currentAccount state 尚未生效
-      // 盲盒 / 合成任一统计成功都上报，避免单边失败导致整份数据缺失
-      const acct = currentAccountRef.current;
+      // 使用「请求开始时锁定」的账号；若期间已切换账号则放弃本次上报，避免串号。
       const blindBoxOk = blindBoxData.code === 0;
       const synthesisOk = synthesisData.code === 0;
-      if ((blindBoxOk || synthesisOk) && currentMidRef.current && acct) {
+      if (
+        (blindBoxOk || synthesisOk) &&
+        midAtStart &&
+        acctAtStart &&
+        currentMidRef.current === midAtStart
+      ) {
         void reportUserLeaderboard({
-          uid: currentMidRef.current,
-          name: acct.uname,
-          face: acct.face,
+          uid: midAtStart,
+          name: acctAtStart.uname,
+          face: acctAtStart.face,
           blindBoxes: blindBoxOk && Array.isArray(blindBoxData.data) ? blindBoxData.data : [],
           synthesis: synthesisOk ? synthesisData.data : null,
         });

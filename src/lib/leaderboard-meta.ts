@@ -9,6 +9,7 @@ import { getEffectiveBlindBoxConfig, getEffectiveSynthesisConfig } from "./confi
 import { BLIND_BOX_CONFIG } from "./config";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftName, getGiftImgByName, getGiftList } from "./gift-catalog";
 import {
+  ALL_BLIND_CARD,
   blindCardKey,
   synCardKey,
   SYN_YEAR_CARD,
@@ -108,6 +109,30 @@ export async function buildLeaderboardMeta(): Promise<LeaderboardMeta> {
         : [{ key: "activity", label: PERIOD_LABEL.activity }],
       defaultView: "user",
       defaultPeriod: permanent ? "today" : "activity",
+    });
+  }
+
+  // 「全部盲盒」聚合卡（仅主播盲盒视图）：对应软件内盲盒页最下方的"全部盲盒"盈亏，
+  // 只统计 admin「盈亏」勾选的盲盒。放在盲盒卡片列表最后。
+  const profitIds = blindCfg.profitIds ?? [];
+  if (profitIds.length > 0) {
+    blindCards.push({
+      key: ALL_BLIND_CARD,
+      tab: "blind",
+      title: "全部盲盒",
+      hideTopGift: true,
+      boxes: profitIds.map((id) => {
+        const box = blindCfg.boxes[id];
+        return {
+          id,
+          name: box?.name || blindCfg.names[id] || getGiftName(id) || `盲盒 ${id}`,
+          icon: box?.icon || blindCfg.icons[id] || getGiftImg(id) || "",
+        };
+      }),
+      views: ["anchor"],
+      periods: [{ key: "activity", label: "累计" }],
+      defaultView: "anchor",
+      defaultPeriod: "activity",
     });
   }
 

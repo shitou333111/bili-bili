@@ -12,7 +12,7 @@ import { getBlindBoxCardBg } from "@/lib/layout";
 import { ensureGiftCatalogLoaded, getGiftImgByName } from "@/lib/gift-catalog-client";
 import { buildGiftSummary } from "@/lib/gift-summary";
 import { getPlatform, isWindowsDisplaySupported } from "@/lib/platform";
-import { reportAnchorLeaderboard } from "@/lib/leaderboard-report";
+import { uploadAnchorLeaderboardNow } from "@/lib/leaderboard-report";
 import { cancelAnchorGiftsFetch } from "@/lib/anchor-gifts-client";
 import AvatarBubbleChart, { type BubbleItem } from "@/components/AvatarBubbleChart";
 import GiftScreenshotPanel from "@/components/GiftScreenshotPanel";
@@ -591,10 +591,12 @@ const AnchorDataModule = memo(function AnchorDataModule({
     abortedRef.current = false;
     const controller = new AbortController();
     abortCtlRef.current = controller;
+    let isDesktopExe = false;
     try {
       // 先确保本地礼物目录已加载（给 GiftScreenshotPanel、giftSummary 图标读取用）
       try {
         const platform = await getPlatform();
+        isDesktopExe = platform.isNative && platform.os === "windows";
         await ensureGiftCatalogLoaded(platform);
       } catch {
         // Web 模式下 getPlatform 可能抛错，忽略，走 stats.giftSummary 已带图标即可
@@ -638,14 +640,21 @@ const AnchorDataModule = memo(function AnchorDataModule({
         // 盲盒盈亏数据独立存储，与收入统计解耦
         setBlindBoxProfits(data.data.blindBoxProfits);
         setBlindBoxProfitStats(data.data.blindBoxProfitStats);
-        // 全站黑白榜（主播榜）：上报本主播房间的活动期盈亏，并补拉今天/上周五快照（静默）
-        if (mid && Array.isArray(data.data.blindBoxProfits) && data.data.blindBoxProfits.length > 0) {
-          void reportAnchorLeaderboard({
-            uid: mid,
-            name: uname || anchorName || `UID ${mid}`,
-            face: anchorFace || undefined,
-            all: data.data.blindBoxProfits,
-          });
+        // 全站黑白榜（主播榜）自动上传：仅电脑端（exe）保留，数据为官方流水 + 弹幕礼物整合后的口径。
+        // 手机 / Web 端不自动上传，避免把不精确的数据覆盖正确数据。
+        if (isDesktopExe && mid) {
+          void uploadAnchorLeaderboardNow(
+            {
+              uid: mid,
+              name: uname || anchorName || `UID ${mid}`,
+              face: anchorFace || undefined,
+              preloaded: {
+                cards: data.data.blindBoxProfits ?? [],
+                stats: data.data.blindBoxProfitStats ?? [],
+              },
+            },
+            { auto: true },
+          );
         }
         // 首次加载时保存完整粉丝列表，供筛选下拉框使用
         if (data.data.blindBoxProfits) {
@@ -1616,15 +1625,30 @@ const AnchorDataModule = memo(function AnchorDataModule({
               {/* 盲盒盈亏 tab */}
               {activeTab === "blindbox" && (
                 <>
-                  <LeaderboardLink mode="anchor-blind" />
+                  <LeaderboardLink
+                    mode="anchor-blind"
+                    upload={
+                      displaySupported
+                        ? () =>
+                            uploadAnchorLeaderboardNow({
+                              uid: mid,
+                              name: uname || anchorName || `UID ${mid}`,
+                              face: anchorFace || undefined,
+                            })
+                        : undefined
+                    }
+                    uploadDisabledHint={displaySupported ? undefined : "仅限电脑端"}
+                    uploadKey={`anchor:${mid}`}
+                  />
                   {blindBoxProfits && blindBoxProfits.length > 0 ? (
                     <div className="space-y-4">
                       {blindBoxProfits.map((bb, idx) => {
                         const isXindong = bb.gift_id === 32251;
-                        const blindPrice = bb.blindPrice; // 单位：电池
-                        const totalSpent = bb.cost / 100; // hamster → 电池
-                        const totalEarned = bb.totalHamster / 100; // hamster → 电池
-                        const profit = bb.profit / 100; // hamster → 电池
+                        const blindPrice = bb.blindPrice; // 单位：电池（完整爆出价值，不折半）
+                        // 盲盒口径统一为「爆出礼物价值」电池：金仓鼠 / 50（×2/100），不再按收益折半
+                        const totalSpent = bb.cost / 50;
+                        const totalEarned = bb.totalHamster / 50;
+                        const profit = bb.profit / 50;
                         return (
                           <div key={bb.gift_id} className={`rounded-lg border border-black/10 p-2 ${getBlindBoxCardBg(idx)}`}>
                             {/* Row 1: 盲盒图标+名称 + 统计时间 */}
@@ -1644,7 +1668,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                             {/* Row 2: 时间筛选 + 粉丝筛选 */}
                             <div className="grid grid-cols-2 gap-2 mb-2">
                               <div className="flex border border-black/10 rounded-lg overflow-hidden">
-                                {(["all", "thisMonth", "thisWeek", "yesterday"] as const).map((key) => {
+                                {(["all", "thisMonth", "thisWeek", "yesterday", "today"] as const).map((key) => {
                                     const isYesterday = key === "yesterday";
                                     const disabled = isYesterday && !yesterdayAvailable;
                                     return (
@@ -1668,7 +1692,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                             : "bg-white text-black/65 hover:bg-black/5"
                                       }`}
                                     >
-                                      {key === "all" ? "全部" : key === "thisMonth" ? "本月" : key === "thisWeek" ? "本周" : "昨日"}
+                                      {key === "all" ? "全部" : key === "today" ? "今日" : key === "thisMonth" ? "本月" : key === "thisWeek" ? "本周" : "昨日"}
                                     </button>
                                     );
                                   })}
@@ -1743,9 +1767,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                               )}
                                             </div>
                                           </td>
-                                          <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 100}</td>
+                                          <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 50}</td>
                                           <td className="px-2 py-2 text-right text-xs">{gift.num}</td>
-                                          <td className="px-2 py-2 text-right text-xs">{gift.hamster / 100}</td>
+                                          <td className="px-2 py-2 text-right text-xs">{gift.hamster / 50}</td>
                                         </tr>
                                         );
                                       })}
@@ -1775,9 +1799,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
                         },
                         { drawCount: 0, cost: 0, totalHamster: 0, profit: 0 },
                       );
-                      const aggSpent = agg.cost / 100;
-                      const aggEarned = agg.totalHamster / 100;
-                      const aggProfit = agg.profit / 100;
+                      const aggSpent = agg.cost / 50;
+                      const aggEarned = agg.totalHamster / 50;
+                      const aggProfit = agg.profit / 50;
                       // 礼物明细：选"全部盲盒"时按盲盒分组显示（每个盲盒的礼物聚在一起），
                       // 选单个盲盒时只显示该盲盒礼物；礼物统一按爆出价值降序
                       const mergedGifts = boxes
@@ -1843,7 +1867,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                           {/* 时间筛选 + 粉丝分析：与上方单个盲盒卡片一致的控件 */}
                           <div className="grid grid-cols-2 gap-2 mb-2">
                             <div className="flex border border-black/10 rounded-lg overflow-hidden">
-                              {(["all", "thisMonth", "thisWeek", "yesterday"] as const).map((key) => {
+                              {(["all", "thisMonth", "thisWeek", "yesterday", "today"] as const).map((key) => {
                                 const isYesterday = key === "yesterday";
                                 const disabled = isYesterday && !yesterdayAvailable;
                                 return (
@@ -1867,7 +1891,7 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                           : "bg-white text-black/65 hover:bg-black/5"
                                     }`}
                                   >
-                                    {key === "all" ? "全部" : key === "thisMonth" ? "本月" : key === "thisWeek" ? "本周" : "昨日"}
+                                    {key === "all" ? "全部" : key === "today" ? "今日" : key === "thisMonth" ? "本月" : key === "thisWeek" ? "本周" : "昨日"}
                                   </button>
                                 );
                               })}
@@ -1949,9 +1973,9 @@ const AnchorDataModule = memo(function AnchorDataModule({
                                                   <span className="font-medium text-xs">{gift.name}</span>
                                                 </div>
                                               </td>
-                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 100}</td>
+                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / (gift.num || 1) / 50}</td>
                                               <td className="px-2 py-2 text-right text-xs">{gift.num}</td>
-                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / 100}</td>
+                                              <td className="px-2 py-2 text-right text-xs">{gift.hamster / 50}</td>
                                             </tr>
                                           ))}
                                         </Fragment>

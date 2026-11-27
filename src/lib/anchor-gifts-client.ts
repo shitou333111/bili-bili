@@ -11,7 +11,7 @@
 import type { Platform } from "./platform/types";
 import type { AuthSession } from "./auth/session";
 import { BLIND_BOX_CONFIG } from "./config";
-import { dateKeyForRange } from "./leaderboard-time";
+import { beijingDateKey, dateKeyForRange } from "./leaderboard-time";
 import { ensureGiftCatalogLoaded, getGiftImg, getGiftImgByName } from "./gift-catalog-client";
 import { buildGiftSummary } from "./gift-summary";
 import {
@@ -336,6 +336,74 @@ function calcMaxConsecutive(sortedDates: string[]): { max: number; start: string
     maxEnd = sortedDates[sortedDates.length - 1];
   }
   return { max: maxLen, start: maxStart, end: maxEnd };
+}
+
+/** unix 秒 → 北京时间 "YYYY-MM-DD HH:mm:ss"（与官方收益记录 time 字段同格式） */
+function beijingTimeFromTs(ts: number): string {
+  const d = new Date((ts + 8 * 3600) * 1000);
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/**
+ * 弹幕礼物电池价 → 官方收益记录的金仓鼠口径。
+ * 官方记录 hamster 为「主播收益」金仓鼠，页面上按 hamster/100 显示为电池；
+ * 而弹幕记录里 price 是礼物实际电池单价（与 gift-db 的 computeFromIncome 口径一致：
+ * 官方 hamster×2/100 = 电池价值 ⇒ hamster = 电池价×50）。乘 50 后并入，
+ * 才能让「收入 / 盲盒」页面中今日与官方历史的数据处于同一量纲，不会突然翻倍。
+ */
+const DANMU_BATTERY_TO_HAMSTER = 50;
+
+/**
+ * 把弹幕监听落盘的礼物记录并入官方收益记录，仅用于页面展示统计。
+ *
+ * 规则（与「盲盒盈亏 · 弹幕查询」的数据整合口径一致）：
+ * - 某天官方流水已有记录 → 该天完全用官方（最准），忽略弹幕记录；
+ * - 某天官方流水无记录（今天 / 昨日官方尚未更新）→ 用弹幕记录补齐；
+ * - 弹幕记录只保留最近 7 天，且只在 Windows 桌面客户端才有（监听能力），
+ *   手机 / Web / 其它系统直接返回官方记录，行为完全不变。
+ *
+ * 注意：本函数只影响返回给前端统计用的数组，**绝不写回 anchor-gifts-records.json**。
+ */
+async function mergeDanmuIncomeRecords(
+  platform: Platform,
+  mid: number,
+  official: BiliGiftRecord[],
+): Promise<BiliGiftRecord[]> {
+  if (!(platform.isNative && platform.os === "windows")) return official;
+  try {
+    const { loadGiftRecordsByRange } = await import("./display/gift-db");
+    const rows = await loadGiftRecordsByRange(mid, null);
+    if (rows.length === 0) return official;
+
+    const officialDates = new Set<string>();
+    for (const r of official) officialDates.add(r.time.slice(0, 10));
+
+    const extra: BiliGiftRecord[] = [];
+    for (const e of rows) {
+      if (!(e.giftId > 0) || !(e.num > 0)) continue;
+      const date = beijingDateKey(e.ts * 1000);
+      // 官方已有该日流水：说明该日数据已汇总完成，弹幕记录不再重复计入
+      if (officialDates.has(date)) continue;
+      extra.push({
+        uid: e.uid,
+        uname: e.uname,
+        time: beijingTimeFromTs(e.ts),
+        goods_id: 0,
+        gift_id: e.giftId,
+        name: e.giftName,
+        num: e.num,
+        hamster: Math.round(e.price * DANMU_BATTERY_TO_HAMSTER),
+        receive_title: "",
+        room_id: 0,
+      });
+    }
+    return extra.length > 0
+      ? [...extra, ...official].sort((a, b) => b.time.localeCompare(a.time))
+      : official;
+  } catch {
+    // 弹幕记录读取失败不影响官方统计
+    return official;
+  }
 }
 
 /** 日期范围过滤 */
@@ -775,7 +843,7 @@ async function sleepBackoff(ms: number, attempt: number): Promise<void> {
 
 export async function fetchAnchorGifts(
   platform: Platform,
-  opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler; probe?: boolean; fast?: boolean } = {},
+  opts: { refresh?: boolean; dateRange?: string; fan?: string; onProgress?: FetchProgressHandler; probe?: boolean; fast?: boolean; mid?: number } = {},
 ): Promise<{ code: number; message: string; data?: AnchorGiftsResult | null }> {
   const { fast = false } = opts;
 
@@ -802,9 +870,19 @@ export async function fetchAnchorGifts(
   // 本轮月份并发度（由速率派生，只保证喂满节拍；速率为 1 时并发 1 = 完全串行）
   const monthConcurrency = concurrencyForRate(_fetchRate);
 
-  const session = await resolveSession(platform);
+  let session = await resolveSession(platform);
   if (!session) {
     return { code: 0, message: "needs-relogin", data: null };
+  }
+
+  // 显式指定账号（黑白榜上传时用）：只允许在 fast/本地只读模式下切换读取目录，
+  // 避免高成本拉取路径被错误地切到非当前账号。这样上传永远绑定目标 uid 的本地数据，
+  // 多账号切换过程中的异步任务也不会把当前账号的数据写到另一个账号名下。
+  if (opts.mid && opts.mid > 0 && opts.mid !== session.mid) {
+    if (!fast) {
+      return { code: -1, message: "account-mismatch", data: null };
+    }
+    session = { ...session, mid: opts.mid };
   }
 
   // 客户端凭证验证与自动刷新（仅非 server 账号有 B站 Cookie）
@@ -1624,6 +1702,10 @@ export async function fetchAnchorGifts(
 
     // ==================== 统计 ====================
 
+    // 展示用记录 = 官方流水 + 弹幕礼物补齐（仅 Windows 客户端；不写回官方流水文件）。
+    // 官方已有的日期一律以官方为准，弹幕只补今天 / 官方尚未更新的最近日期。
+    const displayRecords = await mergeDanmuIncomeRecords(platform, session.mid, allRecords);
+
     const dateFilter = getDateRangeFilter(dateRange);
     // today / lastFriday 按北京时间日期键精确过滤，避免客户端时区差异
     const dateKeyFilter = dateKeyForRange(dateRange);
@@ -1631,7 +1713,7 @@ export async function fetchAnchorGifts(
       ? fan.split(",").map((s) => Number(s.trim())).filter((n) => !isNaN(n))
       : [];
 
-    const filteredRecords = allRecords.filter((r) => {
+    const filteredRecords = displayRecords.filter((r) => {
       if (dateKeyFilter) {
         if (r.time.slice(0, 10) !== dateKeyFilter) return false;
       } else if (dateFilter) {
@@ -1825,7 +1907,7 @@ export async function fetchAnchorGifts(
     // 再次点开下拉框就无法看到其他粉丝（修复：下拉列表只剩一位的问题）。
     const blindBoxFanMapAll = new Map<number, Map<number, { uname: string; count: number }>>();
     if (fanUids.length > 0) {
-      for (const r of allRecords) {
+      for (const r of displayRecords) {
         if (dateFilter) {
           const t = new Date(r.time).getTime();
           if (t < dateFilter.start.getTime() || t >= dateFilter.end.getTime()) continue;
@@ -1919,7 +2001,7 @@ export async function fetchAnchorGifts(
         profit: totalHamsterBB - cost,
         gifts,
         img: boxImg,
-        blindPrice: rawBlindPrice / 2,
+        blindPrice: rawBlindPrice,
         anchors,
         dateRange: dateRangeBB,
         castleFans,
@@ -1980,7 +2062,7 @@ export async function fetchAnchorGifts(
     const yesterdayAvailable =
       yesterdayApiReady !== null
         ? yesterdayApiReady
-        : allRecords.some((r) => r.time.startsWith(yesterdayDate));
+        : displayRecords.some((r) => r.time.startsWith(yesterdayDate));
 
     const data: AnchorGiftsResult = {
       totalHamster,
